@@ -3605,7 +3605,9 @@ def list_areas(backlog_path: Path) -> list[dict[str, Any]]:
 
 # ── ViewerPrefs ────────────────────────────────────────────────
 
-VIEWER_PREFS_SCHEMA_VERSION = 1
+# v2: "theme" is a choice made with the viewer's toggle. v1 wrote "dark" into every
+# install on first read, before any theme control existed.
+VIEWER_PREFS_SCHEMA_VERSION = 2
 
 VIEWER_PREFS_DEFAULTS = {
     "schema_version": VIEWER_PREFS_SCHEMA_VERSION,
@@ -3663,10 +3665,29 @@ def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
         return local_dir(backlog_path) / "viewer.json"
     return root / "viewer.json"
 
+def _viewer_prefs_version(prefs: dict) -> int:
+    """The stored schema version; a missing or non-numeric one is v1."""
+    version = prefs.get("schema_version")
+    return version if isinstance(version, int) and not isinstance(version, bool) else 1
+
+
+def _migrate_viewer_prefs(raw: dict) -> bool:
+    """Bring stored prefs up to the current schema, in place. True when anything changed."""
+    if _viewer_prefs_version(raw) >= VIEWER_PREFS_SCHEMA_VERSION:
+        return False
+    # v1 -> v2: a stored "dark" was the old default, never a choice, so the install
+    # follows the OS from now on. "light" and "system" were set deliberately and stay.
+    if raw.get("theme") == "dark":
+        raw["theme"] = "system"
+    raw["schema_version"] = VIEWER_PREFS_SCHEMA_VERSION
+    return True
+
+
 def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
     Unknown top-level keys are preserved across reads (forward-compat).
     Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
+    A file from an older schema is migrated once and rewritten.
     """
     import json
     from copy import deepcopy
@@ -3691,6 +3712,15 @@ def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
         atomic_write(p, json.dumps(prefs, indent=2))
         return prefs
 
+    if isinstance(raw, dict) and _migrate_viewer_prefs(raw):
+        # Persisted so the migration runs once: a "dark" chosen afterwards is stored
+        # as v2 and never mistaken for the old default. A failed write only means the
+        # migration repeats on the next read.
+        try:
+            atomic_write(p, json.dumps(raw, indent=2))
+        except OSError:
+            pass
+
     # Deep-merge defaults under the loaded data so missing nested keys appear.
     def _merge(default, loaded):
         if isinstance(default, dict) and isinstance(loaded, dict):
@@ -3709,6 +3739,10 @@ def save_viewer_prefs(backlog_path: Path, prefs: dict, v4: "bool | None" = None)
     import json
     p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Whatever is saved here was written by this schema's code, so it never carries an
+    # older version: a stale client echoing v1 back would otherwise get its theme reset.
+    if isinstance(prefs, dict) and _viewer_prefs_version(prefs) < VIEWER_PREFS_SCHEMA_VERSION:
+        prefs = {**prefs, "schema_version": VIEWER_PREFS_SCHEMA_VERSION}
     atomic_write(p, json.dumps(prefs, indent=2))
 
 
