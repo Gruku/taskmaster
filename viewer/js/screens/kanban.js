@@ -11,7 +11,7 @@ import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clus
 import { renderBundleFrame } from '../components/bundle-frame.js';
 import { assignEpicColors }                  from '../lib/epics.js';
 import { countActiveTasksByEpic, rankEpics } from '../lib/epic-ranking.js';
-import { claimTopbar, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmAction, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
@@ -61,19 +61,20 @@ export async function mount(root, { store, api, prefs }) {
   head.appendChild(subcount);
 
   // Search
-  const search = document.createElement('div');
-  search.className = 'tm-search';
-  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find… (prefix ! to exclude)" /><span class="cmp-kbd">⌘K</span>`;
-  const searchInput = search.querySelector('input');
-  searchInput.value = state.filters.search || '';
-  let searchTimer = null;
-  searchInput.addEventListener('input', () => {
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      state.filters.search = searchInput.value;
+  const { el: search, input: searchInput } = tmSearch({
+    placeholder: 'Find… (prefix ! to exclude)',
+    ariaLabel: 'Find tasks',
+    value: state.filters.search || '',
+    onInput: (value) => {
+      state.filters.search = value;
       paint(); savePrefs();
-    }, 180);
+    },
   });
+  // Filters are reset from the board too; that path empties the field without an input event.
+  const resetSearchField = () => {
+    searchInput.value = '';
+    search.classList.remove('tm-search--has-value');
+  };
   head.appendChild(search);
 
   // Priority chips
@@ -302,7 +303,7 @@ export async function mount(root, { store, api, prefs }) {
       onClearFilters: () => {
         state.filters = { ...DEFAULT_FILTERS };
         state.collapsed = new Set();
-        searchInput.value = '';
+        resetSearchField();
         updatePriorityChips(pri, { active: [] });
         prefs.patch({ kanban: { collapsed_columns: [] } });
         paint(); savePrefs();
@@ -325,7 +326,7 @@ export async function mount(root, { store, api, prefs }) {
     const clearAllFilters = () => {
       state.filters = { ...DEFAULT_FILTERS };
       state.collapsed = new Set();
-      searchInput.value = '';
+      resetSearchField();
       updatePriorityChips(pri, { active: [] });
       prefs.patch({ kanban: { collapsed_columns: [] } });
       paint(); savePrefs();

@@ -18,8 +18,10 @@ export async function mount(root, { store, api }) {
   root.classList.add('dk-desk');
 
   // Topbar: project label only (no view switcher — the desk has a single view).
+  // Nothing is appended without a name: an empty label would still open the topbar's second row.
   const topbarSlot = claimTopbar();
-  if (topbarSlot) topbarSlot.appendChild(h('span', { class: 'dk-proj' }, store?.projectName?.() || ''));
+  const projectName = store?.projectName?.() || '';
+  if (topbarSlot && projectName) topbarSlot.appendChild(h('span', { class: 'dk-proj' }, projectName));
 
   const boardEl = h('section', { class: 'dk-board', 'aria-label': 'Sticky notes' });
   const bandEl = h('section', { class: 'dk-continuity', 'aria-label': 'Continuity' });

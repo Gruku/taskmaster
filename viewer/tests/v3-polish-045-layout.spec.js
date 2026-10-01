@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 // Verifies the layout fixes from v3-polish-045:
 //   - .main fits the viewport exactly (no clipped padding)
 //   - topbar is sticky at the top of .main
-//   - .screen-mount never scrolls itself
+//   - .screen-mount has nothing to scroll when the screen fits itself to the slot
 //   - Kanban: .kanban-page fills .screen-mount, only column bodies scroll
 //   - Other screens: their root is the scroller, topbar stays put
 
@@ -46,16 +46,18 @@ test('topbar is sticky and stays at top of .main on any screen', async ({ page }
   expect(probe.hasBackground).toBe(true);
 });
 
-test('screen-mount itself does not scroll', async ({ page }) => {
+test('screen-mount has nothing to scroll when the screen owns the scroll', async ({ page }) => {
   await page.goto('/v3#/issues');
   await page.waitForLoadState('networkidle');
+  await page.waitForSelector('.screen-mount > .issues', { timeout: 5000 });
   const probe = await page.evaluate(() => {
     const sm = document.querySelector('.screen-mount');
-    const cs = getComputedStyle(sm);
-    return { overflow: cs.overflow, overflowY: cs.overflowY };
+    return { scrollH: sm.scrollHeight, clientH: sm.clientHeight, scrollW: sm.scrollWidth, clientW: sm.clientWidth };
   });
-  // overflow shorthand may resolve to "hidden" or "hidden hidden" depending on browser
-  expect(probe.overflow.startsWith('hidden')).toBe(true);
+  // The slot may scroll for a screen that does not fit itself to it (settings, epics);
+  // a screen with its own scroller must leave the slot with no overflow.
+  expect(probe.scrollH).toBeLessThanOrEqual(probe.clientH);
+  expect(probe.scrollW).toBeLessThanOrEqual(probe.clientW);
 });
 
 test('kanban: page fills screen-mount, board never scrolls, column bodies do', async ({ page }) => {

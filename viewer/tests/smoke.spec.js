@@ -8,8 +8,8 @@ const ROUTES = [
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
 ];
 
-// Number of sidebar links is derived from ROUTES (unique sidebarKeys) so it stays in sync.
-const SIDEBAR_LINK_COUNT = new Set(ROUTES.map(r => r.sidebarKey).filter(Boolean)).size;
+// Every nav entry in components/sidebar.js SECTIONS (task detail is a route, not a nav entry).
+const SIDEBAR_LINK_COUNT = 10;
 
 test.describe('Viewer v3 smoke', () => {
   test('boots and renders sidebar', async ({ page }) => {

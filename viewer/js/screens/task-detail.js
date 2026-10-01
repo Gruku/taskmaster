@@ -2,7 +2,7 @@ import { getTaskDetailFull, invalidateTask } from '../store.js';
 import { mountTaskDetailDocument } from '../components/task-detail-document.js';
 import { claimTopbar } from '../lib/topbar.js';
 
-export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: 'task' };
+export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: null };
 
 function stateBlock(headline, hint) {
   const wrap = document.createElement('div');
@@ -37,8 +37,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     return () => {};
   }
 
-  // Persist the most-recently-viewed task so the sidebar's Task entry
-  // re-opens it when clicked without an id.
+  // Persist the most-recently-viewed task so a bare #/task re-opens it.
   if (prefs?.patch) prefs.patch({ ui: { last_task_id: id } });
 
   const onNavigate = (toId) => { location.hash = `#/task/${toId}`; };

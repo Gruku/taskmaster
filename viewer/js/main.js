@@ -2,7 +2,8 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { init as routerInit, registerScreen } from './router.js';
 import { mountSidebar } from './components/sidebar.js';
-import { initTheme } from './lib/theme.js';
+import { initTheme, setThemePref } from './lib/theme.js';
+import { icon } from './components/icon.js';
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
@@ -51,6 +52,10 @@ function deepMerge(base, patch) {
 }
 
 async function boot() {
+  // Before the fetches and before initTheme: the toggle is usable while boot waits,
+  // and initTheme's first theme:changed event finds its listener.
+  wireThemeToggle();
+
   // Initial fetches in parallel
   let identity, prefsData;
   try {
@@ -61,7 +66,7 @@ async function boot() {
   } catch (e) {
     // Render boot error into the sidebar placeholder so the page isn't silently blank.
     const sidebarEl = document.getElementById('sidebar');
-    if (sidebarEl) sidebarEl.innerHTML = `<div style="padding:16px;color:#d66b5f;font-size:11px">Boot failed: ${e.message}</div>`;
+    if (sidebarEl) sidebarEl.replaceChildren(Object.assign(document.createElement('div'), { className: 'boot-error', textContent: `Boot failed: ${e.message}` }));
     console.error('boot failed', e);
     return;
   }
@@ -84,11 +89,37 @@ async function boot() {
     deps: { store, api, prefs },
   });
 
+  // Ctrl+K / ⌘K focuses the current screen's search field (the hint beside it names this shortcut).
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const input = document.querySelector('[data-global-search]');
+      if (input) { e.preventDefault(); input.focus(); input.select(); }
+    }
+  });
+
   // Detail-modal interception (delegated <a> clicks → openDetail when mode=modal).
   import('./lib/open-detail.js').then(({ installDetailInterceptor }) => installDetailInterceptor());
 
   // Backlog polling loop
   pollBacklogForever();
+}
+
+// The toggle always offers the other theme; its label and pressed state follow theme:changed.
+// Until the first event it reads the theme the pre-paint script in index.html applied.
+function wireThemeToggle() {
+  const toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+  toggle.replaceChildren(icon('polarity', { size: 20 }));
+  const sync = (theme) => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    toggle.setAttribute('aria-label', `Switch to ${next} theme`);
+    toggle.title = `Switch to ${next} theme`;
+    toggle.setAttribute('aria-pressed', String(theme === 'light'));
+    toggle.dataset.next = next;
+  };
+  sync(document.documentElement.dataset.theme);
+  document.addEventListener('theme:changed', (e) => sync(e.detail.theme));
+  toggle.addEventListener('click', () => setThemePref(toggle.dataset.next));
 }
 
 async function pollBacklogForever() {

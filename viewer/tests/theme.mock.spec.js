@@ -67,11 +67,23 @@ test('blocked localStorage does not break boot', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('a throwing matchMedia does not break boot', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript(() => { window.matchMedia = () => { throw new Error('matchMedia denied'); }; });
+  await mockApi(page);
+  await page.goto('/#/settings');
+  await expect(page.locator('#sidebar .sidebar-link').first()).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');   // same fallback as the inline script
+  expect(errors).toEqual([]);
+});
+
 test('fonts load locally with no network font request', async ({ page }) => {
   const external = [];
   page.on('request', (r) => { if (!r.url().startsWith('http://127.0.0.1')) external.push(r.url()); });
   await mockApi(page);
   await page.goto('/#/settings');
+  await expect(page.locator('#sidebar .sidebar-link').first()).toBeVisible();   // body-font text is on the page
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => document.fonts.check('600 16px "DM Sans"'))).toBe(true);
   expect(external).toEqual([]);

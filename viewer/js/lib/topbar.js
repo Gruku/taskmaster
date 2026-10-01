@@ -1,12 +1,31 @@
 // Shared #topbar-actions helpers — Layer 2/3 of v3-control-consistency.
 // Each screen's mount() calls claimTopbar() to wipe the slot and gets back the slot element.
 // Then it appends primitives built with tmSubcount/tmSearch/tmSegmented/tmAction.
+// The topbar has two rows: row 1 (title, count, primary action, theme toggle) and row 2
+// (#topbar-actions: search, view switcher, filters). claimTopbar() clears both and returns row 2.
+
+import { icon } from '../components/icon.js';
 
 export function claimTopbar() {
+  document.getElementById('topbar-count')?.replaceChildren();
+  document.getElementById('topbar-primary')?.replaceChildren();
   const root = document.getElementById('topbar-actions');
   if (!root) return null;
   root.replaceChildren();
   return root;
+}
+
+export function claimTopbarPrimary() { return document.getElementById('topbar-primary'); }
+
+export function setTopbarCount(text = '') {
+  const el = document.getElementById('topbar-count');
+  if (el) el.textContent = text;
+}
+
+// The hint next to the search field names the shortcut main.js actually binds.
+function searchShortcutHint() {
+  const platform = typeof navigator !== 'undefined' ? (navigator.platform || '') : '';
+  return /Mac|iPhone|iPad/.test(platform) ? '⌘K' : 'Ctrl K';
 }
 
 export function tmSubcount(text = '') {
@@ -16,19 +35,20 @@ export function tmSubcount(text = '') {
   return el;
 }
 
-export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd = '⌘K', debounceMs = 180, ariaLabel } = {}) {
+// kbd: omit for the platform's shortcut hint; pass a falsy value to hide it.
+export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd, debounceMs = 180, ariaLabel } = {}) {
+  if (kbd === undefined) kbd = searchShortcutHint();
   const wrap = document.createElement('div');
   wrap.className = 'tm-search';
-  const icon = document.createElement('span');
-  icon.className = 'icon';
-  icon.textContent = '⌕';
+  const glyph = icon('search', { size: 16 });
   const input = document.createElement('input');
   // Use type="text" to suppress the WebKit-native clear pseudo-element which is
   // unstyleable and fires inconsistent events. We provide our own clear button.
   input.type = 'text';
   input.placeholder = placeholder;
   input.value = value || '';
-  if (ariaLabel) input.setAttribute('aria-label', ariaLabel);
+  input.setAttribute('aria-label', ariaLabel || placeholder.replace(/…$/, ''));
+  input.dataset.globalSearch = '';
 
   // Clear button — visible only when the field has content.
   const clearBtn = document.createElement('button');
@@ -59,7 +79,7 @@ export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd =
     }
   });
 
-  wrap.append(icon, input, clearBtn);
+  wrap.append(glyph, input, clearBtn);
 
   if (kbd) {
     const k = document.createElement('span');
@@ -153,6 +173,5 @@ export function tmAction({ icon, label, variant, title, onClick, href, disabled 
 export function rightCluster() {
   const el = document.createElement('div');
   el.className = 'tm-right';
-  el.style.cssText = 'margin-left:auto; display:inline-flex; align-items:center; gap:var(--sp-2);';
   return el;
 }

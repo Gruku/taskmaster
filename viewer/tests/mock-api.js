@@ -4,6 +4,7 @@ export async function mockApi(page, table = {}) {
   const base = {
     '/api/identity': { version: '0.0.0-test' },
     '/api/viewer/prefs': { theme: 'system', ui: {}, screens: {} },
+    '/api/ideas': { ideas: [] },
   };
   const merged = { ...base, ...table };
   await page.route('**/api/**', (route) => {

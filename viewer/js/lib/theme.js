@@ -12,8 +12,9 @@ export function resolveTheme(p, systemDark) {
 }
 export function currentPref() { return pref; }
 
+// Dark when the OS can't be asked — the same fallback as the inline script.
 function systemDark() {
-  return typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)').matches : true;
+  try { return matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; }
 }
 function apply() {
   const theme = resolveTheme(pref, systemDark());
@@ -36,8 +37,9 @@ export function initTheme({ store, prefs }) {
     // Prefs fetch failed: keep the cached choice and leave the cache alone, so one bad boot can't erase it.
     try { pref = normalizePref(localStorage.getItem(KEY)); } catch { pref = 'system'; }
   }
-  if (typeof matchMedia === 'function') {
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (pref === 'system') apply(); });
-  }
+  try {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener?.('change', () => { if (pref === 'system') apply(); });
+  } catch { /* no OS scheme to follow: the theme still applies */ }
   apply();
 }

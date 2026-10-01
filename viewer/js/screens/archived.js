@@ -1,7 +1,7 @@
 // Archived tasks — list of all tasks with status === 'archived', grouped by epic.
 // Read-only. No filters apart from search.
 
-import { claimTopbar } from '../lib/topbar.js';
+import { claimTopbar, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 
@@ -17,15 +17,11 @@ export async function mount(root, { store }) {
   subcount.textContent = '… archived tasks';
   head.appendChild(subcount);
 
-  const search = document.createElement('div');
-  search.className = 'tm-search';
-  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Filter by title or id…" /><span class="cmp-kbd">⌘K</span>`;
-  const searchInput = search.querySelector('input');
   let q = '';
-  let timer = null;
-  searchInput.addEventListener('input', () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { q = searchInput.value.trim().toLowerCase(); paint(); }, 180);
+  const { el: search } = tmSearch({
+    placeholder: 'Filter by title or id…',
+    ariaLabel: 'Filter archived tasks',
+    onInput: (value) => { q = value.trim().toLowerCase(); paint(); },
   });
   head.appendChild(search);
 
