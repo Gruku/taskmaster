@@ -108,7 +108,7 @@ test('links with their own colour rule keep it; only unclaimed links take the si
       return getComputedStyle(el).color;
     };
     return {
-      signature: resolve('--signature-text'),
+      signature: resolve('--text-accent'),
       body: resolve('--foreground-default'),
       nav: color('.sidebar-link:not(.active)'),
       classless: color('#screen-mount .tm-empty__hint a'),

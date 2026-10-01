@@ -10,7 +10,7 @@ html, body {
 button, input, select, textarea { font: inherit; color: inherit; }
 /* Links no rule has claimed: the browser's default blue is unreadable on the dark grounds.
    :where() keeps this at zero specificity so any class rule (.sidebar-link, .tm-action…) still wins. */
-:where(a[href]) { color: var(--signature-text); }
+:where(a[href]) { color: var(--text-accent); }
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 ::selection { background: var(--signature-dim); }
 .mono { font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
@@ -88,7 +88,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sidebar-link.active { background: var(--signature-glow-strong); color: var(--foreground-bold); border-color: var(--signature-dim); }
 .sidebar-link .ic { display: inline-flex; color: var(--foreground-subtle); }
 .sidebar-link:hover .ic { color: var(--foreground-default); }
-.sidebar-link.active .ic { color: var(--signature-text); }
+.sidebar-link.active .ic { color: var(--text-accent); }
 
 /* Collapse toggle button. The chevron glyph points right; expanded, it is turned to point left.
    The mobile drawer shows .sidebar-close-btn in its place. */
@@ -234,7 +234,7 @@ body, .shell, .sidebar, .topbar, .main {
 .btn-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--foreground-default); cursor: pointer; transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass); }
 .btn-icon:hover { background: var(--ground-15); border-color: var(--border-strong); color: var(--foreground-bold); }
 .btn-icon:disabled { background: transparent; border-color: var(--border-subtle); color: var(--foreground-disabled); cursor: default; }
-#theme-toggle { color: var(--signature-text); }
+#theme-toggle { color: var(--text-accent); }
 #theme-toggle:disabled { color: var(--foreground-disabled); }
 
 /* Search field: while the input has focus the wrapper carries the ring, so the ring follows

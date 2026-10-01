@@ -74,3 +74,18 @@ test('sticky notes: both inks are AA on both papers, and the paper is the same i
     assert.equal(resolve('dark', t), resolve('light', t), `${t} is theme-independent`);
   }
 });
+
+test('accent text and text on the accent fill are AA', () => {
+  assertAA([
+    [BOTH, '--text-accent', ['--bg-page', '--surface-ground', '--card-bg']],
+    [['dark'], '--text-accent', ['--surface-overlay']],
+    [BOTH, '--on-accent-fill', ['--signature-fill']],
+  ]);
+});
+
+test('legacy aliases that paint the accent as text go through --text-accent', () => {
+  for (const alias of ['--accent-blue', '--accent-edit', '--accent-2', '--issues-investigating']) {
+    for (const theme of BOTH) assert.equal(THEMES[theme][alias], 'var(--text-accent)', `${alias} (${theme})`);
+  }
+  for (const theme of BOTH) assert.equal(THEMES[theme]['--ink-on-accent'], 'var(--on-accent-fill)');
+});

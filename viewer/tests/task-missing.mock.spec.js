@@ -21,11 +21,11 @@ test('the not-found link takes the signature colour in both themes, not the brow
 
   await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'dark', ui: {}, screens: {} } });
   await page.goto('/#/task/NOPE-999');
-  await expect(link).toHaveCSS('color', 'rgb(94, 121, 230)');   // signature-text dark = #5e79e6
+  await expect(link).toHaveCSS('color', 'rgb(138, 158, 235)');   // text-accent dark = signature-vivid #8a9eeb
 
   await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'light', ui: {}, screens: {} } });
   await page.reload();
-  await expect(link).toHaveCSS('color', 'rgb(63, 88, 192)');    // signature-text light = #3f58c0
+  await expect(link).toHaveCSS('color', 'rgb(63, 88, 192)');     // text-accent light = signature #3f58c0
 });
 
 test('no task id shows the empty state without inline styles', async ({ page }) => {

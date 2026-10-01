@@ -181,6 +181,10 @@
   --col-bg: var(--bg-recessed);              /* board column = milled channel */
   --card-bg: var(--surface-raised);
   --card-bg-hover: var(--ground-15);
+  /* The signature hue is too dark to read as text on the raised grounds, so text takes its vivid step.
+     --text-accent is the only token for signature-hued text; --on-accent-fill is text on a --signature-fill ground. */
+  --text-accent: var(--signature-vivid);
+  --on-accent-fill: var(--ground-0);
   --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
   --cat-2: var(--accent-cyan);
   --cat-3: var(--accent-pink);
@@ -216,12 +220,12 @@
   --ink-2: var(--foreground-default);
   --ink-3: var(--foreground-subtle);
   --ink-4: var(--foreground-subtle);
-  --ink-on-accent: var(--on-signature);
+  --ink-on-accent: var(--on-accent-fill);
   --accent: var(--signature);
-  --accent-2: var(--signature-vivid);
+  --accent-2: var(--text-accent);
   --accent-soft: var(--signature-glow);
-  --accent-blue: var(--signature-text);
-  --accent-edit: var(--signature-text);
+  --accent-blue: var(--text-accent);
+  --accent-edit: var(--text-accent);
   --accent-green: var(--color-success);
   --green: var(--color-success);
   --amber: var(--color-warning);
@@ -280,7 +284,7 @@
   --card-recent-glow: none;
   --issues-card-bg: var(--card-bg);
   --issues-card-border: var(--border-subtle);
-  --issues-investigating: var(--signature-text);
+  --issues-investigating: var(--text-accent);
   --task-rail-w: 280px;
   --task-grid-gap: var(--space-md);
   --task-section-mb: var(--space-md);
@@ -341,6 +345,8 @@
   --card-bg-hover: var(--ground-5);
   --note-ink: var(--ground-100);
   --note-ink-soft: var(--ground-50);
+  --text-accent: var(--signature);
+  --on-accent-fill: var(--on-signature);
   --cat-2: var(--pastel-cyan-grounded);
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);
@@ -348,7 +354,6 @@
 
   /* ── Legacy aliases — DELETE in plan 4. The old screens paint these hues as text;
      on light grounds only the darker step of each stays readable. ── */
-  --accent-2: var(--signature-text);
   --accent-green: var(--color-success-bold);
   --green: var(--color-success-bold);
   --amber: var(--color-warning-bold);

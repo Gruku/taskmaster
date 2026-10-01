@@ -104,6 +104,8 @@ export function violations(f) {
       if ((prop === 'font-style' || prop === 'font') && w.some((x) => /^(italic|oblique)$/i.test(x))) v.push(`${where}: italic`);
       if (/var\(\s*--size-section-label\b/.test(value)) v.push(`${where}: section-label size (10px, below the 11px floor)`);
       if (hasColorLiteral(value)) v.push(`${where}: color literal (${prop})`);
+      // The signature hue fails AA as text on raised surfaces; --text-accent is the one token allowed to carry it.
+      if (prop === 'color' && /var\(\s*--signature\b/.test(value)) v.push(`${where}: signature hue as text (use --text-accent)`);
       if (!isTokens) {
         if (prop === 'font-size' && !/var\(--/.test(value) && !/^(inherit|1em)$/.test(value)) v.push(`${where}: raw font-size (${value})`);
         if (prop.startsWith('--') && !/style\s*=/.test(selector)) v.push(`${where}: custom property defined outside tokens.css`);
@@ -211,6 +213,14 @@ test('selftest: box-shadow, font-size, italic, section label, stray custom prope
   clean('.a { padding: var(--space-md); }');
 });
 
+test('selftest: signature hue as text', () => {
+  for (const t of ['--signature', '--signature-text', '--signature-vivid', '--signature-fill']) {
+    caught(`.a { color: var(${t}); }`, 'signature hue as text');
+  }
+  clean('.a { color: var(--text-accent); background: var(--signature-fill); border-color: var(--signature-dim); }');
+  clean('.a { color: var(--on-accent-fill); outline: 2px solid var(--signature); }');
+});
+
 test('selftest: at-rules and nesting', () => {
   caught('@media (max-width: 768px) { .a { color: #fff; } }', 'color literal');
   caught('@supports (display: grid) { @media (min-width: 1px) { .a:hover { scale: 1.1; } } }', 'transform on hover');
@@ -230,9 +240,9 @@ test('selftest: at-rules and nesting', () => {
 
 test('selftest: functional pseudo-classes in a selector', () => {
   // :where()/:is()/:not() carry parentheses and brackets; the rule under them is still found and checked.
-  assert.deepEqual(rules(':where(a[href]) { color: var(--signature-text); }').map((r) => [r.selector, r.body.trim()]),
-    [[':where(a[href])', 'color: var(--signature-text);']]);
-  clean(':where(a[href]) { color: var(--signature-text); }');
+  assert.deepEqual(rules(':where(a[href]) { color: var(--text-accent); }').map((r) => [r.selector, r.body.trim()]),
+    [[':where(a[href])', 'color: var(--text-accent);']]);
+  clean(':where(a[href]) { color: var(--text-accent); }');
   caught(':where(a[href]) { color: #5e79e6; }', 'color literal');
   caught(':where(.a:hover) { transform: scale(1.1); }', 'transform on hover');
   caught(':is(.a, .b):hover { translate: 0 -1px; }', 'transform on hover');
