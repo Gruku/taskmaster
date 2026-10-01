@@ -37,9 +37,6 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     return () => {};
   }
 
-  // Persist the most-recently-viewed task so a bare #/task re-opens it.
-  if (prefs?.patch) prefs.patch({ ui: { last_task_id: id } });
-
   const onNavigate = (toId) => { location.hash = `#/task/${toId}`; };
   const onToggleVariant = async (next) => {
     await api.savePrefs({ screens: { task_detail: { view: next } } });
@@ -53,6 +50,14 @@ export function mount(root, { params, store, api, prefs, subpath }) {
   const view = urlView || (prefsData?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
   let cleanup;
   let disposed = false, generation = 0;
+  // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has
+  // painted: remembering an id that does not load would send bare #/task to a dead end.
+  let remembered = false;
+  function rememberAsLast() {
+    if (remembered || !prefs?.patch) return;
+    remembered = true;
+    prefs.patch({ ui: { last_task_id: id } });
+  }
   async function paint(value, request) {
     cleanup?.();
     const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant};
@@ -66,7 +71,10 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     const request = ++generation;
     try {
       const value = await getTaskDetailFull(id, {force: true});
-      if (!disposed && request === generation && !store.isEditing(id)) await paint(value, request);
+      if (!disposed && request === generation && !store.isEditing(id)) {
+        await paint(value, request);
+        if (!disposed && request === generation) rememberAsLast();
+      }
     } catch (e) {
       if (!disposed && request === generation && !store.isEditing(id)) {
         cleanup?.();

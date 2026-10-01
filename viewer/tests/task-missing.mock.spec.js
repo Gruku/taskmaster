@@ -53,3 +53,35 @@ test('missing task opened after a real one drops that task\'s topbar controls', 
   await expect(page.locator('#topbar-actions > *')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('a missing task is not remembered as the last one opened; a real one is', async ({ page }) => {
+  await mockApi(page, {
+    '/api/task/REAL-1/detail': {
+      task: { id: 'REAL-1', title: 'A real task', status: 'todo', epic: 'demo' },
+      related: {},
+      claim: null,
+      etag: 't1:test',
+    },
+    '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } },
+  });
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/viewer/prefs')) puts.push(r.postData()); });
+  const headline = page.locator('#screen-mount .tm-empty__headline');
+
+  await page.goto('/#/task/NOPE-999');
+  await expect(headline).toHaveText('Task not found');
+  // Bare #/task re-opens the last task; a missing id must not have become that.
+  await page.evaluate(() => { location.hash = '#/task'; });
+  await expect(headline).toHaveText('No task open');
+  expect(await page.evaluate(() => location.hash)).toBe('#/task');
+  await page.waitForTimeout(700);   // longer than the prefs debounce: a queued save would have gone out
+  expect(puts.join('\n')).not.toContain('last_task_id');
+
+  await page.evaluate(() => { location.hash = '#/task/REAL-1'; });
+  await expect(page.locator('#screen-mount')).toContainText('A real task');
+  await expect.poll(() => puts.join('\n')).toContain('"last_task_id":"REAL-1"');
+  expect(puts.join('\n')).not.toContain('NOPE-999');
+  await page.evaluate(() => { location.hash = '#/task'; });
+  await expect(page.locator('#screen-mount')).toContainText('A real task');
+  expect(await page.evaluate(() => location.hash)).toBe('#/task/REAL-1');
+});
