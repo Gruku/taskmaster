@@ -359,3 +359,13 @@ test.describe('mobile drawer', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });
+
+test('the page icons are real files the server can deliver', async ({ page }) => {
+  await page.goto('/#/kanban');
+  const hrefs = await page.locator('link[rel="icon"]').evaluateAll((links) => links.map((l) => l.href));
+  expect(hrefs.map((h) => new URL(h).pathname)).toEqual(['/vendor/favicon.ico', '/vendor/icon.svg']);
+  for (const href of hrefs) {
+    const res = await page.request.get(href);
+    expect(res.status(), href).toBe(200);
+  }
+});

@@ -1,0 +1,8 @@
+<!-- User intent: the Board app icon redrawn on whole pixels for the 32 px favicon size only, where the 24-unit artwork's column edges go soft. Same design, simplified.
+     Colours are Reality Reprojection ground-0, ground-20, ground-100 (dark) and signature, written as literals because an icon file cannot read CSS variables. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect x="1.5" y="1.5" width="29" height="29" rx="5" fill="#0d0d0c" stroke="#343331" stroke-width="1"/>
+  <rect x="8" y="7" width="4" height="18" rx="1" fill="#f5f3ed"/>
+  <rect x="14" y="7" width="4" height="11" rx="1" fill="#f5f3ed"/>
+  <rect x="20" y="7" width="4" height="14" rx="1" fill="#5e79e6"/>
+</svg>

@@ -10567,6 +10567,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         from urllib.parse import unquote, urlparse
         parsed = urlparse(self.path)
         clean_path = unquote(parsed.path)
+        # Browsers ask for /favicon.ico on their own; it is the viewer's vendored icon.
+        if clean_path == "/favicon.ico":
+            clean_path = "/static/v3/vendor/favicon.ico"
 
         if clean_path in ("/", "/index.html", "/v3", "/v3/", "/v3/index.html"):
             viewer_root = SCRIPT_DIR / "viewer"
@@ -10578,6 +10581,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             html = html.replace('href="css/', 'href="/static/v3/css/')
             html = html.replace('src="js/', 'src="/static/v3/js/')
             html = html.replace('src="vendor/', 'src="/static/v3/vendor/')
+            html = html.replace('href="vendor/', 'href="/static/v3/vendor/')
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
