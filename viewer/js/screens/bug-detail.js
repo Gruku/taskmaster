@@ -43,13 +43,20 @@ export async function mount(root, { params, subpath, store, prefs }) {
   let bug;
   try {
     bug = await api.getBug(id);
+    if (Array.isArray(bug)) bug = null;
   } catch (e) {
-    const empty = document.createElement('div');
-    empty.className = 'id-empty';
-    empty.textContent = `Could not load bug ${id}: ${e.message}`;
-    root.appendChild(empty);
-    claimTopbar();
-    return () => { root.classList.remove('bug-detail'); };
+    // http() throws `GET <path> → <status>: <body>`; anchor on the arrow so an
+    // id like B-404 in the path can't read as a status.
+    if (/→ 404\b/.test(String(e?.message))) {
+      bug = null;
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'id-empty';
+      empty.textContent = `Could not load bug ${id}.`;
+      root.appendChild(empty);
+      claimTopbar();
+      return () => { root.classList.remove('bug-detail'); };
+    }
   }
 
   if (!bug) {

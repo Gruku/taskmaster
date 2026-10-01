@@ -10717,7 +10717,22 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, detail, etag=snapshot[1])
             return
-        elif clean_path.startswith("/api/bugs"):
+        elif clean_path.startswith("/api/bugs/"):
+            bug_id = clean_path[len("/api/bugs/"):]
+            found = None
+            snapshot = self._snapshot()
+            if snapshot is not None and re.fullmatch(r"[A-Za-z0-9_\-]+", bug_id):
+                row = _dict_row(snapshot[0], "bug", bug_id)
+                if row is not None:
+                    fm, body = row
+                    found = {k: v for k, v in fm.items() if k != "_body"}
+                    found["summary"] = (body or "").strip()
+            if found is None:
+                self._send_json(404, {"ok": False, "error": f"unknown bug {bug_id}"})
+                return
+            self._send_json(200, found, etag=snapshot[1])
+            return
+        elif clean_path == "/api/bugs":
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             include_archive = qs.get("include_archive", ["false"])[0].strip().lower() in ("1", "true", "yes", "on")
