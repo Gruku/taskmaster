@@ -33,6 +33,9 @@ test('labelled icon is exposed to assistive tech', () => {
   assert.equal(el.getAttribute('aria-hidden'), null);
 });
 test('unknown icon throws', () => { assert.throws(() => icon('nope')); });
+test('inherited object keys are not icons', () => {
+  for (const n of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) assert.throws(() => icon(n), /unknown icon/, n);
+});
 test('the 16 design-system glyphs and the 7 viewer glyphs exist', () => {
   for (const n of ['arrow','check','chevron','copy','dismiss','document','edit','external','folder','grid','minus','more','plus','polarity','search','sliders','kanban','table','alert','bug','idea','archive','menu']) assert.ok(ICONS[n], n);
   assert.equal(Object.keys(ICONS).length, 23);

@@ -52,12 +52,30 @@ test('screen-mount has nothing to scroll when the screen owns the scroll', async
   await page.waitForSelector('.screen-mount > .issues', { timeout: 5000 });
   const probe = await page.evaluate(() => {
     const sm = document.querySelector('.screen-mount');
-    return { scrollH: sm.scrollHeight, clientH: sm.clientHeight, scrollW: sm.scrollWidth, clientW: sm.clientWidth };
+    const tb = document.querySelector('.topbar').getBoundingClientRect();
+    const box = sm.getBoundingClientRect();
+    const main = document.querySelector('.main');
+    const before = sm.scrollTop;
+    sm.scrollTop = 50;
+    const moved = sm.scrollTop;
+    sm.scrollTop = before;
+    return {
+      scrollH: sm.scrollHeight, clientH: sm.clientHeight, scrollW: sm.scrollWidth, clientW: sm.clientWidth,
+      top: box.top, bottom: box.bottom, topbarBottom: tb.bottom, moved,
+      mainScrollH: main.scrollHeight, mainClientH: main.clientHeight, windowScrollY: window.scrollY,
+    };
   });
   // The slot may scroll for a screen that does not fit itself to it (settings, epics);
   // a screen with its own scroller must leave the slot with no overflow.
   expect(probe.scrollH).toBeLessThanOrEqual(probe.clientH);
   expect(probe.scrollW).toBeLessThanOrEqual(probe.clientW);
+  expect(probe.moved).toBe(0);
+  // The slot takes exactly the space between the topbar and the bottom of the viewport,
+  // and nothing above it scrolls either.
+  expect(probe.top).toBe(probe.topbarBottom);
+  expect(probe.bottom).toBe(VIEWPORT_H);
+  expect(probe.mainScrollH).toBeLessThanOrEqual(probe.mainClientH);
+  expect(probe.windowScrollY).toBe(0);
 });
 
 test('kanban: page fills screen-mount, board never scrolls, column bodies do', async ({ page }) => {
@@ -72,7 +90,8 @@ test('kanban: page fills screen-mount, board never scrolls, column bodies do', a
     if (!page || !board) return { error: 'kanban not rendered' };
     const bodies = Array.from(document.querySelectorAll('.kanban-col-body'));
     return {
-      smHeight: sm.getBoundingClientRect().height,
+      // The slot's content box: it carries the page gutter as padding.
+      smHeight: sm.clientHeight - parseFloat(getComputedStyle(sm).paddingTop) - parseFloat(getComputedStyle(sm).paddingBottom),
       pageHeight: page.getBoundingClientRect().height,
       pageScrollH: page.scrollHeight,
       pageClientH: page.clientHeight,
@@ -82,7 +101,7 @@ test('kanban: page fills screen-mount, board never scrolls, column bodies do', a
     };
   });
   expect(layout.error).toBeUndefined();
-  // kanban-page fills screen-mount (within 1px tolerance for borders)
+  // kanban-page fills screen-mount's content box (within 1px tolerance for borders)
   expect(Math.abs(layout.pageHeight - layout.smHeight)).toBeLessThanOrEqual(1);
   // kanban-page does NOT scroll itself
   expect(layout.pageScrollH).toBeLessThanOrEqual(layout.pageClientH + 1);

@@ -13,11 +13,11 @@ test('theme toggle flips and persists the choice', async ({ page }) => {
   page.on('request', (r) => { if (r.method() === 'PUT') puts.push(r.postData()); });
   const toggle = page.locator('#theme-toggle');
   await expect(toggle).toHaveAttribute('aria-label', 'Switch to light theme');
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await toggle.click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(toggle).toHaveAttribute('aria-label', 'Switch to dark theme');
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  // An action button: the label names the result, so it carries no pressed state.
+  expect(await toggle.getAttribute('aria-pressed')).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem('tm.theme'))).toBe('light');
   await expect.poll(() => puts.join('')).toContain('"theme":"light"');
 });
@@ -32,6 +32,23 @@ test('theme toggle works from the keyboard', async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.keyboard.press('Space');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+test('theme toggle is disabled until the saved preference has loaded', async ({ page }) => {
+  // A click before prefs arrive would be applied, then silently reverted by the loaded value.
+  let release;
+  const gate = new Promise((ok) => { release = ok; });
+  await page.route('**/api/viewer/prefs', async (route) => {
+    await gate;
+    await route.fulfill({ json: { theme: 'dark', ui: {}, screens: {} } });
+  });
+  await page.goto('/#/settings', { waitUntil: 'commit' });
+  const toggle = page.locator('#theme-toggle');
+  await expect(toggle.locator('svg.icon')).toHaveCount(1);   // boot has started and is waiting on prefs
+  await expect(toggle).toBeDisabled();
+  release();
+  await expect(toggle).toBeEnabled();
+  await expect(toggle).toHaveAttribute('aria-label', 'Switch to light theme');
 });
 
 test('active nav item has no shadow and no left rail; Task item is gone', async ({ page }) => {
@@ -113,6 +130,49 @@ test('Ctrl+K focuses the search field, which has a name and a focus ring', async
   expect(ring.color).toBe(ring.focusColor);
 });
 
+test('the search ring belongs to the input; the clear button shows its own', async ({ page }) => {
+  await page.goto('/#/kanban');
+  const input = page.locator('[data-global-search]');
+  await input.fill('abc');
+  await page.keyboard.press('Tab');
+  const clear = page.locator('.tm-search__clear');
+  await expect(clear).toBeFocused();
+  const styles = await clear.evaluate((el) => ({
+    wrap: getComputedStyle(el.parentElement).outlineStyle,
+    self: getComputedStyle(el).outlineStyle,
+  }));
+  expect(styles.wrap).toBe('none');
+  expect(styles.self).toBe('solid');
+});
+
+test('Ctrl+K leaves focus alone while a modal is open', async ({ page }) => {
+  await page.goto('/#/kanban');
+  await page.locator('#topbar-actions [aria-label="Add task"]').click();
+  const modal = page.locator('[aria-modal="true"]');
+  const field = modal.locator('input, textarea').first();
+  await field.focus();
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Control+k');
+  await expect(field).toBeFocused();
+  await expect(page.locator('[data-global-search]')).not.toBeFocused();
+});
+
+test('Ctrl+K ignores Shift and Alt chords and key events without a key', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.goto('/#/kanban');
+  const input = page.locator('[data-global-search]');
+  await input.waitFor();
+  await page.keyboard.press('Control+Shift+K');
+  await expect(input).not.toBeFocused();
+  await page.keyboard.press('Control+Alt+k');
+  await expect(input).not.toBeFocused();
+  // Autofill and some IMEs dispatch keydown without `key`.
+  await page.evaluate(() => window.dispatchEvent(new Event('keydown')));
+  await page.evaluate(() => window.dispatchEvent(Object.assign(new Event('keydown'), { ctrlKey: true })));
+  expect(errors).toEqual([]);
+});
+
 test('search shortcut hint names the platform shortcut', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { get: () => 'Win32' }));
   await page.goto('/#/issues');
@@ -153,7 +213,6 @@ test.describe('mobile drawer', () => {
 
   test('opens with focus inside, closes on Escape, returns focus', async ({ page }) => {
     await page.goto('/#/kanban');
-    await expect(page.locator('.sidebar-link.active')).toHaveCount(1);   // route settled: a route event closes the drawer
     const burger = page.locator('.topbar-hamburger');
     await expect(burger).toHaveAttribute('aria-expanded', 'false');
     await expect(burger).toHaveAttribute('aria-controls', 'sidebar');
@@ -170,14 +229,67 @@ test.describe('mobile drawer', () => {
     await expect(page.locator('.shell')).not.toHaveClass(/sidebar-drawer-open/);
   });
 
+  test('keeps keyboard focus inside while open; its close button closes it', async ({ page }) => {
+    await page.goto('/#/kanban');
+    const burger = page.locator('.topbar-hamburger');
+    await burger.click();
+    await expect(page.locator('.sidebar-link').first()).toBeFocused();
+    expect(await page.locator('.main').evaluate((el) => el.inert)).toBe(true);
+    // More Tab presses than the drawer has stops: focus never lands on the page behind it.
+    for (let i = 0; i < 14; i++) {
+      await page.keyboard.press('Tab');
+      const where = await page.evaluate(() => {
+        const a = document.activeElement;
+        return a === document.body ? 'body' : document.getElementById('sidebar').contains(a) ? 'drawer' : 'page';
+      });
+      expect(where, `Tab ${i + 1}`).not.toBe('page');
+    }
+    const close = page.locator('.sidebar-close-btn');
+    await expect(close).toBeVisible();
+    await expect(close).toHaveAttribute('aria-label', 'Close navigation');
+    await close.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.shell')).not.toHaveClass(/sidebar-drawer-open/);
+    await expect(burger).toBeFocused();
+    expect(await page.locator('.main').evaluate((el) => el.inert)).toBe(false);
+  });
+
   test('choosing a destination closes the drawer', async ({ page }) => {
     await page.goto('/#/kanban');
-    await expect(page.locator('.sidebar-link.active')).toHaveCount(1);
     await page.locator('.topbar-hamburger').click();
     await page.locator('.sidebar-link[data-key="settings"]').click();
     await expect(page.locator('#page-title')).toHaveText('Settings');
     await expect(page.locator('.shell')).not.toHaveClass(/sidebar-drawer-open/);
     await expect(page.locator('.topbar-hamburger')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('tapping the current page in the drawer closes it', async ({ page }) => {
+    await page.goto('/#/kanban');
+    await expect(page.locator('.sidebar-link.active')).toHaveAttribute('data-key', 'kanban');
+    await page.locator('.topbar-hamburger').click();
+    await page.locator('.sidebar-link[data-key="kanban"]').click();
+    await expect(page.locator('.shell')).not.toHaveClass(/sidebar-drawer-open/);
+    await expect(page.locator('.topbar-hamburger')).toBeFocused();
+  });
+
+  test('a drawer opened while the screen is still mounting stays open', async ({ page }) => {
+    let release;
+    const gate = new Promise((ok) => { release = ok; });
+    await page.route('**/api/ideas**', async (route) => { await gate; await route.fulfill({ json: { ideas: [] } }); });
+    await page.goto('/#/ideas');
+    const burger = page.locator('.topbar-hamburger');
+    await burger.click();
+    await expect(burger).toHaveAttribute('aria-expanded', 'true');
+    release();
+    await expect(page.locator('.sidebar-link.active')).toHaveAttribute('data-key', 'ideas');   // route:changed has fired
+    await expect(burger).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  test('the desktop collapse button has no close-drawer twin showing', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/#/kanban');
+    await expect(page.locator('.sidebar-collapse-btn')).toBeVisible();
+    await expect(page.locator('.sidebar-close-btn')).toBeHidden();
   });
 
   test('topbar row 1 stays 56px and the page does not scroll sideways', async ({ page }) => {

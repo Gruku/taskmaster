@@ -52,8 +52,9 @@ function deepMerge(base, patch) {
 }
 
 async function boot() {
-  // Before the fetches and before initTheme: the toggle is usable while boot waits,
-  // and initTheme's first theme:changed event finds its listener.
+  // Before the fetches and before initTheme: the toggle has its icon and label while boot
+  // waits (it stays disabled until initTheme), and initTheme's first theme:changed event
+  // finds its listener.
   wireThemeToggle();
 
   // Initial fetches in parallel
@@ -73,6 +74,8 @@ async function boot() {
   store.setIdentity(identity);
   store.setPrefs(prefsData);
   initTheme({ store, prefs });
+  // Only now can a click be saved; before this the loaded preference would overwrite it.
+  document.getElementById('theme-toggle')?.removeAttribute('disabled');
 
   // Apply persisted sidebar-collapsed before sidebar mounts so layout doesn't flicker.
   if (prefsData?.ui?.sidebar_collapsed) {
@@ -90,11 +93,13 @@ async function boot() {
   });
 
   // Ctrl+K / ⌘K focuses the current screen's search field (the hint beside it names this shortcut).
+  // Not while a modal is open: the search sits behind the overlay, and moving focus there
+  // would commit the field being edited and send later keystrokes to a filter nobody can see.
   window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-      const input = document.querySelector('[data-global-search]');
-      if (input) { e.preventDefault(); input.focus(); input.select(); }
-    }
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key?.toLowerCase() !== 'k') return;
+    if (document.querySelector('[aria-modal="true"]')) return;
+    const input = document.querySelector('[data-global-search]');
+    if (input) { e.preventDefault(); input.focus(); input.select(); }
   });
 
   // Detail-modal interception (delegated <a> clicks → openDetail when mode=modal).
@@ -104,8 +109,8 @@ async function boot() {
   pollBacklogForever();
 }
 
-// The toggle always offers the other theme; its label and pressed state follow theme:changed.
-// Until the first event it reads the theme the pre-paint script in index.html applied.
+// The toggle is an action, not a state: its label names the theme a click switches to and
+// follows theme:changed. Until the first event it reads the theme the pre-paint script applied.
 function wireThemeToggle() {
   const toggle = document.getElementById('theme-toggle');
   if (!toggle) return;
@@ -114,7 +119,6 @@ function wireThemeToggle() {
     const next = theme === 'dark' ? 'light' : 'dark';
     toggle.setAttribute('aria-label', `Switch to ${next} theme`);
     toggle.title = `Switch to ${next} theme`;
-    toggle.setAttribute('aria-pressed', String(theme === 'light'));
     toggle.dataset.next = next;
   };
   sync(document.documentElement.dataset.theme);

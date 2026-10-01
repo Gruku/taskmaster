@@ -87,8 +87,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sidebar-link:hover .ic { color: var(--foreground-default); }
 .sidebar-link.active .ic { color: var(--signature-text); }
 
-/* Collapse toggle button. The chevron glyph points right; expanded, it is turned to point left. */
-.sidebar-collapse-btn {
+/* Collapse toggle button. The chevron glyph points right; expanded, it is turned to point left.
+   The mobile drawer shows .sidebar-close-btn in its place. */
+.sidebar-collapse-btn,
+.sidebar-close-btn {
   flex: 0 0 auto;
   width: 24px; height: 24px;
   padding: 0;
@@ -102,7 +104,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
               border-color var(--dur-micro) var(--ease-hourglass),
               color var(--dur-micro) var(--ease-hourglass);
 }
-.sidebar-collapse-btn:hover { background: var(--ground-10); border-color: var(--border-strong); color: var(--foreground-bold); }
+.sidebar-collapse-btn:hover,
+.sidebar-close-btn:hover { background: var(--ground-10); border-color: var(--border-strong); color: var(--foreground-bold); }
+.sidebar-close-btn { display: none; }
 .sidebar-collapse-btn .icon { transform: rotate(180deg); }
 .sidebar-collapse-btn.is-collapsed .icon { transform: none; }
 
@@ -226,11 +230,14 @@ body, .shell, .sidebar, .topbar, .main {
 .topbar-primary { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-xs); }
 .btn-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--foreground-default); cursor: pointer; transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass); }
 .btn-icon:hover { background: var(--ground-15); border-color: var(--border-strong); color: var(--foreground-bold); }
+.btn-icon:disabled { background: transparent; border-color: var(--border-subtle); color: var(--foreground-disabled); cursor: default; }
 #theme-toggle { color: var(--signature-text); }
+#theme-toggle:disabled { color: var(--foreground-disabled); }
 
-/* Search field: the wrapper carries the focus ring, so the ring follows the field's
-   visible box; the input's own ring stays in place but unpainted. */
-.tm-search:focus-within { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+/* Search field: while the input has focus the wrapper carries the ring, so the ring follows
+   the field's visible box; the input's own ring stays in place but unpainted. The clear
+   button inside the wrapper keeps its own ring. */
+.tm-search:has(> input:focus-visible) { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 .tm-search > input:focus-visible { outline-color: transparent; }
 .tm-right { margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-xs); }
 .boot-error { padding: var(--space-md); color: var(--foreground-bold); font-size: var(--size-narrator-small); }
@@ -364,14 +371,17 @@ body, .shell, .sidebar, .topbar, .main {
 
   /* ── Sidebar as slide-in drawer ──
      A fixed overlay that slides in from the left; always rendered, just off-screen.
-     Above screen chrome and the right rail (50), below modals (100).
+     Above screen chrome and the right rail (50); below the conflict banner (90), which
+     must stay readable over an open drawer, and below modals (100).
      Elevation via a stronger border, no box-shadow (design rule). */
   .sidebar-collapse-btn { display: none; }
+  .sidebar-close-btn { display: inline-flex; width: 44px; height: 44px; }
+  .sidebar-logo { padding-right: var(--space-xs); }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
     width: var(--sidebar-w);
-    z-index: 90;
+    z-index: 80;
     transform: translateX(-100%);
     transition: transform var(--dur-macro) var(--ease-hourglass),
                 background-color var(--dur-standard) var(--ease-hourglass),
@@ -384,7 +394,7 @@ body, .shell, .sidebar, .topbar, .main {
   .shell.sidebar-drawer-open .sidebar { transform: translateX(0); }
 
   /* Backdrop scrim — covers main content when drawer is open */
-  .sidebar-backdrop { position: fixed; inset: 0; background: var(--overlay-bg); z-index: 89; display: none; }
+  .sidebar-backdrop { position: fixed; inset: 0; background: var(--overlay-bg); z-index: 79; display: none; }
   .shell.sidebar-drawer-open .sidebar-backdrop { display: block; }
 
   /* Drawer links: 44px touch targets */

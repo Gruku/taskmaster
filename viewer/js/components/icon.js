@@ -32,8 +32,8 @@ export const ICONS = {
 };
 
 export function icon(name, { size = 20, label } = {}) {
+  if (!Object.hasOwn(ICONS, name)) throw new Error(`unknown icon: ${name}`);
   const inner = ICONS[name];
-  if (!inner) throw new Error(`unknown icon: ${name}`);
   const el = document.createElementNS(NS, 'svg');
   el.setAttribute('viewBox', '0 0 24 24');
   el.setAttribute('width', String(size));

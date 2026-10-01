@@ -1,7 +1,7 @@
 // Sidebar renderer. Sections + entries are static here.
 // On mobile (< 768px), the sidebar becomes a slide-in drawer triggered by a hamburger
-// button injected into the topbar's first row. The drawer is dismissed by Escape, by
-// clicking the backdrop scrim or the hamburger button again, or by navigating.
+// button injected into the topbar's first row. The drawer is dismissed by Escape, by its
+// own close button, by clicking the backdrop scrim, or by choosing a nav link.
 
 import { icon } from './icon.js';
 
@@ -47,8 +47,14 @@ export function mountSidebar(el, { store, prefs }) {
       <div class="ver" id="sidebar-version">v?</div>
     </div>
     <button class="sidebar-collapse-btn" type="button"></button>
+    <button class="sidebar-close-btn" type="button" aria-label="Close navigation" title="Close navigation"></button>
   `;
   el.appendChild(logo);
+
+  // Shown only in the mobile drawer, where it takes the collapse button's place.
+  const closeBtn = logo.querySelector('.sidebar-close-btn');
+  closeBtn.appendChild(icon('dismiss'));
+  closeBtn.addEventListener('click', () => closeDrawer());
 
   // The chevron is one glyph; CSS turns it to point the way the sidebar will move.
   const collapseBtn = logo.querySelector('.sidebar-collapse-btn');
@@ -88,13 +94,15 @@ export function mountSidebar(el, { store, prefs }) {
       a.href = item.hash;
       a.title = item.label;
       a.append(span('ic', icon(item.icon)), span('lbl', item.label));
+      // Closing on the tap itself (not on route:changed) also covers the current page's
+      // link and a screen that fails to mount, and leaves alone a drawer opened mid-mount.
+      a.addEventListener('click', () => closeDrawer());
       nav.appendChild(a);
     }
   }
 
   // Active sync + aria-current
   const onRouteChanged = (e) => {
-    closeDrawer();
     const key = e.detail.sidebarKey;
     el.querySelectorAll('.sidebar-link').forEach(a => {
       const isActive = a.dataset.key === key;
@@ -119,12 +127,14 @@ export function mountSidebar(el, { store, prefs }) {
   // The sidebar becomes a fixed overlay; a hamburger button is injected into
   // the topbar's first row and a backdrop scrim is appended to the shell. Both
   // are torn down when the screen widens past --bp-md or when the sidebar is
-  // unmounted. While the drawer is closed the off-screen sidebar is inert, so
-  // Tab never lands on a link the user cannot see.
+  // unmounted. Exactly one side is inert at a time: the off-screen sidebar while
+  // the drawer is closed, the page behind the scrim while it is open — so Tab
+  // never lands on something the user cannot see or reach.
 
   // A browser that refuses media queries gets the desktop sidebar rather than a failed boot.
   let mql = null;
   try { mql = window.matchMedia('(max-width: 768px)'); } catch { /* stay on the desktop layout */ }
+  const mainEl = shell?.querySelector('.main');
   let hamburger = null;
   let backdrop  = null;
 
@@ -144,21 +154,22 @@ export function mountSidebar(el, { store, prefs }) {
   function openDrawer() {
     shell.classList.add('sidebar-drawer-open');
     el.inert = false;
+    if (mainEl) mainEl.inert = true;
     syncHamburger(true);
     document.addEventListener('keydown', onDrawerKeydown);
     el.querySelector('.sidebar-link')?.focus();
   }
 
-  // Focus returns to the hamburger only when the drawer was open and still held focus —
-  // closing on a route change or a resize must not pull focus out of the page.
+  // Safe to call when the drawer is not open (link clicks on desktop, teardown): focus
+  // goes back to the hamburger, the drawer's opener, only when a drawer really closed.
   function closeDrawer() {
     const wasOpen = shell.classList.contains('sidebar-drawer-open');
-    const hadFocus = el.contains(document.activeElement);
     shell.classList.remove('sidebar-drawer-open');
     document.removeEventListener('keydown', onDrawerKeydown);
+    if (mainEl) mainEl.inert = false;
     if (hamburger) el.inert = true;
     syncHamburger(false);
-    if (wasOpen && hadFocus) hamburger?.focus();
+    if (wasOpen) hamburger?.focus();
   }
 
   function toggleDrawer() {
