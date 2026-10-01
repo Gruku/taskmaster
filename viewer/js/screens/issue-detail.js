@@ -2,6 +2,7 @@ import * as api from '../api.js';
 import { claimTopbar } from '../lib/topbar.js';
 import { severityGlyph, injectSeverityDefs } from '../components/severity-glyph.js';
 import { severityLabel } from '../util/severity-label.js';
+import { issueDiscovered, issueEvidence } from '../util/issue-fields.js';
 import { pluralize } from '../util/pluralize.js';
 import { agingBar } from '../components/aging-bar.js';
 import { formatRelative, formatAbsolute } from '../lib/time.js';
@@ -112,7 +113,7 @@ export async function mount(root, { params, store, prefs, subpath }) {
     statusPill.textContent = STATUS_LABEL[status] || status;
     const created = document.createElement('span');
     created.className = 'id-created';
-    created.textContent = `since ${_fmtDate(issue.created)}`;
+    created.textContent = `since ${_fmtDate(issueDiscovered(issue))}`;
     meta.append(glyph, sev, idEl, statusPill, created);
     head.appendChild(meta);
 
@@ -137,13 +138,13 @@ export async function mount(root, { params, store, prefs, subpath }) {
     const main = document.createElement('div');
     main.className = 'id-main';
 
-    if (issue.symptom) {
+    if (issueEvidence(issue)) {
       const symSec = document.createElement('section');
       symSec.className = 'id-symptom';
-      const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Symptom';
+      const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Evidence';
       const body = document.createElement('p');
-      body.className = 'id-body id-body--italic';
-      body.textContent = issue.symptom;
+      body.className = 'id-body';
+      body.textContent = issueEvidence(issue);
       symSec.append(h, body);
       main.appendChild(symSec);
     }
@@ -213,7 +214,7 @@ export async function mount(root, { params, store, prefs, subpath }) {
     const rows = [
       ['Severity', label],
       ['Status', STATUS_LABEL[status] || status],
-      ['Created', _fmtRel(issue.created)],
+      ['Discovered', _fmtRel(issueDiscovered(issue))],
     ];
     if (issue.resolved) rows.push(['Resolved', _fmtRel(issue.resolved)]);
     for (const [k, v] of rows) {
