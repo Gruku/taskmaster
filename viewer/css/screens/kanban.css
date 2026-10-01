@@ -71,7 +71,7 @@
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 .card-task:hover {
-  background: #23252b;
+  background: var(--card-bg-hover);
   border-color: var(--border-strong);
   /* Spec §3.6: no movement / no transform on hover. */
 }

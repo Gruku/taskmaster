@@ -196,12 +196,12 @@
   /* ── Legacy aliases — DELETE in plan 4. Old name → RR role. ── */
   --bg-canvas: var(--bg-page);
   --bg-shell: var(--surface-ground);
-  --bg-panel: var(--surface-raised);
+  --bg-panel: var(--card-bg);
   --bg-card: var(--card-bg);
   --bg-card-hover: var(--card-bg-hover);
   --bg-board-col: var(--col-bg);
   --bg-deep: var(--bg-recessed);
-  --bg-issue: var(--surface-raised);
+  --bg-issue: var(--card-bg);
   --border: var(--border-subtle);
   --border-soft: var(--border-subtle);
   --ink: var(--foreground-bold);
@@ -255,8 +255,8 @@
   --page-gap: var(--space-md);
   /* Names the old screens used without ever defining them (audit TK-03). */
   --bl: var(--border-default);
-  --surface: var(--surface-raised);
-  --surface-1: var(--surface-raised);
+  --surface: var(--card-bg);
+  --surface-1: var(--card-bg);
   --surface2: var(--surface-overlay);
   --s2: var(--surface-overlay);
   --danger-ink: var(--color-critical);
@@ -271,7 +271,7 @@
   --shell-label-size: var(--size-technical-label);
   --shell-hover-overlay: var(--surface-raised);
   --card-recent-glow: none;
-  --issues-card-bg: var(--surface-raised);
+  --issues-card-bg: var(--card-bg);
   --issues-card-border: var(--border-subtle);
   --issues-investigating: var(--signature-text);
   --task-rail-w: 280px;
@@ -332,6 +332,11 @@
   --color-warning-subtle: rgba(212, 120, 14, 0.15);
   --color-warning-bold: #b36100;
   /* @generated:end */
+  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface,
+     its column the darkest, and hover steps the card down to the page ground. */
+  --col-bg: var(--ground-10);
+  --card-bg: var(--ground-0);
+  --card-bg-hover: var(--ground-5);
   --cat-2: var(--pastel-cyan-grounded);
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);
