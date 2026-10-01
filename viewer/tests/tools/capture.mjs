@@ -13,16 +13,28 @@ const require = createRequire(import.meta.url);
 const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 
 const [BASE, OUT_ARG, ...FLAGS] = process.argv.slice(2);
-if (!BASE || !OUT_ARG) {
+const usage = (why) => {
+  if (why) console.error(why);
   console.error('usage: node capture.mjs <base-url> <out-dir> [--only=a,b] [--themes=dark,light] [--widths=d,m]');
   process.exit(2);
-}
+};
+if (!BASE || !OUT_ARG) usage();
+const flag = (name) => FLAGS.find(f => f.startsWith(`--${name}=`))?.split('=')[1].split(',').filter(Boolean);
+// A misspelt value would otherwise capture nothing and still exit 0.
+const choice = (name, allowed) => {
+  const picked = flag(name);
+  if (!picked) return allowed;
+  const unknown = picked.filter(v => !allowed.includes(v));
+  if (unknown.length || !picked.length) usage(`--${name}: expected any of ${allowed.join(', ')}; got "${picked.join(',')}"`);
+  return picked;
+};
+const THEMES = choice('themes', ['dark', 'light']);
+const WIDTHS = choice('widths', ['d', 'm']);
 const OUT = path.resolve(OUT_ARG);
 fs.mkdirSync(OUT, { recursive: true });
-const flag = (name) => FLAGS.find(f => f.startsWith(`--${name}=`))?.split('=')[1].split(',').filter(Boolean);
 const ONLY = flag('only');
 
-const ROUTES = [
+const ALL_ROUTES = [
   ['dashboard', '/dashboard'],
   ['kanban', '/kanban'],
   ['table', '/table'],
@@ -47,16 +59,22 @@ const ROUTES = [
   ['ideas', '/ideas'],
   ['archived', '/archived'],
   ['settings', '/settings'],
-].filter(([name]) => !ONLY || ONLY.includes(name));
+];
+const unknownRoutes = (ONLY || []).filter(n => !ALL_ROUTES.some(([name]) => name === n));
+if (unknownRoutes.length || (ONLY && !ONLY.length)) usage(`--only: unknown route name(s) "${unknownRoutes.join(',')}"; known: ${ALL_ROUTES.map(([n]) => n).join(', ')}`);
+const ROUTES = ALL_ROUTES.filter(([name]) => !ONLY || ONLY.includes(name));
 
-const THEMES = (flag('themes') || ['dark', 'light']);
-const VIEWPORTS = [['d', 1440, 900], ['m', 390, 844]].filter(([vk]) => (flag('widths') || ['d', 'm']).includes(vk));
+const VIEWPORTS = [['d', 1440, 900], ['m', 390, 844]].filter(([vk]) => WIDTHS.includes(vk));
 
-// blocked: writes answered here. seenWrites: every write the browser attempted. The two must match,
-// or a write went out some way the route handler did not see.
+// answered: the write requests this tool answered itself. seenWrites: every write the browser issued.
+// Compared by request object, not by method + URL: the app repeats the same PUT many times, so a
+// string match would let one unanswered write hide behind an answered twin.
 const blocked = [];
+const answered = new Set();
 const seenWrites = [];
+const warnings = [];
 const isWrite = (req) => req.method() !== 'GET' && req.method() !== 'HEAD';
+const label = (req) => `${req.method()} ${req.url()}`;
 
 async function metrics(page) {
   return page.evaluate(() => {
@@ -161,19 +179,25 @@ async function newPage(browser, theme, w, h) {
   // Service workers are blocked so no request can bypass the route handler below.
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, colorScheme: theme, serviceWorkers: 'block' });
   await ctx.addInitScript((t) => { try { localStorage.setItem('tm.theme', t); } catch { /* storage unavailable */ } }, theme);
-  ctx.on('request', (req) => { if (isWrite(req)) seenWrites.push(`${req.method()} ${req.url()}`); });
+  ctx.on('request', (req) => { if (isWrite(req)) seenWrites.push(req); });
   // All URLs, not only /api/**: a write to any path is answered here and never reaches the server.
   await ctx.route('**/*', async (route) => {
     const req = route.request();
     if (isWrite(req)) {
-      blocked.push(`${req.method()} ${req.url()}`);
+      answered.add(req);
+      blocked.push(label(req));
       return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     }
     // The app takes its theme from server prefs on boot; rewrite the answer instead of changing the prefs.
-    if (new URL(req.url()).pathname === '/api/viewer/prefs') {
+    if (new URL(req.url()).pathname.replace(/\/$/, '') === '/api/viewer/prefs') {
       const res = await route.fetch();
-      let json = {};
-      try { json = await res.json(); } catch { /* not JSON: serve a theme-only object */ }
+      let json = null;
+      if (res.ok()) { try { json = await res.json(); } catch { /* handled below */ } }
+      if (!json || typeof json !== 'object' || Array.isArray(json)) {
+        // A faulty prefs answer goes through untouched, so the fault shows in the sweep instead of being papered over.
+        warnings.push(`prefs response not rewritten (status ${res.status()}, ${res.ok() ? 'not a JSON object' : 'not ok'}): ${req.url()}`);
+        return route.fulfill({ response: res });
+      }
       return route.fulfill({ response: res, json: { ...json, theme } });
     }
     return route.continue();
@@ -220,11 +244,12 @@ try {
     }
   }
 } finally {
-  const leaked = seenWrites.filter(w => !blocked.includes(w));
-  fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify({ base: BASE, results, blocked, leaked }, null, 1));
+  const leaked = seenWrites.filter(req => !answered.has(req)).map(label);
+  fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify({ base: BASE, results, blocked, leaked, warnings }, null, 1));
   await browser.close();
-  console.log(`\nblocked write requests (answered locally, never sent): ${blocked.length}`);
+  console.log(`\nwrite requests seen: ${seenWrites.length}; answered locally, never sent: ${blocked.length}`);
   for (const b of blocked) console.log('  ' + b);
+  for (const w of [...new Set(warnings)]) console.error(`WARNING ${w} (x${warnings.filter(x => x === w).length})`);
   if (leaked.length) {
     console.error(`WRITES NOT INTERCEPTED: ${leaked.length}`);
     for (const l of leaked) console.error('  ' + l);
