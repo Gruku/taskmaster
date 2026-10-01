@@ -3,6 +3,8 @@
 //   #/kanban?epic=auth&phase=2
 //   #/task/T-148
 
+import { claimTopbar } from './lib/topbar.js';
+
 const screens = new Map();   // path-prefix → loader (() => Promise<module>)
 let currentCleanup = null;
 let mountEl = null;
@@ -41,6 +43,17 @@ function parseHash() {
   return { path, params, segments };
 }
 
+// What the mount shows when a screen cannot be loaded or opened.
+function failureStub(headline, error) {
+  const stub = document.createElement('div');
+  stub.className = 'stub';
+  const meta = document.createElement('div');
+  meta.className = 'stub-meta';
+  meta.textContent = error?.message || String(error);
+  stub.append(headline, meta);
+  return stub;
+}
+
 async function go() {
   if (!mountEl) throw new Error('router.go() called before router.init()');
   const seq = ++navSeq;
@@ -64,13 +77,18 @@ async function go() {
   }
   if (seq !== navSeq) return; // stale — a newer navigation started
 
+  // The top bar belongs to the screen that just left: cleared here, once, so every outcome
+  // below (mounted, failed to load, threw while mounting) starts from an empty one.
   mountEl.replaceChildren();
+  claimTopbar();
 
   let mod;
   try {
     mod = await match();
   } catch (e) {
-    mountEl.innerHTML = `<div class="stub">Failed to load screen: ${matchPrefix}<div class="stub-meta">${e.message}</div></div>`;
+    if (seq !== navSeq) return; // stale
+    console.error('screen load failed', e);
+    mountEl.replaceChildren(failureStub(`Failed to load screen: ${matchPrefix}`, e));
     return;
   }
   if (seq !== navSeq) return; // stale
@@ -78,11 +96,21 @@ async function go() {
   titleEl.textContent = mod.meta?.title || matchPrefix;
   // Pass remaining path segments after the prefix as `subpath` (e.g. /task/T-148 → ['T-148']).
   const subSegments = segments.slice(matchPrefix.split('/').filter(Boolean).length);
-  const cleanup = await mod.mount(mountEl, {
-    params,
-    subpath: subSegments,
-    ...injectDeps,
-  });
+  let cleanup;
+  try {
+    cleanup = await mod.mount(mountEl, {
+      params,
+      subpath: subSegments,
+      ...injectDeps,
+    });
+  } catch (e) {
+    if (seq !== navSeq) return; // stale
+    console.error('screen mount failed', e);
+    // Drop whatever the screen built before it threw.
+    claimTopbar();
+    mountEl.replaceChildren(failureStub(`Failed to open screen: ${matchPrefix}`, e));
+    return;
+  }
   if (seq !== navSeq) return; // stale
   currentCleanup = cleanup;
 
