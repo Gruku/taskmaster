@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { init as routerInit, registerScreen } from './router.js';
 import { mountSidebar } from './components/sidebar.js';
+import { initTheme } from './lib/theme.js';
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
@@ -66,6 +67,7 @@ async function boot() {
   }
   store.setIdentity(identity);
   store.setPrefs(prefsData);
+  initTheme({ store, prefs });
 
   // Apply persisted sidebar-collapsed before sidebar mounts so layout doesn't flicker.
   if (prefsData?.ui?.sidebar_collapsed) {

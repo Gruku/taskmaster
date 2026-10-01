@@ -134,9 +134,20 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .sidebar-collapse-btn:hover { color: var(--ink); background: var(--shell-hover-overlay); }
 
+/* Theme switch: the shell surfaces cross-fade instead of snapping.
+   Rules below that set their own transition on these elements repeat this list. */
+body, .shell, .sidebar, .topbar, .main {
+  transition: background-color var(--dur-standard) var(--ease-hourglass),
+              color var(--dur-standard) var(--ease-hourglass),
+              border-color var(--dur-standard) var(--ease-hourglass);
+}
+
 /* Sidebar width animates between expanded and collapsed states. */
 .shell {
-  transition: grid-template-columns var(--t-slow) var(--ease);
+  transition: grid-template-columns var(--t-slow) var(--ease),
+              background-color var(--dur-standard) var(--ease-hourglass),
+              color var(--dur-standard) var(--ease-hourglass),
+              border-color var(--dur-standard) var(--ease-hourglass);
 }
 .sidebar-logo .brand,
 .sidebar-logo .name,
@@ -373,7 +384,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
     height: auto;
     min-height: 100vh;
     overflow: visible;
-    transition: none;
+    /* no column animation on mobile; the theme cross-fade stays */
+    transition: background-color var(--dur-standard) var(--ease-hourglass),
+                color var(--dur-standard) var(--ease-hourglass),
+                border-color var(--dur-standard) var(--ease-hourglass);
   }
 
   /* ── Sidebar as slide-in drawer ──
@@ -388,7 +402,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
     width: var(--sidebar-w);
     z-index: 200;
     transform: translateX(-100%);
-    transition: transform var(--t-slow) var(--ease);
+    transition: transform var(--t-slow) var(--ease),
+                background-color var(--dur-standard) var(--ease-hourglass),
+                color var(--dur-standard) var(--ease-hourglass),
+                border-color var(--dur-standard) var(--ease-hourglass);
     /* Elevation via border, no box-shadow (design rule) */
     border-right: 1px solid var(--border-strong);
   }
