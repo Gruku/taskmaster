@@ -138,13 +138,14 @@ export async function mount(root, { params, store, prefs, subpath }) {
     const main = document.createElement('div');
     main.className = 'id-main';
 
-    if (issueEvidence(issue)) {
+    const evidence = issueEvidence(issue);
+    if (evidence) {
       const symSec = document.createElement('section');
       symSec.className = 'id-symptom';
       const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Evidence';
       const body = document.createElement('p');
       body.className = 'id-body';
-      body.textContent = issueEvidence(issue);
+      body.textContent = evidence;
       symSec.append(h, body);
       main.appendChild(symSec);
     }

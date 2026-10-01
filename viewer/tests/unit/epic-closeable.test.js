@@ -49,3 +49,7 @@ test('groupTasks — by area with "No area" bucket for missing area', () => {
   const desktop = groups.find(g => g.key === 'desktop-app');
   assert.deepEqual(desktop.tasks.map(t => t.id), ['a-1', 'a-2']);
 });
+
+test('closeableBadge — stale counters (done+archived > total) still show the badge', () => {
+  assert.match(closeableBadge({ total: 3, done: 3, archived: 2 }), /closeable/i);
+});

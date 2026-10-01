@@ -6,6 +6,7 @@ import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { groupByStatus, groupBySeverity } from '../util/issues-grouping.js';
+import { issueEvidence } from '../util/issue-fields.js';
 import { legacyLinksToTyped } from '../components/link-pills.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
@@ -284,7 +285,7 @@ export async function mount(root, { store, prefs }) {
     const hay = [
       i.id || '',
       i.title || '',
-      i.symptom || '',
+      issueEvidence(i),
       i.component || '',
       ...(i.location || []),
       ...linkTargets,

@@ -41,10 +41,8 @@ export function progressPercent(stats) {
 // from stats (same formula as progressPercent) so it's testable without a
 // server round-trip; never stored, never auto-archives (see epic B task 4).
 export function closeableBadge(stats) {
-  const total = stats?.total || 0;
-  if (!total) return '';
-  const done = (stats?.done || 0) + (stats?.archived || 0);
-  if (done !== total) return '';
+  const p = epicProgress(stats);
+  if (!p.total || p.closed !== p.total) return '';
   return `<span class="epic-closeable" title="All tasks done or archived">Closeable</span>`;
 }
 
