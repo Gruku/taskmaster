@@ -9,6 +9,8 @@ globalThis.window = dom.window;
 globalThis.queueMicrotask = queueMicrotask;
 
 const { TextField } = await import('../../js/components/edit/fields/text-field.js');
+const { EnumSelect } = await import('../../js/components/edit/fields/enum-select.js');
+const { MdField } = await import('../../js/components/edit/fields/md-field.js');
 const { mountInlineField } = await import('../../js/components/edit/inline-field.js');
 
 const SCHEMA = {
@@ -164,4 +166,51 @@ test('save error shows ✕ indicator', async () => {
   const err = root.querySelector('.if-status-error');
   assert.ok(err, 'error indicator visible');
   ctrl.destroy();
+});
+
+test('a renderer that returns a wrapper around its control edits and saves inline like any other', async () => {
+  const root = document.createElement('div');
+  document.body.replaceChildren(root);
+  const options = [{ value: 'todo', label: 'Todo' }, { value: 'done', label: 'Done' }];
+  const saved = [];
+  const ctrl = mountInlineField(root, {
+    schema: { entity: 'task', fields: [{ key: 'status', label: 'Status', renderer: EnumSelect, options, marker: 'status' }] },
+    fieldKey: 'status', entity: { id: 'wrap-1', status: 'todo' },
+    onSave: async (v) => { saved.push(v); },
+  });
+  try {
+    assert.equal(root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    root.querySelector('.ef-enum').click();
+    const select = root.querySelector('.if-wrap .ef-select > select');
+    assert.ok(select, 'the select is mounted inside its wrapper');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(document.activeElement, select, 'inline editing puts focus in the control');
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(saved, ['done']);
+    assert.equal(root.querySelector('select'), null);
+    assert.equal(root.querySelector('.ef-enum .marker__word').textContent, 'Done');
+  } finally { ctrl.destroy(); }
+});
+
+test('a click on a link inside a read-mode field follows the link instead of opening the editor', () => {
+  const root = document.createElement('div');
+  document.body.replaceChildren(root);
+  const link = document.createElement('a');
+  link.href = 'https://example.com/';
+  link.textContent = 'spec';
+  const Linked = { ...MdField, read: (args) => { const el = MdField.read(args); el.appendChild(link); return el; } };
+  const ctrl = mountInlineField(root, {
+    schema: { entity: 'task', fields: [{ key: 'notes', label: 'Notes', renderer: Linked }] },
+    fieldKey: 'notes', entity: { id: 'link-1', notes: 'see' },
+    onSave: async () => {},
+  });
+  try {
+    link.addEventListener('click', (e) => e.preventDefault());   // jsdom would try to navigate
+    link.click();
+    assert.equal(root.querySelector('textarea'), null, 'the link click did not open the editor');
+    root.querySelector('.ef-md').click();
+    assert.ok(root.querySelector('textarea'), 'a click on the text still does');
+  } finally { ctrl.destroy(); }
 });

@@ -18,7 +18,7 @@ test('read mode renders value as span with editable class when not readOnly', ()
   assert.ok(el.classList.contains('ef-editable'));
 });
 
-test('read mode without value renders placeholder italics', () => {
+test('read mode without value renders the placeholder', () => {
   const el = TextField.read({ value: '', readOnly: false, placeholder: 'no title' });
   assert.equal(el.textContent, 'no title');
   assert.ok(el.classList.contains('ef-placeholder'));

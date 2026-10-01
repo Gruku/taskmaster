@@ -1,13 +1,15 @@
 // viewer/js/components/edit/fields/number-field.js
 import { h } from '../../../util/h.js';
+import { bindControl, focusOnMount } from './control.js';
 
 export const NumberField = {
   read({ value, readOnly = false }) {
     const cls = ['ef-num']; if (!readOnly) cls.push('ef-editable');
     return h('span', { class: cls.join(' ') }, value == null ? '—' : String(value));
   },
-  edit({ value, onChange, onCommit, onCancel, min, max }) {
+  edit({ value, onChange, onCommit, onCancel, min, max, id, describedBy, autoFocus = true }) {
     const inp = h('input', { type: 'number', class: 'ef-num-input', value: value == null ? '' : String(value) });
+    bindControl(inp, { id, describedBy });
     if (min != null) inp.setAttribute('min', String(min));
     if (max != null) inp.setAttribute('max', String(max));
     inp.addEventListener('input', () => onChange?.(inp.value));
@@ -16,7 +18,7 @@ export const NumberField = {
       else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
     });
     inp.addEventListener('blur', () => onCommit?.(inp.value));
-    queueMicrotask(() => { inp.focus(); inp.select(); });
+    focusOnMount(inp, autoFocus, { select: true });
     return inp;
   },
   coerce(raw) {

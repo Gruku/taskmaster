@@ -120,3 +120,78 @@ test('a hovered control on a modal surface is a visible step off that surface', 
     assert.notEqual(resolve(theme, '--overlay-surface-active'), resolve(theme, '--overlay-surface-hover'), theme);
   }
 });
+
+// Non-text marks (a status shape, a field's edge, an error mark) need 3:1 against what they sit on.
+function assertNonText(pairs) {
+  const bad = [];
+  for (const [themes, fg, bgs] of pairs) {
+    for (const theme of themes) for (const bg of bgs) {
+      const r = ratio(theme, fg, bg);
+      if (r < 3) bad.push(`${theme}: ${fg} on ${bg} = ${r.toFixed(2)}`);
+    }
+  }
+  assert.deepEqual(bad, []);
+}
+
+test('status and priority shapes reach 3:1 on the page, a card and a modal, in both themes', () => {
+  const grounds = ['--bg-page', '--card-bg', '--overlay-surface'];
+  assertNonText(['--tone-neutral', '--tone-accent', '--tone-success', '--tone-warning', '--tone-critical', '--tone-orange']
+    .map((tone) => [BOTH, tone, grounds]));
+});
+
+test('dark theme keeps the tone each marker was specified with', () => {
+  for (const [role, token] of Object.entries({
+    '--tone-neutral': '--foreground-subtle', '--tone-accent': '--text-accent', '--tone-success': '--color-success',
+    '--tone-warning': '--color-warning', '--tone-critical': '--color-critical', '--tone-orange': '--accent-orange',
+  })) assert.equal(THEMES.dark[role], `var(${token})`, role);
+});
+
+test('form fields: value and placeholder are AA on the field ground, in both themes', () => {
+  assertAA([
+    [BOTH, '--foreground-bold', ['--bg-recessed']],      // the typed value; code in rendered markdown
+    [BOTH, '--foreground-subtle', ['--bg-recessed']],    // placeholder
+    [BOTH, '--foreground-default', ['--bg-recessed']],   // an unpressed estimate size
+  ]);
+});
+
+test('form fields: chips, the suggestion list and the estimate picker are AA in every state', () => {
+  assertAA([
+    [BOTH, '--foreground-default', ['--overlay-surface']],                               // chip; suggestion row
+    [BOTH, '--foreground-bold', ['--overlay-surface-hover', '--ground-15']],             // hovered row, chip remove, estimate size
+    [BOTH, '--foreground-subtle', ['--overlay-surface', '--overlay-surface-hover']],     // row hint; chip remove at rest
+    [BOTH, '--on-accent-fill', ['--signature-fill', '--accent-fill-hover']],             // the pressed estimate size
+  ]);
+});
+
+test('form fields: the error message is body text, and its mark and the invalid edge reach 3:1', () => {
+  const grounds = ['--bg-page', '--card-bg', '--overlay-surface'];
+  assertAA([[BOTH, '--foreground-bold', grounds]]);
+  assertNonText([[BOTH, '--tone-critical', [...grounds, '--bg-recessed']]]);
+});
+
+test('read-mode fields: text stays AA on the hover ground of an editable value', () => {
+  assertAA([
+    [BOTH, '--foreground-bold', ['--ground-15', '--overlay-surface-hover']],
+    [BOTH, '--foreground-default', ['--ground-15', '--overlay-surface-hover']],
+    [BOTH, '--foreground-subtle', ['--ground-15', '--overlay-surface-hover']],     // the "no content" placeholder
+  ]);
+});
+
+test('light theme: a field shares its ground with the card and the modal, so its edge alone reaches 3:1', () => {
+  assert.equal(resolve('light', '--bg-recessed'), resolve('light', '--overlay-surface'));
+  assertNonText([
+    [['light'], '--field-border', ['--bg-recessed', '--card-bg', '--overlay-surface', '--bg-page']],
+    [['light'], '--field-border-hover', ['--bg-recessed', '--card-bg', '--overlay-surface', '--bg-page']],
+  ]);
+  for (const theme of BOTH) assert.notEqual(resolve(theme, '--field-border-hover'), resolve(theme, '--field-border'), theme);
+});
+
+test('rendered markdown: body, quote, link and table-head text are AA on every ground a document sits on', () => {
+  const grounds = ['--bg-page', '--card-bg', '--overlay-surface'];
+  assertAA([
+    [BOTH, '--foreground-default', grounds],             // paragraphs, list items
+    [BOTH, '--foreground-subtle', grounds],              // blockquote
+    [BOTH, '--text-accent', grounds],                    // links
+    [BOTH, '--foreground-bold', ['--bg-recessed']],      // code, pre, table head
+  ]);
+});

@@ -144,3 +144,13 @@ export function formatDurationCompact(ms) {
   if (m) return `${m}m`;
   return `${s}s`;
 }
+
+/**
+ * A timestamp as shown beside a task: the relative form to read, the absolute form for the tooltip.
+ * A missing or unparsable input gives an em dash and no tooltip.
+ *   formatStamp('2026-05-14T12:00:00Z', now) → { text: '1d ago', title: 'May 14, 2026 · 12:00' }
+ */
+export function formatStamp(input, now = Date.now()) {
+  if (_toMs(input) == null) return { text: '—', title: '' };
+  return { text: formatRelative(input, { now }), title: formatAbsolute(input, { now, year: true }) };
+}

@@ -1,5 +1,7 @@
 // viewer/js/components/edit/fields/chip-input.js
 import { h } from '../../../util/h.js';
+import { icon } from '../../icon.js';
+import { bindControl, focusOnMount } from './control.js';
 
 const MAX_DROPDOWN = 8;
 
@@ -19,12 +21,15 @@ export const ChipInput = {
     return wrap;
   },
 
-  edit({ value, source, onChange, onCommit, onCancel, allowFree = false, placeholder = 'add…' }) {
+  // The id goes on the inner text input, which is `wrapper.control`.
+  edit({ value, source, onChange, onCommit, onCancel, allowFree = false, placeholder = 'add…', id, describedBy, autoFocus = true }) {
     const draft = Array.isArray(value) ? [...value] : [];
     const wrap = h('div', { class: 'ef-chip-input' });
     const chipsBox = h('div', { class: 'ef-chip-list' });
     const inputBox = h('div', { class: 'ef-chip-input-row' });
-    const input = h('input', { type: 'text', class: 'ef-chip-input-text', placeholder });
+    const input = h('input', { type: 'text', class: 'ef-chip-input-text', placeholder, autocomplete: 'off' });
+    bindControl(input, { id, describedBy });
+    wrap.control = input;
     const dropdown = h('div', { class: 'ef-chip-dropdown', style: 'display:none' });
     inputBox.appendChild(input);
     inputBox.appendChild(dropdown);
@@ -38,7 +43,7 @@ export const ChipInput = {
       chipsBox.replaceChildren(...draft.map((v) => {
         const chip = h('span', { class: 'ef-chip' });
         chip.appendChild(h('span', { class: 'ef-chip-label' }, _displayLabel(v)));
-        const x = h('button', { type: 'button', class: 'ef-chip-x', 'aria-label': 'remove' }, '✕');
+        const x = h('button', { type: 'button', class: 'ef-chip-x', 'aria-label': `Remove ${_displayLabel(v)}` }, icon('dismiss', { size: 12 }));
         x.addEventListener('click', (e) => {
           e.preventDefault();
           const i = draft.indexOf(v);
@@ -58,7 +63,7 @@ export const ChipInput = {
       const q = input.value.trim();
       if (!q) { dropdown.style.display = 'none'; suggestions = []; return; }
       let raw = [];
-      try { raw = (await source(q)) || []; } catch (e) { raw = []; }
+      try { raw = (await source?.(q)) || []; } catch (e) { raw = []; }
       // Filter out already-chosen items.
       suggestions = raw.filter(s => !draft.some(d => _val(d) === _val(s))).slice(0, MAX_DROPDOWN);
       if (!suggestions.length) { dropdown.style.display = 'none'; return; }
@@ -125,7 +130,7 @@ export const ChipInput = {
       // Slight delay so a mousedown on dropdown row still fires.
       setTimeout(() => onCommit?.([...draft]), 80);
     });
-    queueMicrotask(() => input.focus());
+    focusOnMount(input, autoFocus);
     return wrap;
   },
 

@@ -63,3 +63,60 @@ test('priority must be in enum', () => {
   assert.equal(r.valid, false);
   assert.equal(r.errors.priority, 'invalid value');
 });
+
+test('every field belongs to one of the four form groups, in the order the form lays them out', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  const byGroup = {};
+  for (const f of s.fields) (byGroup[f.group] ??= []).push(f.key);
+  assert.deepEqual(byGroup, {
+    basics: ['title', 'status', 'priority', 'epic', 'phase', 'estimate'],
+    tracking: ['stage', 'sub_repo', 'branch', 'worktree', 'release'],
+    relations: ['depends_on', 'docs', 'anchors'],
+    content: ['description', 'specification', 'plan', 'notes', 'review_instructions', 'patchnote'],
+  });
+});
+
+test('status and priority read as markers; no other field does', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  const markers = Object.fromEntries(s.fields.filter(f => f.marker).map(f => [f.key, f.marker]));
+  assert.deepEqual(markers, { status: 'status', priority: 'priority' });
+  const status = s.fields.find(f => f.key === 'status');
+  const el = status.renderer.read({ value: 'done', ...status });
+  assert.equal(el.querySelector('.marker__word').textContent, 'Done');
+});
+
+test('estimate is picked with the estimate field and labelled plainly', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  const estimate = s.fields.find(f => f.key === 'estimate');
+  assert.equal(estimate.label, 'Estimate');
+  const base = { title: 'x', status: 'todo', priority: 'medium', epic: 'v3-edit' };
+  for (const ok of ['S', 'M', 'L', '3d', null, undefined]) {
+    assert.equal(runValidation({ ...base, estimate: ok }, s).valid, true, JSON.stringify(ok));
+  }
+  for (const bad of ['XL', '0d', '-1d', '3 d']) {
+    assert.ok(runValidation({ ...base, estimate: bad }, s).errors.estimate, bad);
+  }
+});
+
+test('a task with null, missing or wrong-typed fields validates and renders without throwing', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  const odd = {
+    id: 't-1', title: 'x', status: 'someday', priority: 7, epic: 'v3-edit', phase: null,
+    estimate: 3, stage: '2', depends_on: null, docs: { spec: 'docs/spec.md' }, anchors: 'a.py',
+    description: 42, notes: null, plan: ['a'],
+  };
+  let result;
+  assert.doesNotThrow(() => { result = runValidation(odd, s); });
+  assert.equal(result.errors.estimate, undefined, 'a stored bare number of days is accepted');
+  assert.equal(result.errors.depends_on, undefined);
+  assert.equal(result.errors.status, 'invalid value');
+  for (const f of s.fields) {
+    assert.doesNotThrow(() => f.renderer.read({ value: odd[f.key], ...f }), `read ${f.key}`);
+    assert.doesNotThrow(() => {
+      const el = f.renderer.edit({ value: odd[f.key], onChange() {}, onCommit() {}, onCancel() {}, ...f, autoFocus: false });
+      assert.ok((el.control ?? el).tagName, `edit ${f.key} exposes a control`);
+    }, `edit ${f.key}`);
+    assert.doesNotThrow(() => f.renderer.coerce(odd[f.key]), `coerce ${f.key}`);
+  }
+  assert.doesNotThrow(() => runValidation({}, s));
+});

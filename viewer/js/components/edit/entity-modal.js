@@ -31,8 +31,9 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   const fieldEls = new Map(); // key → { wrap, errEl }
 
   for (const f of schema.fields || []) {
+    const controlId = `em-field-${f.key}`;
     const wrap = h('div', { class: 'em-field', 'data-key': f.key }, [
-      h('label', { class: 'em-label' }, f.label || f.key),
+      h('label', { class: 'em-label', for: controlId }, f.label || f.key),
     ]);
     const renderer = f.renderer;
     const editEl = renderer.edit({
@@ -42,6 +43,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       onCancel: () => {},
       ...f, // pass through options/min/max/maxLength/etc.
       getBacklog: f.getBacklog, // for relation pickers
+      // The renderer puts the id on its control (a wrapper exposes it as `.control`), so the label reaches it.
+      id: controlId,
     });
     wrap.appendChild(editEl);
     const errEl = h('div', { class: 'em-field-error' });

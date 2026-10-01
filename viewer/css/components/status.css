@@ -13,12 +13,13 @@
   white-space: nowrap;
 }
 
-.marker__shape { flex: 0 0 auto; color: var(--foreground-subtle); }
-.marker--accent .marker__shape { color: var(--text-accent); }
-.marker--warning .marker__shape { color: var(--color-warning); }
-.marker--critical .marker__shape { color: var(--color-critical); }
-.marker--success .marker__shape { color: var(--color-success); }
-.marker--orange .marker__shape { color: var(--accent-orange); }
+/* Each tone is a per-theme role that holds 3:1 against the page, a card and a modal. */
+.marker__shape { flex: 0 0 auto; color: var(--tone-neutral); }
+.marker--accent .marker__shape { color: var(--tone-accent); }
+.marker--warning .marker__shape { color: var(--tone-warning); }
+.marker--critical .marker__shape { color: var(--tone-critical); }
+.marker--success .marker__shape { color: var(--tone-success); }
+.marker--orange .marker__shape { color: var(--tone-orange); }
 
 /* The local fonts carry none of the shape glyphs, so a named shape is drawn here in the tone colour and its
    glyph is pushed out of the box; an unnamed one falls back to the glyph. */

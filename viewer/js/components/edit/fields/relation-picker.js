@@ -4,10 +4,7 @@
 // other field that links to a backlog entity.
 
 import { ChipInput } from './chip-input.js';
-
-const STATUS_BADGE = {
-  todo: 'todo', 'in-progress': '▶', 'in-review': 'rev', done: '✓', blocked: '⛔',
-};
+import { statusMeta } from '../../status.js';
 
 export function makeRelationSource(kind, getBacklog) {
   if (kind === 'tasks') {
@@ -21,7 +18,7 @@ export function makeRelationSource(kind, getBacklog) {
         .map(t => ({
           value: t.id,
           label: `${t.id} · ${t.title || ''}`,
-          hint: STATUS_BADGE[t.status] || t.status || '',
+          hint: t.status ? statusMeta('task', t.status).label : '',
         }));
     };
   }
@@ -54,11 +51,11 @@ export function makeRelationSource(kind, getBacklog) {
 // Forms can use ChipInput directly + makeRelationSource OR call this helper.
 export const RelationPicker = {
   read: ChipInput.read,
-  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder }) {
+  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder, id, describedBy, autoFocus }) {
     const source = makeRelationSource(kind, getBacklog);
     return ChipInput.edit({
       value, source, allowFree: false,
-      onChange, onCommit, onCancel,
+      onChange, onCommit, onCancel, id, describedBy, autoFocus,
       placeholder: placeholder || `add ${kind.slice(0, -1)}…`,
     });
   },

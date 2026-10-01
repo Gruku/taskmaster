@@ -49,7 +49,8 @@ export function mountInlineField(parent, {
         placeholder: fieldSpec.placeholder,
         ...fieldSpec,
       });
-      if (!ro) el.addEventListener('click', enterEdit);
+      // A link inside rendered markdown is followed, not treated as a request to edit.
+      if (!ro) el.addEventListener('click', (e) => { if (!e.target.closest?.('a[href]')) enterEdit(); });
       wrap.appendChild(el);
     } else {
       const el = renderer.edit({

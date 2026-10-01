@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTimeInStatus, formatElapsed, classifyTimeInStatus, isoToMs, formatRelative, formatAbsolute } from '../../js/lib/time.js';
+import { formatTimeInStatus, formatElapsed, classifyTimeInStatus, isoToMs, formatRelative, formatAbsolute, formatStamp } from '../../js/lib/time.js';
 
 test('formatTimeInStatus — under an hour returns minutes', () => {
   const now = Date.parse('2026-04-26T12:00:00Z');
@@ -130,4 +130,40 @@ test('formatRelative · handover.created drives "Xd ago" not handover.date', () 
   // From NOW=2026-05-15T12:00Z, late-night-prior should be "12h ago", not "1d ago".
   const out = formatRelative(handover.created, { now: NOW });
   assert.equal(out, '12h ago');
+});
+
+test('formatStamp · text is the relative form, title the absolute form with its year', () => {
+  const now = Date.parse('2026-05-15T12:00:00Z');
+  const iso = '2026-05-14T12:00:00Z';
+  const stamp = formatStamp(iso, now);
+  assert.deepEqual(Object.keys(stamp), ['text', 'title']);
+  assert.equal(stamp.text, formatRelative(iso, { now }));
+  assert.equal(stamp.text, '1d ago');
+  assert.equal(stamp.title, formatAbsolute(iso, { now, year: true }));
+  assert.match(stamp.title, /2026/, 'a tooltip names the year even inside the current one');
+  assert.match(stamp.title, /·/, 'a full timestamp keeps its clock time');
+});
+
+test('formatStamp · a date-only value has no clock time in its title', () => {
+  const stamp = formatStamp('2026-05-08', Date.parse('2026-05-15T12:00:00Z'));
+  assert.match(stamp.text, /^\d+d ago$/);
+  assert.ok(!stamp.title.includes('·'));
+  assert.match(stamp.title, /8/);
+});
+
+test('formatStamp · a Date and a millisecond number are accepted like an ISO string', () => {
+  const now = Date.parse('2026-05-15T12:00:00Z');
+  const ms = Date.parse('2026-05-15T09:00:00Z');
+  assert.equal(formatStamp(ms, now).text, '3h ago');
+  assert.equal(formatStamp(new Date(ms), now).text, '3h ago');
+});
+
+test('formatStamp · missing or unparsable input is an em dash with no title, never a throw or "Invalid Date"', () => {
+  for (const bad of [null, undefined, '', 'not a date', '2026-13-45T99:99', NaN, {}, [], true]) {
+    assert.deepEqual(formatStamp(bad, Date.parse('2026-05-15T12:00:00Z')), { text: '—', title: '' }, JSON.stringify(bad));
+  }
+});
+
+test('formatStamp · now defaults to the present', () => {
+  assert.equal(formatStamp(new Date().toISOString()).text, 'now');
 });

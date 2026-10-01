@@ -192,6 +192,17 @@
   --overlay-surface-sunken: var(--bg-recessed);
   --overlay-surface-hover: var(--ground-20);
   --overlay-surface-active: var(--ground-30);
+  /* The hue a status, severity or priority shape is drawn in. A shape is not text: it must reach 3:1 against the
+     page, a card and a modal, so each theme names the step that does. */
+  --tone-neutral: var(--foreground-subtle);
+  --tone-accent: var(--text-accent);
+  --tone-success: var(--color-success);
+  --tone-warning: var(--color-warning);
+  --tone-critical: var(--color-critical);
+  --tone-orange: var(--accent-orange);
+  /* The edge of a form field at rest and under the pointer. */
+  --field-border: var(--border-default);
+  --field-border-hover: var(--border-strong);
   --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
   --cat-2: var(--accent-cyan);
   --cat-3: var(--accent-pink);
@@ -361,6 +372,15 @@
   --overlay-surface-sunken: var(--ground-5);
   --overlay-surface-hover: var(--ground-15);
   --overlay-surface-active: var(--ground-20);
+  /* On the light grounds the plain success and warning steps fall below 3:1, so shapes take the bold step.
+     No orange in RR reaches 3:1 here (accent-orange 2.31, pastel-orange-grounded 2.34 on the page), so the orange
+     tone shares the bold warning step; the shape and the word still tell High from Medium. */
+  --tone-success: var(--color-success-bold);
+  --tone-warning: var(--color-warning-bold);
+  --tone-orange: var(--color-warning-bold);
+  /* A field's fill is the card's and the modal's own ground here, so its edge alone has to show it: 3:1. */
+  --field-border: var(--border-strong);
+  --field-border-hover: var(--foreground-subtle);
   --cat-2: var(--pastel-cyan-grounded);
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);

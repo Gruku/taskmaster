@@ -94,3 +94,17 @@ test('Save calls onSave with current draft and closes on success', async () => {
   assert.deepEqual(savedEntity, { title: 'hi', status: 'todo' });
   assert.equal(document.querySelector('.em-modal'), null);
 });
+
+test('every label is bound to its control, including one built inside a wrapper', () => {
+  const close = openEntityModal({ schema: SCHEMA, mode: 'edit', initialEntity: { title: 'x', status: 'done' }, onSave: async () => {}, onCancel: () => {} });
+  for (const key of ['title', 'status']) {
+    const field = document.querySelector(`.em-field[data-key="${key}"]`);
+    const label = field.querySelector('label');
+    const control = document.getElementById(label.getAttribute('for'));
+    assert.ok(control, `label for ${key} points at an element`);
+    assert.ok(field.contains(control));
+    assert.ok(['INPUT', 'SELECT'].includes(control.tagName), `${key}: the label reaches the control itself`);
+  }
+  assert.equal(document.querySelector('.em-field[data-key="status"] .ef-select').control.id, 'em-field-status');
+  close();
+});
