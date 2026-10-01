@@ -1,7 +1,25 @@
 import { getTaskDetailFull, invalidateTask } from '../store.js';
 import { mountTaskDetailDocument } from '../components/task-detail-document.js';
+import { claimTopbar } from '../lib/topbar.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: 'task' };
+
+function stateBlock(headline, hint) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tm-empty';
+  const h = document.createElement('div');
+  h.className = 'tm-empty__headline';
+  h.textContent = headline;
+  const p = document.createElement('div');
+  p.className = 'tm-empty__hint';
+  p.append(hint, ' ');
+  const a = document.createElement('a');
+  a.href = '#/kanban';
+  a.textContent = 'Open the Kanban';
+  p.appendChild(a);
+  wrap.append(h, p);
+  return wrap;
+}
 
 export function mount(root, { params, store, api, prefs, subpath }) {
   let id = subpath?.[0] || params?.id || null;
@@ -14,15 +32,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
       location.hash = `#/task/${lastId}`;
       return () => {};
     }
-    root.innerHTML = `<div class="td-page td-empty">
-      <h2 style="font-size:var(--text-2xl);margin:0 0 8px">No task open</h2>
-      <p style="color:var(--ink-3);margin:0">
-        Pick a task from the
-        <a href="#/kanban" style="color:var(--accent)">Kanban</a>
-        or the
-        <a href="#/table" style="color:var(--accent)">Table</a>.
-      </p>
-    </div>`;
+    claimTopbar();
+    root.replaceChildren(stateBlock('No task open', 'Pick a task from a board.'));
     return () => {};
   }
 
@@ -60,7 +71,11 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     } catch (e) {
       if (!disposed && request === generation && !store.isEditing(id)) {
         cleanup?.();
-        root.textContent = `Could not load ${id}: ${e.message}`;
+        claimTopbar();
+        // http() throws `GET <path> → <status>: <body>`; anchor on the arrow so an
+        // id like T-404 in the path can't read as a status.
+        const missing = /→ 404\b/.test(String(e?.message));
+        root.replaceChildren(stateBlock(missing ? 'Task not found' : 'Could not load task', missing ? `${id} does not exist.` : 'The server did not answer.'));
       }
     }
   }
