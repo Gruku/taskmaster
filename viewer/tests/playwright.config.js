@@ -1,4 +1,8 @@
 import { defineConfig } from '@playwright/test';
+import { requireLiveOptIn } from './live-guard.js';
+
+// These specs write viewer prefs to the live server at baseURL; refuse before anything starts.
+requireLiveOptIn();
 
 export default defineConfig({
   testDir: '.',

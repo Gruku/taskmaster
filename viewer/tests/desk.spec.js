@@ -4,6 +4,10 @@
 // Runs against live .taskmaster — all notes created here are archived in afterAll.
 
 import { test, expect } from '@playwright/test';
+import { requireLiveOptIn } from './live-guard.js';
+
+// This spec names the live port itself, so it checks the opt-in even when run without the guarded config.
+requireLiveOptIn();
 
 const BASE = process.env.VIEWER_BASE_URL || 'http://127.0.0.1:8765';
 const CREATED = [];
