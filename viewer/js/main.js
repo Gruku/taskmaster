@@ -4,6 +4,7 @@ import { init as routerInit, registerScreen } from './router.js';
 import { mountSidebar } from './components/sidebar.js';
 import { initTheme, setThemePref } from './lib/theme.js';
 import { icon } from './components/icon.js';
+import { createPrefsWriter, deepMerge } from './lib/prefs-writer.js';
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
@@ -25,7 +26,12 @@ registerScreen('/archived',   () => import('./screens/archived.js'));
 registerScreen('/settings',   () => import('./screens/settings.js'));
 
 // Prefs writer with debounce — screens call `prefs.patch({...})`.
-let prefsDebounce = null;
+// Patches inside one debounce window are merged, so none of them is dropped.
+const prefsWriter = createPrefsWriter({
+  save: (patchObj) => api.savePrefs(patchObj),
+  delayMs: PREFS_DEBOUNCE_MS,
+  onError: (e) => console.error('savePrefs failed', e),
+});
 const prefs = {
   patch(patchObj) {
     // Apply locally for instant UI feedback.
@@ -33,23 +39,9 @@ const prefs = {
     const merged = deepMerge(structuredClone(cur), patchObj);
     store.setPrefs(merged);
     // Persist with debounce.
-    if (prefsDebounce) clearTimeout(prefsDebounce);
-    prefsDebounce = setTimeout(() => {
-      api.savePrefs(patchObj).catch(e => console.error('savePrefs failed', e));
-    }, PREFS_DEBOUNCE_MS);
+    prefsWriter.queue(patchObj);
   },
 };
-
-function deepMerge(base, patch) {
-  for (const [k, v] of Object.entries(patch)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object') {
-      deepMerge(base[k], v);
-    } else {
-      base[k] = v;
-    }
-  }
-  return base;
-}
 
 async function boot() {
   // Before the fetches and before initTheme: the toggle has its icon and label while boot

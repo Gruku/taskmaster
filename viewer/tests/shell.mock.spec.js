@@ -22,6 +22,24 @@ test('theme toggle flips and persists the choice', async ({ page }) => {
   await expect.poll(() => puts.join('')).toContain('"theme":"light"');
 });
 
+test('a theme choice followed at once by another preference change is still saved', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/#/kanban');
+  const toggle = page.locator('#theme-toggle');
+  await expect(toggle).toBeEnabled();
+  await expect(page.locator('.sidebar-link.active')).toHaveCount(1);   // boot's own writes are behind us
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/viewer/prefs')) puts.push(r.postData()); });
+  // Both inside one debounce window: the second used to replace the first.
+  await page.evaluate(() => {
+    document.getElementById('theme-toggle').click();
+    document.querySelector('.sidebar-collapse-btn').click();
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect.poll(() => puts.join('\n')).toContain('"sidebar_collapsed":true');
+  expect(puts.join('\n')).toContain('"theme":"light"');
+});
+
 test('theme toggle works from the keyboard', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/#/settings');
