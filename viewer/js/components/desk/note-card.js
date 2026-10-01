@@ -2,8 +2,8 @@ import { h } from '../../util/h.js';
 import { tiltFor } from '../../lib/desk.js';
 import { mountMarkdown } from '../markdown.js';
 
-// A paper sticky note. Light paper on the dark desk; user notes are warm
-// yellow paper, claude notes cool blue paper. Static tilt from id hash.
+// A paper sticky note. Solid coloured paper in both themes; user notes are warm
+// orange paper, claude notes cool periwinkle paper. Static tilt from id hash.
 // onPin(note), onArchive(note), onSave(note, newText) are async callbacks.
 export function createNoteCard({ note, onPin, onArchive, onSave }) {
   const root = h('article', {

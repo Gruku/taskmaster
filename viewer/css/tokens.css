@@ -187,6 +187,13 @@
   --cat-4: var(--accent-orange);
   --cat-5: var(--accent-lime);
   --cat-6: var(--pastel-orange);
+  /* Desk notes are paper: the same sheet and the same dark ink in both themes (the ink steps are mirrored in light). */
+  --note-paper-user: var(--pastel-orange);
+  --note-paper-claude: var(--pastel-signature);
+  --note-ink: var(--ground-0);
+  --note-ink-soft: var(--ground-30);
+  --note-edge-user: var(--pastel-orange-grounded);
+  --note-edge-claude: var(--pastel-signature-grounded);
 
   /* ── Layout ── */
   --sidebar-w: 240px;
@@ -285,11 +292,6 @@
   --graph-edge-stroke: var(--signature-dim);
   --graph-edge-stroke-active: var(--signature);
   --graph-col-guide: var(--border-subtle);
-  --paper: var(--surface-raised);            /* desk notes; the Claude note's edge is --paper-edge-claude */
-  --paper-edge: var(--pastel-orange);
-  --paper-edge-claude: var(--pastel-signature);
-  --paper-ink: var(--foreground-default);
-  --paper-ink-soft: var(--foreground-subtle);
   /* Defaults for variables JS sets as inline style. */
   --tilt: 0deg;
   --epic: var(--foreground-subtle);
@@ -337,6 +339,8 @@
   --col-bg: var(--ground-10);
   --card-bg: var(--ground-0);
   --card-bg-hover: var(--ground-5);
+  --note-ink: var(--ground-100);
+  --note-ink-soft: var(--ground-50);
   --cat-2: var(--pastel-cyan-grounded);
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);
@@ -358,8 +362,6 @@
   --sev-high: var(--color-warning-bold);
   --sev-medium: var(--color-warning-bold);
   --danger-ink: var(--color-critical-bold);
-  --paper-edge: var(--pastel-orange-grounded);
-  --paper-edge-claude: var(--pastel-signature-grounded);
 }
 
 @media (max-width: 768px) { :root { --page-gutter: var(--space-md); } }

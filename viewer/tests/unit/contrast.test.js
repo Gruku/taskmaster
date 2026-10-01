@@ -66,3 +66,11 @@ test('light theme: cards are the lightest surface, columns the darkest (no shado
   assert.ok(lum('light', '--card-bg') > lum('light', '--card-bg-hover'), 'hover is a visible step');
   assert.ok(lum('light', '--card-bg-hover') > lum('light', '--col-bg'), 'a hovered card still stands off its column');
 });
+
+test('sticky notes: both inks are AA on both papers, and the paper is the same in both themes', () => {
+  const papers = ['--note-paper-user', '--note-paper-claude'];
+  assertAA([[BOTH, '--note-ink', papers], [BOTH, '--note-ink-soft', papers]]);
+  for (const t of [...papers, '--note-ink', '--note-ink-soft', '--note-edge-user', '--note-edge-claude']) {
+    assert.equal(resolve('dark', t), resolve('light', t), `${t} is theme-independent`);
+  }
+});

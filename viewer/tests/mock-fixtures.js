@@ -22,3 +22,17 @@ export const BOARD = {
     task('T-107', 'Review the cutover checklist', 'in-review', 'medium', 'store'),
   ],
 };
+
+const ago = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString();
+export const NOTES = {
+  notes: [
+    { id: 'NOTE-001', author: 'user', pinned: true, created: ago(2),
+      body: 'Ship the viewer re-skin before the weekend. Check the **light theme** on the laptop screen, not only the big monitor.' },
+    { id: 'NOTE-002', author: 'claude', pinned: false, created: ago(5),
+      body: 'The store write hang is the O(N²) related-index rebuild under the writer mutex. Fix verified in scratch; needs `pytest -m scale` before merge.' },
+    { id: 'NOTE-003', author: 'user', pinned: false, created: ago(26),
+      body: 'Ask about the Linear sync retries.' },
+    { id: 'NOTE-004', author: 'claude', pinned: false, created: ago(50),
+      body: 'Three follow-ups left from the cutover:\n\n- restore scalars\n- re-run the bypass gate\n- [handover](#/sessions) for tomorrow' },
+  ],
+};
