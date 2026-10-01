@@ -36,3 +36,22 @@ export const NOTES = {
       body: 'Three follow-ups left from the cutover:\n\n- restore scalars\n- re-run the bypass gate\n- [handover](#/sessions) for tomorrow' },
   ],
 };
+
+// A task with every editable field filled, for the forms and the detail views. `docs` is a map, as it is stored.
+export const RICH_TASK = {
+  id: 'T-102', title: 'Re-skin the Kanban cards and columns', status: 'in-progress', priority: 'critical', epic: 'viewer', phase: 'P1',
+  estimate: 'M', stage: 2, sub_repo: 'viewer', branch: 'feat/viewer-reality-reprojection', worktree: '.worktrees/viewer-rr', release: '7.1.0',
+  depends_on: ['T-101'],
+  docs: { spec: 'docs/specs/2026-10-01-viewer-reality-reprojection-design.md', plan: 'docs/plans/2026-10-01-viewer-rr-2a-task-modals.md' },
+  anchors: ['viewer/js/components/card.js', 'viewer/css/screens/kanban.css'],
+  created: '2026-09-28T09:00:00Z', last_referenced: '2026-09-30T16:20:00Z',
+  description: 'Cards and columns take the **Reality Reprojection** grounds.\n\nSee [the spec](docs/specs/2026-10-01-viewer-reality-reprojection-design.md).',
+  specification: '## Requirements\n\n1. Cards are the raised ground.\n2. Columns are the milled channel.\n3. No shadows.\n\n```css\n.card { background: var(--card-bg); }\n```',
+  plan: '1. Tokens\n2. Cards\n3. Columns\n\n| Step | State |\n|---|---|\n| Tokens | done |\n| Cards | in progress |',
+  notes: 'Light theme: check the card edge on the laptop screen.',
+  review_instructions: 'Open the board in both themes and drag a card across columns.',
+  patchnote: 'The board takes the new look.',
+};
+
+// The payload of GET /api/task/<id>/detail for `task`.
+export const taskDetail = (task, etag = 't1:fixture') => ({ task, related: {}, claim: null, etag });

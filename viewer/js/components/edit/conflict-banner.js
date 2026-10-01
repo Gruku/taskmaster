@@ -52,7 +52,7 @@ export function showFieldConflict({
 }
 
 export function showFullConflict({
-  entityKind, entityId, localDraft, currentValue, currentEtag, onResolve,
+  entityKind, entityId, localDraft, currentValue, currentEtag, onResolve, onDismiss,
 }) {
   const host = getHost();
   host.replaceChildren();
@@ -83,6 +83,9 @@ export function showFullConflict({
       `${entityKind} ${entityId} updated by another writer — pick fields to keep`),
     rows,
     h('div', { class: 'cb-actions' }, [
+      // Stepping back is always possible: the form behind keeps the edits and can be saved again.
+      h('button', { type: 'button', class: 'cb-dismiss',
+                    on: { click: () => { dismiss(banner); onDismiss?.(); } } }, 'Dismiss'),
       h('button', { type: 'button', class: 'cb-resolve',
                     on: { click: async () => {
                       const merged = { ...currentValue };

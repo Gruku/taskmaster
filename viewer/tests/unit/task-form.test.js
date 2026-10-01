@@ -69,8 +69,8 @@ test('every field belongs to one of the four form groups, in the order the form 
   const byGroup = {};
   for (const f of s.fields) (byGroup[f.group] ??= []).push(f.key);
   assert.deepEqual(byGroup, {
-    basics: ['title', 'status', 'priority', 'epic', 'phase', 'estimate'],
-    tracking: ['stage', 'sub_repo', 'branch', 'worktree', 'release'],
+    basics: ['title', 'status', 'priority', 'epic', 'phase', 'estimate', 'stage'],
+    tracking: ['sub_repo', 'release', 'branch', 'worktree'],
     relations: ['depends_on', 'docs', 'anchors'],
     content: ['description', 'specification', 'plan', 'notes', 'review_instructions', 'patchnote'],
   });
@@ -119,4 +119,23 @@ test('a task with null, missing or wrong-typed fields validates and renders with
     assert.doesNotThrow(() => f.renderer.coerce(odd[f.key]), `coerce ${f.key}`);
   }
   assert.doesNotThrow(() => runValidation({}, s));
+});
+
+test('neither two-column group ends on a lone field: Title spans the row and the rest pair up', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  for (const group of ['basics', 'tracking']) {
+    const cells = s.fields.filter(f => f.group === group).reduce((n, f) => n + (f.wide ? 2 : 1), 0);
+    assert.equal(cells % 2, 0, group);
+  }
+  assert.deepEqual(s.fields.filter(f => f.wide).map(f => f.key), ['title']);
+});
+
+test('docs is edited as a map of type to path, never as a list', async () => {
+  const { KeyValueField } = await import('../../js/components/edit/fields/keyvalue-field.js');
+  const s = taskSchema({ getBacklog: FAKE });
+  const docs = s.fields.find(f => f.key === 'docs');
+  assert.equal(docs.renderer, KeyValueField);
+  const base = { title: 'x', status: 'todo', priority: 'medium', epic: 'v3-edit' };
+  assert.equal(runValidation({ ...base, docs: { spec: 'docs/spec.md' } }, s).valid, true);
+  assert.ok(runValidation({ ...base, docs: [{ key: 'a', value: '1' }, { key: 'a', value: '2' }] }, s).errors.docs);
 });

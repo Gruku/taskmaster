@@ -22,7 +22,7 @@
   border: 1px solid var(--border);
 }
 .cb-keep-mine, .cb-resolve { background: var(--accent); color: white; border-color: var(--accent); }
-.cb-use-server { background: transparent; color: var(--ink-2); }
+.cb-use-server, .cb-dismiss { background: transparent; color: var(--ink-2); }
 
 /* ---- Mobile (< 768px) — above modal, vertical-stack rows ---- */
 @media (max-width: 768px) {

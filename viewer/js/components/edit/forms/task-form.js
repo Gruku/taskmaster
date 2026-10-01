@@ -12,6 +12,7 @@ import { NumberField }   from '../fields/number-field.js';
 import { ChipInput }     from '../fields/chip-input.js';
 import { RelationPicker } from '../fields/relation-picker.js';
 import { EstimateField } from '../fields/estimate-field.js';
+import { KeyValueField } from '../fields/keyvalue-field.js';
 
 const STATUS_OPTIONS = [
   { value: 'todo',        label: 'Todo' },
@@ -38,7 +39,8 @@ export function taskSchema({ getBacklog }) {
     entity: 'task',
     label: 'Task',
     fields: [
-      { key: 'title',    label: 'Title',    renderer: TextField, group: 'basics',
+      // `wide` spans both columns of the form grid. The rest of Basics and Tracking pair up, so no row ends on a lone field.
+      { key: 'title',    label: 'Title',    renderer: TextField, group: 'basics', wide: true,
         required: true, maxLength: 140 },
       { key: 'status',   label: 'Status',   renderer: EnumSelect, group: 'basics',
         required: true, options: STATUS_OPTIONS, marker: 'status' },
@@ -61,11 +63,11 @@ export function taskSchema({ getBacklog }) {
           return null;
         }},
       { key: 'estimate', label: 'Estimate', renderer: EstimateField, group: 'basics' },
-      { key: 'stage',    label: 'Stage',    renderer: NumberField, group: 'tracking', min: 0 },
+      { key: 'stage',    label: 'Stage',    renderer: NumberField, group: 'basics', min: 0 },
       { key: 'sub_repo', label: 'Sub-repo', renderer: TextField, group: 'tracking', maxLength: 64 },
+      { key: 'release',  label: 'Release',  renderer: TextField, group: 'tracking', maxLength: 32 },
       { key: 'branch',   label: 'Branch',   renderer: TextField, group: 'tracking', maxLength: 200 },
       { key: 'worktree', label: 'Worktree', renderer: TextField, group: 'tracking', maxLength: 200 },
-      { key: 'release',  label: 'Release',  renderer: TextField, group: 'tracking', maxLength: 32 },
       { key: 'depends_on', label: 'Depends on', renderer: RelationPicker, group: 'relations',
         kind: 'tasks', getBacklog,
         validate(value, spec) {
@@ -74,15 +76,11 @@ export function taskSchema({ getBacklog }) {
           // The owning task's id is passed via crossField (see below).
           return null;
         }},
-      { key: 'docs',     label: 'Docs',     renderer: ChipInput, group: 'relations',
-        allowFree: true,
-        // Stored as object { type: url } in YAML; the form treats it as an
-        // array of "type:url" strings on the wire and the form layout is
-        // responsible for serializing back. For Phase A we keep it as the
-        // already-flat chip-input view — Task 13 wires the round-trip.
-      },
+      // Stored as a map { type: path or URL }; edited as rows and saved as that same map.
+      { key: 'docs',     label: 'Docs',     renderer: KeyValueField, group: 'relations',
+        keyLabel: 'Type', valueLabel: 'Path or URL', addLabel: 'Add doc' },
       { key: 'anchors',  label: 'Anchors',  renderer: ChipInput, group: 'relations',
-        allowFree: true },
+        allowFree: true, placeholder: 'add a file or path…' },
       { key: 'description', label: 'Description', renderer: MdField, group: 'content' },
       { key: 'specification', label: 'Specification', renderer: MdField, group: 'content' },
       { key: 'plan', label: 'Plan', renderer: MdField, group: 'content' },
