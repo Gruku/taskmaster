@@ -16,6 +16,7 @@ const { DateField } = await import('../../js/components/edit/fields/date-field.j
 const { ChipInput } = await import('../../js/components/edit/fields/chip-input.js');
 const { RelationPicker } = await import('../../js/components/edit/fields/relation-picker.js');
 const { EstimateField } = await import('../../js/components/edit/fields/estimate-field.js');
+const { KeyValueField } = await import('../../js/components/edit/fields/keyvalue-field.js');
 
 const noop = () => {};
 const OPTIONS = [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }];
@@ -29,6 +30,7 @@ const RENDERERS = {
   ChipInput: [ChipInput, { source: async () => [] }, 'INPUT', 'text'],
   RelationPicker: [RelationPicker, { kind: 'tasks', getBacklog: () => ({ tasks: [] }) }, 'INPUT', 'text'],
   EstimateField: [EstimateField, {}, 'INPUT', 'number'],
+  KeyValueField: [KeyValueField, {}, 'INPUT', 'text'],
 };
 const edit = (name, args = {}) => {
   const [renderer, extra] = RENDERERS[name];

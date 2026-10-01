@@ -148,17 +148,18 @@
 .ef-chip-list { display: flex; flex-wrap: wrap; gap: var(--space-micro); }
 .ef-chip-list:empty { display: none; }
 .ef-chip-input-row { position: relative; }
+/* As wide as its input and as tall as its (at most eight, one-line) rows: it never scrolls inside itself, so a
+   scrolling dialog can bring the whole list into view and no row is cut off. */
 .ef-chip-dropdown {
   position: absolute;
   top: 100%;
   left: 0;
+  right: 0;
   z-index: 10;
   box-sizing: border-box;
-  min-width: 240px;
-  max-width: 360px;
-  max-height: 240px;
   margin-top: var(--space-micro);
-  overflow-y: auto;
+  /* Brought into view with a little room under it, not flush against the dialog's footer. */
+  scroll-margin: var(--space-sm);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--overlay-surface);
@@ -175,7 +176,7 @@
 }
 .ef-chip-dd-row:hover,
 .ef-chip-dd-row.ef-chip-dd-active { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
-.ef-chip-dd-val { min-width: 0; overflow-wrap: anywhere; }
+.ef-chip-dd-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ef-chip-dd-hint {
   flex: 0 0 auto;
   margin-left: auto;
@@ -184,6 +185,14 @@
   font-weight: var(--font-technical-weight);
   font-size: var(--size-technical-small);
 }
+
+/* ── Key and value rows (a task's docs) ── */
+.ef-kv { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xs); min-width: 0; }
+.ef-kv-rows { display: flex; flex-direction: column; gap: var(--space-xs); width: 100%; }
+.ef-kv-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.ef-kv-key { flex: 0 1 140px; font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.ef-kv-value { flex: 1 1 0; font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.ef-kv-remove { color: var(--foreground-subtle); }
 
 /* ── Estimate: three sizes or a number of days ── */
 .ef-estimate { font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
@@ -215,7 +224,12 @@
 .ef-estimate-size:hover:not(:disabled) { background: var(--ground-15); color: var(--foreground-bold); }
 .ef-estimate-size[aria-pressed="true"] { background: var(--signature-fill); color: var(--on-accent-fill); }
 .ef-estimate-size[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-fill-hover); color: var(--on-accent-fill); }
-.ef-estimate-size:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Disabled steps back like the inputs beside it: quieter ink and edge. Fading the buttons instead would let the
+   group's edge colour show through them as a grey slab. */
+.ef-estimate-size:disabled { color: var(--foreground-disabled); cursor: not-allowed; }
+.ef-estimate-sizes:has(:disabled) { background: var(--border-subtle); }
+.ef-estimate-size[aria-pressed="true"]:disabled { background: var(--overlay-surface-active); color: var(--foreground-bold); }
+.ef-estimate-custom:disabled { border-color: var(--border-subtle); }
 /* The ring of a focused size must not be covered by its neighbour. */
 .ef-estimate-size:focus-visible { position: relative; z-index: 1; }
 .ef-estimate-days {
@@ -226,6 +240,24 @@
   font-size: var(--size-narrator-small);
 }
 .ef-estimate-days-input { width: 72px; }
+/* A stored estimate the picker cannot produce: a choice of its own, with a line saying what it is. */
+.ef-estimate-custom {
+  max-width: 20ch;
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ef-estimate-custom:first-child,
+.ef-estimate-custom:last-child { border-radius: var(--radius-md); }
+.ef-estimate-custom[aria-pressed="true"] { border-color: var(--signature-fill); }
+.ef-estimate-note {
+  flex: 1 0 100%;
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+}
 .ef-num-input { max-width: 160px; }
 .ef-date-input { max-width: 200px; }
 
@@ -245,5 +277,5 @@
 
 @media (max-width: 768px) {
   .ef-chip-input { min-width: 0; }
-  .ef-chip-dropdown { min-width: 0; width: min(360px, calc(100vw - 2 * var(--space-md))); max-width: calc(100vw - 2 * var(--space-md)); }
+  .ef-kv-key { flex-basis: 96px; }
 }

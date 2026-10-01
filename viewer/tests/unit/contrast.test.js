@@ -177,13 +177,29 @@ test('read-mode fields: text stays AA on the hover ground of an editable value',
   ]);
 });
 
-test('light theme: a field shares its ground with the card and the modal, so its edge alone reaches 3:1', () => {
-  assert.equal(resolve('light', '--bg-recessed'), resolve('light', '--overlay-surface'));
-  assertNonText([
-    [['light'], '--field-border', ['--bg-recessed', '--card-bg', '--overlay-surface', '--bg-page']],
-    [['light'], '--field-border-hover', ['--bg-recessed', '--card-bg', '--overlay-surface', '--bg-page']],
-  ]);
-  for (const theme of BOTH) assert.notEqual(resolve(theme, '--field-border-hover'), resolve(theme, '--field-border'), theme);
+test('a field\'s edge reaches 3:1 against its own fill and every ground it sits on, in both themes', () => {
+  assert.equal(resolve('light', '--bg-recessed'), resolve('light', '--overlay-surface'), 'light: the fill is the modal\'s own ground, so the edge alone shows the field');
+  const grounds = ['--bg-recessed', '--bg-page', '--card-bg', '--overlay-surface'];
+  assertNonText([[BOTH, '--field-border', grounds], [BOTH, '--field-border-hover', grounds]]);
+});
+
+test('dark theme: the field edge is the lowest ground step that reaches 3:1 on a modal', () => {
+  assert.equal(THEMES.dark['--field-border'], 'var(--ground-50)');
+  assert.ok(ratio('dark', '--ground-40', '--overlay-surface') < 3, 'one step lower falls short');
+  assert.ok(ratio('dark', '--ground-40', '--card-bg') < 3);
+});
+
+test('a field\'s states read apart: hover is a stronger edge than rest, and focus and invalid are not ground steps at all', () => {
+  for (const theme of BOTH) {
+    const rest = ratio(theme, '--field-border', '--bg-recessed');
+    const hover = ratio(theme, '--field-border-hover', '--bg-recessed');
+    assert.ok(hover / rest >= 1.3, `${theme}: hover ${hover.toFixed(2)} vs rest ${rest.toFixed(2)}`);
+    const edges = ['--field-border', '--field-border-hover', '--border-focus', '--tone-critical'].map((t) => resolve(theme, t));
+    assert.equal(new Set(edges).size, 4, `${theme}: rest, hover, focus and invalid are four different colours`);
+    // A disabled field steps back instead: its edge is deliberately quieter than a live one.
+    assert.ok(ratio(theme, '--border-subtle', '--bg-recessed') < rest, theme);
+  }
+  assertNonText([[BOTH, '--border-focus', ['--bg-recessed', '--overlay-surface', '--card-bg', '--bg-page']]]);
 });
 
 test('rendered markdown: body, quote, link and table-head text are AA on every ground a document sits on', () => {

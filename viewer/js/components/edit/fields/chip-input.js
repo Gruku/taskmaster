@@ -1,7 +1,7 @@
 // viewer/js/components/edit/fields/chip-input.js
 import { h } from '../../../util/h.js';
 import { icon } from '../../icon.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 const MAX_DROPDOWN = 8;
 
@@ -30,7 +30,7 @@ export const ChipInput = {
     const input = h('input', { type: 'text', class: 'ef-chip-input-text', placeholder, autocomplete: 'off' });
     bindControl(input, { id, describedBy });
     wrap.control = input;
-    const dropdown = h('div', { class: 'ef-chip-dropdown', style: 'display:none' });
+    const dropdown = h('div', { class: 'ef-chip-dropdown', hidden: '' });
     inputBox.appendChild(input);
     inputBox.appendChild(dropdown);
     wrap.appendChild(chipsBox);
@@ -59,31 +59,41 @@ export const ChipInput = {
     }
     paintChips();
 
+    function closeList() {
+      dropdown.hidden = true;
+      suggestions = [];
+      highlighted = -1;
+    }
+
     async function refreshDropdown() {
       const q = input.value.trim();
-      if (!q) { dropdown.style.display = 'none'; suggestions = []; return; }
+      if (!q) { closeList(); return; }
       let raw = [];
       try { raw = (await source?.(q)) || []; } catch (e) { raw = []; }
+      // An answer to a query that has since been changed or abandoned must not reopen the list.
+      if (q !== input.value.trim()) return;
       // Filter out already-chosen items.
       suggestions = raw.filter(s => !draft.some(d => _val(d) === _val(s))).slice(0, MAX_DROPDOWN);
-      if (!suggestions.length) { dropdown.style.display = 'none'; return; }
+      if (!suggestions.length) { closeList(); return; }
       dropdown.replaceChildren(...suggestions.map((s, i) => {
-        const row = h('div', { class: 'ef-chip-dd-row' + (i === 0 ? ' ef-chip-dd-active' : '') });
+        // One line per suggestion; the full text is the tooltip when it had to be cut.
+        const row = h('div', { class: 'ef-chip-dd-row' + (i === 0 ? ' ef-chip-dd-active' : ''), title: _displayLabel(s) });
         row.appendChild(h('span', { class: 'ef-chip-dd-val' }, _displayLabel(s)));
         if (s.hint) row.appendChild(h('span', { class: 'ef-chip-dd-hint' }, s.hint));
         row.addEventListener('mousedown', (e) => { e.preventDefault(); commitChoice(s); });
         return row;
       }));
       highlighted = 0;
-      dropdown.style.display = '';
+      dropdown.hidden = false;
+      // Inside a scrolling dialog the list can open below the fold: bring all of it into view, still under its input.
+      dropdown.scrollIntoView?.({ block: 'nearest' });
     }
 
     function commitChoice(s) {
       draft.push(_val(s));
       paintChips();
       input.value = '';
-      dropdown.style.display = 'none';
-      suggestions = [];
+      closeList();
       onChange?.([...draft]);
       input.focus();
     }
@@ -116,9 +126,9 @@ export const ChipInput = {
         e.preventDefault();
         commitChoice(suggestions[highlighted >= 0 ? highlighted : 0]);
       } else if (e.key === 'Escape') {
-        e.preventDefault();
-        if (input.value) { input.value = ''; dropdown.style.display = 'none'; }
-        else onCancel?.();
+        // The key is this field's while it has something of its own to close: the list, or a half-typed entry.
+        if (input.value || !dropdown.hidden) { e.preventDefault(); input.value = ''; closeList(); }
+        else cancelOnEscape(e, onCancel);
       } else if (e.key === 'Backspace' && !input.value && draft.length) {
         e.preventDefault();
         draft.pop();
@@ -127,6 +137,10 @@ export const ChipInput = {
       }
     });
     input.addEventListener('blur', () => {
+      // Text typed where free entries are allowed is an entry the user meant: it becomes a chip rather than being
+      // dropped by a Save pressed straight after typing.
+      if (allowFree) commitFree();
+      closeList();
       // Slight delay so a mousedown on dropdown row still fires.
       setTimeout(() => onCommit?.([...draft]), 80);
     });

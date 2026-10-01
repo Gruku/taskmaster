@@ -1,7 +1,7 @@
 // viewer/js/components/edit/fields/md-field.js
 import { h } from '../../../util/h.js';
 import { renderMarkdown } from '../../markdown.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 export const MdField = {
   read({ value, readOnly = false, placeholder = '' }) {
@@ -31,10 +31,7 @@ export const MdField = {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         onCommit?.(ta.value);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onCancel?.();
-      }
+      } else cancelOnEscape(e, onCancel);
     });
     ta.addEventListener('blur', () => onCommit?.(ta.value));
     focusOnMount(ta, autoFocus, { select: true });

@@ -1,6 +1,6 @@
 // viewer/js/components/edit/fields/text-field.js
 import { h } from '../../../util/h.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 export const TextField = {
   read({ value, readOnly = false, placeholder = '' }) {
@@ -24,7 +24,7 @@ export const TextField = {
     input.addEventListener('input', () => onChange?.(input.value));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onCommit?.(input.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     input.addEventListener('blur', () => onCommit?.(input.value));
     focusOnMount(input, autoFocus, { select: true });

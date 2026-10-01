@@ -1,6 +1,6 @@
 // viewer/js/components/edit/fields/number-field.js
 import { h } from '../../../util/h.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 export const NumberField = {
   read({ value, readOnly = false }) {
@@ -15,7 +15,7 @@ export const NumberField = {
     inp.addEventListener('input', () => onChange?.(inp.value));
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onCommit?.(inp.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     inp.addEventListener('blur', () => onCommit?.(inp.value));
     focusOnMount(inp, autoFocus, { select: true });

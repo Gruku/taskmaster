@@ -1,6 +1,6 @@
 // viewer/js/components/edit/fields/date-field.js
 import { h } from '../../../util/h.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 const ISO_DATE_RE = /^(\d{4}-\d{2}-\d{2})/;
 
@@ -16,7 +16,7 @@ export const DateField = {
     inp.addEventListener('input', () => onChange?.(inp.value));
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onCommit?.(inp.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     inp.addEventListener('blur', () => onCommit?.(inp.value));
     focusOnMount(inp, autoFocus);

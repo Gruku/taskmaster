@@ -2,7 +2,7 @@
 import { h } from '../../../util/h.js';
 import { icon } from '../../icon.js';
 import { statusMarker, priorityMarker } from '../../status.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 const MARKERS = {
   status: (value) => statusMarker('task', value),
@@ -28,6 +28,15 @@ export const EnumSelect = {
   // the <select> itself is `wrapper.control`.
   edit({ value, options = [], onChange, onCommit, onCancel, id, describedBy, autoFocus = true }) {
     const sel = h('select', { class: 'ef-enum-select' });
+    const empty = value == null || value === '';
+    // A select always shows some option. A stored value that is not on the list, or no value where the list has no
+    // blank, gets an option of its own — disabled, so it can be seen and left but not picked — instead of the first
+    // option standing in for it.
+    if (!options.some(o => o.value === (empty ? '' : value))) {
+      const stand = h('option', { value: empty ? '' : String(value), disabled: '' }, empty ? 'Select…' : String(value));
+      stand.selected = true;
+      sel.appendChild(stand);
+    }
     for (const opt of options) {
       const o = h('option', { value: opt.value }, opt.label);
       if (opt.value === value) o.selected = true;
@@ -38,9 +47,8 @@ export const EnumSelect = {
       onChange?.(sel.value);
       onCommit?.(sel.value);
     });
-    sel.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
-    });
+    // With its list open the browser keeps Escape for the list; this only sees the key when the list is closed.
+    sel.addEventListener('keydown', (e) => cancelOnEscape(e, onCancel));
     focusOnMount(sel, autoFocus);
     const wrap = h('span', { class: 'ef-select' }, [sel, icon('chevron', { size: 16 })]);
     wrap.control = sel;

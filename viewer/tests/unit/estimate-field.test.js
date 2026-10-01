@@ -118,7 +118,7 @@ test('a stored value of the wrong type or shape opens without throwing', () => {
   assert.equal(mount({ value: 3 }).days.value, '3');
   assert.equal(mount({ value: '0d' }).days.value, '0', 'a refused day count stays visible');
   const odd = mount({ value: 'XL' });
-  assert.deepEqual(odd.pressed(), []);
+  assert.deepEqual(odd.pressed(), ['XL'], 'kept as a choice of its own, never as one of the sizes');
   assert.equal(odd.days.value, '');
   assert.doesNotThrow(() => mount({ value: { a: 1 } }));
   assert.doesNotThrow(() => EstimateField.read({ value: { a: 1 } }));
@@ -153,4 +153,29 @@ test('read shows the stored value, a placeholder when empty, and the editable af
   const empty = EstimateField.read({ value: null, readOnly: true });
   assert.equal(empty.textContent, '—');
   assert.ok(empty.classList.contains('ef-placeholder') && !empty.classList.contains('ef-editable'));
+});
+
+test('a stored value the picker cannot produce is shown as a pressed custom choice with a note, and can be put back', () => {
+  const { el, sizes, days, pressed, changes } = mount({ value: '2 weeks' });
+  const custom = el.querySelector('.ef-estimate-custom');
+  assert.equal(custom.textContent, '2 weeks');
+  assert.equal(custom.tagName, 'BUTTON');
+  assert.equal(custom.getAttribute('aria-pressed'), 'true');
+  assert.equal(days.value, '');
+  assert.match(el.querySelector('.ef-estimate-note').textContent, /kept/);
+  assert.deepEqual(changes, [], 'showing it is not a change');
+  sizes.S.click();
+  assert.deepEqual(pressed(), ['S']);
+  assert.equal(changes.at(-1), 'S');
+  custom.click();
+  assert.deepEqual(pressed(), ['2 weeks']);
+  assert.equal(changes.at(-1), '2 weeks');
+});
+
+test('a value the picker can express has no custom choice and no note', () => {
+  for (const value of ['M', '3d', 3, null, '0d', '2.5d']) {
+    const { el } = mount({ value });
+    assert.equal(el.querySelector('.ef-estimate-custom'), null, JSON.stringify(value));
+    assert.equal(el.querySelector('.ef-estimate-note'), null);
+  }
 });

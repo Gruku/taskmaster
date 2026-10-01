@@ -1,7 +1,7 @@
 // User intent: an estimate is picked, not typed from memory — a size (S, M, L) or a whole number of days, never both —
 // so the board never carries "medium-ish" or "3 d" as an estimate.
 import { h } from '../../../util/h.js';
-import { bindControl, focusOnMount } from './control.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 const SIZES = ['S', 'M', 'L'];
 const DAYS_RE = /^([1-9]\d*)d$/;
@@ -36,17 +36,32 @@ export const EstimateField = {
     const buttons = SIZES.map((size) => h('button', { type: 'button', class: 'ef-estimate-size', 'aria-pressed': 'false' }, size));
     const days = h('input', { type: 'number', class: 'ef-estimate-days-input', min: '1', step: '1', inputmode: 'numeric' });
     bindControl(days, { id, describedBy });
+    // A stored estimate that is neither a size nor a day count ("2 weeks") cannot be picked here, but it must not be
+    // lost by opening the form: it stays as a choice of its own, pressed until another is made, and can be put back.
+    const stored = current != null && !SIZES.includes(current) && !TYPED_DAYS_RE.test(current) ? current : null;
+    const custom = stored == null ? null
+      : h('button', { type: 'button', class: 'ef-estimate-size ef-estimate-custom', 'aria-pressed': 'false', title: stored }, stored);
     const wrap = h('div', { class: 'ef-estimate-edit', role: 'group', 'aria-label': label }, [
       h('span', { class: 'ef-estimate-sizes' }, buttons),
       h('label', { class: 'ef-estimate-days' }, [days, h('span', {}, 'days')]),
+      custom,
+      custom && h('span', { class: 'ef-estimate-note' }, 'Stored value, not a size or a day count. It is kept unless you pick another.'),
     ]);
     wrap.control = days;
 
     function paint({ keepDays = false } = {}) {
       buttons.forEach((b, i) => b.setAttribute('aria-pressed', String(current === SIZES[i])));
+      custom?.setAttribute('aria-pressed', String(current === stored));
       if (!keepDays) days.value = TYPED_DAYS_RE.exec(current ?? '')?.[1] ?? '';
     }
     paint();
+
+    custom?.addEventListener('click', () => {
+      current = current === stored ? null : stored;
+      paint();
+      onChange?.(current);
+      onCommit?.(current);
+    });
 
     buttons.forEach((b, i) => b.addEventListener('click', () => {
       current = current === SIZES[i] ? null : SIZES[i];
@@ -63,7 +78,7 @@ export const EstimateField = {
     });
     wrap.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target === days) { e.preventDefault(); onCommit?.(current); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     // Moving between the sizes and the days stays inside the field; only leaving it commits.
     wrap.addEventListener('focusout', (e) => {

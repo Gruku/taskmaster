@@ -200,9 +200,11 @@
   --tone-warning: var(--color-warning);
   --tone-critical: var(--color-critical);
   --tone-orange: var(--accent-orange);
-  /* The edge of a form field at rest and under the pointer. */
-  --field-border: var(--border-default);
-  --field-border-hover: var(--border-strong);
+  /* The edge of a form field at rest and under the pointer. A field must be findable before it is touched, so the
+     edge takes the lowest ground step that reaches 3:1 on every surface a field sits on (ground-40 is 2.53 on a
+     modal, 2.86 on a card); the border roles (ground-15 to 30) are for dividers and stay below that. */
+  --field-border: var(--ground-50);
+  --field-border-hover: var(--ground-60);
   --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
   --cat-2: var(--accent-cyan);
   --cat-3: var(--accent-pink);

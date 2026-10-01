@@ -103,3 +103,32 @@ test('validate enforces value-in-options', () => {
   assert.equal(EnumSelect.validate('bogus', { options: STATUSES }), 'invalid value');
   assert.equal(EnumSelect.validate(null, { options: STATUSES, required: true }), 'required');
 });
+
+test('edit: a stored value that is not an option is shown as a disabled, selected option carrying the raw value', () => {
+  for (const [raw, shown] of [['someday', 'someday'], [7, '7']]) {
+    let changed = 0;
+    const el = EnumSelect.edit({ value: raw, options: STATUSES, onChange: () => { changed++; }, autoFocus: false });
+    const sel = el.control;
+    assert.equal(sel.options.length, STATUSES.length + 1);
+    assert.equal(sel.selectedOptions[0].textContent, shown);
+    assert.equal(sel.selectedOptions[0].disabled, true);
+    assert.equal(sel.value, shown);
+    assert.equal(changed, 0, 'showing it is not a change');
+    sel.value = 'done';
+    sel.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(changed, 1);
+  }
+});
+
+test('edit: an empty value with no empty option shows a placeholder rather than the first option', () => {
+  for (const empty of [null, undefined, '']) {
+    const sel = EnumSelect.edit({ value: empty, options: STATUSES, autoFocus: false }).control;
+    assert.equal(sel.value, '');
+    assert.equal(sel.selectedOptions[0].disabled, true);
+    assert.equal(sel.options.length, STATUSES.length + 1);
+  }
+  const withBlank = [{ value: '', label: '—' }, ...STATUSES];
+  const sel = EnumSelect.edit({ value: null, options: withBlank, autoFocus: false }).control;
+  assert.equal(sel.options.length, withBlank.length, 'an option list with its own blank needs no placeholder');
+  assert.equal(sel.value, '');
+});

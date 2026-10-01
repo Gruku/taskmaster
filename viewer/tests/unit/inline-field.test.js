@@ -38,7 +38,8 @@ test('Keep mine retains a newer draft typed while the first save was rejected', 
     input.value = 'latest';
     input.dispatchEvent(new dom.window.Event('input'));
     reject(Object.assign(new Error('stale'), {code: 409, current: {title: 'peer'}, current_etag: 'peer-tag'}));
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // The banner module is loaded on first use; how long that takes depends on how busy the machine is.
+    for (let i = 0; i < 400 && !host.querySelector('.cb-keep-mine'); i++) await new Promise(resolve => setTimeout(resolve, 5));
     host.querySelector('.cb-keep-mine').click();
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.deepEqual(saved, ['first', 'latest']);

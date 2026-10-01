@@ -8,6 +8,15 @@ export function bindControl(control, { id, describedBy } = {}) {
   return control;
 }
 
+// Escape is a field's own key only when it has an edit to cancel: inline editing passes `onCancel`, a form does not,
+// and an unclaimed Escape is left for the modal around the field.
+export function cancelOnEscape(e, onCancel) {
+  if (e.key !== 'Escape' || !onCancel) return false;
+  e.preventDefault();
+  onCancel();
+  return true;
+}
+
 // Inline editing mounts one control and wants the caret in it; a form passes autoFocus: false.
 export function focusOnMount(control, autoFocus, { select = false } = {}) {
   if (!autoFocus) return;
