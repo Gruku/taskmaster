@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const CSS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'css');
 
 // Files that must satisfy every rule. Append as files are converted; plan 4 replaces this with "all".
-export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'];
+export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css', 'components/button.css', 'components/status.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
@@ -133,6 +133,7 @@ test('every var(--x) used in any CSS file is defined in tokens.css', () => {
 });
 
 test('enforced files satisfy every style rule', () => {
+  assert.deepEqual(ENFORCED.filter((rel) => !files.some((f) => f.rel === rel)), [], 'every enforced file exists');
   const bad = files.filter((f) => ENFORCED.includes(f.rel)).flatMap(violations);
   assert.deepEqual(bad, []);
 });

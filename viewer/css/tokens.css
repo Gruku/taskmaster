@@ -185,6 +185,13 @@
      --text-accent is the only token for signature-hued text; --on-accent-fill is text on a --signature-fill ground. */
   --text-accent: var(--signature-vivid);
   --on-accent-fill: var(--ground-0);
+  --accent-fill-hover: var(--signature-fill-hover);
+  /* Modals and popovers. The -hover and -active steps are for a transparent control sitting on the surface,
+     where the shared ground-15 hover fill would be the surface itself. */
+  --overlay-surface: var(--surface-overlay);
+  --overlay-surface-sunken: var(--bg-recessed);
+  --overlay-surface-hover: var(--ground-20);
+  --overlay-surface-active: var(--ground-30);
   --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
   --cat-2: var(--accent-cyan);
   --cat-3: var(--accent-pink);
@@ -347,6 +354,13 @@
   --note-ink-soft: var(--ground-50);
   --text-accent: var(--signature);
   --on-accent-fill: var(--on-signature);
+  /* RR's light hover fill leaves its label at 4.49:1; the fill holds and the button's border answers the hover instead. */
+  --accent-fill-hover: var(--signature-fill);
+  /* RR's light overlay step is a mid-grey that reads heavy without a shadow: a modal is the lightest surface, like a card. */
+  --overlay-surface: var(--ground-0);
+  --overlay-surface-sunken: var(--ground-5);
+  --overlay-surface-hover: var(--ground-15);
+  --overlay-surface-active: var(--ground-20);
   --cat-2: var(--pastel-cyan-grounded);
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);

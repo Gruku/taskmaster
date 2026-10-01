@@ -89,3 +89,34 @@ test('legacy aliases that paint the accent as text go through --text-accent', ()
   }
   for (const theme of BOTH) assert.equal(THEMES[theme]['--ink-on-accent'], 'var(--on-accent-fill)');
 });
+
+test('modal and popover surfaces: body text and accent text are AA on them in both themes', () => {
+  const surfaces = ['--overlay-surface', '--overlay-surface-sunken'];
+  assertAA(['--foreground-bold', '--foreground-default', '--foreground-subtle', '--text-accent'].map((fg) => [BOTH, fg, surfaces]));
+});
+
+test('light theme: a modal is the lightest surface and its footer one step below it (no shadows to carry elevation)', () => {
+  assert.ok(lum('light', '--overlay-surface') > lum('light', '--bg-page'), 'the dialog is lighter than the page');
+  assert.equal(resolve('light', '--overlay-surface'), resolve('light', '--card-bg'), 'the dialog matches a card');
+  assert.ok(lum('light', '--overlay-surface') > lum('light', '--overlay-surface-sunken'), 'the footer is a visible step down');
+  assert.ok(lum('dark', '--overlay-surface') > lum('dark', '--overlay-surface-sunken'), 'and in dark');
+});
+
+test('button labels are AA on their fill in every state, in both themes', () => {
+  // Where a transparent button can sit, and the fills its hover and pressed states paint.
+  const grounds = ['--bg-page', '--card-bg', '--overlay-surface', '--overlay-surface-sunken'];
+  const fills = ['--ground-15', '--ground-20', '--overlay-surface-hover', '--overlay-surface-active'];
+  assertAA([
+    [BOTH, '--on-accent-fill', ['--signature-fill', '--accent-fill-hover']],   // primary: rest and pressed, hover
+    [BOTH, '--foreground-on-accent', ['--color-critical-bold']],               // critical: every state
+    [BOTH, '--foreground-bold', [...grounds, ...fills]],                       // secondary; ghost hovered or pressed
+    [BOTH, '--foreground-default', grounds],                                   // ghost at rest
+  ]);
+});
+
+test('a hovered control on a modal surface is a visible step off that surface', () => {
+  for (const theme of BOTH) {
+    assert.notEqual(resolve(theme, '--overlay-surface-hover'), resolve(theme, '--overlay-surface'), theme);
+    assert.notEqual(resolve(theme, '--overlay-surface-active'), resolve(theme, '--overlay-surface-hover'), theme);
+  }
+});
