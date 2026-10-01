@@ -201,3 +201,19 @@ Each stage is a task in its own worktree, reviewed, then merged locally `--no-ff
 - New features beyond the dashboard summary strip and the epic task list.
 - Write-path UX not exercised by the audit (drag-and-drop, conflict banner) beyond restyling to tokens.
 - Kanban keyboard reordering.
+
+## 11. Amendments (2026-10-01, after plan 1 and the user's live review)
+
+These override the sections they name.
+
+- **§3.1 contrast.** "Passes by construction" was wrong for RR's values: signature as text fails AA on raised surfaces and on tints. Rule: signature-hued text uses the viewer role `--text-accent` only (dark `signature-vivid`, light `signature`); text on a signature-tinted fill is `foreground-bold`; text on a solid `signature-fill` is `--on-accent-fill` (dark `ground-0`, light `on-signature`). A unit test computes these ratios from the tokens. Known remaining misses in light: `--text-accent` on `--col-bg` (4.01:1) and on `surface-overlay` (3.15:1) — do not place accent text there.
+- **§3.1 themes.** Dark values live on `:root` only (the theme attribute is on `<html>`).
+- **§3.1 / §6 light surfaces.** In light theme cards are the lightest surface: `--card-bg: ground-0`, `--col-bg: ground-10`, hover `ground-5`. RR's light elevation relies on shadows, which this project bans. RR's own semantic tokens are unchanged; screens use `--card-bg`, not `--surface-raised`.
+- **§3.5 theme.** The default is **dark** (user decision). A missing or unknown preference means dark; `system` is honoured only when explicitly stored. The toggle is an action button whose label names the result ("Switch to light theme"); it has no `aria-pressed`, and it is disabled until the saved preference has loaded.
+- **§4 sidebar.** The active item uses `--signature-glow-strong` with a full-perimeter `--signature-dim` border.
+- **§4 landmarks.** The nested `<main>` in task detail is removed in plan 2a (task document template), not plan 1.
+- **§5.4 estimate.** The estimate is `S | M | L | <n>d` (a number of days), not "ND": three size buttons plus a days input.
+- **§6 Dashboard notes.** Notes are solid coloured paper in both themes (user decision): user notes `pastel-orange`, Claude's `pastel-signature`, with a fixed dark ink; tilt and folded corner kept.
+- **§5.10 brand / favicon.** The app icon is the "Board" mark: three board columns on an off-black tile, the last one Periwinkle; shipped as SVG and a multi-size `.ico`.
+- **§9 stages.** Plan series is now: 1 foundation (done) → 2a task modals (shared modal shell, buttons, markers, fields, markdown, task document template) → 2b remaining shared components → 3 screens → 4 cleanup. The carry-forward list is in plan 1's verification report and is copied into each plan as it is written.
+- **Tests.** Live-server Playwright specs write viewer prefs and refuse to run without `TM_LIVE_SPECS_OK=1`; all new UI specs are API-mocked.
