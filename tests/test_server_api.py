@@ -151,3 +151,11 @@ def test_root_ignores_stale_use_v3_pref(running_server):
     html = resp.read().decode()
     assert "<title>Taskmaster</title>" in html
     assert 'src="/static/v3/js/main.js"' in html
+
+
+def test_viewer_font_is_served(running_server):
+    base, _ = running_server
+    with urllib.request.urlopen(f"{base}/static/v3/vendor/fonts/DMSans-Variable.woff2") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"].startswith("font/woff2")
+        assert len(r.read()) > 10_000

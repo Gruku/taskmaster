@@ -1,27 +1,17 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+Pro:ital,wght@1,400&display=swap');
-
-:root {
-  /* Shell-specific vars (behavioural + shell-scoped design values; not in tokens.css) */
-  /* spec §3.4 — 1.5x baked into source CSS values, not via CSS zoom */
-  --shell-bg-sidebar:   #101116;                   /* sidebar surface, darker than --bg-shell */
-  --shell-label-size:   14px;                      /* section header caps, sub-text-xs */
-  --shell-hover-overlay: rgba(255,255,255,0.03);   /* near-invisible hover scrim */
-}
-
 html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-  font-family: var(--font-sans);
-  background: var(--bg-canvas);
-  color: var(--ink);
-  font-size: var(--text-base);
-  line-height: 1.5;
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-body);
+  background: var(--bg-page);
+  color: var(--foreground-default);
 }
-
-.mono { font-family: var(--font-mono); }
-.serif { font-family: var(--font-serif); font-style: italic; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+::selection { background: var(--signature-dim); }
+.mono { font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.serif { font-family: var(--font-narrator); font-style: normal; }
 
 /* Shell grid: sidebar + main.
    Explicit row track of 100vh + box-sizing:border-box on .main below

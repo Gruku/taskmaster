@@ -12,10 +12,6 @@
 .dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-5); align-items: start; }
 
 .dk-note {
-  --paper: #e8d98a;            /* user: post-it yellow */
-  --paper-edge: #d8c66f;
-  --paper-ink: #2c2718;
-  --paper-ink-soft: rgba(44, 39, 24, 0.62);
   position: relative;
   background: var(--paper);
   color: var(--paper-ink);
@@ -46,12 +42,7 @@
   transform: translateX(-50%);
 }
 
-.dk-note--claude {
-  --paper: #9fc0e8;            /* claude: cool blue paper */
-  --paper-edge: #86abd6;
-  --paper-ink: #16202e;
-  --paper-ink-soft: rgba(22, 32, 46, 0.62);
-}
+.dk-note--claude { border-color: var(--paper-edge-claude); }
 
 /* Hover: brightness lift only — no transform, no movement (design rule). */
 .dk-note:hover { background: color-mix(in srgb, var(--paper) 94%, white); }

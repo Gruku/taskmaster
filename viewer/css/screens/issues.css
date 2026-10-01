@@ -3,9 +3,6 @@
    Bottom: Resolved shelf (Fixed + Wontfix), faded, collapsible. */
 
 .issues {
-  --issues-card-bg: #181a20;          /* slightly cooler than other cards */
-  --issues-card-border: var(--border);
-  --issues-investigating: #6ea8ff;
   /* --sev-* hoisted to :root in tokens.css so issue-detail (not under .issues) inherits them. */
 
   display: flex;

@@ -1,134 +1,365 @@
-/* Design tokens — single source of truth.
-   Subsequent CSS files reference these via var(--name).
-   No new global tokens are added in screen-specific CSS files. */
+/* User intent: single source of truth for the viewer's design tokens — Reality Reprojection values (generated),
+   plus the few viewer-specific roles. Screen CSS reads var(--*) only and defines no tokens of its own. */
+
+@font-face { font-family: 'League Spartan'; src: url('../vendor/fonts/LeagueSpartan-Variable.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'DM Sans';        src: url('../vendor/fonts/DMSans-Variable.woff2') format('woff2');        font-weight: 100 1000; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('../vendor/fonts/JetBrainsMono-Variable.woff2') format('woff2'); font-weight: 100 800; font-display: swap; }
+
 :root {
-  /* Surfaces (dark theme — only theme implemented at this stage) */
-  --bg-canvas:        #14151a;
-  --bg-shell:         #0f1014;
-  --bg-panel:         #17181d;
-  --bg-card:          #1f2025;
-  --bg-card-hover:    #25262c;
-  --bg-board-col:     #0f131c;
-  --bg-deep:          #0a0c11;          /* console / input recess */
-  --bg-issue:         #181a20;          /* slightly cooler than bg-card, per spec §3.14 */
+  /* @generated:rr-dark */
+  --signature: #5e79e6;
+  --signature-vivid: #8a9eeb;
+  --signature-muted: #3f58c0;
+  --signature-dim: rgba(94, 121, 230, 0.24);
+  --signature-glow: rgba(94, 121, 230, 0.10);
+  --signature-glow-strong: rgba(94, 121, 230, 0.20);
+  --signature-glow-intense: rgba(94, 121, 230, 0.35);
+  --signature-fill: var(--signature);
+  --signature-fill-hover: var(--signature-vivid);
+  --signature-text: var(--signature);
+  --on-signature: #f5f3ed;
+  --accent-cyan: #00d3fa;
+  --accent-cyan-glow: rgba(0, 211, 250, 0.10);
+  --accent-cyan-glow-strong: rgba(0, 211, 250, 0.20);
+  --accent-cyan-subtle: rgba(0, 211, 250, 0.08);
+  --accent-lime: #64fa00;
+  --accent-lime-glow: rgba(100, 250, 0, 0.10);
+  --accent-lime-glow-strong: rgba(100, 250, 0, 0.20);
+  --accent-lime-subtle: rgba(100, 250, 0, 0.08);
+  --accent-pink: #fa017b;
+  --accent-pink-glow: rgba(250, 1, 123, 0.10);
+  --accent-pink-glow-strong: rgba(250, 1, 123, 0.20);
+  --accent-pink-subtle: rgba(250, 1, 123, 0.08);
+  --accent-orange: #ff660d;
+  --pastel-signature: #b5c2ee;
+  --pastel-signature-glow: rgba(181, 194, 238, 0.10);
+  --pastel-signature-glow-strong: rgba(181, 194, 238, 0.20);
+  --pastel-signature-subtle: rgba(181, 194, 238, 0.08);
+  --pastel-cyan: #8ef0e0;
+  --pastel-cyan-glow: rgba(142, 240, 224, 0.10);
+  --pastel-cyan-glow-strong: rgba(142, 240, 224, 0.20);
+  --pastel-cyan-subtle: rgba(142, 240, 224, 0.08);
+  --pastel-lime: #dcf58a;
+  --pastel-lime-glow: rgba(220, 245, 138, 0.10);
+  --pastel-lime-glow-strong: rgba(220, 245, 138, 0.20);
+  --pastel-lime-subtle: rgba(220, 245, 138, 0.08);
+  --pastel-pink: #ff6070;
+  --pastel-pink-glow: rgba(255, 96, 112, 0.10);
+  --pastel-pink-glow-strong: rgba(255, 96, 112, 0.20);
+  --pastel-pink-subtle: rgba(255, 96, 112, 0.08);
+  --pastel-orange: #ffcb8a;
+  --pastel-orange-glow: rgba(255, 203, 138, 0.10);
+  --pastel-orange-glow-strong: rgba(255, 203, 138, 0.20);
+  --pastel-orange-subtle: rgba(255, 203, 138, 0.08);
+  --pastel-signature-grounded: #3f58c0;
+  --pastel-cyan-grounded: #3fa899;
+  --pastel-lime-grounded: #8fb13d;
+  --pastel-pink-grounded: #d1404f;
+  --pastel-orange-grounded: #c68940;
+  --ground-0: #0d0d0c;
+  --ground-5: #151514;
+  --ground-10: #1d1d1b;
+  --ground-15: #272725;
+  --ground-20: #343331;
+  --ground-30: #4d4c48;
+  --ground-40: #66645f;
+  --ground-50: #7d7b76;
+  --ground-60: #a09c95;
+  --ground-70: #bbb8b1;
+  --ground-80: #d2cfc8;
+  --ground-90: #e6e4dd;
+  --ground-100: #f5f3ed;
+  --fg-bold: var(--ground-100);
+  --fg-default: var(--ground-80);
+  --fg-subtle: var(--ground-60);
+  --fg-disabled: var(--ground-40);
+  --foreground-bold: var(--ground-100);
+  --foreground-default: var(--ground-80);
+  --foreground-subtle: var(--ground-60);
+  --foreground-disabled: var(--ground-40);
+  --foreground-on-accent: #f5f3ed;
+  --bg-page: var(--ground-5);
+  --bg-raised: var(--ground-10);
+  --bg-overlay: var(--ground-15);
+  --bg-recessed: var(--ground-0);
+  --surface-ground: var(--ground-0);
+  --surface-raised: var(--ground-10);
+  --surface-overlay: var(--ground-15);
+  --surface-recessed: var(--ground-5);
+  --border-default: var(--ground-20);
+  --border-subtle: var(--ground-15);
+  --border-strong: var(--ground-30);
+  --border-focus: var(--signature);
+  --overlay-bg: rgba(13, 13, 12, 0.6);
+  --frost-bg-light: rgba(13, 13, 12, 0.6);
+  --frost-bg-medium: rgba(13, 13, 12, 0.75);
+  --frost-bg-heavy: rgba(13, 13, 12, 0.85);
+  --color-success: #3a9a5b;
+  --color-success-subtle: rgba(58, 154, 91, 0.12);
+  --color-success-bold: #2d7a47;
+  --color-warning: #c4881d;
+  --color-warning-subtle: rgba(196, 136, 29, 0.12);
+  --color-warning-bold: #a06f14;
+  --color-critical: #d14343;
+  --color-critical-subtle: rgba(209, 67, 67, 0.12);
+  --color-critical-bold: #b33030;
+  --color-info: #5b8fc7;
+  --color-info-subtle: rgba(91, 143, 199, 0.12);
+  --color-info-bold: #4574a6;
+  --font-declaration: 'League Spartan', system-ui, -apple-system, sans-serif;
+  --font-narrator: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-technical: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  --space-base: 8px;
+  --space-micro: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --emitter-declaration: 96px;
+  --emitter-narrator: 24px;
+  --emitter-technical: 8px;
+  --container-narrow: 720px;
+  --container-max: 1200px;
+  --container-wide: 1440px;
+  --container-padding: 24px;
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-full: 9999px;
+  --size-declaration-hero: clamp(56px, 9vw, 112px);
+  --size-declaration-h1: 48px;
+  --size-declaration-h2: 36px;
+  --size-declaration-h3: 28px;
+  --size-declaration-h4: 22px;
+  --size-declaration-h5: 18px;
+  --size-narrator-large: 20px;
+  --size-narrator-default: 16px;
+  --size-narrator-small: 14px;
+  --size-narrator-whisper: 13px;
+  --size-technical-default: 14px;
+  --size-technical-small: 12px;
+  --size-technical-label: 11px;
+  --size-section-label: 10px;
+  --leading-tight: 1.15;
+  --leading-heading: 1.2;
+  --leading-body: 1.6;
+  --leading-loose: 1.8;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-ultra: 0.12em;
+  --font-declaration-weight: 800;
+  --font-declaration-weight-alt: 700;
+  --font-declaration-alt-weight: 900;
+  --font-narrator-weight: 600;
+  --font-narrator-weight-light: 400;
+  --font-narrator-weight-medium: 600;
+  --font-narrator-weight-semi: 700;
+  --font-technical-weight: 600;
+  --frost-blur-light: 8px;
+  --frost-blur-medium: 16px;
+  --frost-blur-heavy: 24px;
+  --ease-hourglass: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-hourglass-settle: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-pendulum: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-bell: cubic-bezier(0.0, 0.0, 0.2, 1);
+  --dur-micro: 80ms;
+  --dur-standard: 200ms;
+  --dur-macro: 400ms;
+  --stagger-fast: 30ms;
+  --stagger-base: 50ms;
+  --stagger-slow: 80ms;
+  /* @generated:end */
 
-  /* Borders */
-  --border:           rgba(230,230,233,0.07);
-  --border-soft:      rgba(255,255,255,0.05);
-  --border-strong:    #3a3b42;
+  /* ── Viewer roles (not in RR) ── */
+  --page-gutter: var(--space-lg);
+  --col-bg: var(--bg-recessed);              /* board column = milled channel */
+  --card-bg: var(--surface-raised);
+  --card-bg-hover: var(--ground-15);
+  --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
+  --cat-2: var(--accent-cyan);
+  --cat-3: var(--accent-pink);
+  --cat-4: var(--accent-orange);
+  --cat-5: var(--accent-lime);
+  --cat-6: var(--pastel-orange);
 
-  /* Ink */
-  --ink:              #e6e7eb;
-  --ink-2:            #a8a8ae;
-  --ink-3:            #7c8290;
-  --ink-4:            #4d4d54;
-  --ink-on-accent:    #0a1628;
+  /* ── Layout ── */
+  --sidebar-w: 240px;
+  --rail-w: 720px;
+  --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px;   /* documentation only: @media needs literals */
 
-  /* Accents */
-  --accent:           #4a9eff;
-  --accent-2:         #7fb3f0;
-  --accent-soft:      rgba(74,158,255,0.10);
-  --accent-blue:      #6ea8ff;            /* secondary blue used in issue card location nums */
-  --accent-edit:      #6ea8ff;            /* dashboard edit-mode chrome */
-  --accent-green:     #5fcdb8;            /* brighter green than --green; used for fresh aging + fixed marks */
-
-  /* Status */
-  --green:            #5fae6e;
-  --amber:            #d6a45f;
-  --red:              #d66b5f;
-  --purple:           #a07fe0;
-  --gold:             var(--amber); /* semantic alias — identical hue, keep --amber as canonical */
-
-  /* Diff colors (Sessions detail) */
-  --diff-add:         var(--green);
-  --diff-mod:         var(--amber);
-  --diff-del:         var(--red);
-
-  /* Issue severity — used across Issues + Issue detail screens. */
-  --sev-critical:     #e87a85;
-  --sev-high:         #e8a34d;
-  --sev-medium:       #c8b75a;
-  --sev-low:          #888c95;
-
-  /* Epic palette — auto-assigned in order; see spec §5 */
-  --epic-1:           #6ea8ff;
-  --epic-2:           #b585e8;
-  --epic-3:           #5fcdb8;
-  --epic-4:           #e8a34d;
-  --epic-5:           #e87a85;
-  --epic-6:           #a8c958;
-
-  /* Bundle palette — frame hues, deliberately off the blue accent */
-  --bundle-1:          #5fcdb8;
-  --bundle-2:          #a07fe0;
-  --bundle-3:          #d6a45f;
-  --bundle-4:          #e87a85;
-  --bundle-5:          #a8c958;
-  --bundle-6:          #5fb0cd;
-
-  /* Type */
-  --font-sans:        'Inter', -apple-system, system-ui, sans-serif;
-  --font-mono:        'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-serif:       'Source Serif Pro', Georgia, serif;
-
-  --text-xs:          12px;
-  --text-sm:          14px;
-  --text-base:        16px;
-  --text-md:          17px;
-  --text-lg:          19px;
-  --text-xl:          22px;
-  --text-2xl:         24px;
-  --text-3xl:         28px;
-
-  /* Spacing */
-  --sp-1:             6px;
-  --sp-2:             9px;
-  --sp-3:             12px;
-  --sp-4:             15px;
-  --sp-5:             18px;
-  --sp-6:             21px;
-  --sp-7:             24px;
-  --sp-8:             27px;
-  --sp-9:             33px;
-  --sp-10:            36px;
-  --sp-12:            48px;
-  --sp-13:            60px;
-
-  /* Radius */
-  --r-sm:             6px;
-  --r-md:             9px;
-  --r-lg:             12px;
-  --r-xl:             15px;
-  --r-2xl:            18px;
-
-  /* Shadows + recess (graph frame language, Task Detail B / Auto Mode B) */
-  --shadow-card:      0 2px 0 rgba(255,255,255,0.02) inset, 0 6px 18px rgba(0,0,0,0.18);
-  --shadow-lifted:    0 6px 21px rgba(0,0,0,0.4);
-  --recess-inset:     inset 0 0 54px rgba(0,0,0,0.4);
-  --recess-bg:        radial-gradient(ellipse at 50% 50%, #181a22 0%, #0d0e13 100%);
-
-  /* Motion */
-  --t-fast:           120ms;
-  --t-base:           180ms;
-  --t-slow:           320ms;
-  --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
-
-  /* Layout */
-  --sidebar-w:        236px;
-  --rail-w:           720px;            /* right-rail detail surface */
-  --page-pad:         20px;
-  --page-gap:         16px;
-
-  /* Breakpoints — documentation anchors for the mobile-dash epic.
-     CSS custom properties cannot be used inside @media at-rules, so screen-
-     specific CSS files use the matching literal px value (e.g. 768px for --bp-md).
-     Convention: mobile styles go inside @media (max-width: 768px) { … } blocks. */
-  --bp-sm:            480px;            /* small phones (portrait) */
-  --bp-md:            768px;            /* tablet / large phone (landscape) — primary mobile breakpoint */
-  --bp-lg:            1024px;           /* small desktop / large tablet */
+  /* ── Legacy aliases — DELETE in plan 4. Old name → RR role. ── */
+  --bg-canvas: var(--bg-page);
+  --bg-shell: var(--surface-ground);
+  --bg-panel: var(--surface-raised);
+  --bg-card: var(--card-bg);
+  --bg-card-hover: var(--card-bg-hover);
+  --bg-board-col: var(--col-bg);
+  --bg-deep: var(--bg-recessed);
+  --bg-issue: var(--surface-raised);
+  --border: var(--border-subtle);
+  --border-soft: var(--border-subtle);
+  --ink: var(--foreground-bold);
+  --ink-1: var(--foreground-bold);
+  --ink-2: var(--foreground-default);
+  --ink-3: var(--foreground-subtle);
+  --ink-4: var(--foreground-subtle);
+  --ink-on-accent: var(--on-signature);
+  --accent: var(--signature);
+  --accent-2: var(--signature-vivid);
+  --accent-soft: var(--signature-glow);
+  --accent-blue: var(--signature-text);
+  --accent-edit: var(--signature-text);
+  --accent-green: var(--color-success);
+  --green: var(--color-success);
+  --amber: var(--color-warning);
+  --gold: var(--color-warning);
+  --red: var(--color-critical);
+  --purple: var(--pastel-signature);
+  --diff-add: var(--color-success);
+  --diff-mod: var(--color-warning);
+  --diff-del: var(--color-critical);
+  --sev-critical: var(--color-critical);
+  --sev-high: var(--accent-orange);
+  --sev-medium: var(--color-warning);
+  --sev-low: var(--foreground-subtle);
+  --epic-1: var(--cat-1); --epic-2: var(--cat-2); --epic-3: var(--cat-3);
+  --epic-4: var(--cat-4); --epic-5: var(--cat-5); --epic-6: var(--cat-6);
+  --bundle-1: var(--cat-2); --bundle-2: var(--cat-3); --bundle-3: var(--cat-4);
+  --bundle-4: var(--cat-5); --bundle-5: var(--cat-6); --bundle-6: var(--cat-1);
+  --font-sans: var(--font-narrator);
+  --font-mono: var(--font-technical);
+  --font-serif: var(--font-narrator);
+  --text-xs: var(--size-technical-small);
+  --text-sm: var(--size-narrator-small);
+  --text-base: var(--size-narrator-default);
+  --text-md: var(--size-narrator-default);
+  --text-lg: var(--size-narrator-large);
+  --text-xl: var(--size-declaration-h4);
+  --text-2xl: var(--size-declaration-h4);
+  --text-3xl: var(--size-declaration-h3);
+  --sp-1: var(--space-micro); --sp-2: var(--space-xs); --sp-3: var(--space-sm);
+  --sp-4: var(--space-md); --sp-5: var(--space-md); --sp-6: var(--space-lg);
+  --sp-7: var(--space-lg); --sp-8: var(--space-lg); --sp-9: var(--space-xl);
+  --sp-10: var(--space-xl); --sp-12: var(--space-2xl); --sp-13: var(--space-3xl);
+  --r-sm: var(--radius-lg); --r-md: var(--radius-xl); --r-lg: var(--radius-xl);
+  --r-xl: var(--radius-xl); --r-2xl: var(--radius-xl);
+  --t-fast: var(--dur-micro); --t-base: var(--dur-standard); --t-slow: var(--dur-macro);
+  --ease: var(--ease-hourglass);
+  --page-pad: var(--page-gutter);
+  --page-gap: var(--space-md);
+  /* Names the old screens used without ever defining them (audit TK-03). */
+  --bl: var(--border-default);
+  --surface: var(--surface-raised);
+  --surface-1: var(--surface-raised);
+  --surface2: var(--surface-overlay);
+  --s2: var(--surface-overlay);
+  --danger-ink: var(--color-critical);
+  --danger-border: var(--color-critical);
+  --danger-bg: var(--color-critical-subtle);
+  --amber-tint-bg: var(--color-warning-subtle);
+  --amber-tint-border: var(--color-warning);
+  --muted-tint-bg: var(--ground-15);
+  --muted-tint-border: var(--border-default);
+  /* Screen-local tokens hoisted out of shell/screen CSS (audit TK-04). Shadow-valued ones are none. */
+  --shell-bg-sidebar: var(--surface-ground);
+  --shell-label-size: var(--size-technical-label);
+  --shell-hover-overlay: var(--surface-raised);
+  --card-recent-glow: none;
+  --issues-card-bg: var(--surface-raised);
+  --issues-card-border: var(--border-subtle);
+  --issues-investigating: var(--signature-text);
+  --task-rail-w: 280px;
+  --task-grid-gap: var(--space-md);
+  --task-section-mb: var(--space-md);
+  --task-section-h: var(--space-sm);
+  --graph-frame-bg: var(--bg-recessed);
+  --graph-frame-border: var(--border-subtle);
+  --graph-frame-shadow: none;
+  --graph-canvas-h: 320px;
+  --graph-edge-stroke: var(--signature-dim);
+  --graph-edge-stroke-active: var(--signature);
+  --graph-col-guide: var(--border-subtle);
+  --paper: var(--surface-raised);            /* desk notes; the Claude note's edge is --paper-edge-claude */
+  --paper-edge: var(--pastel-orange);
+  --paper-edge-claude: var(--pastel-signature);
+  --paper-ink: var(--foreground-default);
+  --paper-ink-soft: var(--foreground-subtle);
+  /* Defaults for variables JS sets as inline style. */
+  --tilt: 0deg;
+  --epic: var(--foreground-subtle);
+  --epic-soft: var(--surface-overlay);
+  --ec: var(--foreground-subtle);
+  --ec-soft: var(--surface-overlay);
+  --bundle: var(--bundle-1);
+  --anim-dur: var(--dur-macro);
+  --card-w: 240px;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 1; }
+[data-theme="light"] {
+  /* @generated:rr-light */
+  --signature: #3f58c0;
+  --signature-vivid: #5e79e6;
+  --signature-dim: rgba(63, 88, 192, 0.35);
+  --signature-glow: rgba(63, 88, 192, 0.15);
+  --signature-glow-strong: rgba(63, 88, 192, 0.25);
+  --signature-glow-intense: rgba(63, 88, 192, 0.40);
+  --signature-fill: #3f58c0;
+  --signature-fill-hover: #5066d6;
+  --signature-text: #3f58c0;
+  --ground-0: #f5f3ed;
+  --ground-5: #e6e4dd;
+  --ground-10: #d2cfc8;
+  --ground-15: #bbb8b1;
+  --ground-20: #a09c95;
+  --ground-30: #7d7b76;
+  --ground-50: #4d4c48;
+  --ground-60: #343331;
+  --ground-70: #272725;
+  --ground-80: #1d1d1b;
+  --ground-90: #151514;
+  --ground-100: #0d0d0c;
+  --overlay-bg: rgba(226, 223, 218, 0.6);
+  --frost-bg-light: rgba(226, 223, 218, 0.6);
+  --frost-bg-medium: rgba(226, 223, 218, 0.75);
+  --frost-bg-heavy: rgba(226, 223, 218, 0.85);
+  --color-warning: #d4780e;
+  --color-warning-subtle: rgba(212, 120, 14, 0.15);
+  --color-warning-bold: #b36100;
+  /* @generated:end */
+  --cat-2: var(--pastel-cyan-grounded);
+  --cat-3: var(--pastel-pink-grounded);
+  --cat-5: var(--pastel-lime-grounded);
+  --cat-6: var(--pastel-orange-grounded);
+
+  /* ── Legacy aliases — DELETE in plan 4. The old screens paint these hues as text;
+     on light grounds only the darker step of each stays readable. ── */
+  --accent-2: var(--signature-text);
+  --accent-green: var(--color-success-bold);
+  --green: var(--color-success-bold);
+  --amber: var(--color-warning-bold);
+  --gold: var(--color-warning-bold);
+  --red: var(--color-critical-bold);
+  --purple: var(--pastel-signature-grounded);
+  --diff-add: var(--color-success-bold);
+  --diff-mod: var(--color-warning-bold);
+  --diff-del: var(--color-critical-bold);
+  --sev-critical: var(--color-critical-bold);
+  --sev-high: var(--color-warning-bold);
+  --sev-medium: var(--color-warning-bold);
+  --danger-ink: var(--color-critical-bold);
+  --paper-edge: var(--pastel-orange-grounded);
+  --paper-edge-claude: var(--pastel-signature-grounded);
+}
+
+@media (max-width: 768px) { :root { --page-gutter: var(--space-md); } }
+
+@keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
