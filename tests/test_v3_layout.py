@@ -767,6 +767,39 @@ def test_viewer_prefs_tolerates_stale_use_v3(tmp_path, monkeypatch):
     assert prefs["card_density"] == "full"  # defaults still fill in
 
 
+# Dark is the default theme and a stored theme is never rewritten on read. A short-lived
+# build stamped files as schema_version 2 (and turned some "dark" into "system"); those
+# files load like any other, and their "system" is kept because it cannot be told from a choice.
+@pytest.mark.parametrize("stored", [
+    {"schema_version": 1, "theme": "dark"},
+    {"schema_version": 2, "theme": "dark"},
+    {"schema_version": 2, "theme": "system"},
+    {"schema_version": 1, "theme": "system"},
+    {"schema_version": 1, "theme": "light"},
+    {"theme": "light"},
+])
+def test_viewer_prefs_stored_theme_is_kept_and_file_is_not_rewritten(tmp_path, stored):
+    import json
+    from taskmaster.taskmaster_v3 import load_viewer_prefs
+    bp = _prefs_bp(tmp_path)
+    path = tmp_path / ".taskmaster" / "viewer.json"
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    before = path.read_bytes()
+    prefs = load_viewer_prefs(bp)
+    assert prefs["theme"] == stored["theme"]
+    assert prefs["schema_version"] == stored.get("schema_version", 1)
+    assert path.read_bytes() == before
+
+
+def test_viewer_prefs_missing_file_defaults_to_dark(tmp_path):
+    import json
+    from taskmaster.taskmaster_v3 import load_viewer_prefs
+    bp = _prefs_bp(tmp_path)
+    assert load_viewer_prefs(bp)["theme"] == "dark"
+    on_disk = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text(encoding="utf-8"))
+    assert (on_disk["theme"], on_disk["schema_version"]) == ("dark", 1)
+
+
 def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     """Forward-compat: don't strip keys we don't know about."""
     import json
