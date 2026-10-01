@@ -615,3 +615,30 @@ test('10. the close button is a ghost icon button from the shared button family'
   for (const c of ['btn', 'btn--ghost', 'btn--icon']) assert.ok(close.classList.contains(c), c);
   m.close();
 });
+
+test('4. Escape inside the conflict banner belongs to the banner: the modal beneath stays open; Escape in the dialog still asks to close', async () => {
+  const { buttons: [useServer] } = addBanner();
+  let asked = 0;
+  const m = openModal({ title: 'Edit task', onRequestClose: () => { asked++; return false; } });
+  const input = document.createElement('input');
+  m.body.appendChild(input);
+  await tick();
+
+  useServer.focus();
+  assert.equal(key('Escape'), true, 'the shell does not consume an Escape typed in the banner');
+  await tick();
+  assert.equal(asked, 0, 'the modal was not asked to close');
+  assert.equal(openModalCount(), 1);
+
+  input.focus();
+  key('Escape');
+  await tick();
+  assert.equal(asked, 1, 'Escape from inside the dialog still requests close');
+
+  // Focus lost to the page (not the banner) keeps the stray-Escape rescue.
+  document.activeElement.blur();
+  key('Escape');
+  await tick();
+  assert.equal(asked, 2);
+  m.close();
+});

@@ -89,8 +89,9 @@ function isEscape(e) {
 }
 
 // Escape typed while focus is outside every modal (it was lost with a removed element) still closes the top one.
+// Not from inside the conflict banner: it owns its keys, and closing the form being resolved would lose the edit.
 function onStrayEscape(e) {
-  if (!isEscape(e) || e.target?.closest?.('.modal-overlay')) return;
+  if (!isEscape(e) || e.target?.closest?.(`.modal-overlay, #${BANNER_HOST}`)) return;
   e.preventDefault();
   top()?.requestClose();
 }

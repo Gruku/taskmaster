@@ -336,6 +336,11 @@ test('a conflict banner joins the Tab cycle of the open modal: banner, then dial
   }
   // The banner is above the overlay and takes a real click and a real key press.
   await page.locator('.cb-use-server').focus();
+  // Escape typed in the banner must not dismiss the form whose conflict is being resolved.
+  await page.keyboard.press('Escape');
+  await expect(dialog(page, 'a')).toBeVisible();
+  expect(await count(page)).toBe(1);
+  await page.locator('.cb-use-server').focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);
   await expect(dialog(page, 'a')).toBeVisible();
