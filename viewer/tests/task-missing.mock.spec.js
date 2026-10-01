@@ -12,6 +12,19 @@ test('missing task shows not-found and clears the topbar', async ({ page }) => {
   await expect(page.locator('#topbar-actions > *')).toHaveCount(0);
 });
 
+test('the not-found link takes the signature colour in both themes, not the browser default blue', async ({ page }) => {
+  const missing = { '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } } };
+  const link = page.locator('#screen-mount .tm-empty__hint a');
+
+  await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'dark', ui: {}, screens: {} } });
+  await page.goto('/#/task/NOPE-999');
+  await expect(link).toHaveCSS('color', 'rgb(94, 121, 230)');   // signature-text dark = #5e79e6
+
+  await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'light', ui: {}, screens: {} } });
+  await page.reload();
+  await expect(link).toHaveCSS('color', 'rgb(63, 88, 192)');    // signature-text light = #3f58c0
+});
+
 test('no task id shows the empty state without inline styles', async ({ page }) => {
   await mockApi(page);
   await page.goto('/#/task');
