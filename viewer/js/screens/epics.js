@@ -1,7 +1,7 @@
 // plugins/taskmaster/viewer/js/screens/epics.js
 import { claimTopbar } from '../lib/topbar.js';
 import { assignEpicColors, epicCssVar } from '../lib/epics.js';
-import { progressPercent, closeableBadge } from '../lib/epic-format.js';
+import { epicProgress, closeableBadge } from '../lib/epic-format.js';
 
 export const meta = { title: 'Epics', icon: '⬡', sidebarKey: 'epics' };
 
@@ -41,7 +41,7 @@ export async function mount(root, { store }) {
         done: mine.filter(t => t.status === 'done').length,
         archived: mine.filter(t => t.status === 'archived').length,
       };
-      const pct = progressPercent(stats);
+      const prog = epicProgress(stats);
       const a = document.createElement('a');
       a.className = 'epic-row';
       a.href = `#/epic/${encodeURIComponent(ep.id)}`;
@@ -52,8 +52,8 @@ export async function mount(root, { store }) {
         <span class="epic-row__name">${esc(ep.name || ep.id)}</span>
         <span class="epic-row__ds">${esc(ep.design_status || 'exploring')}</span>
         ${closeableBadge(stats)}
-        <span class="epic-row__count">${stats.done}/${stats.total}</span>
-        <span class="epic-row__bar"><span style="width:${pct}%"></span></span>`;
+        <span class="epic-row__count" title="${prog.label}">${prog.closed}/${prog.total}</span>
+        <span class="epic-row__bar"><span style="width:${prog.pct}%"></span></span>`;
       list.appendChild(a);
     }
     root.appendChild(list);

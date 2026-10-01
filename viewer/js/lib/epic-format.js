@@ -19,11 +19,22 @@ export function componentGlyph(status) {
   return COMPONENT_GLYPH[status] || '○';
 }
 
+export function epicProgress(stats) {
+  const total = Math.max(0, stats?.total || 0);
+  const done = Math.max(0, stats?.done || 0);
+  const archived = Math.max(0, stats?.archived || 0);
+  const closed = Math.min(total, done + archived);
+  const pct = total ? Math.round((closed / total) * 100) : 0;
+  const parts = [`${closed}/${total} closed`];
+  if (total) {
+    parts.push(`${done} done`);
+    if (archived) parts.push(`${archived} archived`);
+  }
+  return { total, done, archived, closed, pct, label: parts.join(' · ') };
+}
+
 export function progressPercent(stats) {
-  const total = stats?.total || 0;
-  if (!total) return 0;
-  const done = (stats.done || 0) + (stats.archived || 0);
-  return Math.round((done / total) * 100);
+  return epicProgress(stats).pct;
 }
 
 // Closeable = every task in the epic is done or archived. Derived client-side

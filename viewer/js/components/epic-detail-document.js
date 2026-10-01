@@ -5,7 +5,7 @@
 import { mountMarkdown } from './markdown.js';
 import { assignEpicColors, epicCssVar } from '../lib/epics.js';
 import {
-  designBadge, progressPercent, closeableBadge,
+  designBadge, epicProgress, closeableBadge,
 } from '../lib/epic-format.js';
 import { mountComponentDiagram } from './component-diagram.js';
 
@@ -39,7 +39,7 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
 
   // header
   const badge = designBadge(epic.design_status);
-  const pct = progressPercent(epic.stats);
+  const prog = epicProgress(epic.stats);
   const head = document.createElement('header');
   head.className = 'ed-head';
   head.innerHTML = `
@@ -54,8 +54,8 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
     <h1 class="ed-title">${esc(epic.name || epic.id)}</h1>
     ${epic.done_when ? `<p class="ed-done-when"><strong>Done when:</strong> ${esc(epic.done_when)}</p>` : ''}
     <div class="ed-progress">
-      <span class="ed-progress__bar"><span style="width:${pct}%"></span></span>
-      <span class="ed-progress__label">${(epic.stats?.done || 0)}/${(epic.stats?.total || 0)} done · ${pct}%</span>
+      <span class="ed-progress__bar"><span style="width:${prog.pct}%"></span></span>
+      <span class="ed-progress__label">${prog.label} · ${prog.pct}%</span>
     </div>`;
   container.appendChild(head);
 
