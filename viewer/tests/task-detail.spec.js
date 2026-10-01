@@ -94,6 +94,6 @@ test.describe('Task Detail screen', () => {
 
   test('unknown task id renders an error message, not a crash', async ({ page }) => {
     await page.goto('/v3/#/task/T-DOES-NOT-EXIST');
-    await expect(page.locator('.td-empty')).toContainText(/T-DOES-NOT-EXIST|not found/);
+    await expect(page.locator('.tm-empty__headline')).toHaveText('Task not found');
   });
 });

@@ -75,7 +75,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         // http() throws `GET <path> → <status>: <body>`; anchor on the arrow so an
         // id like T-404 in the path can't read as a status.
         const missing = /→ 404\b/.test(String(e?.message));
-        root.replaceChildren(stateBlock(missing ? 'Task not found' : 'Could not load task', missing ? `${id} does not exist.` : 'The server did not answer.'));
+        root.replaceChildren(stateBlock(missing ? 'Task not found' : 'Could not load task', missing ? `${id} does not exist.` : 'Something went wrong while loading this task.'));
       }
     }
   }
