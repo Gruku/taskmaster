@@ -254,7 +254,7 @@ class Snapshot:
                       "COALESCE(c.first_seq,e.seq) first_seq,COALESCE(c.final_seq,e.seq) final_seq ")
 
     def changes_since(self, cursor="", *, kinds=None, ids=None, epic="", limit=100,
-                      group_commits=True, since_seq=None):
+                      group_commits=True, since_seq=None, skip_imports=False):
         """What moved after this cursor, as whole commits in sequence order.
 
         Answers a resync instead of raising whenever the cursor can no longer be
@@ -291,6 +291,14 @@ class Snapshot:
         except cursors.CursorInvalid as exc:
             return cursors.resync(exc, floor=floor, **envelope)
         conditions, args = self._change_scope(scope, after)
+        # `skip_imports` is set by a `since` anchor, and carried on by the cursor
+        # such an answer issues; any other cursor and `since_seq` report every row.
+        skip_imports = bool(skip_imports) or (bool(cursor) and cursors.skips_imports(cursor))
+        if skip_imports:
+            omitted = int(self.connection.execute("SELECT COUNT(*) FROM domain_events e WHERE " + " AND ".join(conditions) +
+                                                  " AND " + cursors.STORE_IMPORT, args).fetchone()[0])
+            conditions.append("NOT " + cursors.STORE_IMPORT)
+            envelope.update(skip_imports=True, omitted_imports=omitted)
         source = "FROM domain_events e LEFT JOIN command_commits c USING(commit_key) WHERE " + " AND ".join(conditions)
         if not group_commits:
             events = rows(self.connection, "SELECT " + self._EVENT_COLUMNS + source + " ORDER BY e.seq LIMIT ?",

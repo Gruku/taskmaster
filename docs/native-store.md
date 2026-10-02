@@ -516,8 +516,9 @@ shape on legacy and native.
 `backlog_changes_since(cursor="", kinds=None, ids=None, epic="", limit=100, group_commits=True,
 since_seq=None, since="")` answers "what moved since I last looked".
 
-- `since` starts from a date, an ISO timestamp, or an entity id (everything after that entity
-  was created), instead of a cursor or `since_seq`.
+- `since` starts from an entity id (everything after that entity was created), a date or an
+  ISO timestamp, instead of a cursor or `since_seq`. Such an answer leaves out the rows of the
+  store's first import of existing files and counts them in `note`.
 
 - Call it with no cursor to get a cursor for "now". Keep it, and pass it back later with the
   same filters.

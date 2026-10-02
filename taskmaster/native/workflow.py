@@ -562,13 +562,34 @@ def live_handover_rows(transaction):
     return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
 
 
-def open_archived_handover_rows(transaction):
+def open_archived_handover_rows(snapshot, threads=None):
     """`(id, fields, None)` for every archived handover that is still open: outside
-    the index, but still the resume point of its thread."""
-    ids = [row[0] for row in transaction.connection.execute(
-        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=1 "
-        "AND json_extract(status_json,'$')='open' ORDER BY public_id")]
-    return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
+    the index, but still a resume point of its thread.
+
+    A store can hold hundreds of these, and one whole-document read each made
+    every thread command and every tree read scale with them. `threads` names
+    the only threads the caller's registry can hold, and the thread index then
+    finds their few members; without it the read is paged and takes only the
+    fields the registry reads.
+    """
+    if threads is not None:
+        names = sorted({name for name in threads if isinstance(name, str) and name})
+        if not names:
+            return []
+        ids = [row[0] for row in snapshot.connection.execute(
+            "SELECT c.public_id FROM handover_operational h JOIN entity_core c ON c.entity_key=h.entity_key "
+            f"WHERE json_extract(h.thread_json,'$') IN ({','.join('?' for _ in names)}) AND c.kind='handover' "
+            "AND c.deleted=0 AND c.archived=1 AND json_extract(c.status_json,'$')='open' ORDER BY c.public_id", names)]
+        return [(ident, snapshot.get("handover", ident)["fields"], None) for ident in ids]
+    from .queries import MAX_PAGE
+    out, cursor = [], None
+    while True:
+        page = snapshot.list("handover", status="open", include_archived=True,
+                             fields=domain_v3.THREAD_MEMBER_FIELDS, limit=MAX_PAGE, cursor=cursor)
+        out.extend((entity["id"], entity["fields"], None) for entity in page["items"] if entity["archived"])
+        cursor = page["cursor"]
+        if cursor is None:
+            return out
 
 
 def open_thread_handover_ids(connection, thread):
@@ -1374,10 +1395,18 @@ def _thread_update(transaction, arguments):
     # The thread registry is derived from the live handovers, which native
     # commands do not re-derive into this row; derive it here, as the tool's
     # index sync would have, before applying the override.
-    domain_v3.sync_thread_registry(doc, [*live_handover_rows(transaction),
-                                         *open_archived_handover_rows(transaction)])
+    # With the named thread even when its handovers are all archived: it can be
+    # parked or closed too. The override lives in `thread_meta`, which is why
+    # the threads already holding one are read as well, and the archived-only
+    # threads are dropped again below.
+    live = live_handover_rows(transaction)
+    wanted = {fields.get("thread") for _ident, fields, _body in live} | set(doc.get("thread_meta") or {})
+    wanted.add(domain_v3.normalize_thread_name(arguments["name"]))
+    domain_v3.sync_thread_registry(doc, live, archived=open_archived_handover_rows(transaction.snapshot, wanted),
+                                   archived_only=True)
     domain_v3.update_thread_status(doc, None, name=arguments["name"], status=arguments["status"],
                                    reason=arguments.get("reason", ""))
+    doc["threads"] = domain_v3.indexed_threads(doc["threads"])
     transaction.replace("backlog", BACKLOG_ID, doc, entity["body"], before_entity=entity)
     return arguments["name"]
 

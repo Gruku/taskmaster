@@ -54,23 +54,28 @@ def _any(connection, kind) -> bool:
                               (kind,)).fetchone() is not None
 
 
-def _open_archived_handovers(connection, snapshot) -> list:
-    """`(id, fields, None)` for the archived handovers that are still open; the thread
-    registry keeps them, as `workflow.open_archived_handover_rows` does for a command."""
-    return [(row[0], snapshot.get("handover", row[0])["fields"], None) for row in connection.execute(
-        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=1 "
-        "AND json_extract(status_json,'$')='open' ORDER BY public_id").fetchall()]
+def apply(snapshot, data: dict, *, archived_only_threads: bool = False) -> dict:
+    """Recompute the derived keys on a backlog document in place; keys stay sorted.
 
-
-def apply(snapshot, data: dict) -> dict:
-    """Recompute the derived keys on a backlog document in place; keys stay sorted."""
+    `archived_only_threads` keeps the threads with no indexed handover in the
+    registry, for the thread tools: True for all of them, or the names to look
+    for. The exported document never holds them, so by default only the
+    archived open handovers of threads it can hold are read — those with a live
+    handover, and those `thread_meta` keeps an override for.
+    """
     connection = snapshot.connection
     for kind, key, sync in INDEXES:
         if key in data or _any(connection, kind):
             sync(data, live_rows(connection, snapshot, kind))
     if "handovers" in data or _any(connection, "handover"):
-        sync_handover_index(data, live_rows(connection, snapshot, "handover"),
-                            archived=_open_archived_handovers(connection, snapshot))
+        from taskmaster.native.workflow import open_archived_handover_rows
+        live = live_rows(connection, snapshot, "handover")
+        wanted = None
+        if archived_only_threads is not True:
+            wanted = {fields.get("thread") for _ident, fields, _body in live} | set(data.get("thread_meta") or {})
+            wanted.update(archived_only_threads or ())
+        sync_handover_index(data, live, archived=open_archived_handover_rows(snapshot, wanted),
+                            archived_only=bool(archived_only_threads))
     # The legacy row is stored as sorted JSON and read back before it renders, so
     # every nested mapping arrives key-sorted; the sync functions build theirs in
     # field order.

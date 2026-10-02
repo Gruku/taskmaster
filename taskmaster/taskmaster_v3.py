@@ -2043,6 +2043,7 @@ def sync_handover_index(
     tx: Any = None,
     cap: int = HANDOVER_INDEX_CAP,
     archived: "Iterable[tuple[str, Mapping[str, Any], str | None]]" = (),
+    archived_only: bool = False,
 ) -> dict[str, Any]:
     """Rebuild `backlog_data['handovers']` from live handover rows; archive overflow.
 
@@ -2053,8 +2054,8 @@ def sync_handover_index(
     `handovers/_archive/<year>/` is the exporter's job). Mutates in place.
 
     `archived` is the rows already archived. The index never lists them, but one
-    that is still open is still its thread's resume point, so it and any open
-    overflow stay in the thread registry.
+    that is still open is still a resume point of its thread, so it and any open
+    overflow are members in the thread registry (`archived_only` as there).
     """
     ordered = sort_handover_rows(rows)
     keep = ordered[:cap]
@@ -2066,9 +2067,15 @@ def sync_handover_index(
         for hid, _doc, _body in overflow:
             tx.archive("handover", hid)
 
-    sync_thread_registry(backlog_data, [*keep, *open_handover_rows([*overflow, *archived])])
+    sync_thread_registry(backlog_data, keep, archived=open_handover_rows([*overflow, *archived]),
+                         archived_only=archived_only)
 
     return backlog_data
+
+
+# What the thread registry reads off a handover: enough to describe a thread
+# without decoding the whole document of every archived open one.
+THREAD_MEMBER_FIELDS = ("thread", "status", "created", "date", "tldr", "next_action", "branch", "task_ids")
 
 
 def open_handover_rows(
@@ -2098,16 +2105,29 @@ def _ts_or_min(raw: str):
 def sync_thread_registry(
     backlog_data: dict[str, Any],
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+    archived: "Iterable[tuple[str, Mapping[str, Any], str | None]]" = (),
+    archived_only: bool = False,
 ) -> dict[str, Any]:
-    """Rebuild `backlog_data['threads']` from the indexed handover rows plus any
-    archived one that is still open (`sync_handover_index` passes both).
+    """Rebuild `backlog_data['threads']` from the indexed handover `rows` plus the
+    `archived` ones that are still open (`sync_handover_index` passes both).
 
-    Derived status: open if any member handover is open, else closed.
+    A thread with no indexed member is kept only when `archived_only` asks, and
+    then carries `archived_only: True`. The stored registry never holds them: a
+    store can carry hundreds from before handovers superseded each other, and
+    every write re-renders the document the registry lives in. The thread tools
+    ask for them at read time instead; their overrides stay in `thread_meta`.
+
+    Derived status: open if any member handover is open, else closed. A thread
+    is described (tldr, next_action, branch) by its newest open member, and
+    only when none is open by its newest; `resume` names that open member when
+    it is not the newest, and is absent otherwise.
     A `thread_meta` override (parked/closed/open) is honoured only while no
     member handover is newer than the override's set_at; stale overrides and
     overrides for vanished threads are pruned. Mutates in place.
     """
-    ordered = sort_handover_rows(rows)  # newest-first
+    archived = list(archived)
+    outside_index = {row[0] for row in archived}
+    ordered = sort_handover_rows([*rows, *archived])  # newest-first
     threads: dict[str, dict[str, Any]] = {}
     for hid, doc, _body in reversed(ordered):   # oldest-first -> chronological chains
         fm = doc or {}
@@ -2124,6 +2144,7 @@ def sync_thread_registry(
             "next_action": "",
             "branch": "",
             "_any_open": False,
+            "_indexed": False,
         })
         t["handover_ids"].append(hid)
         for tid in fm.get("task_ids") or []:
@@ -2132,15 +2153,26 @@ def sync_thread_registry(
         # `ordered` is newest-first, so this reversed loop is oldest-first: the
         # last-iterated member of each thread is the newest by definition.
         t["last_touched"] = fm.get("created") or fm.get("date") or ""
-        t["tldr"] = fm.get("tldr", "")
-        t["next_action"] = fm.get("next_action", "")
-        if fm.get("branch"):
-            t["branch"] = fm["branch"]
-        if fm.get("status", "open") == "open":
+        is_open = fm.get("status", "open") == "open"
+        # A newer closed member does not speak for a thread an older one keeps
+        # open: the open one is where the work resumes.
+        if is_open or not t["_any_open"]:
+            t["tldr"] = fm.get("tldr", "")
+            t["next_action"] = fm.get("next_action", "")
+            if fm.get("branch"):
+                t["branch"] = fm["branch"]
+        if is_open:
             t["_any_open"] = True
+            t["resume"] = hid
+        if hid not in outside_index:
+            t["_indexed"] = True
 
     meta = dict(backlog_data.get("thread_meta") or {})
     for name, t in threads.items():
+        if t.get("resume") in (None, t["handover_ids"][-1]):
+            t.pop("resume", None)
+        if not t.pop("_indexed"):
+            t["archived_only"] = True
         derived = "open" if t.pop("_any_open") else "closed"
         override = meta.get(name)
         if override and _ts_or_min(str(override.get("set_at", ""))) >= _ts_or_min(t["last_touched"]):
@@ -2149,10 +2181,17 @@ def sync_thread_registry(
             meta.pop(name, None)  # stale/absent — newer handover reopens
             t["status"] = derived
     meta = {k: v for k, v in meta.items() if k in threads}
+    if not archived_only:
+        threads = indexed_threads(threads)
 
     backlog_data["threads"] = threads
     backlog_data["thread_meta"] = meta
     return backlog_data
+
+
+def indexed_threads(threads: "Mapping[str, dict[str, Any]]") -> dict[str, dict[str, Any]]:
+    """A registry without its archived-only threads: the part that is stored."""
+    return {name: t for name, t in threads.items() if not t.get("archived_only")}
 
 
 def update_thread_status(
@@ -2194,7 +2233,8 @@ def resolve_thread(
     ref: str,
     find_handover: "Callable[[str], dict[str, Any] | None] | None" = None,
 ) -> tuple[str, str]:
-    """Resolve a resume token to (thread_name, newest_handover_id).
+    """Resolve a resume token to (thread_name, handover_id): the thread's newest
+    open handover, or its newest when none is open.
 
     `ref` may be a thread name (normalized) or a handover id — live or
     archived — whose `thread` field routes to the thread's newest handover.
@@ -2204,7 +2244,7 @@ def resolve_thread(
     threads = backlog_data.get("threads") or {}
     name = normalize_thread_name(ref)
     if name in threads and threads[name]["handover_ids"]:
-        return name, threads[name]["handover_ids"][-1]
+        return name, threads[name].get("resume") or threads[name]["handover_ids"][-1]
 
     fm: dict[str, Any] | None = None
     if find_handover is not None:
@@ -2224,17 +2264,24 @@ def resolve_thread(
         raise KeyError(ref)
     tname = fm.get("thread") or ""
     if tname and tname in threads and threads[tname]["handover_ids"]:
-        return tname, threads[tname]["handover_ids"][-1]
+        return tname, threads[tname].get("resume") or threads[tname]["handover_ids"][-1]
     return tname, str(fm.get("id") or ref)
 
 
-def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
+def list_threads(backlog_data: dict[str, Any], *, archived_only: bool = False) -> list[dict[str, Any]]:
     """Board rows from the registry — open first, then parked, then closed;
     newest-touched first within each status. staleness_days is whole days
-    since last_touched (0 when unparseable)."""
+    since last_touched (0 when unparseable).
+
+    Threads with no handover in the index are left out unless `archived_only`
+    asks for them; those rows then carry `archived_only: True`. A store can
+    hold hundreds from before handovers superseded each other, and the board
+    must stay readable."""
     rows: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for name, t in (backlog_data.get("threads") or {}).items():
+        if t.get("archived_only") and not archived_only:
+            continue
         try:
             staleness = max(0, (now - _parse_iso8601(t["last_touched"])).days)
         except (ValueError, KeyError, TypeError):
@@ -2248,6 +2295,7 @@ def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
             "branch": t.get("branch", ""),
             "last_touched": t.get("last_touched", ""),
             "staleness_days": staleness,
+            **({"archived_only": True} if t.get("archived_only") else {}),
         })
     order = {"open": 0, "parked": 1, "closed": 2}
     rows.sort(key=lambda r: _ts_or_min(r["last_touched"]), reverse=True)

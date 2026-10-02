@@ -6412,6 +6412,26 @@ class Transaction:
             for row in self.connection.execute(sql + " ORDER BY id", (kind,))
         ]
 
+    def archived_fields(
+        self, kind: str, status: str, fields: "tuple[str, ...]"
+    ) -> list[tuple[str, dict[str, Any], None]]:
+        """Archived rows of `kind` in one status, as `(id, {field: value}, None)`.
+
+        Only the named fields are read, by SQLite, and no body: a store can hold
+        hundreds of archived handovers, and decoding each whole document inside
+        the writer transaction made every handover write scale with them.
+        """
+        # One json_array per row: each document is parsed once, whatever the
+        # number of fields, and an array or object field keeps its type.
+        values = ",".join(f"json_extract(doc,'$.{field}')" for field in fields)
+        return [
+            (row[0], {field: value for field, value in zip(fields, _from_json(row[1], [])) if value is not None}, None)
+            for row in self.connection.execute(
+                f"SELECT id,json_array({values}) FROM entities WHERE kind=? AND deleted=0 AND archived=1 "
+                "AND json_extract(doc,'$.status')=? ORDER BY id", (kind, status),
+            )
+        ]
+
     def linear_enqueue(
         self,
         op: str,

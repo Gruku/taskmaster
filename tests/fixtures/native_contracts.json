@@ -1372,7 +1372,7 @@
     },
     "backlog_changes_since": {
       "category": "targeted-query",
-      "documentation": "What changed in the backlog since a cursor, a time or an entity's creation, as JSON.\nResume, don't re-read.\n\nCall it with no arguments to get a cursor and nothing else (\"start watching\nfrom now\"), then pass that cursor back to learn what moved. A cursor survives\nevery write; it stops being usable only if the store was rebuilt or restored\nto an earlier state, the scope of the question changed, or the history it\npoints at was retired. In that case the\nanswer is not an error: `resync_required` is true, `reason` says which, and a\nfresh cursor comes back, so recovery costs one call. Do not treat a resync as\na quiet period — re-read what you care about.\n\nAuthored values are never returned. Each change names the fields that moved;\nread the current value with `backlog_get_task` or `backlog_get_*` if you need\nit. On a legacy store each change is reported as its own commit, because the\nlegacy change log has no commit rows to group by.\n\nArgs:\n    cursor: A cursor from an earlier call. Empty starts from now.\n    kinds: Entity kinds to report (task, bug, issue, ...). Empty means all.\n    ids: Entity ids to report. Empty means all.\n    epic: Report only this epic and its tasks, including a task leaving it.\n    limit: Commits (or changes, when ungrouped) per answer, 1-500.\n    group_commits: Group each transaction's changes into one commit entry.\n    since_seq: Start from this sequence instead of a cursor. 0 is all history.\n    since: Start from a date (YYYY-MM-DD) or ISO timestamp, or from an entity\n        id — \"since handover X was written\" is since=\"<X's id>\": everything\n        after that entity was created. Instead of a cursor or since_seq.",
+      "documentation": "What changed in the backlog since a cursor, a time or an entity's creation, as JSON.\nResume, don't re-read.\n\nCall it with no arguments to get a cursor and nothing else (\"start watching\nfrom now\"), then pass that cursor back to learn what moved. A cursor survives\nevery write; it stops being usable only if the store was rebuilt or restored\nto an earlier state, the scope of the question changed, or the history it\npoints at was retired. In that case the\nanswer is not an error: `resync_required` is true, `reason` says which, and a\nfresh cursor comes back, so recovery costs one call. Do not treat a resync as\na quiet period — re-read what you care about.\n\nAuthored values are never returned. Each change names the fields that moved;\nread the current value with `backlog_get_task` or `backlog_get_*` if you need\nit. On a legacy store each change is reported as its own commit, because the\nlegacy change log has no commit rows to group by.\n\nArgs:\n    cursor: A cursor from an earlier call. Empty starts from now.\n    kinds: Entity kinds to report (task, bug, issue, ...). Empty means all.\n    ids: Entity ids to report. Empty means all.\n    epic: Report only this epic and its tasks, including a task leaving it.\n    limit: Commits (or changes, when ungrouped) per answer, 1-500.\n    group_commits: Group each transaction's changes into one commit entry.\n    since_seq: Start from this sequence instead of a cursor. 0 is all history.\n    since: Start from a date (YYYY-MM-DD) or ISO timestamp, or from an entity\n        id — \"since handover X was written\" is since=\"<X's id>\": everything\n        after that entity was created. Instead of a cursor or since_seq. The\n        store's own import of existing files is left out, and counted in `note`.",
       "parameters": [
         {
           "default_expression": "''",
@@ -2876,7 +2876,7 @@
     },
     "backlog_last_session": {
       "category": "targeted-query",
-      "documentation": "What the last logged session did: the newest entry of the PROGRESS.md changelog (everything\nbetween its first and second ### headings). Handovers are not read; when some are newer than\nthat entry the answer says so and where to look.",
+      "documentation": "What the last logged session did: the newest entry of the PROGRESS.md changelog (everything\nbetween its first and second ### headings). Handovers are not read; when some are dated after\nthat entry the answer says how many and where to look.",
       "parameters": [],
       "returns": "str",
       "transactional": false
@@ -4018,13 +4018,21 @@
     },
     "backlog_thread_list": {
       "category": "targeted-query",
-      "documentation": "What is still open, per line of work (thread / workstream): each open or\nparked thread with its latest summary, next step and tasks. Resume one with\n`backlog_thread_resume(<name>)`.\n\nArgs:\n    include_closed: Also list closed threads (default False).",
+      "documentation": "What is still open, per line of work (thread / workstream): each open or\nparked thread with its newest open handover's summary, next step and tasks.\nResume one with `backlog_thread_resume(<name>)`.\n\nArgs:\n    include_closed: Also list closed threads (default False).\n    include_archived: Also list threads whose handovers are all outside the\n        30-entry handover index; by default they are only counted.",
       "parameters": [
         {
           "default_expression": "False",
           "default_value": false,
           "mode": "positional",
           "name": "include_closed",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_archived",
           "required": false,
           "type": "bool"
         }
@@ -4034,7 +4042,7 @@
     },
     "backlog_thread_resume": {
       "category": "targeted-query",
-      "documentation": "Where a line of work left off: its thread's newest handover in full\n(frontmatter + body) in one call. `ref` is a thread name OR any handover id\n(stale dated slugs still land on the thread's newest handover); a miss\nanswers the closest thread names.",
+      "documentation": "Where a line of work left off: its thread's newest open handover (its\nnewest when none is open) in full, frontmatter + body, in one call. `ref`\nis a thread name OR any handover id of the thread, however stale; a miss\nanswers the closest thread names.",
       "parameters": [
         {
           "mode": "positional",

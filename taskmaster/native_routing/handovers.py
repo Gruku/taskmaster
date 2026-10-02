@@ -23,10 +23,11 @@ def _run(call, operation, arguments):
     return None
 
 
-def _backlog_document(snapshot) -> dict:
+def _backlog_document(snapshot, *, archived_only_threads=False) -> dict:
     """The backlog row with its derived indexes, plus the row map reads consult."""
     entity = reads.get(snapshot, "backlog", "__backlog__")
-    data = derived.apply(snapshot, deepcopy(entity["fields"]) if entity else {})
+    data = derived.apply(snapshot, deepcopy(entity["fields"]) if entity else {},
+                         archived_only_threads=archived_only_threads)
     data["_rows"] = reads.NativeRows(snapshot)
     return data
 
@@ -171,11 +172,12 @@ def handover_update_status(call, *, handover_id, status, reason):
 
 
 @adapter("backlog_thread_list")
-def thread_list(call, *, include_closed):
+def thread_list(call, *, include_closed, include_archived):
     if not bs._backlog_path().exists():
         return "No backlog found."
     with call.read() as snapshot:
-        return bs._thread_list_text(_backlog_document(snapshot), include_closed)
+        return bs._thread_list_text(_backlog_document(snapshot, archived_only_threads=True), include_closed,
+                                    include_archived)
 
 
 @adapter("backlog_thread_resume")
@@ -187,7 +189,8 @@ def thread_resume(call, *, ref):
         def find_handover(ident):
             entity = reads.get(snapshot, "handover", ident)
             return deepcopy(entity["fields"]) if entity else None
-        return bs._thread_resume_text(_backlog_document(snapshot), backlog, ref, find_handover)
+        return bs._thread_resume_text(_backlog_document(snapshot, archived_only_threads=True), backlog, ref,
+                                      find_handover)
 
 
 @adapter("backlog_thread_update")
@@ -196,7 +199,7 @@ def thread_update(call, *, name, status, reason):
     if not backlog.exists():
         return "No backlog found."
     with call.read() as snapshot:
-        data = _backlog_document(snapshot)
+        data = _backlog_document(snapshot, archived_only_threads={v3.normalize_thread_name(name)})
     data.pop("_rows", None)
     try:
         v3.update_thread_status(data, backlog, name=name, status=status, reason=reason)
@@ -227,8 +230,9 @@ def last_session(call):
     backlog, legacy_progress = bs._resolve_paths()
     with call.read() as snapshot:
         entity = reads.get(snapshot, "backlog", "__backlog__")
-        # Only ids are compared, and the index is the live handovers.
-        handovers = [{"id": ident} for ident, _fields, _body in
-                     derived.live_rows(snapshot.connection, snapshot, "handover")]
-    return bs._last_session_text(bs._progress_path_for(entity["fields"] if entity else {}, backlog, legacy_progress),
-                                 handovers)
+
+        def handover_ids_after(day):
+            return [row[0] for row in snapshot.connection.execute(
+                "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND public_id>?", (day,))]
+        return bs._last_session_text(
+            bs._progress_path_for(entity["fields"] if entity else {}, backlog, legacy_progress), handover_ids_after)
