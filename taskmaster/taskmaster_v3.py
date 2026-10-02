@@ -1719,17 +1719,27 @@ def plan_thread_supersession(
     thread: str,
     new_key: tuple[str, str, str],
     exclude: "Iterable[str | None]" = (),
+    task_ids: "Iterable[str] | None" = None,
 ) -> tuple[list[str], list[str]]:
     """Which handovers of `thread` a new open handover supersedes. Pure.
 
-    Returns `(supersede, pinned)`, newest first: the live rows of the thread
-    that are still open and older than the new handover (`new_key`, a
-    `handover_sort_key`). A row whose status was set by hand is never
-    auto-transitioned, so it comes back as pinned for the caller to warn about.
-    `exclude` names the ids handled elsewhere — the new handover and an
-    explicit `supersedes`.
+    Returns `(supersede, pinned)`, newest first: the rows of the thread —
+    archived ones included, when the caller passes them — that are still open
+    and older than the new handover (`new_key`, a `handover_sort_key`).
+
+    `task_ids` is given when the thread was derived rather than named. A derived
+    thread is a whole epic or bundle, so only a row sharing a task with the new
+    handover (or both naming none) is the same line of work; a sibling task's
+    resume point is left alone, silently.
+
+    A row whose status was set by hand is never auto-transitioned. It comes back
+    as pinned for the caller to warn about, unless it already carries a
+    `superseded_by` pointer — then the chain is recorded and there is nothing
+    left to say. `exclude` names the ids handled elsewhere: the new handover and
+    an explicit `supersedes`.
     """
     skip = set(exclude)
+    tasks = None if task_ids is None else set(task_ids)
     supersede: list[str] = []
     pinned: list[str] = []
     for hid, doc, _body in sort_handover_rows(rows):
@@ -1738,7 +1748,14 @@ def plan_thread_supersession(
             continue
         if handover_sort_key(hid, fm) >= new_key:
             continue  # a backdated handover does not supersede a newer one
-        (pinned if fm.get("status_user_set") else supersede).append(hid)
+        if tasks is not None:
+            theirs = set(fm.get("task_ids") or [])
+            if (tasks or theirs) and not tasks & theirs:
+                continue
+        if not fm.get("status_user_set"):
+            supersede.append(hid)
+        elif not fm.get("superseded_by"):
+            pinned.append(hid)
     return supersede, pinned
 
 

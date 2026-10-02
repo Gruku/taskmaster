@@ -15,7 +15,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 from taskmaster import backlog_server  # noqa: E402
 from taskmaster.taskmaster_v3 import HANDOVER_INDEX_CAP  # noqa: E402
 
-from tests.entity_helpers import (apply_supersession, update_handover_status, write_handover)
+from tests.entity_helpers import (apply_supersession, archive_handover, update_handover_status, write_handover)
 
 HANDOVER_KEYS = {"id", "date", "created", "thread", "session_kind", "status", "tldr", "next_action",
                  "task_ids", "tip_commit", "branch", "links", "superseded_by"}
@@ -235,6 +235,69 @@ def test_no_archive_footer_when_everything_is_in_the_index(tmp_path, monkeypatch
     bp = _setup(tmp_path, monkeypatch)
     write_handover(bp, tldr="only one", when="2026-04-01")
     assert "older handovers" not in backlog_server.backlog_handover_list()
+
+
+def test_dates_must_be_strictly_yyyy_mm_dd(tmp_path, monkeypatch):
+    """`date.fromisoformat` also takes `20260101` and week dates; the filter compares strings."""
+    bp = _setup(tmp_path, monkeypatch)
+    write_handover(bp, tldr="recent", when="2026-04-01")
+    for bad in ("20260101", "2026-W01-1", "2026-4-1"):
+        for name in ("since", "until"):
+            out = backlog_server.backlog_handover_list(**{name: bad})
+            assert out.startswith("Error:") and f"`{name}`" in out, (name, bad, out)
+            assert "error" in _json(**{name: bad})
+
+
+def test_latest_per_thread_reaches_into_the_archive_and_respects_limit(tmp_path, monkeypatch):
+    bp = _setup(tmp_path, monkeypatch)
+    buried, _ = write_handover(bp, tldr="buried", thread="old-line", when="2025-01-01")
+    live, _ = write_handover(bp, tldr="live", thread="live-line", when="2026-06-01")
+    for n in range(HANDOVER_INDEX_CAP - 1):
+        write_handover(bp, tldr=f"filler {n:02d}", session_kind="auto-stage", when=f"2026-02-{1 + n % 28:02d}")
+
+    indexed = _json(latest_per_thread=True)
+    assert _ids(indexed) == [live] and indexed["archived_omitted"] == 1 and indexed["truncated"] is True
+
+    whole = _json(latest_per_thread=True, include_archived=True)
+    assert _ids(whole) == [live, buried]
+    assert (whole["total"], whole["truncated"]) == (2, False)
+
+    cut = _json(latest_per_thread=True, include_archived=True, limit=1)
+    assert _ids(cut) == [live]
+    assert (cut["returned"], cut["total"], cut["truncated"]) == (1, 2, True)
+
+
+def test_include_archived_merges_by_date_not_by_where_a_row_is_stored(tmp_path, monkeypatch):
+    bp = _setup(tmp_path, monkeypatch)
+    old, _ = write_handover(bp, tldr="old", when="2026-04-01")
+    mid, _ = write_handover(bp, tldr="mid", thread="line-a", when="2026-04-02")
+    # Archived by hand although newer than a live row, as an import can leave it.
+    archive_handover(bp, mid)
+    new, _ = write_handover(bp, tldr="new", when="2026-04-03")
+
+    assert _ids(_json()) == [new, old]
+    assert _ids(_json(include_archived=True)) == [new, mid, old]
+    assert _ids(_json(include_archived=True, latest_per_thread=True)) == [new, mid, old]
+
+
+def test_the_slim_text_listing_decodes_no_handover_document(tmp_path, monkeypatch):
+    """The default call is the hot path: it renders from the index and counts ids."""
+    from taskmaster import store
+    bp = _setup(tmp_path, monkeypatch)
+    _overflow(bp, extra=1)
+    decoded = []
+    real = store._LazyEntityRows.__getitem__
+
+    def spy(self, kind):
+        decoded.append(kind)
+        return real(self, kind)
+
+    monkeypatch.setattr(store._LazyEntityRows, "__getitem__", spy)
+    slim = backlog_server.backlog_handover_list()
+    assert "1 older handovers" in slim and "handover" not in decoded
+
+    backlog_server.backlog_handover_list(verbose=True)
+    assert "handover" in decoded, "the spy must see the decode the detailed paths do"
 
 
 def test_explicit_supersession_helper_is_visible_in_the_listing(tmp_path, monkeypatch):

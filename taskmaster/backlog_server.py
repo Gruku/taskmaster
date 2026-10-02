@@ -4029,15 +4029,19 @@ def _handover_create_in_tx(
     review_reason: str = "",
     open_decisions: list | None = None,
     resolved_this_session: list | None = None,
+    thread_derived: bool = False,
 ):
     """Create one handover row and everything that must commit with it.
 
-    Returns `(handover_id, superseded_warning | None, thread_supersession)`, or
-    an error string; `thread_supersession` is `{"superseded": [ids], "pinned":
-    [ids]}`. The supersession, the review flag and the `open_decisions`
-    back-references all ride the caller's transaction, so a handover that names
-    a decision can never half-land. Shared with the test seeding shim so both
-    drive one code path.
+    Returns `(handover_id, supersession)`, or an error string; `supersession`
+    is what `_supersession_lines` renders. The supersessions, the review flag
+    and the `open_decisions` back-references all ride the caller's transaction,
+    so a handover that names a decision can never half-land. Shared with the
+    test seeding shim so both drive one code path.
+
+    `thread_derived` says the caller derived `thread` rather than being given
+    it, which narrows the thread's automatic supersession to handovers sharing
+    a task (see `plan_thread_supersession`).
     """
     tx = _store_tx()
     try:
@@ -4060,34 +4064,42 @@ def _handover_create_in_tx(
     except ValueError as exc:
         return str(exc)
 
-    superseded_warning = None
-    if supersedes:
+    supersession = {"explicit": "", "explicit_status": "", "superseded": [], "pinned": []}
+    if supersedes == hid:
+        # `supersedes` named an id nothing held, and the new handover took it.
+        # A handover cannot supersede itself: drop the pointer and say so.
+        own_doc, own_body = _tx_doc("handover", hid)
+        own_doc.pop("supersedes", None)
+        tx.put("handover", hid, own_doc, body=own_body)
+        supersession["explicit"] = "self"
+    elif supersedes:
         try:
             old_doc, old_body = _tx_doc("handover", supersedes)
         except KeyError:
-            superseded_warning = (
-                f"WARNING: supersedes={supersedes} not found on disk; old "
-                f"handover not updated."
-            )
+            supersession["explicit"] = "missing"
         else:
             new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
             tx.put("handover", supersedes, new_doc, body=new_body)
+            pinned_status = old_doc.get("status_user_set")
+            supersession["explicit"] = "hand-set" if pinned_status else "superseded"
+            supersession["explicit_status"] = str(old_doc.get("status") or "") if pinned_status else ""
 
     # A thread has one live resume point: an open handover written into it
-    # supersedes the older open ones. A hand-set status is left alone.
-    thread_supersession = {"superseded": [], "pinned": []}
+    # supersedes the older open ones of its line of work, archived ones too.
+    # A hand-set status is left alone.
     if document.get("thread") and document.get("status") == "open":
         to_supersede, pinned = _plan_thread_supersession(
-            tx.list("handover"),
+            tx.list("handover", include_archived=True),
             thread=document["thread"],
             new_key=_handover_sort_key(hid, document),
             exclude=(hid, supersedes),
+            task_ids=(document.get("task_ids") or []) if thread_derived else None,
         )
         for old_id in to_supersede:
             old_doc, old_body = _tx_doc("handover", old_id)
             new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
             tx.put("handover", old_id, new_doc, body=new_body)
-        thread_supersession = {"superseded": to_supersede, "pinned": pinned}
+        supersession.update(superseded=to_supersede, pinned=pinned)
 
     if flag_for_review:
         flagged_doc, flagged_body = _tx_doc("handover", hid)
@@ -4112,15 +4124,40 @@ def _handover_create_in_tx(
     data = _load()
     _sync_handover_index_tx(data)
     _mutate_and_save(data)
-    return hid, superseded_warning, thread_supersession
+    return hid, supersession
 
 
-def _thread_supersession_lines(thread: str, superseded: list, pinned: list) -> list[str]:
-    """What a create result says about its thread's older open handovers."""
+# How many auto-superseded ids a create result spells out before it counts.
+_SUPERSEDED_SHOWN = 5
+
+
+def _supersession_lines(supersedes: str, thread: str, supersession: dict) -> list[str]:
+    """What a create result says about the handovers it superseded or left alone.
+
+    `supersession` is `{"explicit": "" | "superseded" | "hand-set" | "missing" |
+    "self", "explicit_status": str, "superseded": [ids], "pinned": [ids]}` —
+    the explicit `supersedes=` outcome, then the thread's automatic one. Shared
+    with the native adapter.
+    """
     lines = []
+    explicit = supersession.get("explicit")
+    if explicit == "superseded":
+        lines.append(f"- Superseded: {supersedes}")
+    elif explicit == "hand-set":
+        lines.append(
+            f"- Superseded: {supersedes} (superseded_by recorded; its status was set by hand "
+            f"and stays {supersession.get('explicit_status') or 'as it was'})"
+        )
+    elif explicit == "missing":
+        lines.append(f"- WARNING: supersedes={supersedes} not found on disk; old handover not updated.")
+    elif explicit == "self":
+        lines.append(f"- WARNING: supersedes={supersedes} is this handover's own id; ignored.")
+    superseded = supersession.get("superseded") or []
     if superseded:
-        lines.append(f"- Auto-superseded (same thread): {', '.join(superseded)}")
-    for handover_id in pinned:
+        more = len(superseded) - _SUPERSEDED_SHOWN
+        shown = ", ".join(superseded[:_SUPERSEDED_SHOWN]) + (f" (+{more} more)" if more > 0 else "")
+        lines.append(f"- Auto-superseded (same thread): {shown}")
+    for handover_id in supersession.get("pinned") or []:
         lines.append(
             f"- WARNING: {handover_id} not auto-superseded — its status was set by hand; "
             f"it is still open in thread {thread}."
@@ -4146,11 +4183,14 @@ def backlog_handover_create(
     start next. body is freeform markdown (Decisions / Blockers / Where I'd
     start / Open threads).
 
-    A thread keeps one open resume point: older open handovers in the same
-    thread are superseded by this one automatically (as `supersedes=` does) and
-    listed in the result as "Auto-superseded". One whose status was set by hand
-    is left open and reported as a WARNING line. A handover born closed
-    (auto-stage) supersedes nothing.
+    A line of work keeps one open resume point: older open handovers in the
+    same thread, archived ones included, are superseded by this one
+    automatically (as `supersedes=` does) and listed in the result as
+    "Auto-superseded". With an explicit `thread` that is the whole thread; with
+    a derived one (a whole epic or bundle) only handovers sharing a task id
+    with this one, or both naming none — a sibling task's handover stays open.
+    One whose status was set by hand is left open and reported as a WARNING
+    line. A handover born closed (auto-stage) supersedes nothing.
 
     Args:
         tldr: One-line summary. Required.
@@ -4178,7 +4218,8 @@ def backlog_handover_create(
     _ensure_handover_status_backfilled()
     data = _load()
     thread_name = (thread or "").strip()
-    if not thread_name:
+    thread_derived = not thread_name
+    if thread_derived:
         bundle = _get_session_bundle() or {}
         thread_name = _derive_thread_name(
             task_ids or [], tldr, data, bundle_slug=bundle.get("slug", "") or ""
@@ -4196,10 +4237,11 @@ def backlog_handover_create(
         tip_commit=tip_commit or None,
         flag_for_review=flag_for_review,
         review_reason=review_reason,
+        thread_derived=thread_derived,
     )
     if isinstance(outcome, str):
         return f"Error: {outcome}"
-    hid, superseded_warning, thread_supersession = outcome
+    hid, supersession = outcome
     target = _handover_path(bp, hid)
     data = _load()
 
@@ -4215,12 +4257,7 @@ def backlog_handover_create(
         f"- Path: {target.resolve()}",
         f"- Index entries: {len(data.get('handovers') or [])}",
     ]
-    if supersedes and not superseded_warning:
-        lines.append(f"- Superseded: {supersedes}")
-    if superseded_warning:
-        lines.append(f"- {superseded_warning}")
-    lines.extend(_thread_supersession_lines(
-        _normalize_thread_name(thread_name), thread_supersession["superseded"], thread_supersession["pinned"]))
+    lines.extend(_supersession_lines(supersedes, _normalize_thread_name(thread_name), supersession))
     if flag_for_review:
         lines.append(f"- Flagged for review: {review_reason}")
     lines.append(f"Resume: {thread_name} — {next_action or tldr}")
@@ -4252,8 +4289,8 @@ def backlog_handover_list(
         task_id: If set, only entries whose `task_ids` list contains this id.
         session_kind: If set, only entries with this session_kind
             (e.g. "continuity", "deep-context", "milestone").
-        since: YYYY-MM-DD. Only entries dated on or after it. An invalid date
-            is refused with an error.
+        since: YYYY-MM-DD, exactly that form. Only entries dated on or after
+            it. Anything else is refused with an error.
         status: One of open, closed, superseded, or "all" (default).
         limit: Max entries returned (default 50 — above the 30-entry index, so
             by default it only cuts with include_archived). 0 = no cap.
@@ -4333,10 +4370,14 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
         return json.dumps({"error": message}) if as_json else f"Error: {message}"
 
     # Validate the date bounds before filtering so we fail fast on bad input.
+    # The filters compare strings, so only the one spelling is accepted:
+    # `fromisoformat` alone also takes `20260101` and week dates.
     from datetime import date as _date
     for name, value in (("since", since), ("until", until)):
         if value:
             try:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError(value)
                 _date.fromisoformat(value)
             except ValueError:
                 return refuse(f"`{name}` must be a date in YYYY-MM-DD format, got {value!r}.")
@@ -4358,9 +4399,11 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
     docs = {}
     if as_json or verbose or (include_archived and outside):
         docs = (data.get("_rows") or {}).get("handover") or {}
-    if include_archived:
-        for ident, doc, _body in _sort_handover_rows([(i, docs[i][0], None) for i in outside]):
-            entries.append({"id": ident, **_handover_index_entry(dict(doc))})
+    if include_archived and outside:
+        entries += [{"id": ident, **_handover_index_entry(dict(docs[ident][0]))} for ident in outside]
+        # One newest-first order over both, by the key the index is built with:
+        # an archived row is not always older than every indexed one.
+        entries.sort(key=lambda e: _handover_sort_key(str(e.get("id") or ""), e), reverse=True)
     archived_omitted = 0 if include_archived else len(outside)
 
     # Apply filters in spec order.

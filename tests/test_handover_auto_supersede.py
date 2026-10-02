@@ -25,8 +25,14 @@ def _create(**kwargs) -> tuple[str, str]:
 
 
 def _listed() -> dict:
-    out = json.loads(bs.backlog_handover_list(format="json", limit=0))
+    out = json.loads(bs.backlog_handover_list(format="json", limit=0, include_archived=True))
     return {h["id"]: h for h in out["handovers"]}
+
+
+def _sibling_tasks() -> tuple[str, str]:
+    for title in ("First", "Second"):
+        assert "Error" not in bs.backlog_add_task(title=title, epic="test-epic", phase="dev")
+    return "test-epic-001", "test-epic-002"
 
 
 def _body(handover_id) -> str:
@@ -116,3 +122,104 @@ def test_a_backdated_handover_does_not_supersede_a_newer_one(project):
     write_handover(project, tldr="backdated", thread="line-a", when="2026-01-01")
 
     assert (_listed()[newer]["status"], _listed()[newer]["superseded_by"]) == ("open", "")
+
+
+# ── a derived thread is a whole epic: only the same line of work is superseded ──
+
+
+def test_a_derived_thread_leaves_a_sibling_tasks_handover_open(project):
+    one, two = _sibling_tasks()
+    resume, _ = _create(tldr="Deep context for one", task_ids=[one], session_kind="deep-context")
+    _done, result = _create(tldr="Two is complete", task_ids=[two], session_kind="task-complete")
+
+    assert (_listed()[resume]["status"], _listed()[resume]["superseded_by"]) == ("open", "")
+    assert "Auto-superseded" not in result and "WARNING" not in result
+    assert resume in bs.backlog_handover_list(task_id=one, status="open")
+
+
+def test_a_derived_thread_supersedes_a_handover_sharing_a_task(project):
+    one, two = _sibling_tasks()
+    first, _ = _create(tldr="Working on one", task_ids=[one])
+    second, result = _create(tldr="Still on one, and two", task_ids=[two, one])
+
+    assert _listed()[first]["superseded_by"] == second
+    assert f"- Auto-superseded (same thread): {first}" in result.splitlines()
+
+
+def test_a_derived_thread_supersedes_when_neither_handover_names_a_task(project):
+    first, _ = _create(tldr="Loose work")
+    second, result = _create(tldr="Loose work")
+
+    assert first != second and _listed()[first]["superseded_by"] == second
+    assert f"- Auto-superseded (same thread): {first}" in result.splitlines()
+
+
+def test_a_named_thread_supersedes_whatever_the_tasks(project):
+    one, two = _sibling_tasks()
+    first, _ = _create(tldr="On one", task_ids=[one], thread="shared-line")
+    second, _result = _create(tldr="On two", task_ids=[two], thread="shared-line")
+
+    assert _listed()[first]["superseded_by"] == second
+
+
+# ── archived handovers, long lists, self-reference, hand-set status ───────────
+
+
+def test_an_archived_open_handover_in_the_thread_is_superseded_too(project):
+    buried, _ = write_handover(project, tldr="buried", thread="line-a", when="2025-01-01")
+    for n in range(30):
+        write_handover(project, tldr=f"filler {n:02d}", when=f"2025-02-{1 + n % 28:02d}")
+    assert json.loads(bs.backlog_handover_list(format="json"))["archived_omitted"] == 1
+    assert _listed()[buried]["status"] == "open"
+
+    latest, result = _create(tldr="latest", thread="line-a")
+
+    assert (_listed()[buried]["status"], _listed()[buried]["superseded_by"]) == ("superseded", latest)
+    assert f"- Auto-superseded (same thread): {buried}" in result.splitlines()
+    assert json.loads(bs.backlog_handover_list(format="json"))["archived_omitted"] == 2
+
+
+def test_a_long_superseded_list_is_reported_compactly(project):
+    # Newest first, so all seven stay open until the tool writes into the thread.
+    ids = [write_handover(project, tldr=f"open {n}", thread="line-a", when=f"2026-01-{20 - n:02d}")[0]
+           for n in range(7)]
+    latest, result = _create(tldr="latest", thread="line-a")
+
+    assert {_listed()[h]["superseded_by"] for h in ids} == {latest}
+    line = next(l for l in result.splitlines() if l.startswith("- Auto-superseded"))
+    assert line == f"- Auto-superseded (same thread): {', '.join(ids[:5])} (+2 more)"
+
+
+def test_superseding_its_own_id_is_ignored(project):
+    from datetime import date
+    own = f"{date.today().isoformat()}-self-reference"
+    created, result = _create(tldr="Self reference", supersedes=own)
+
+    assert created == own
+    assert f"- WARNING: supersedes={own} is this handover's own id; ignored." in result.splitlines()
+    assert "- Superseded:" not in result
+    listed = _listed()[own]
+    assert (listed["status"], listed["superseded_by"], listed["links"]) == ("open", "", [])
+    assert "SUPERSEDED" not in _body(own)
+
+
+def test_explicitly_superseding_a_hand_set_status_says_it_stayed(project):
+    pinned, _ = _create(tldr="pinned", thread="line-a")
+    bs.backlog_handover_update_status(handover_id=pinned, status="open", reason="still using")
+    second, result = _create(tldr="second", thread="line-b", supersedes=pinned)
+
+    assert (_listed()[pinned]["status"], _listed()[pinned]["superseded_by"]) == ("open", second)
+    line = next(l for l in result.splitlines() if l.startswith("- Superseded:"))
+    assert pinned in line and "set by hand" in line and "open" in line
+
+
+def test_the_pinned_warning_is_not_repeated_once_it_has_a_pointer(project):
+    pinned, _ = _create(tldr="pinned", thread="line-a")
+    bs.backlog_handover_update_status(handover_id=pinned, status="open", reason="still using")
+    _second, warned = _create(tldr="second", thread="line-a")
+    assert "WARNING" in warned
+    bs.backlog_handover_supersede(old_id=pinned, new_id=_second)
+    _third, quiet = _create(tldr="third", thread="line-a")
+
+    assert pinned not in quiet and "WARNING" not in quiet
+    assert _listed()[pinned]["status"] == "open"

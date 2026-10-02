@@ -7,6 +7,22 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## Unreleased
+
+**`backlog_handover_list` is dependable for agent callers** (tm-audit-028), on both stores. All new parameters are optional.
+
+- `format="json"` returns `{"handovers": [...], "returned", "total", "truncated", "archived_omitted"}`. Every handover has the same keys, empty when absent: `id`, `date`, `created`, `thread`, `session_kind`, `status`, `tldr`, `next_action`, `task_ids`, `tip_commit`, `branch`, `links` (`[{"type", "target"}]`, supersession included), `superseded_by`. Errors are `{"error": "..."}`.
+- `verbose=True` text adds `thread`, `branch`, `tip_commit` and `links` lines.
+- New filters: `thread`, `until` (YYYY-MM-DD, inclusive; `since=until=` one day returns that day), `latest_per_thread` (the newest open handover of each thread; refuses a `status` other than `open` or `all`).
+- **The 30-entry index cap is no longer silent.** When archived handovers exist the text answer ends with a line saying how many were not searched, and JSON reports `archived_omitted` and `truncated`. `include_archived=True` searches and lists them.
+
+**Behaviour changes:**
+
+- **`since` and `until` accept only `YYYY-MM-DD`.** `since` used to accept any form `date.fromisoformat` takes (`20260101`, week dates) and then compared it as a string, returning the wrong rows; those forms are now refused.
+- **`backlog_handover_create` supersedes the older open handovers of its line of work** (tm-audit-029), archived ones included, in the same transaction, and lists them as `Auto-superseded (same thread): …` (the first five ids, then a count). With an explicit `thread` that is every older open handover in the thread. With a derived thread, which is a whole epic or bundle, only those sharing a task id with the new handover, or both naming none; a sibling task's handover stays open. A handover whose status was set by hand is left open and reported on a `WARNING:` line, until it carries a `superseded_by` pointer. A handover born closed (`auto-stage`) supersedes nothing. Projects with several open handovers in one thread will see them superseded by the next create in that line of work.
+- **`supersedes=` results are truthful.** Superseding a handover whose status was set by hand says the status stayed. `supersedes=` naming the new handover's own id is ignored with a warning on both stores; the legacy store used to mark the new handover superseded by itself, and a native store returned the wrong id or failed after committing.
+
+---
 ## 7.0.0
 
 **A second storage mode, the native authority, opt-in per checkout.** A project moves to it only when an operator runs the explicit cutover, `uv run <plugin>/taskmaster_cli.py cutover --root <project>` (`python -m taskmaster.native.cutover` from a source checkout), never automatically. The legacy store stays the default: this build opens every existing project as a legacy store and serves it as 6.0.3 did, plus the new tools below. On a native store one repository coordinator process owns every write; the Markdown and YAML files under `.taskmaster/` are exported after each commit; hand edits are imported only at an explicit sync, `backlog_sync()`; and `.taskmaster/` is committed with the managed Git command, `uv run <plugin>/taskmaster_cli.py git commit`. Git operations that bypass it are detected as drift and held, never imported silently. The [native store guide](docs/native-store.md) covers receipts, sync and Git obligations, service recovery, compatibility and known limitations; the [cutover runbook](docs/runbooks/native-cutover.md) is the migration procedure. Rehearse the cutover on a copy first. After activation it cannot be rolled back; the escape hatch re-adopts the files into a fresh legacy store and loses database-only state (receipts, sessions, queue leases, history sequence).

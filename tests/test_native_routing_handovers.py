@@ -83,7 +83,7 @@ def test_handover_reads_match(twins):
     twins.same("backlog_handover_create", tldr="Third handover, with git context", supersedes=seeded,
                body="Mentions ISS-001 inline", options={"branch": "feature/x", "tip_commit": "abc1234"})
     legacy, _native = twins.same("backlog_handover_list", format="json")
-    newest = json.loads(legacy)["handovers"][0]
+    newest = next(h for h in json.loads(legacy)["handovers"] if h["id"] == "2026-09-17-third-handover-with-git-context")
     assert (newest["branch"], newest["tip_commit"]) == ("feature/x", "abc1234")
     assert {"type": "supersedes", "target": seeded} in newest["links"]
     assert {"type": "references", "target": "ISS-001"} in newest["links"]
@@ -124,6 +124,77 @@ def test_same_thread_create_auto_supersedes_like_the_tool(twins):
     twins.same("backlog_handover_list", format="json", limit=0)
     twins.same("backlog_thread_list", include_closed=True)
     _check(twins)
+
+
+def _seed_history():
+    """`_seed` plus a sibling task and an open handover old enough to be archived."""
+    from tests.entity_helpers import write_handover
+    _seed()
+    bs.backlog_add_task(title="Sibling", epic="test-epic", phase="dev")
+    backlog = bs._backlog_path()
+    write_handover(backlog, tldr="Buried open line", thread="old-line", when="2025-01-01")
+    for n in range(30):
+        write_handover(backlog, tldr=f"Filler {n:02d}", session_kind="auto-stage", when=f"2025-02-{1 + n % 28:02d}")
+
+
+def test_thread_supersession_rules_match(tmp_path, monkeypatch):
+    twins = make_twins(tmp_path, monkeypatch, _seed_history)
+    seeded, buried = "2026-09-17-seeded-handover-about-first", "2025-01-01-buried-open-line"
+    # Ids chosen to sort on both sides of the rows they act on: nothing here may
+    # depend on the new handover happening to sort first or last.
+    legacy, _native = twins.same("backlog_handover_create", tldr="Zz sibling is complete", task_ids=["test-epic-002"],
+                                 session_kind="task-complete")
+    assert "Auto-superseded" not in legacy and "WARNING" not in legacy
+    legacy, _native = twins.same("backlog_handover_create", tldr="Aa continues first", task_ids=["test-epic-001"])
+    assert f"- Auto-superseded (same thread): {seeded}" in legacy.splitlines()
+    legacy, _native = twins.same("backlog_handover_create", tldr="Zz revives the old line", thread="old-line")
+    assert f"- Auto-superseded (same thread): {buried}" in legacy.splitlines()
+
+    for tldr, thread in (("Self reference", ""), ("Aa self again", "old-line")):
+        own = "2026-09-17-" + tldr.lower().replace(" ", "-")
+        legacy, native = twins.same("backlog_handover_create", tldr=tldr, thread=thread, supersedes=own)
+        for answer in (legacy, native):
+            assert answer.splitlines()[0] == f"Handover written: {own}"
+            assert f"- WARNING: supersedes={own} is this handover's own id; ignored." in answer.splitlines()
+    assert "- Auto-superseded (same thread): 2026-09-17-zz-revives-the-old-line" in legacy.splitlines()
+
+    pinned = "2026-09-17-aa-self-again"
+    twins.same("backlog_handover_update_status", handover_id=pinned, status="open", reason="still using")
+    legacy, _native = twins.same("backlog_handover_create", tldr="Mm over the pin", thread="elsewhere", supersedes=pinned)
+    assert "set by hand" in next(l for l in legacy.splitlines() if l.startswith("- Superseded:"))
+    legacy, _native = twins.same("backlog_handover_create", tldr="Zz after the pin", thread="old-line")
+    assert "WARNING" not in legacy
+
+    for kwargs in ({"format": "json", "limit": 0, "include_archived": True},
+                   {"latest_per_thread": True, "include_archived": True, "format": "json"},
+                   {"latest_per_thread": True, "include_archived": True, "limit": 1},
+                   {"task_id": "test-epic-002", "status": "open"}, {"until": "20260917"}, {"since": "2026-W38-4"}):
+        twins.same("backlog_handover_list", **kwargs)
+    by_id = {h["id"]: h for h in json.loads(twins.same(
+        "backlog_handover_list", format="json", limit=0, include_archived=True)[0])["handovers"]}
+    assert by_id["2026-09-17-zz-sibling-is-complete"]["superseded_by"] == ""
+    assert (by_id[buried]["status"], by_id[buried]["superseded_by"]) == ("superseded", "2026-09-17-zz-revives-the-old-line")
+    assert by_id["2026-09-17-self-reference"]["links"] == []
+    _check(twins)
+
+
+def test_native_slim_listing_does_not_materialize_handover_rows(twins, monkeypatch):
+    """The native index is derived from live rows; the slim listing must add no
+    second decode of every handover (archived ones and bodies included)."""
+    from taskmaster.native_routing import reads
+    decoded = []
+    real = reads.NativeRows.__getitem__
+
+    def spy(self, kind):
+        decoded.append(kind)
+        return real(self, kind)
+
+    monkeypatch.setattr(reads.NativeRows, "__getitem__", spy)
+    with twins.at(twins.native):
+        bs.backlog_handover_list()
+        assert "handover" not in decoded
+        bs.backlog_handover_list(format="json")
+        assert "handover" in decoded
 
 
 def test_threads_match(twins):
