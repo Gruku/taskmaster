@@ -287,6 +287,12 @@ from taskmaster.taskmaster_v3 import (
     set_handover_status_doc as _set_handover_status_doc,
     sync_handover_index as _sync_handover_index,
     sort_handover_rows as _sort_handover_rows,
+    handover_sort_key as _handover_sort_key,
+    plan_thread_supersession as _plan_thread_supersession,
+    _handover_index_entry,
+    HANDOVER_INDEX_CAP as _HANDOVER_INDEX_CAP,
+    normalize_thread_name as _normalize_thread_name,
+    legacy_links_to_typed as _legacy_links_to_typed,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
     ISSUE_SEVERITIES,
@@ -951,6 +957,13 @@ def _dict_rows(data: dict, kind: str, *, include_archived: bool = False) -> list
             continue
         out.append((ident, doc, body))
     return out
+
+
+def _dict_row_ids(data: dict, kind: str) -> list:
+    """Every stored id of one kind, archived included, without decoding a document."""
+    rows = data.get("_rows") or {}
+    ids = getattr(rows, "ids", None)
+    return ids(kind) if ids is not None else list(rows.get(kind) or {})
 
 
 def _dict_row(data: dict, kind: str, ident: str):
@@ -4016,13 +4029,19 @@ def _handover_create_in_tx(
     review_reason: str = "",
     open_decisions: list | None = None,
     resolved_this_session: list | None = None,
+    thread_derived: bool = False,
 ):
     """Create one handover row and everything that must commit with it.
 
-    Returns `(handover_id, superseded_warning | None)`, or an error string. The
-    supersession, the review flag and the `open_decisions` back-references all
-    ride the caller's transaction, so a handover that names a decision can never
-    half-land. Shared with the test seeding shim so both drive one code path.
+    Returns `(handover_id, supersession)`, or an error string; `supersession`
+    is what `_supersession_lines` renders. The supersessions, the review flag
+    and the `open_decisions` back-references all ride the caller's transaction,
+    so a handover that names a decision can never half-land. Shared with the
+    test seeding shim so both drive one code path.
+
+    `thread_derived` says the caller derived `thread` rather than being given
+    it, which narrows the thread's automatic supersession to handovers sharing
+    a task (see `plan_thread_supersession`).
     """
     tx = _store_tx()
     try:
@@ -4045,18 +4064,42 @@ def _handover_create_in_tx(
     except ValueError as exc:
         return str(exc)
 
-    superseded_warning = None
-    if supersedes:
+    supersession = {"explicit": "", "explicit_status": "", "superseded": [], "pinned": []}
+    if supersedes == hid:
+        # `supersedes` named an id nothing held, and the new handover took it.
+        # A handover cannot supersede itself: drop the pointer and say so.
+        own_doc, own_body = _tx_doc("handover", hid)
+        own_doc.pop("supersedes", None)
+        tx.put("handover", hid, own_doc, body=own_body)
+        supersession["explicit"] = "self"
+    elif supersedes:
         try:
             old_doc, old_body = _tx_doc("handover", supersedes)
         except KeyError:
-            superseded_warning = (
-                f"WARNING: supersedes={supersedes} not found on disk; old "
-                f"handover not updated."
-            )
+            supersession["explicit"] = "missing"
         else:
             new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
             tx.put("handover", supersedes, new_doc, body=new_body)
+            pinned_status = old_doc.get("status_user_set")
+            supersession["explicit"] = "hand-set" if pinned_status else "superseded"
+            supersession["explicit_status"] = str(old_doc.get("status") or "") if pinned_status else ""
+
+    # A thread has one live resume point: an open handover written into it
+    # supersedes the older open ones of its line of work, archived ones too.
+    # A hand-set status is left alone.
+    if document.get("thread") and document.get("status") == "open":
+        to_supersede, pinned = _plan_thread_supersession(
+            tx.list("handover", include_archived=True),
+            thread=document["thread"],
+            new_key=_handover_sort_key(hid, document),
+            exclude=(hid, supersedes),
+            task_ids=(document.get("task_ids") or []) if thread_derived else None,
+        )
+        for old_id in to_supersede:
+            old_doc, old_body = _tx_doc("handover", old_id)
+            new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
+            tx.put("handover", old_id, new_doc, body=new_body)
+        supersession.update(superseded=to_supersede, pinned=pinned)
 
     if flag_for_review:
         flagged_doc, flagged_body = _tx_doc("handover", hid)
@@ -4081,7 +4124,45 @@ def _handover_create_in_tx(
     data = _load()
     _sync_handover_index_tx(data)
     _mutate_and_save(data)
-    return hid, superseded_warning
+    return hid, supersession
+
+
+# How many auto-superseded ids a create result spells out before it counts.
+_SUPERSEDED_SHOWN = 5
+
+
+def _supersession_lines(supersedes: str, thread: str, supersession: dict) -> list[str]:
+    """What a create result says about the handovers it superseded or left alone.
+
+    `supersession` is `{"explicit": "" | "superseded" | "hand-set" | "missing" |
+    "self", "explicit_status": str, "superseded": [ids], "pinned": [ids]}` —
+    the explicit `supersedes=` outcome, then the thread's automatic one. Shared
+    with the native adapter.
+    """
+    lines = []
+    explicit = supersession.get("explicit")
+    if explicit == "superseded":
+        lines.append(f"- Superseded: {supersedes}")
+    elif explicit == "hand-set":
+        lines.append(
+            f"- Superseded: {supersedes} (superseded_by recorded; its status was set by hand "
+            f"and stays {supersession.get('explicit_status') or 'as it was'})"
+        )
+    elif explicit == "missing":
+        lines.append(f"- WARNING: supersedes={supersedes} not found on disk; old handover not updated.")
+    elif explicit == "self":
+        lines.append(f"- WARNING: supersedes={supersedes} is this handover's own id; ignored.")
+    superseded = supersession.get("superseded") or []
+    if superseded:
+        more = len(superseded) - _SUPERSEDED_SHOWN
+        shown = ", ".join(superseded[:_SUPERSEDED_SHOWN]) + (f" (+{more} more)" if more > 0 else "")
+        lines.append(f"- Auto-superseded (same thread): {shown}")
+    for handover_id in supersession.get("pinned") or []:
+        lines.append(
+            f"- WARNING: {handover_id} not auto-superseded — its status was set by hand; "
+            f"it is still open in thread {thread}."
+        )
+    return lines
 
 
 @mcp.tool()
@@ -4102,6 +4183,15 @@ def backlog_handover_create(
     start next. body is freeform markdown (Decisions / Blockers / Where I'd
     start / Open threads).
 
+    A line of work keeps one open resume point: older open handovers in the
+    same thread, archived ones included, are superseded by this one
+    automatically (as `supersedes=` does) and listed in the result as
+    "Auto-superseded". With an explicit `thread` that is the whole thread; with
+    a derived one (a whole epic or bundle) only handovers sharing a task id
+    with this one, or both naming none — a sibling task's handover stays open.
+    One whose status was set by hand is left open and reported as a WARNING
+    line. A handover born closed (auto-stage) supersedes nothing.
+
     Args:
         tldr: One-line summary. Required.
         next_action: One-line "where to start next session."
@@ -4110,7 +4200,8 @@ def backlog_handover_create(
         session_kind: One of {", ".join(HANDOVER_KINDS)}.
         thread: Thread this handover belongs to (stable resume token). Auto-derived from bundle/epic/task/tldr when empty.
         supersedes: Optional id of an older handover this one supersedes; the old
-            one gets a `superseded_by:` field and a SUPERSEDED callout.
+            one gets a `superseded_by:` field and a SUPERSEDED callout. Only
+            needed across threads — within a thread it is automatic.
         flag_for_review: When True, flags this handover for retro extraction.
         options: Rarely-set fields — branch, tip_commit (frontmatter git
             context), context_size_at_write (compaction marker), review_reason
@@ -4127,7 +4218,8 @@ def backlog_handover_create(
     _ensure_handover_status_backfilled()
     data = _load()
     thread_name = (thread or "").strip()
-    if not thread_name:
+    thread_derived = not thread_name
+    if thread_derived:
         bundle = _get_session_bundle() or {}
         thread_name = _derive_thread_name(
             task_ids or [], tldr, data, bundle_slug=bundle.get("slug", "") or ""
@@ -4145,10 +4237,11 @@ def backlog_handover_create(
         tip_commit=tip_commit or None,
         flag_for_review=flag_for_review,
         review_reason=review_reason,
+        thread_derived=thread_derived,
     )
     if isinstance(outcome, str):
         return f"Error: {outcome}"
-    hid, superseded_warning = outcome
+    hid, supersession = outcome
     target = _handover_path(bp, hid)
     data = _load()
 
@@ -4164,10 +4257,7 @@ def backlog_handover_create(
         f"- Path: {target.resolve()}",
         f"- Index entries: {len(data.get('handovers') or [])}",
     ]
-    if supersedes and not superseded_warning:
-        lines.append(f"- Superseded: {supersedes}")
-    if superseded_warning:
-        lines.append(f"- {superseded_warning}")
+    lines.extend(_supersession_lines(supersedes, _normalize_thread_name(thread_name), supersession))
     if flag_for_review:
         lines.append(f"- Flagged for review: {review_reason}")
     lines.append(f"Resume: {thread_name} — {next_action or tldr}")
@@ -4182,44 +4272,139 @@ def backlog_handover_list(
     status: str = "all",
     limit: int = DEFAULT_LIST_LIMIT,
     verbose: bool = False,
+    thread: str = "",
+    until: str = "",
+    latest_per_thread: bool = False,
+    include_archived: bool = False,
+    format: str = "text",
 ) -> str:
-    """List recent handovers. By default shows slim one-liners (id, date, tldr).
+    """List handovers, newest first. Text one-liners by default; `format="json"`
+    for a parseable envelope.
 
-    Reads from the backlog.yaml index, which is bounded to the most recent 30.
-    Older handovers are still on disk under handovers/_archive/ but not listed
-    here — fetch by id with `backlog_handover_get` if needed.
+    Searches the handover index — the most recent 30. Older handovers are
+    archived, not deleted: when any exist the answer says how many went
+    unsearched, and `include_archived=True` searches them too.
 
     Args:
         task_id: If set, only entries whose `task_ids` list contains this id.
         session_kind: If set, only entries with this session_kind
-            (e.g. "end-of-day", "context-handoff", "milestone-complete").
-        since: ISO date string (YYYY-MM-DD). If set, only entries whose
-            date prefix is >= since. Raises ValueError for invalid formats.
-        status: One of open, closed, superseded, or "all" (default). Filters
-            against the index entry — does not read every file.
-        limit: Max entries returned (default 50). 0 = no cap. An overflow footer
-            reports how many were hidden.
-        verbose: If True, include additional index fields (next_action, task_ids,
-            status) per entry. Slim (default) shows id, date, kind, and tldr.
+            (e.g. "continuity", "deep-context", "milestone").
+        since: YYYY-MM-DD, exactly that form. Only entries dated on or after
+            it. Anything else is refused with an error.
+        status: One of open, closed, superseded, or "all" (default).
+        limit: Max entries returned (default 50 — above the 30-entry index, so
+            by default it only cuts with include_archived). 0 = no cap.
+        verbose: Text only. Adds next_action, task_ids, status, thread, branch,
+            tip_commit and links per entry. Slim (default) shows id, date,
+            kind and tldr.
+        thread: If set, only entries in this thread (its name as
+            `backlog_thread_list` shows it).
+        until: YYYY-MM-DD, inclusive. Only entries dated on or before it;
+            since=until=one day returns just that day.
+        latest_per_thread: Only the newest open handover of each thread, among
+            those the other filters match. A handover with no thread is its
+            own group.
+        include_archived: Also search and list the archived handovers beyond
+            the 30-entry index.
+        format: "text" (default) or "json". JSON returns {"handovers": [...],
+            "returned", "total", "truncated", "archived_omitted"}. Every
+            handover has the same keys, empty when absent: id, date, created,
+            thread, session_kind, status, tldr, next_action, task_ids,
+            tip_commit, branch, links ([{"type", "target"}], supersession
+            included), superseded_by. `total` counts matches before `limit`;
+            `archived_omitted` counts archived handovers not searched;
+            `truncated` is true when either left something out. Errors are
+            {"error": "..."}.
     """
     bp = _backlog_path()
     if not bp.exists():
-        return "No backlog found."
+        return json.dumps({"error": "No backlog found."}) if format == "json" else "No backlog found."
     _ensure_handover_status_backfilled()
-    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose)
+    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose,
+                               thread, until, latest_per_thread, include_archived, format)
 
 
-def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose) -> str:
+_HANDOVER_LIST_FORMATS = ("text", "json")
+
+
+def _handover_list_object(entry: dict, doc: dict) -> dict:
+    """One handover as `format="json"` returns it: fixed keys, empty when absent.
+
+    The index entry carries the slim fields; `branch`, `tip_commit`, `links` and
+    the supersession pointers live only on the handover's own document.
+    """
+    links = _legacy_links_to_typed(doc, kind="handover")
+    superseded_by = doc.get("superseded_by") or [l["target"] for l in links if l["type"] == "superseded_by"]
+    if isinstance(superseded_by, (list, tuple)):
+        superseded_by = superseded_by[0] if superseded_by else ""
+
+    def text(field):
+        return str(entry.get(field) or doc.get(field) or "")
+
+    return {
+        "id": text("id"),
+        "date": text("date"),
+        "created": text("created"),
+        "thread": text("thread"),
+        "session_kind": text("session_kind"),
+        "status": text("status"),
+        "tldr": text("tldr"),
+        "next_action": text("next_action"),
+        "task_ids": list(entry.get("task_ids") or doc.get("task_ids") or []),
+        "tip_commit": text("tip_commit"),
+        "branch": text("branch"),
+        "links": [{"type": l["type"], "target": l["target"]} for l in links],
+        "superseded_by": str(superseded_by),
+    }
+
+
+def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose,
+                        thread="", until="", latest_per_thread=False, include_archived=False,
+                        format="text") -> str:
     """`backlog_handover_list` over any backlog document; shared with the native adapter."""
-    entries = list(data.get("handovers") or [])
+    if format not in _HANDOVER_LIST_FORMATS:
+        return f"Error: format must be one of {_HANDOVER_LIST_FORMATS}, got {format!r}."
+    as_json = format == "json"
 
-    # Validate `since` before filtering so we fail fast on bad input.
-    if since:
-        from datetime import date as _date
-        try:
-            _date.fromisoformat(since)
-        except ValueError:
-            return f"Error: `since` must be a date in YYYY-MM-DD format, got {since!r}."
+    def refuse(message: str) -> str:
+        return json.dumps({"error": message}) if as_json else f"Error: {message}"
+
+    # Validate the date bounds before filtering so we fail fast on bad input.
+    # The filters compare strings, so only the one spelling is accepted:
+    # `fromisoformat` alone also takes `20260101` and week dates.
+    from datetime import date as _date
+    for name, value in (("since", since), ("until", until)):
+        if value:
+            try:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError(value)
+                _date.fromisoformat(value)
+            except ValueError:
+                return refuse(f"`{name}` must be a date in YYYY-MM-DD format, got {value!r}.")
+
+    from taskmaster.taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
+    filter_status = bool(status) and status != "all"
+    if filter_status and status not in _STATUSES:
+        return refuse(f"status must be one of {_STATUSES} or 'all', got {status!r}.")
+    if latest_per_thread and filter_status and status != "open":
+        return refuse("latest_per_thread returns open handovers only; status must be 'open' or 'all', "
+                      f"got {status!r}.")
+
+    entries = list(data.get("handovers") or [])
+    # The index holds the newest 30; every other stored handover is archived
+    # overflow. Counting those reads ids only, so the slim listing decodes no
+    # document to say what it left out.
+    indexed = {e.get("id") for e in entries}
+    outside = [ident for ident in _dict_row_ids(data, "handover") if ident not in indexed]
+    docs = {}
+    if as_json or verbose or (include_archived and outside):
+        docs = (data.get("_rows") or {}).get("handover") or {}
+    if include_archived and outside:
+        entries += [{"id": ident, **_handover_index_entry(dict(docs[ident][0]))} for ident in outside]
+        # One newest-first order over both, by the key the index is built with:
+        # an archived row is not always older than every indexed one.
+        entries.sort(key=lambda e: _handover_sort_key(str(e.get("id") or ""), e), reverse=True)
+    archived_omitted = 0 if include_archived else len(outside)
 
     # Apply filters in spec order.
     if task_id:
@@ -4228,19 +4413,50 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
         entries = [e for e in entries if e.get("session_kind") == session_kind]
     if since:
         entries = [e for e in entries if e.get("date", e.get("id", "")) >= since]
-
-    from taskmaster.taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
-    if status and status != "all":
-        if status not in _STATUSES:
-            return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
+    if until:
+        entries = [e for e in entries if str(e.get("date", e.get("id", "")))[:10] <= until]
+    if thread:
+        names = {thread, _normalize_thread_name(thread)}
+        entries = [e for e in entries if e.get("thread") in names]
+    if filter_status:
         entries = [e for e in entries if e.get("status") == status]
-
-    if not entries:
-        filtered = any([task_id, session_kind, since, status != "all"])
-        return "No handovers match those filters." if filtered else "No handovers yet."
+    if latest_per_thread:
+        # Entries are newest-first, so the first open one seen per thread wins.
+        seen, newest = set(), []
+        for e in entries:
+            if e.get("status") != "open" or e.get("thread") in seen:
+                continue
+            if e.get("thread"):
+                seen.add(e["thread"])
+            newest.append(e)
+        entries = newest
 
     # Cap after all filters (limit<=0 = no cap) and report overflow.
+    total = len(entries)
     entries, overflow = _cap_list(entries, limit)
+
+    def doc_of(e):
+        return (docs.get(e.get("id")) or ({}, None))[0]
+
+    if as_json:
+        return json.dumps({
+            "handovers": [_handover_list_object(e, doc_of(e)) for e in entries],
+            "returned": len(entries),
+            "total": total,
+            "truncated": bool(overflow or archived_omitted),
+            "archived_omitted": archived_omitted,
+        }, default=str)
+
+    archive_footer = (
+        f"…{archived_omitted} older handovers outside the {_HANDOVER_INDEX_CAP}-entry index were not "
+        "searched — pass include_archived=True to include them"
+    ) if archived_omitted else ""
+
+    if not entries:
+        filtered = any([task_id, session_kind, since, until, thread, latest_per_thread, status != "all"])
+        empty = "No handovers match those filters." if filtered else "No handovers yet."
+        return f"{empty}\n{archive_footer}" if archive_footer else empty
+
     footer = _overflow_footer(overflow, "handovers")
 
     lines = []
@@ -4260,8 +4476,15 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
                 lines.append(f"  tasks: {', '.join(tids)}")
             if e.get("status"):
                 lines.append(f"  status: {e['status']}")
-    if footer:
-        lines.append(footer)
+            full = _handover_list_object(e, doc_of(e))
+            for field in ("thread", "branch", "tip_commit"):
+                if full[field]:
+                    lines.append(f"  {field}: {full[field]}")
+            if full["links"]:
+                lines.append("  links: " + ", ".join(f"{l['type']} {l['target']}" for l in full["links"]))
+    for line in (footer, archive_footer):
+        if line:
+            lines.append(line)
     return "\n".join(lines)
 
 

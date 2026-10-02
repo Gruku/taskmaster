@@ -562,6 +562,19 @@ def live_handover_rows(transaction):
     return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
 
 
+def open_thread_handover_ids(connection, thread):
+    """Ids of a thread's open handovers, archived ones included, by the thread index.
+
+    A new handover supersedes these (`lifecycle._handover_created`); the archive
+    is included because a resume point that fell out of the 30-entry index is
+    still open.
+    """
+    return [row[0] for row in connection.execute(
+        "SELECT c.public_id FROM handover_operational h JOIN entity_core c ON c.entity_key=h.entity_key "
+        "WHERE json_extract(h.thread_json,'$')=? AND c.kind='handover' AND c.deleted=0 "
+        "AND json_extract(c.status_json,'$')='open' ORDER BY c.public_id", (thread,))]
+
+
 def archive_handover_overflow(transaction):
     """Archive every live handover past the index cap, newest kept, as the tools do.
 

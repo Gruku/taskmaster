@@ -1,61 +1,67 @@
 # Chained Handover Supersession
 
-When a new handover replaces an older one for the same task line of work, we **chain** them: the new one points back at the old (`supersedes:`); the old one is edited in place to point at the new (`superseded_by:`) and gets a `SUPERSEDED` callout prepended to its body.
+When a new handover replaces an older one for the same line of work, they are **chained**: the old one is edited in place to point at the new (`superseded_by:`), its status becomes `superseded`, and a `SUPERSEDED` callout is prepended to its body. A line of work then has one open resume point.
 
-This automates what real handovers like `2026-04-27-viewer-redesign-m1-complete-resume-m2.md` do manually at the top of the file.
+Most of this is automatic. `supersedes=` is only for the cases the server cannot infer.
 
-## When to chain
+## What `backlog_handover_create` does on its own
 
-Set `supersedes = <prior_id>` if **all** of:
+Every create supersedes the older **open** handovers of the same line of work, archived ones (outside the 30-entry index) included:
 
-1. The new handover's `session_kind` is `milestone-complete` or `pivot`.
-2. There is a prior handover whose `task_ids` overlap with the new handover's `task_ids` (intersection non-empty).
-3. That prior handover's `session_kind` is also `milestone-complete` or `pivot`.
+- **`thread` passed explicitly** — every older open handover in that thread.
+- **`thread` left empty (derived: bundle → epic → task id → tldr)** — a derived thread is a whole epic or bundle, so only handovers that share a task id with the new one, or where both name no task. A sibling task's handover in the same epic stays open, silently: it is someone else's resume point.
 
-If multiple priors qualify, pick the **newest** by `date`.
+The result names what was superseded:
+
+```
+- Auto-superseded (same thread): <id>, <id>, … (+N more)
+```
+
+Exceptions, all automatic:
+
+- A handover whose status was set by hand (`backlog_handover_update_status`) is never auto-transitioned. It stays open and the result carries `- WARNING: <id> not auto-superseded — its status was set by hand; …`. **Surface that line to the user**; they can close it with `backlog_handover_update_status` or chain it with `backlog_handover_supersede`. Once it carries a `superseded_by` pointer the warning stops.
+- A handover born closed (`auto-stage`) supersedes nothing.
+- A handover dated before an open one (backdated) does not supersede the newer one.
+
+The new handover gets no `supersedes:` field from this; the pointer lives on the old ones (`superseded_by`), which is what `backlog_handover_list` shows in `links`.
+
+## When to pass `supersedes=` yourself
+
+Set `supersedes = <prior_id>` only when the prior handover is **not** covered above and the new one replaces it:
+
+1. It is in a different thread (the line of work was renamed, or moved between a derived and a named thread), or
+2. the thread is derived and the two handovers share no task id, but this session did take over that work.
+
+The playbook's step 4 case — a `milestone` handover replacing the previous `milestone` for the same `task_ids` — is now covered automatically; passing `supersedes=` there is harmless (it is never applied twice) and additionally records `supersedes:` on the new handover.
 
 ## How to find the prior
 
-> **Note:** The clean iteration shown below depends on `v3-skills-015` shipping `backlog_handover_list` with structured (`task_id`, `session_kind`) filter args. Until then, fall back to the **interim algorithm** further down.
-
 ```
-candidates = backlog_handover_list(limit=10, session_kind="milestone-complete pivot", task_id=new_task_ids[0])
-prior = candidates[0] if candidates else None
+out = backlog_handover_list(task_id=<task>, status="open", format="json")
 ```
 
-If multiple priors qualify, pick the **newest** by `date`.
+`out["handovers"]` is newest first; each has `id`, `thread`, `session_kind`, `task_ids`, `status`, `superseded_by` and `links`. Pick the newest whose `task_ids` overlap the new handover's. If `out["truncated"]` is true and `out["archived_omitted"]` is non-zero, older handovers were not searched — repeat with `include_archived=True` before concluding there is no prior.
 
-### Interim algorithm (until v3-skills-015 lands)
+To see each thread's current resume point instead: `backlog_handover_list(latest_per_thread=True, format="json")`.
 
-`backlog_handover_list` currently returns a markdown-bullet string and does not surface `task_ids`. So:
-
-1. Call `backlog_handover_list(status="open", limit=1)` to get the most-recent handover's id and session_kind.
-2. If its `session_kind` is not `milestone-complete` or `pivot`, **no chain** — set `supersedes` to empty and stop.
-3. Otherwise call `backlog_handover_get(id)` and read `task_ids` from the returned frontmatter block.
-4. If `set(task_ids) & set(new_task_ids)` is non-empty, set `supersedes = id` and stop.
-5. Otherwise, the latest handover is for unrelated work — set `supersedes` to empty.
-
-This interim path only checks the single most-recent handover, not the top-10. That's an acceptable approximation: if a chained `milestone-complete` is more than one handover behind the head, it's likely already superseded by something else. v3-skills-015 will replace this with a proper filter.
-
-If no prior matches, do **not** set `supersedes`. The chain starts fresh.
+If nothing matches, omit `supersedes`. The chain starts here.
 
 ## What the server does when `supersedes` is set
 
-`backlog_handover_create(supersedes=old_id, ...)` calls `apply_supersession(old_id=..., new_id=...)` after writing the new file. That helper:
+Inside the same transaction as the create, the old handover:
 
-1. Reads the old handover.
-2. Sets `superseded_by: <new_id>` in its frontmatter.
-3. Prepends a callout block to the body:
+1. gets `superseded_by: <new_id>` in its frontmatter,
+2. has its status set to `superseded` (unless its status was set by hand — then the status is left as is and the result says so: `- Superseded: <id> (superseded_by recorded; its status was set by hand and stays <status>)`),
+3. has this callout prepended to its body:
    ```
    > **SUPERSEDED YYYY-MM-DD by [<new_id>](./<new_id>.md).**
    > The next session should read the newer handover instead. This file kept as a checkpoint reference.
    ```
-4. Writes the old file back.
 
-If a SUPERSEDED callout already starts the body (the file was previously superseded by an even older handover, and we're now superseding by a newer one), the helper **replaces** the callout in place rather than stacking. Idempotent on the same `old_id`.
+If a SUPERSEDED callout already starts the body, it is **replaced**, not stacked. Idempotent on the same `old_id`.
 
-## What to do if `supersedes` resolution fails
+## Warnings to surface
 
-If `backlog_handover_list` returns nothing useful (e.g., this is the first handover in the project, or no prior matches the task), simply omit `supersedes` from the create call. The chain starts here.
-
-If `backlog_handover_create` returns a `WARNING: supersedes=... not found on disk` line, surface it to the user. The new handover was still written; the old one just didn't get its callout. Offer to fix manually with `backlog_handover_supersede(old_id=..., new_id=...)` if the user wants to repair the chain.
+- `WARNING: supersedes=... not found on disk` — the new handover was written; the id named nothing. Offer `backlog_handover_supersede(old_id=..., new_id=...)` with the right id to repair the chain.
+- `WARNING: supersedes=... is this handover's own id; ignored.` — the id named nothing and the new handover was allocated that very id. Nothing was superseded and no pointer was recorded.
+- `WARNING: <id> not auto-superseded — its status was set by hand` — see above.
