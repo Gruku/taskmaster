@@ -9,6 +9,20 @@ indicate schema breaks or removed surfaces.
 ---
 ## Unreleased
 
+**Tool fixes from the second agent tool-use batch** (tm-audit-030), on both stores.
+
+- **`backlog_link(create)` stores what it reports.** On a legacy store a link whose two ends were not tasks (an idea to an issue, say) answered `ok: linked` and rolled back: a non-task write never latched the tool's transaction. `backlog_link_reconcile`'s inverse repairs on non-task peers were lost the same way. Links now commit on both stores.
+- **Links join every kind by its id.** The kind of an id is looked up, not read off its prefix, so task ids such as `asset-pipeline-007` and bugs, decisions and notes link as issues, ideas and handovers did; an id that names nothing is refused as `not found`. `query` without a source and `validate` now cover bugs, decisions, notes and date-slug handovers too, so their unfiltered answers can list more edges than before.
+- `backlog_list_tasks` takes `waiting_on_human=True` (tasks with a `human_action`), and `area=` also matches the untagged tasks of epics filed under the area. `backlog_area_get` adds the area's epics with their progress and a count of its tasks.
+- `backlog_bug_list` and `backlog_issue_list` take `path`: a directory, file or glob their `location` must point under; matching rows show `at: …`. `backlog_issue_list(status="unresolved")` is open and investigating; an unknown status is refused instead of matching nothing.
+- `backlog_update_task(field="depends_on")` and `backlog_area_update(field="anchors")` still replace the whole list; ids or globs each prefixed `+` or `-` now add to or remove from it, and a mix of prefixed and plain entries is refused. `backlog_area_update` and `backlog_area_create` take anchors as a list, a JSON array or a comma-separated string alike; the legacy store no longer stores non-text anchors.
+- `backlog_continuity_items` is capped by `limit` (default 50, most actionable classes first; `limit=0` is the whole rail, which the viewer asks for), filters by `action_class`, and reports `total` and `truncated`.
+- `backlog_decision(action="list")` ends with a line counting the decisions its status filter (default `open`) left out.
+- `backlog_index_status(verify=True)` on a legacy store reports the row counts and says nothing was compared, instead of an error.
+- **`backlog_advance_phase` refuses while the phase has unfinished tasks**, as it refuses unchecked deliverables, unless `force=True`; forced, the phase is marked done and the tasks keep their status, as before.
+- `backlog_document(kind="task")` with no body shows the task's `notes` / `review_instructions` (any kind's `description` too) as named sections instead of `(no body)`.
+- Descriptions: `backlog_context` leads with "what is in the way of a task — can it start, can it close today"; `backlog_get_task` and `backlog_task_pipeline` point at it.
+
 **Tool-surface fixes from the agent tool-use pilot** (tm-audit-030), on both stores.
 
 - **An open thread no longer disappears when its handover leaves the 30-entry index.** An archived handover that is still open is still a member of its thread. `backlog_thread_resume` and `backlog_thread_update` reach such a thread by name. `backlog_thread_list` lists the threads that have a handover in the index, as before, and ends with one line counting the threads whose handovers are all archived; the new `include_archived=True` lists them, marked `[archived]`. The stored registry (`threads:` in `backlog.yaml`) and the viewer's board do not hold archived-only threads; a legacy store's board is derived from the rows on every read, so no resync is needed.

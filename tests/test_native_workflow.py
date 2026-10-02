@@ -427,7 +427,10 @@ def test_only_one_phase_is_active_and_advance_archives_done_tasks(workspace):
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "in-progress"}, "start")
         express(connection, "demo-001", "advance")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
-        run(connection, "phase.advance", {}, "advance")
+        # demo-002 is still todo: the phase does not advance unless forced.
+        with pytest.raises(ValueError, match="tasks in phase Foundation are not done"):
+            run(connection, "phase.advance", {}, "unfinished")
+        run(connection, "phase.advance", {"force": True}, "advance")
         with Repository(connection).snapshot() as query:
             assert query.get("phase", "foundation")["fields"]["status"] == "done"
             assert query.get("phase", "polish")["fields"]["status"] == "active"
@@ -492,8 +495,11 @@ def test_link_domains_and_unknown_targets_are_refused(workspace):
                                         "task_id": "T-1"}, "t1")
         issue = created(connection, "issue.create", {"title": "Known", "severity": "P2",
                                                      "evidence": "seen"}, "issue")
-        with pytest.raises(ValueError, match="invalid source ID"):
-            run(connection, "link.create", {"source": "demo-001", "target": issue, "type": "fixes"}, "kebab")
+        # A task id names its epic, not its kind: it is looked up, and links.
+        run(connection, "link.create", {"source": "demo-001", "target": issue, "type": "fixes"}, "kebab")
+        assert {"type": "fixes", "target": issue} in fields(connection, "task", "demo-001")["links"]
+        with pytest.raises(KeyError, match="not found"):
+            run(connection, "link.create", {"source": "nothing-001", "target": issue, "type": "fixes"}, "unknown")
         with pytest.raises(ValueError, match="cannot go from"):
             run(connection, "link.create", {"source": issue, "target": "T-1", "type": "duplicate_of"}, "domain")
         with pytest.raises(KeyError, match="not found"):
@@ -679,7 +685,7 @@ def test_advancing_a_phase_queues_no_linear_push_for_the_tasks_it_archives(works
         express(connection, "demo-001", "advance")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
         connection.execute("DELETE FROM linear_queue WHERE target_id='demo-001'")
-        run(connection, "phase.advance", {}, "advance")
+        run(connection, "phase.advance", {"force": True}, "advance")
         assert _queued(connection, "demo-001") == []
         with Repository(connection).snapshot() as query:
             assert query.get("task", "demo-001")["archived"]

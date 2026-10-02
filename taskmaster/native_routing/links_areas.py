@@ -24,9 +24,14 @@ def _run(call, operation, arguments):
     return None
 
 
-def _anywhere(snapshot, ident):
-    """`read_entity_anywhere`: the entity by id prefix, with legacy links synthesized."""
-    kind = v3.entity_kind_of(ident)
+def _kind(snapshot, ident):
+    """The kind of the linkable entity `ident` names, by lookup, as the tool resolves it."""
+    return v3.resolve_link_kind(ident, lambda kind, eid: reads.get(snapshot, kind, eid) is not None)
+
+
+def _anywhere(snapshot, ident, kind=None):
+    """`read_entity_anywhere`: the entity, with legacy links synthesized."""
+    kind = kind or _kind(snapshot, ident)
     if kind is None:
         return None
     entity = reads.get(snapshot, kind, ident, body=True)
@@ -56,20 +61,17 @@ def link(call, *, action, source, target, type, note, depth):
 def _create(call, source, target, link_type, note):
     if link_type not in v3.LINK_TYPES:
         return f"Error: invalid link type {link_type!r} (valid: {sorted(v3.LINK_TYPES)})"
-    source_kind, target_kind = v3.entity_kind_of(source), v3.entity_kind_of(target)
-    if source_kind is None:
-        return f"Error: invalid source ID {source!r}"
-    if target_kind is None:
-        return f"Error: invalid target ID {target!r}"
-    if not v3.is_valid_link(link_type, source_kind, target_kind):
-        return (f"Error: invalid link — type {link_type!r} cannot go from "
-                f"{source_kind} ({source}) to {target_kind} ({target})")
     with call.read() as snapshot:
-        source_entity = _anywhere(snapshot, source)
-        if source_entity is None:
+        source_kind = _kind(snapshot, source)
+        if source_kind is None:
             return f"Error: source {source!r} not found"
-        if _anywhere(snapshot, target) is None:
+        target_kind = _kind(snapshot, target)
+        if target_kind is None:
             return f"Error: target {target!r} not found"
+        if not v3.is_valid_link(link_type, source_kind, target_kind):
+            return (f"Error: invalid link — type {link_type!r} cannot go from "
+                    f"{source_kind} ({source}) to {target_kind} ({target})")
+        source_entity = _anywhere(snapshot, source, source_kind)
     added = v3.add_link(deepcopy(source_entity), link_type, target)
     refusal = _run(call, "link.create", {"source": source, "target": target, "type": link_type, "note": note})
     if refusal:
@@ -80,10 +82,6 @@ def _create(call, source, target, link_type, note):
 
 
 def _remove(call, source, target, link_type):
-    if v3.entity_kind_of(source) is None:
-        return f"Error: invalid source ID {source!r}"
-    if v3.entity_kind_of(target) is None:
-        return f"Error: invalid target ID {target!r}"
     with call.read() as snapshot:
         source_entity = _anywhere(snapshot, source)
     if source_entity is None:
@@ -109,11 +107,13 @@ def _remove(call, source, target, link_type):
 
 
 def _file_entities(snapshot):
-    """What the tool's `{handovers,issues,ideas}/{HND,ISS,IDEA}-*.md` globs reach: top-level files."""
-    for kind, prefix in (("handover", "HND-"), ("issue", "ISS-"), ("idea", "IDEA-")):
+    """`(id, kind)` of every non-task entity a link can join, as the tool's `_linkable_rows` lists them."""
+    for kind in v3.LINKABLE_KINDS:
+        if kind == "task":
+            continue
         for entity in sorted(reads.page(snapshot, kind, include_archived=True), key=lambda e: e["id"]):
-            if entity["id"].startswith(prefix) and not (entity["archived"] and kind in ("handover", "issue")):
-                yield entity["id"]
+            if kind in bs._LINK_LISTING_KEEPS_ARCHIVED or not entity["archived"]:
+                yield entity["id"], kind
 
 
 def _query(snapshot, source, target, link_type, depth):
@@ -123,10 +123,6 @@ def _query(snapshot, source, target, link_type, depth):
             return []
         return [{"source": ident, "target": item["target"], "type": item["type"]} for item in v3.entity_links(entity)]
 
-    if source and v3.entity_kind_of(source) is None:
-        return f"Error: invalid source ID {source!r}"
-    if target and v3.entity_kind_of(target) is None:
-        return f"Error: invalid target ID {target!r}"
     if source and _anywhere(snapshot, source) is None:
         return f"Error: source {source!r} not found"
     if source:
@@ -151,8 +147,8 @@ def _query(snapshot, source, target, link_type, depth):
             for task in reads.epic_tasks(snapshot, epic["id"]):
                 for item in task.get("links", []) or []:
                     results.append({"source": task["id"], "target": item["target"], "type": item["type"]})
-        for ident in _file_entities(snapshot):
-            for item in v3.entity_links(_anywhere(snapshot, ident)):
+        for ident, kind in _file_entities(snapshot):
+            for item in v3.entity_links(_anywhere(snapshot, ident, kind)):
                 results.append({"source": ident, "target": item["target"], "type": item["type"]})
     if target:
         results = [edge for edge in results if edge["target"] == target]
@@ -167,8 +163,8 @@ def _validate(snapshot):
         for task in reads.epic_tasks(snapshot, epic["id"]):
             if task.get("id"):
                 entities[task["id"]] = task
-    for ident in _file_entities(snapshot):
-        entities[ident] = _anywhere(snapshot, ident)
+    for ident, kind in _file_entities(snapshot):
+        entities[ident] = _anywhere(snapshot, ident, kind)
     orphans, asymmetric, archived_targets, graph = [], [], [], {}
     for ident, entity in entities.items():
         for item in v3.entity_links(entity):
@@ -209,6 +205,10 @@ def area_create(call, *, area_id, name, description, anchors):
     if not backlog.exists():
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     try:
+        anchors = bs._anchor_items(anchors)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
         v3.validate_area_doc({"id": area_id, "name": name, "description": description,
                               "anchors": list(anchors) if anchors else [], "created": domain.now_stamp()})
     except ValueError as exc:
@@ -244,7 +244,16 @@ def area_get(call, *, area_id):
     if not bs._backlog_path().exists():
         return "No backlog found."
     with call.read() as snapshot:
-        return bs._area_get_text(reads.rows_only(snapshot), area_id)
+        epics = reads.epics(snapshot)
+        by_id = {epic["id"]: epic for epic in epics}
+        for epic in epics:
+            epic["tasks"] = []
+        # Only what the area summary counts, not every task's document.
+        for entity in reads.page(snapshot, "task", fields=("id", "status", "area", "epic"), include_archived=True):
+            epic = by_id.get(entity["fields"].get("epic"))
+            if epic is not None:
+                epic["tasks"].append(entity["fields"])
+        return bs._area_get_text(reads.rows_only(snapshot), area_id, epics)
 
 
 @adapter("backlog_area_update")
@@ -253,20 +262,21 @@ def area_update(call, *, area_id, field, value):
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(domain.ALLOWED_AREA_FIELDS))}"
     if not bs._backlog_path().exists():
         return "No backlog found."
-    if field == "anchors":
-        try:
-            parsed = json.loads(value)
-        except (ValueError, TypeError):
-            return "Error: anchors value must be a JSON array of strings"
-        if not isinstance(parsed, list):
-            return "Error: anchors value must be a JSON array of strings"
-        updates = {"anchors": parsed}
-    else:
-        updates = {field: value}
     with call.read() as snapshot:
         entity = reads.get(snapshot, "area", area_id)
     if entity is None:
         return f"Area not found: {area_id}"
+    if field == "anchors":
+        try:
+            final = bs._edited_anchors(entity["fields"].get("anchors") or [], value)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        updates = {"anchors": final}
+        value = json.dumps(final)  # the command takes the whole list, as a JSON array
+    elif not isinstance(value, str):
+        return f"Error: `{field}` takes a string"
+    else:
+        updates = {field: value}
     try:
         v3.apply_area_updates(entity["fields"], updates)
     except ValueError as exc:

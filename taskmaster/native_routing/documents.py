@@ -59,7 +59,7 @@ def document(call, *, kind, entity_id, sections, provenance):
             return f"Error: {kind} `{entity_id}` not found"
         header = document_header(kind, entity_id, entity["fields"].get("title") or "")
         if sections is None:
-            return render_document_body(header, entity["body"] or "")
+            return render_document_body(header, entity["body"] or "", entity["fields"])
         try:
             content, facts = sections_with_provenance(snapshot, kind, entity_id, sections, project_root())
         except ValueError as exc:

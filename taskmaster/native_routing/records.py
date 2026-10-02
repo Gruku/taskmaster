@@ -59,11 +59,11 @@ def bug_create(call, *, title, found_in, discovered_by, severity, components, lo
 
 
 @adapter("backlog_bug_list")
-def bug_list(call, *, status, found_in, limit, include_archive):
+def bug_list(call, *, status, found_in, limit, include_archive, path):
     if not bs._backlog_path().exists():
         return "No backlog found."
     with call.read() as snapshot:
-        return bs._bug_list_text(reads.rows_only(snapshot), status, found_in, limit, include_archive)
+        return bs._bug_list_text(reads.rows_only(snapshot), status, found_in, limit, include_archive, path)
 
 
 @adapter("backlog_bug_get")
@@ -195,11 +195,11 @@ def issue_create(call, *, title, severity, evidence, impact, components, locatio
 
 
 @adapter("backlog_issue_list")
-def issue_list(call, *, severity, status, limit, verbose):
+def issue_list(call, *, severity, status, limit, verbose, path):
     if not bs._backlog_path().exists():
         return "No backlog found."
     with call.read() as snapshot:
-        return bs._issue_list_text(reads.rows_only(snapshot), severity, status, limit, verbose)
+        return bs._issue_list_text(reads.rows_only(snapshot), severity, status, limit, verbose, path)
 
 
 @adapter("backlog_issue_get")

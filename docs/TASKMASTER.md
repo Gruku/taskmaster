@@ -85,7 +85,7 @@ Temporal blocks of work that cut across epics — like sprints or release phases
 
 - **Only one phase can be active at a time** (enforced server-side)
 - `backlog_next_available` filters to the active phase, keeping focus narrow
-- `backlog_advance_phase` completes the active phase, archives its done tasks, and activates the next one by order
+- `backlog_advance_phase` completes the active phase, archives its done tasks, and activates the next one by order; it refuses while the phase has unchecked deliverables or unfinished tasks unless `force=True`
 - Have optional `target_date` for deadline tracking
 
 ### Task Budget
@@ -237,7 +237,7 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_update_epic(id, field, value)` | Update epic name, status, or description |
 | `backlog_add_phase(id, name, ...)` | Create phase. Auto-activates if first |
 | `backlog_update_phase(id, field, value)` | Update phase. Activating one deactivates the current active |
-| `backlog_advance_phase` | Complete active phase, archive done tasks, activate next by order |
+| `backlog_advance_phase` | Complete active phase, archive done tasks, activate next by order (refuses unfinished work unless `force=True`) |
 | `backlog_batch_update(operations)` | Atomic multi-op: update, status, complete, archive, pick, update_epic |
 | `backlog_open_viewer` | Open kanban board in browser |
 

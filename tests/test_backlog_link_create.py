@@ -39,9 +39,11 @@ def test_link_create_rejects_unknown_type(tm_dir):
 
 
 def test_link_create_rejects_domain_mismatch(tm_dir):
-    # depends_on is task->task; T-001 -> ISS-007 should fail.
-    out = bs.backlog_link_create(source="T-001", target="ISS-007", type="depends_on")
-    assert "invalid" in out.lower()
+    # depends_on is task->task; a task -> an existing issue should fail.
+    from tests.entity_helpers import write_issue
+    issue, _path = write_issue(tm_dir / "backlog.yaml", title="Known", severity="P2", evidence="seen")
+    out = bs.backlog_link_create(source="T-001", target=issue, type="depends_on")
+    assert "invalid" in out.lower() and "issue" in out
 
 
 def test_link_create_rejects_missing_target(tm_dir):

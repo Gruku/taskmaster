@@ -194,6 +194,8 @@ def advance_phase(call, *, force):
                 f"field=\"deliverables\", value='{{\"action\":\"toggle\",\"index\":N}}')` "
                 f"or advance with force=True.")
     incomplete = stats["todo"] + stats["in-progress"] + stats["in-review"] + stats["blocked"]
+    if incomplete and not force:
+        return bs._unfinished_phase_refusal(active, stats, incomplete)
     warning = ""
     if incomplete > 0:
         warning = (f"\n\n**Warning:** {incomplete} tasks in this phase are not done "

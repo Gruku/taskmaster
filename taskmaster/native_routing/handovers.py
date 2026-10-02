@@ -214,7 +214,7 @@ def thread_update(call, *, name, status, reason):
 
 
 @adapter("backlog_continuity_items")
-def continuity_items(call, *, view, include_auto_stage):
+def continuity_items(call, *, view, include_auto_stage, limit, action_class):
     backlog = bs._backlog_path()
     if not backlog.exists():
         return json.dumps({"items": [], "view": view, "error": "no backlog"})
@@ -222,7 +222,7 @@ def continuity_items(call, *, view, include_auto_stage):
         tree = reads.tree(snapshot)
         items = v3.continuity_items(backlog, include_auto_stage=include_auto_stage,
                                     handover_rows=reads.rows(snapshot, "handover"), data=tree)
-    return json.dumps({"items": items, "view": view}, default=str)
+    return bs._continuity_answer(items, view, limit, action_class)
 
 
 @adapter("backlog_last_session")

@@ -866,7 +866,7 @@
     },
     "backlog_advance_phase": {
       "category": "composite-command",
-      "documentation": "Complete the active phase and activate the next one in sequence.\nArchives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.\nBlocks if phase has unchecked deliverables unless force=True.\n\nArgs:\n    force: If True, advance even if deliverables are incomplete.",
+      "documentation": "Complete the active phase and activate the next one in sequence.\nArchives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.\nRefuses while the phase has unchecked deliverables or tasks that are not done, unless force=True.\n\nArgs:\n    force: If True, advance anyway: the phase is marked done and its unfinished\n        tasks keep their status.",
       "parameters": [
         {
           "default_expression": "False",
@@ -926,7 +926,7 @@
     },
     "backlog_area_create": {
       "category": "simple-command",
-      "documentation": "Create a new Area — a long-lived subsystem/workstream with NO status\nlifecycle (e.g. \"desktop-app\", \"viewer\", \"mcp-server\").\n\nAreas group epics and tasks by where they live in the codebase rather\nthan by when they finish — an area never completes or archives. If an\nepic can say when it's done, it's an epic; if it can't, it's an area.",
+      "documentation": "Create a new Area — a long-lived subsystem/workstream with NO status\nlifecycle (e.g. \"desktop-app\", \"viewer\", \"mcp-server\").\n\nAreas group epics and tasks by where they live in the codebase rather\nthan by when they finish — an area never completes or archives. If an\nepic can say when it's done, it's an epic; if it can't, it's an area.\n`anchors` is a list of path globs, or the same as a JSON array or a\ncomma-separated string.",
       "parameters": [
         {
           "mode": "positional",
@@ -954,7 +954,7 @@
           "mode": "positional",
           "name": "anchors",
           "required": false,
-          "type": "list[str] | None"
+          "type": "list[str] | str | None"
         }
       ],
       "returns": "str",
@@ -962,7 +962,7 @@
     },
     "backlog_area_get": {
       "category": "targeted-query",
-      "documentation": "Read one Area in full (frontmatter + body).",
+      "documentation": "What an Area is and what work is under it: its frontmatter and body, the\nepics filed under it with their progress, and how many tasks it holds.",
       "parameters": [
         {
           "mode": "positional",
@@ -992,7 +992,7 @@
     },
     "backlog_area_update": {
       "category": "simple-command",
-      "documentation": "Update a single field on an Area.\n\nArgs:\n    area_id: The area ID (e.g., \"desktop-app\", \"viewer\")\n    field: Field to update — one of: name, description, anchors\n    value: New value. For anchors, pass a JSON array of path/glob\n        strings (e.g., '[\"viewer/**\", \"docs/viewer/**\"]').",
+      "documentation": "Update a single field on an Area.\n\nArgs:\n    area_id: The area ID (e.g., \"desktop-app\", \"viewer\")\n    field: Field to update — one of: name, description, anchors\n    value: New value. For anchors: a list of path globs, a JSON array or a\n        comma-separated string, which REPLACES the whole list; or entries\n        each prefixed `+` (add) or `-` (remove), e.g. \"+docs/viewer/**\",\n        which edit it.",
       "parameters": [
         {
           "mode": "positional",
@@ -1010,7 +1010,7 @@
           "mode": "positional",
           "name": "value",
           "required": true,
-          "type": "str"
+          "type": "str | list[str]"
         }
       ],
       "returns": "str",
@@ -1224,7 +1224,7 @@
     },
     "backlog_bug_list": {
       "category": "targeted-query",
-      "documentation": "List Bugs from the active set (and optionally archive).\n\nDefaults to the active set sorted by (status weight asc, discovered desc).\n\nArgs:\n    status: Filter by status: open, fixed, shelved, adopted, promoted.\n    found_in: Filter by task ID where bug was discovered.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    include_archive: If True, also include archived bugs.",
+      "documentation": "Which bugs exist, filtered by status, the task they were found in, or the\ncode path they point at; the active set by default (and optionally archive).\n\nSorted by (status weight asc, discovered desc).\n\nArgs:\n    status: Filter by status: open, fixed, shelved, adopted, promoted.\n    found_in: Filter by task ID where bug was discovered.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    include_archive: If True, also include archived bugs.\n    path: Only bugs whose `location` points under this path (a directory or\n        file, e.g. \"pipeline/providers\") or matches this glob (\"viewer/*.js\").\n        Each row then shows the matching locations.",
       "parameters": [
         {
           "default_expression": "''",
@@ -1257,6 +1257,14 @@
           "name": "include_archive",
           "required": false,
           "type": "bool"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "path",
+          "required": false,
+          "type": "str"
         }
       ],
       "returns": "str",
@@ -1602,7 +1610,7 @@
     },
     "backlog_context": {
       "category": "targeted-query",
-      "documentation": "What you need to know before working on a task, as JSON, bounded by bytes.\n\nOne call in place of status + next_available + get_task + dependencies +\nhandover_list. `mandatory` is what blocks the task — unsatisfied review gates,\nunmet or unresolvable dependencies, open bugs filed against it, open handovers\nasking for an action, a human action it waits on, and a live peer's claim. It\nis never trimmed to fit: when the budget cannot hold it, `over_budget` is true,\n`selected` is empty and the blockers still come back whole, so raise the\nbudget rather than trusting a short answer.\n\n`clear` is a safety claim and is true only when nothing blocks *and* every\nproducer answered. A producer that could not answer — an unreadable row, a\ndependency id that resolves to nothing, no task in focus at all — appears as a\nblocker of kind `unknown`. Treat `clear: false` as \"do not proceed\", never as\n\"probably fine\".\n\n`selected` is the convenience half: bounded, ordered, and reported with an\nexact count of what was left out. When rows remain, `cursor` continues the\nsame question; a cursor is refused once the store or the question moves on.\n\nOnly facts are spelled out. An absent `cursor` means nothing remains; an\nabsent `provenance` entry means the section was delivered whole from its\nfixed source; an absent `omitted` means nothing was left out; `over_budget`\nappears only when no answer fits the budget, blockers included. A blocker\nleaves out a state or source its kind fixes (bugs and handovers are open).\n\nArgs:\n    focus: Task id. Empty takes the task this session picked, unless scope is project.\n    scope: task, session or project — what the question is about.\n    budget_bytes: UTF-8 bytes the whole answer may use. Only selection is trimmed.\n    include: Sections to select: spec, plan, body, links, handovers, bugs,\n        issues, notes, dependencies, siblings, recent. Empty uses the scope's default.\n    cursor: A cursor from an earlier call, to continue its selection.",
+      "documentation": "What is in the way of a task — can it start, can it close today — and what\nto know before working on it, as JSON, bounded by bytes.\n\nOne call in place of status + next_available + get_task + task_pipeline +\ndependencies + bug and handover reads: `focus=<task id>, scope=\"task\"`. `mandatory` is what blocks the task — unsatisfied review gates,\nunmet or unresolvable dependencies, open bugs filed against it, open handovers\nasking for an action, a human action it waits on, and a live peer's claim. It\nis never trimmed to fit: when the budget cannot hold it, `over_budget` is true,\n`selected` is empty and the blockers still come back whole, so raise the\nbudget rather than trusting a short answer.\n\n`clear` is a safety claim and is true only when nothing blocks *and* every\nproducer answered. A producer that could not answer — an unreadable row, a\ndependency id that resolves to nothing, no task in focus at all — appears as a\nblocker of kind `unknown`. Treat `clear: false` as \"do not proceed\", never as\n\"probably fine\".\n\n`selected` is the convenience half: bounded, ordered, and reported with an\nexact count of what was left out. When rows remain, `cursor` continues the\nsame question; a cursor is refused once the store or the question moves on.\n\nOnly facts are spelled out. An absent `cursor` means nothing remains; an\nabsent `provenance` entry means the section was delivered whole from its\nfixed source; an absent `omitted` means nothing was left out; `over_budget`\nappears only when no answer fits the budget, blockers included. A blocker\nleaves out a state or source its kind fixes (bugs and handovers are open).\n\nArgs:\n    focus: Task id. Empty takes the task this session picked, unless scope is project.\n    scope: task, session or project — what the question is about.\n    budget_bytes: UTF-8 bytes the whole answer may use. Only selection is trimmed.\n    include: Sections to select: spec, plan, body, links, handovers, bugs,\n        issues, notes, dependencies, siblings, recent. Empty uses the scope's default.\n    cursor: A cursor from an earlier call, to continue its selection.",
       "parameters": [
         {
           "default_expression": "''",
@@ -1650,7 +1658,7 @@
     },
     "backlog_continuity_items": {
       "category": "targeted-query",
-      "documentation": "Return all continuity items as JSON: {\"items\": [...], \"view\": \"...\"}.\n\n`view` is informational only — the server returns the full set; the client\ndecides grouping (Action / Time / Entity).\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).",
+      "documentation": "The viewer's continuity rail as JSON: open handovers, tasks, decisions,\nissues and ideas, each with an `action_class` (review, resume, clean-up,\nambient), most actionable first, capped at `limit`. For an agent's question\n\"what waits on a person\" `backlog_list_tasks(waiting_on_human=True)` is the\ndirect answer.\n\nReturns {\"items\": [...], \"view\", \"total\"}, plus \"truncated\": true when\n`limit` cut the list.\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).\n    limit: Max items (default 50); 0 returns every item in the rail's order.\n    action_class: Only items of this class.",
       "parameters": [
         {
           "default_expression": "'action'",
@@ -1667,6 +1675,22 @@
           "name": "include_auto_stage",
           "required": false,
           "type": "bool"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "action_class",
+          "required": false,
+          "type": "str"
         }
       ],
       "returns": "str",
@@ -1824,7 +1848,7 @@
         ]
       },
       "category": "action-router",
-      "documentation": "Read and transition existing decisions (DEC-NNN). To CREATE a decision use\nbacklog_decision_create. Route through the taskmaster:decision skill.\n\nParams by action: list(status, task_id, limit); get(decision_id);\nresolve(decision_id, resolved_with, rationale, resolved_in);\ndrop(decision_id, reason); update(decision_id, title, options,\nrecommendation, body).",
+      "documentation": "Read and transition existing decisions (DEC-NNN). To CREATE a decision use\nbacklog_decision_create. Route through the taskmaster:decision skill.\n\nParams by action: list(status — default \"open\"; \"all\" for every state —,\ntask_id, limit); get(decision_id);\nresolve(decision_id, resolved_with, rationale, resolved_in);\ndrop(decision_id, reason); update(decision_id, title, options,\nrecommendation, body).",
       "parameters": [
         {
           "mode": "positional",
@@ -2102,7 +2126,7 @@
     },
     "backlog_get_task": {
       "category": "targeted-query",
-      "documentation": "Get details for a single task including epic context and related tasks.\n\nBy default returns a slim view (tldr, status, priority, key links) to\nminimise token cost. Use verbose=True for the full body (notes, review\ninstructions, docs, spec-review record, epic context). Use sections to\npull specific named body sections (e.g. [\"notes\", \"spec\"]). Use\nexpand_links=True to swap dependency/issue IDs for {id, tldr} pills —\nhonored in both slim and verbose modes (uniform across all _get tools).\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    verbose: If True, include full body fields (notes, review_instructions,\n        docs, spec-review, epic context, recently completed tasks).\n    sections: Named sections to include (e.g. [\"notes\", \"spec\"]).\n        Canonical sections for tasks: notes, review_instructions, spec,\n        plan, design, analysis, roadmap.\n    expand_links: If True, replace bare IDs in depends_on,\n        related_issues with {id, tldr} pills.\n    provenance: With sections, annotate each section with where its text came\n        from — an imported document (path, content_hash, imported_seq), an\n        inline field, or a file read off disk that was never imported.",
+      "documentation": "Get details for a single task including epic context and related tasks.\nFor what blocks it or whether it can close now, `backlog_context(focus=<id>,\nscope=\"task\")` answers in one call.\n\nBy default returns a slim view (tldr, status, priority, key links) to\nminimise token cost. Use verbose=True for the full body (notes, review\ninstructions, docs, spec-review record, epic context). Use sections to\npull specific named body sections (e.g. [\"notes\", \"spec\"]). Use\nexpand_links=True to swap dependency/issue IDs for {id, tldr} pills —\nhonored in both slim and verbose modes (uniform across all _get tools).\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    verbose: If True, include full body fields (notes, review_instructions,\n        docs, spec-review, epic context, recently completed tasks).\n    sections: Named sections to include (e.g. [\"notes\", \"spec\"]).\n        Canonical sections for tasks: notes, review_instructions, spec,\n        plan, design, analysis, roadmap.\n    expand_links: If True, replace bare IDs in depends_on,\n        related_issues with {id, tldr} pills.\n    provenance: With sections, annotate each section with where its text came\n        from — an imported document (path, content_hash, imported_seq), an\n        inline field, or a file read off disk that was never imported.",
       "parameters": [
         {
           "mode": "positional",
@@ -2623,7 +2647,7 @@
     },
     "backlog_index_status": {
       "category": "maintenance",
-      "documentation": "Report the state of the store's derived tables (FTS, paths, links, related).\n\nThey live in `.taskmaster/local/store.db` beside the authoritative rows and are\nrefreshed inside the transaction of every tool call; `rebuild` recomputes them\nfrom the entity rows should they ever drift.\n\nArgs:\n    rebuild: Recompute every derived table from the entity rows before reporting.\n        The authoritative tables are not touched and no file is re-read. On a\n        native store this is the graph repair and covers only `entity_paths`,\n        `links`, `handover_tasks` and `related` (not search): they are compared\n        with the full oracle and only the differing rows are replaced, in one\n        transaction.\n    verify: Native stores only. Compare the graph tables with the full oracle\n        and report the differences and the cost, changing nothing. Refused on\n        a legacy store, with or without `rebuild`.",
+      "documentation": "Report the state of the store's derived tables (FTS, paths, links, related).\n\nThey live in `.taskmaster/local/store.db` beside the authoritative rows and are\nrefreshed inside the transaction of every tool call; `rebuild` recomputes them\nfrom the entity rows should they ever drift.\n\nArgs:\n    rebuild: Recompute every derived table from the entity rows before reporting.\n        The authoritative tables are not touched and no file is re-read. On a\n        native store this is the graph repair and covers only `entity_paths`,\n        `links`, `handover_tasks` and `related` (not search): they are compared\n        with the full oracle and only the differing rows are replaced, in one\n        transaction.\n    verify: On a native store, compare the graph tables with the full oracle\n        and report the differences and the cost, changing nothing. A legacy\n        store has no such verifier: it reports the row counts and says that\n        nothing was compared, and does not rebuild.",
       "parameters": [
         {
           "default_expression": "False",
@@ -2801,7 +2825,7 @@
     },
     "backlog_issue_list": {
       "category": "targeted-query",
-      "documentation": "List issues, optionally filtered by severity and/or status.\n\nReads from the backlog.yaml index (sorted P0 → P3). Default lists active\nissues regardless of status — pass `status=open` to focus on what still\nneeds work.\n\nArgs:\n    severity: Filter by severity: P0, P1, P2, P3.\n    status: Filter by status: open, investigating, fixed, wontfix, duplicate.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    verbose: If True, include body content (repro steps) per entry. Slim\n        (default) shows id, severity, status, title, and tldr.",
+      "documentation": "Which issues exist, filtered by severity, status or the code path they\npoint at, sorted P0 → P3. With no status every active issue is listed;\n`status=\"unresolved\"` is what still needs work (open and investigating).\n\nArgs:\n    severity: Filter by severity: P0, P1, P2, P3.\n    status: Filter by status: open, investigating, fixed, wontfix, duplicate,\n        or unresolved (open + investigating).\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    verbose: If True, include body content (repro steps) per entry. Slim\n        (default) shows id, severity, status, title, and tldr.\n    path: Only issues whose `location` points under this path or matches\n        this glob; each row then shows the matching locations.",
       "parameters": [
         {
           "default_expression": "''",
@@ -2834,6 +2858,14 @@
           "name": "verbose",
           "required": false,
           "type": "bool"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "path",
+          "required": false,
+          "type": "str"
         }
       ],
       "returns": "str",
@@ -3263,7 +3295,7 @@
         ]
       },
       "category": "action-router",
-      "documentation": "Manage typed links between entities. The server writes the inverse side\nautomatically and rejects invalid types, kind mismatches, and depends_on\ncycles.\n\nParams by action: create(source, target, type, note);\nremove(source, target, type); query(source, target, type, depth);\nvalidate(); reconcile().",
+      "documentation": "Link two entities of any kind — tasks, bugs, issues, decisions, ideas,\nnotes, handovers — and read the links back. The server writes the inverse\nside automatically and rejects unknown ids, invalid types, kind mismatches\nand depends_on cycles; `query(source=X)` lists X's links, inverses included.\n\nParams by action: create(source, target, type, note);\nremove(source, target, type); query(source, target, type, depth);\nvalidate(); reconcile().",
       "parameters": [
         {
           "mode": "positional",
@@ -3317,7 +3349,7 @@
     },
     "backlog_list_tasks": {
       "category": "targeted-query",
-      "documentation": "List tasks with optional filters. Active tasks sort first; output is\ncapped at `limit` rows with an overflow footer.\n\nArgs:\n    epic: Filter by epic ID\n    status: Filter by status: todo, in-progress, in-review, done, blocked\n    priority: Filter by priority: critical, high, medium, low\n    phase: Filter by phase ID\n    area: Filter by area ID\n    verbose: If True, include heavy fields (notes) per task entry. Slim\n        (default) shows id, title, tldr, priority, epic, and status only.\n    limit: Max rows returned (default 50). 0 = no cap.",
+      "documentation": "Which tasks match: by epic, status, priority, phase, area or waiting on a\nperson, one line each, active tasks first, capped at `limit` with an\noverflow footer. A row shows `waiting-on-human:` when the task has a\nhuman_action.\n\nArgs:\n    epic: Filter by epic ID\n    status: Filter by status: todo, in-progress, in-review, done, blocked\n    priority: Filter by priority: critical, high, medium, low\n    phase: Filter by phase ID\n    area: Filter by area ID: tasks tagged with it, and the untagged tasks\n        of epics filed under it.\n    verbose: If True, include heavy fields (notes) per task entry. Slim\n        (default) shows id, title, tldr, priority, epic, and status only.\n    limit: Max rows returned (default 50). 0 = no cap.\n    waiting_on_human: Only tasks with a human_action set — what waits on\n        someone to act or decide.",
       "parameters": [
         {
           "default_expression": "''",
@@ -3374,6 +3406,14 @@
           "name": "limit",
           "required": false,
           "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "waiting_on_human",
+          "required": false,
+          "type": "bool"
         }
       ],
       "returns": "str",
@@ -4004,7 +4044,7 @@
     },
     "backlog_task_pipeline": {
       "category": "targeted-query",
-      "documentation": "Show a task's lane, its required gate pipeline, and each gate's recorded\nstate (pass/done/skipped/fail/pending), plus the one-line gate_state and the\nlist of outstanding gates blocking `done`.",
+      "documentation": "Show a task's lane, its required gate pipeline, and each gate's recorded\nstate (pass/done/skipped/fail/pending), plus the one-line gate_state and the\nlist of outstanding gates blocking `done`. For everything else in the way\n(dependencies, open bugs, handovers, a human action), use\n`backlog_context(focus=<id>, scope=\"task\")`.",
       "parameters": [
         {
           "mode": "positional",
@@ -4136,7 +4176,7 @@
     },
     "backlog_update_task": {
       "category": "simple-command",
-      "documentation": "Update a single field on a task. Status changes trigger appropriate date updates.\n\nTwo calling styles are supported:\n- Field/value style: backlog_update_task(task_id, field, value) — the classic API.\n- Keyword style: backlog_update_task(task_id, tldr=\"...\", next_step=\"...\") — for tldr/next_step.\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,\n        docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,\n        patchnote, release, tldr, next_step, human_action\n    value: New value. Format varies by field:\n        - docs: \"key:path\" (e.g., \"plan:docs/plans/foo.md\")\n        - depends_on: comma-separated task IDs (e.g., \"cpp-parser-002,cpp-parser-003\")\n        - stage: integer\n        - estimate: size string (e.g., \"S\", \"M\", \"L\")\n        - sub_repo: sub-repo directory name for monorepo projects\n        - locked_by: refused — only backlog_pick_task and backlog_claim write a claim\n        - phase: phase ID to assign, or \"\" to clear\n        - anchors: comma-separated glob patterns/URLs, or \"\" to clear\n        - patchnote: 1-2 sentence user-facing release-note line, or \"\" to clear\n        - release: release bucket this task ships in (e.g., \"pre-alpha\", \"alpha-1.0\"), or \"\" to clear\n        - area: area id (must match an existing Area from `backlog_area_list`), or \"\" to clear\n    tldr: One-sentence essence of the task (keyword style only).\n    next_step: Concrete immediate action to take on this task (keyword style only).",
+      "documentation": "Update a single field on a task. Status changes trigger appropriate date updates.\n\nTwo calling styles are supported:\n- Field/value style: backlog_update_task(task_id, field, value) — the classic API.\n- Keyword style: backlog_update_task(task_id, tldr=\"...\", next_step=\"...\") — for tldr/next_step.\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,\n        docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,\n        patchnote, release, tldr, next_step, human_action\n    value: New value. Format varies by field:\n        - docs: \"key:path\" (e.g., \"plan:docs/plans/foo.md\")\n        - depends_on: comma-separated task IDs (e.g., \"cpp-parser-002,cpp-parser-003\"),\n          which REPLACE the whole list; or ids each prefixed + or - (\"+cpp-parser-004\"),\n          which add to or remove from it\n        - stage: integer\n        - estimate: size string (e.g., \"S\", \"M\", \"L\")\n        - sub_repo: sub-repo directory name for monorepo projects\n        - locked_by: refused — only backlog_pick_task and backlog_claim write a claim\n        - phase: phase ID to assign, or \"\" to clear\n        - anchors: comma-separated glob patterns/URLs, or \"\" to clear\n        - patchnote: 1-2 sentence user-facing release-note line, or \"\" to clear\n        - release: release bucket this task ships in (e.g., \"pre-alpha\", \"alpha-1.0\"), or \"\" to clear\n        - area: area id (must match an existing Area from `backlog_area_list`), or \"\" to clear\n    tldr: One-sentence essence of the task (keyword style only).\n    next_step: Concrete immediate action to take on this task (keyword style only).",
       "parameters": [
         {
           "mode": "positional",

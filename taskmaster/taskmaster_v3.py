@@ -278,9 +278,25 @@ def document_header(kind: str, ident: str, title: str = "") -> str:
     return f"## {kind} `{ident}`" + (f" — {title}" if title else "")
 
 
-def render_document_body(header: str, body: str) -> str:
-    """The whole-document answer: no sections were selected, so this is the prose."""
-    return f"{header}\n\n{body}" if (body or "").strip() else f"{header}\n\n(no body)"
+# Fields that hold an entity's prose when its document body is empty — a task
+# keeps its text in `notes` — in the order the whole-document answer shows them.
+DOCUMENT_TEXT_FIELDS = ("description", "notes", "review_instructions")
+
+
+def render_document_body(header: str, body: str, fields: "Mapping[str, Any] | None" = None) -> str:
+    """The whole-document answer: no sections were selected, so this is the prose.
+
+    With no body, the text fields of `fields` stand in for it, named as the
+    sections they are; "(no body)" only when there is no text anywhere.
+    """
+    if (body or "").strip():
+        return f"{header}\n\n{body}"
+    found = {name: str(fields[name]).strip() for name in DOCUMENT_TEXT_FIELDS
+             if fields and isinstance(fields.get(name), str) and fields[name].strip()}
+    if not found:
+        return f"{header}\n\n(no body)"
+    return (f"{header}\n\nNo document body; its text is in these fields:\n\n"
+            + "\n\n".join(f"### {name}\n{text}" for name, text in found.items()))
 
 
 def section_provenance_line(entry: dict[str, Any]) -> str:
@@ -686,6 +702,33 @@ def entity_kind_of(entity_id: str | None) -> str | None:
     # Date-slug handover IDs (the production handover format).
     if _HANDOVER_DATE_SLUG_RE.match(entity_id):
         return "handover"
+    return None
+
+
+# Every kind a typed link can join. An id whose prefix names no kind (a task's
+# id is its epic's, `asset-pipeline-007`) is looked up in this order.
+LINKABLE_KINDS: tuple[str, ...] = ("task", "issue", "handover", "idea", "bug", "decision", "note")
+# Id prefixes the link engine can guess a kind from before it looks; a guess is
+# only a first try, never a verdict.
+_LINK_PREFIX_GUESS: dict[str, str] = {"B": "bug", "DEC": "decision", "NOTE": "note"}
+
+
+def link_kind_candidates(entity_id: str | None) -> list[str]:
+    """The kinds an id may name, most likely first."""
+    if not entity_id or not isinstance(entity_id, str):
+        return []
+    guess = entity_kind_of(entity_id) or next(
+        (kind for prefix, kind in _LINK_PREFIX_GUESS.items() if entity_id.startswith(prefix + "-")), None)
+    return ([guess] if guess else []) + [kind for kind in LINKABLE_KINDS if kind != guess]
+
+
+def resolve_link_kind(entity_id: str | None, exists: "Callable[[str, str], bool]") -> str | None:
+    """The kind of the entity `entity_id` names, by asking `exists(kind, id)`; None
+    when no linkable entity has that id. The prefix alone decided this before,
+    which refused every task id and every bug, decision and note."""
+    for kind in link_kind_candidates(entity_id):
+        if exists(kind, entity_id):
+            return kind
     return None
 
 
@@ -4519,6 +4562,7 @@ def read_entity_anywhere(
     entity_id: str,
     *,
     fallback: bool = True,
+    kind: str | None = None,
 ) -> dict | None:
     """Read any entity (task/issue/handover/idea) by ID. Returns its
     in-memory dict (frontmatter for non-task entities; merged dict for tasks).
@@ -4531,10 +4575,13 @@ def read_entity_anywhere(
     The fallback is read-only — does not write back. Pass fallback=False to
     get the raw entity (used by the migration script).
     """
-    kind = entity_kind_of(entity_id)
-    if kind is None:
-        return None
-    entity = _entity_io("read")(backlog_path, kind, entity_id)
+    read = _entity_io("read")
+    entity = None
+    for candidate in ([kind] if kind else link_kind_candidates(entity_id)):
+        entity = read(backlog_path, candidate, entity_id)
+        if entity is not None:
+            kind = candidate
+            break
     if entity is None:
         return None
     entity = dict(entity)
@@ -4543,7 +4590,7 @@ def read_entity_anywhere(
     return entity
 
 
-def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
+def write_entity_anywhere(backlog_path: Path, entity: dict, kind: str | None = None) -> None:
     """Persist an entity's frontmatter + body through the store.
 
     Every kind — task, handover, issue, idea — hands the whole document to the
@@ -4551,7 +4598,7 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
     The body travels under BODY_KEY and the hook splits it out.
     """
     entity_id = entity.get("id")
-    kind = entity_kind_of(entity_id)
+    kind = kind or entity_kind_of(entity_id)
     if kind is None:
         raise ValueError(f"unknown entity kind for id={entity_id!r}")
     _entity_io("write")(backlog_path, kind, dict(entity))
@@ -4564,6 +4611,7 @@ def sync_inverse(
     type: str,
     *,
     remove: bool = False,
+    target_kind: str | None = None,
 ) -> None:
     """Write (or remove) the inverse link on the target entity.
 
@@ -4573,7 +4621,9 @@ def sync_inverse(
     """
     if type not in REVERSE_TYPE:
         raise ValueError(f"unknown link type {type!r}")
-    target_entity = read_entity_anywhere(backlog_path, target)
+    target_kind = target_kind or resolve_link_kind(
+        target, lambda kind, ident: _entity_io("read")(backlog_path, kind, ident) is not None)
+    target_entity = read_entity_anywhere(backlog_path, target, kind=target_kind) if target_kind else None
     if target_entity is None:
         raise KeyError(f"target entity {target!r} not found")
     inverse_type = REVERSE_TYPE[type]
@@ -4582,7 +4632,7 @@ def sync_inverse(
     else:
         changed = add_link(target_entity, inverse_type, source)
     if changed:
-        write_entity_anywhere(backlog_path, target_entity)
+        write_entity_anywhere(backlog_path, target_entity, kind=target_kind)
 
 
 def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:

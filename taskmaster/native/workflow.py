@@ -1237,6 +1237,11 @@ def _phase_advance(transaction, arguments):
     if unchecked and not arguments.get("force", False):
         raise ValueError(f"blocked: {len(unchecked)} unchecked deliverable(s) in phase "
                          f"{active['fields'].get('name', active['id'])}")
+    unfinished = [item["id"] for item in _page(transaction.snapshot, "task", phase=active["id"])
+                  if item["fields"].get("status") in ("todo", "in-progress", "in-review", "blocked")]
+    if unfinished and not arguments.get("force", False):
+        raise ValueError(f"blocked: {len(unfinished)} tasks in phase "
+                         f"{active['fields'].get('name', active['id'])} are not done; pass force to advance anyway")
     entity = _entity(transaction, "phase", active["id"])
     done = dict(entity["fields"], status="done", completed=domain.now_stamp())
     transaction.replace("phase", active["id"], done, entity["body"], before_entity=entity)
@@ -1283,21 +1288,24 @@ def _bug_promote(transaction, arguments):
     return issue_id
 
 
+def _link_kind(transaction, ident):
+    """The kind of the linkable entity `ident` names, by lookup, not by prefix."""
+    return domain_v3.resolve_link_kind(ident, lambda kind, eid: _exists(transaction, kind, eid))
+
+
 def _link_create(transaction, arguments):
     source_id, target_id = arguments["source"], arguments["target"]
     link_type, note = arguments["type"], arguments.get("note", "")
-    source_kind = domain_v3.entity_kind_of(source_id)
-    target_kind = domain_v3.entity_kind_of(target_id)
+    source_kind = _link_kind(transaction, source_id)
     if source_kind is None:
-        raise ValueError(f"invalid source ID {source_id!r}")
+        raise KeyError(f"source {source_id!r} not found")
+    target_kind = _link_kind(transaction, target_id)
     if target_kind is None:
-        raise ValueError(f"invalid target ID {target_id!r}")
+        raise KeyError(f"target {target_id!r} not found")
     if not domain_v3.is_valid_link(link_type, source_kind, target_kind):
         raise ValueError(f"invalid link — type {link_type!r} cannot go from "
                          f"{source_kind} ({source_id}) to {target_kind} ({target_id})")
     entity = _entity(transaction, source_kind, source_id)
-    if not _exists(transaction, target_kind, target_id):
-        raise KeyError(f"target {target_id!r} not found")
     if link_type in ("depends_on", "blocks"):
         _assert_no_cycle(transaction, source_id, target_id, link_type)
     doc = deepcopy(entity["fields"])
@@ -1328,12 +1336,10 @@ def _assert_no_cycle(transaction, source_id, target_id, link_type):
 
 def _link_remove(transaction, arguments):
     source_id, target_id = arguments["source"], arguments["target"]
-    source_kind = domain_v3.entity_kind_of(source_id)
-    target_kind = domain_v3.entity_kind_of(target_id)
+    source_kind = _link_kind(transaction, source_id)
     if source_kind is None:
-        raise ValueError(f"invalid source ID {source_id!r}")
-    if target_kind is None:
-        raise ValueError(f"invalid target ID {target_id!r}")
+        raise KeyError(f"source {source_id!r} not found")
+    target_kind = _link_kind(transaction, target_id)
     entity = _entity(transaction, source_kind, source_id)
     doc = deepcopy(entity["fields"])
     domain_v3._fallback_links_if_absent(doc, source_kind)
@@ -1347,7 +1353,7 @@ def _link_remove(transaction, arguments):
     for link_type in types:
         removed = domain_v3.remove_link(doc, link_type, target_id) or removed
     for link_type in types:
-        if _exists(transaction, target_kind, target_id):
+        if target_kind is not None:
             _write_inverse(transaction, target_kind, target_id, source=source_id,
                            link_type=link_type, remove=True, fallback=True)
     if removed:
