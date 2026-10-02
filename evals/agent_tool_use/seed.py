@@ -140,15 +140,37 @@ def auto_stage(key: str, thread: str, task: str, branch: str, files: int, what: 
              text=f"Checkpoint written by the pre-compaction hook. {files} files staged on `{branch}`: {what}.\n")
 
 
-def task(title: str, epic: str, phase: str, priority: str = "medium", notes: str = "") -> str:
-    result = call("backlog_add_task", title=title, epic=epic, phase=phase, priority=priority, notes=notes)
+def task(title: str, epic: str, phase: str, priority: str = "medium", notes: str = "", depends_on: str = "",
+         **options) -> str:
+    result = call("backlog_add_task", title=title, epic=epic, phase=phase, priority=priority, notes=notes,
+                  depends_on=depends_on, options=options or None)
     return re.search(rf"\b{re.escape(epic)}-\d{{3}}\b", result).group(0)
 
 
-def bug(title: str, found_in: str, severity: str, text: str, components=()) -> str:
+def bug(title: str, found_in: str, severity: str, text: str, components=(), location=()) -> str:
     result = call("backlog_bug_create", title=title, found_in=found_in, severity=severity, body=text,
-                  components=list(components))
+                  components=list(components), location=list(location))
     return re.search(r"\bB-\d+\b", result).group(0)
+
+
+def created_id(prefix: str, result: str) -> str:
+    return re.search(rf"\b{prefix}-\d+\b", result).group(0)
+
+
+def issue(title: str, severity: str, **fields) -> str:
+    return created_id("ISS", call("backlog_issue_create", title=title, severity=severity, **fields))
+
+
+def decision(title: str, options: list, **fields) -> str:
+    return created_id("DEC", call("backlog_decision_create", title=title, options=options, **fields))
+
+
+def idea(title: str, text: str, tags: list, status: str = "parking-lot", **fields) -> str:
+    return created_id("IDEA", call("backlog_idea_create", title=title, body=text, tags=tags, status=status, **fields))
+
+
+def note(text: str, pinned: bool = False) -> str:
+    return created_id("NOTE", call("backlog_note", action="create", text=text, pinned=pinned))
 
 
 def start_task(task_id: str) -> None:
@@ -172,13 +194,19 @@ def build() -> dict:
     call("backlog_init", project_name="Kilnworks")
     call("backlog_add_phase", phase_id="alpha", name="Alpha — internal content pipeline")
     call("backlog_add_phase", phase_id="beta", name="Beta — external studios")
-    call("backlog_add_epic", epic_id="asset-pipeline", name="Asset Pipeline", status="active",
+    call("backlog_area_create", area_id="pipeline", name="Asset pipeline",
+         description="Generation, validation, caching and delivery code.", anchors=["pipeline/**", "agents/generation/**"])
+    call("backlog_area_create", area_id="brief-tool", name="Brief tooling",
+         description="Everything that reads a game design doc and produces a brief or an export.", anchors=["brief/**"])
+    call("backlog_area_create", area_id="ci", name="CI and test infrastructure",
+         description="Workflows, runners and shared test fixtures.", anchors=[".github/workflows/**", "tests/fixtures/**"])
+    call("backlog_add_epic", epic_id="asset-pipeline", name="Asset Pipeline", status="active", area="pipeline",
          done_when="A generated asset goes from prompt to in-engine preview without a human fixing metadata",
          description="Generation, validation, caching and delivery of game assets.")
-    call("backlog_add_epic", epic_id="design-docs", name="Design Docs Tooling", status="active",
+    call("backlog_add_epic", epic_id="design-docs", name="Design Docs Tooling", status="active", area="brief-tool",
          done_when="A designer can get a one-page brief and a PDF out of any game design doc",
          description="Tools that read the game design document (GDD) and produce briefs and exports.")
-    call("backlog_add_epic", epic_id="ci-health", name="CI Health", status="active",
+    call("backlog_add_epic", epic_id="ci-health", name="CI Health", status="active", area="ci",
          done_when="Main is green for a week without reruns and a cold CI run is under two minutes")
 
     T["contract"] = task("Expose the asset contract as a callable tool for the generation agent", "asset-pipeline",
@@ -187,7 +215,8 @@ def build() -> dict:
     T["thumbs"] = task("Thumbnail cache v2: content-addressed previews", "asset-pipeline", "alpha", "high",
                        "Preview thumbnails are regenerated on every re-import. Key them by content hash.")
     T["fallback"] = task("Fail over to the secondary image provider on timeout", "asset-pipeline", "alpha", "medium",
-                         "Primary provider times out under batch load; route to the secondary instead of failing the job.")
+                         "Primary provider times out under batch load; route to the secondary instead of failing the job.",
+                         anchors="pipeline/providers/**")
     T["atlas"] = task("Texture atlas memory budget per scene", "asset-pipeline", "beta", "medium",
                       "Decide and enforce how much atlas memory a scene may use.")
     T["brief"] = task("GDD brief generator tool", "design-docs", "alpha", "high",
@@ -201,6 +230,16 @@ def build() -> dict:
                         "Cold runs spend most of their time resolving and installing.")
 
     start_task(T["flakes"])
+    I: dict[str, str] = {}
+    D: dict[str, str] = {}
+    N: dict[str, str] = {}
+    IDEAS: dict[str, str] = {}
+    I["flakes"] = issue("Importer tests fail intermittently on the Windows runners", "P1",
+                        evidence="Recurring: test_importer_roundtrip failed 9 of the last 45 runs on main, Windows runners only.",
+                        impact="Main cannot be trusted; every merge needs a rerun.", components=["ci"],
+                        related_tasks=[T["flakes"]], discovered_by="CI history",
+                        body="## Repro\n- Run `pytest tests/importer -p no:randomly --count 40` on a Windows runner.\n"
+                             "- Expect 5 to 9 failures in test_importer_roundtrip.\n")
     at(-13, "15:40")
     handover("e1", thread="ci-flake-hunt", tasks=[T["flakes"]], branch="fix/importer-flakes", tip="3f9a1c2",
              tldr="Importer tests flake on Windows runners: reproduced locally, three suspects",
@@ -261,6 +300,8 @@ def build() -> dict:
     finish_task(T["flakes"], session_title="CI: importer flakes fixed at the fixture",
          done="Found the tmp-dir/watcher race in the importer fixtures\nFixture joins its thread on teardown\n12 green Windows runs in a row",
          decisions="Fix the fixture instead of adding retries", issues="None", tasks_touched=T["flakes"])
+    call("backlog_issue_update", issue_id=I["flakes"], field="fixed_in_task", value=T["flakes"])
+    call("backlog_issue_update", issue_id=I["flakes"], field="status", value="fixed")
     call("backlog_handover_update_status", handover_id=HANDOVERS["e3"], status="closed", reason="flakes fixed, task done")
 
     at(-10, "08:15")
@@ -290,6 +331,14 @@ def build() -> dict:
 
     at(-9, "09:30")
     start_task(T["pdf"])
+    D["naming"] = decision(
+        "Naming scheme for generated asset files",
+        ["<name>_<type>_<variant>.<ext>, no version in the name",
+         "<type>_<name>_<variant>_v###.<ext>, version suffix kept in the name",
+         "content hash as the file name, readable names only in metadata"],
+        recommendation=2, task_id=T["contract"],
+        body="Generated files currently get whatever name the prompt produced. The contract needs one rule.\n"
+             "Constraints: the asset browser sorts by file name; artists re-generate the same asset many times.")
     at(-9, "13:10")
     auto_stage("x3", "contract-as-tool", T["contract"], "feature/contract-tool", 4, "registry entries for mesh and audio")
     at(-9, "15:00")
@@ -303,6 +352,9 @@ def build() -> dict:
 
     at(-8, "10:00")
     start_task(T["fallback"])
+    call("backlog_decision", action="resolve", decision_id=D["naming"], resolved_with=2,
+         rationale="Type first so the asset browser groups sprites, meshes and audio together; the version suffix "
+                   "keeps earlier generations side by side instead of overwriting them.")
     handover("c2", thread="thumb-cache-v2", tasks=[T["thumbs"]], branch="feature/thumb-cache-v2", tip="8c3e5f7",
              tldr="Thumb cache v2: key derivation done, read-through wrapper serves old and new entries",
              next_action="Write the migration that re-keys existing thumbnails without regenerating them",
@@ -365,6 +417,19 @@ def build() -> dict:
     B["empty_schema"] = bug("Contract tool returns 200 with an empty schema for an unknown asset type", T["contract"], "P2",
                             "Repro: `get_asset_contract('vfx')`. Expected a 404-style error naming the known types; got `{}`. "
                             "The agent then generates metadata with no constraints at all.", ["contract"])
+    I["timestamps"] = issue("Job log timestamps are written in local time", "P3",
+                            evidence="Systemic: every job log line; reports from two time zones cannot be lined up.",
+                            impact="Cosmetic until logs from two machines are compared.", components=["pipeline"],
+                            discovered_by="manual QA")
+    N["publisher"] = note("Publisher check-in is every other Thursday. The demo recording has to stay under 8 minutes.", pinned=True)
+    at(-6, "11:00")
+    call("backlog_add_epic", epic_id="legacy-retag", name="Legacy Asset Re-tagging", status="planned", area="pipeline",
+         done_when="Every legacy asset pack carries contract-conformant tags",
+         description="Hand-made packs from before the contract existed need their metadata brought in line.")
+    packs = ("harbor", "forest", "caverns", "desert", "tundra", "citadel", "swamp", "ruins")
+    for number in range(1, 49):
+        T[f"retag{number:02d}"] = task(f"Re-tag legacy asset pack {number:02d} ({packs[number % 8]} set {1 + number // 8})",
+                                       "legacy-retag", "beta", "low")
     at(-6, "12:30")
     auto_stage("x5", "provider-fallback", T["fallback"], "feature/provider-fallback", 6, "router skeleton and parameter mapping")
     at(-6, "16:20")
@@ -391,6 +456,15 @@ def build() -> dict:
                  notes=["Loose notes, not tied to a task. Measured 400 batch jobs against the primary provider: p50 6 s, p95 28 s, p99 44 s.",
                         "With a 30 s budget roughly 4% of jobs would fail over."],
                  open_threads=["Measure again at a different time of day; this was a single afternoon."]))
+    I["timeouts"] = issue("Primary image provider times out under batch load", "P1",
+                          evidence="Recurring: seen on three separate afternoons; p95 28 s and p99 44 s across 400 batch jobs.",
+                          impact="About 4% of batch jobs fail outright until failover is on for everyone.",
+                          components=["providers"], related_tasks=[T["fallback"]], discovered_by="load measurement",
+                          body="## Repro\n- Queue 400 generation jobs in one batch against the primary provider between 14:00 and 17:00 UTC.\n"
+                               "- Watch `pipeline/providers/primary.py` request durations: roughly 1 in 25 exceeds the 30 s budget.\n\n"
+                               "## Investigation\n- Not reproducible with fewer than about 150 concurrent jobs.\n"
+                               "- The provider's status page shows nothing during the slow windows.\n")
+    call("backlog_issue_update", issue_id=I["timeouts"], field="status", value="investigating")
     at(-5, "15:35")
     handover("d2", thread="provider-fallback", tasks=[T["fallback"]], branch="feature/provider-fallback", tip="91ce3d6",
              tldr="Provider failover: router implemented, parameter mapping covers size, seed and style",
@@ -400,6 +474,13 @@ def build() -> dict:
                  notes=["Size, seed and style map cleanly. 12 router tests pass."],
                  start=["`pipeline/providers/mapping.py::SECONDARY` has no entry for negative prompts."],
                  open_threads=["Cost per image differs between providers; nobody has decided who is told when a job fails over."]))
+    D["notify"] = decision(
+        "Who is told when a job fails over to the secondary provider?",
+        ["Nobody: the job log records it and that is all",
+         "The job owner sees a notice on the finished job",
+         "The job owner and whoever pays the provider bill"],
+        task_id=T["fallback"], branch="feature/provider-fallback",
+        body="The secondary provider costs about 1.6x per image. Someone will eventually ask why the bill moved.")
     auto_stage("x6", "thumb-cache-v2", T["thumbs"], "feature/thumb-cache-v2", 3, "THUMBS_V2 flag plumbing")
 
     at(-4, "09:40")
@@ -412,6 +493,31 @@ def build() -> dict:
                         "The first survives a doc rewrite; the second survives a backlog reshuffle."],
                  blockers=["Needs a decision from design before any code."],
                  open_threads=["Beta-phase work; do not start before the brief tool is done."]))
+    D["linking"] = decision(
+        "Where does a design-doc-section-to-task link live?",
+        ["An `implements:` list on each task", "Anchors in the design doc that name task ids"],
+        recommendation=1, task_id=T["linking"], raised_in=HANDOVERS["g3"], branch="spike/gdd-task-links",
+        body="The list on the task survives a rewrite of the design doc; anchors in the doc survive a backlog reshuffle.")
+    T["metrics"] = task("Emit failover metrics to the job dashboard", "asset-pipeline", "alpha", "high",
+                        "Acceptance criteria:\n- One counter per provider: jobs started, jobs failed over, jobs failed.\n"
+                        "- The dashboard shows the failover rate over the last 24 hours.\n"
+                        "- An alert fires when the failover rate stays above 15% for 30 minutes.\n"
+                        "Out of scope: per-image cost.", anchors="pipeline/providers/**,dashboards/jobs/**", area="pipeline")
+    T["retry"] = task("Retry budget for contract repair rounds", "asset-pipeline", "alpha", "medium",
+                      "Make the two-round repair limit configurable per asset type.", depends_on=T["contract"])
+    T["batchgen"] = task("Contract-aware batch generation", "asset-pipeline", "alpha", "medium",
+                         "Fetch each asset type's contract once per batch instead of once per asset.", depends_on=T["retry"])
+    T["glossary"] = task("Glossary section in the brief", "design-docs", "alpha", "medium",
+                         "Pull defined terms out of the design doc into a short glossary at the end of the brief.",
+                         area="brief-tool")
+    T["upload"] = task("Raise the upload size limit in the pipeline config", "asset-pipeline", "alpha", "low",
+                       "Meshes above 64 MB are rejected at upload. Raise the limit to 256 MB; config only.")
+    start_task(T["upload"])
+    T["secrets"] = task("Secondary provider API key in the CI secrets", "asset-pipeline", "alpha", "medium",
+                        "The failover tests need a real key for the secondary provider on CI.")
+    start_task(T["secrets"])
+    call("backlog_complete_task", task_id=T["secrets"], target_status="in-review",
+         human_action="add PROVIDER_SECONDARY_KEY to the CI secrets (only the account owner can)")
     at(-4, "12:15")
     handover("b4", thread="gdd-brief-tool", tasks=[T["brief"]], branch="feature/gdd-brief", tip="3c8e1f6",
              tldr="GDD brief: two of three real design docs produce a usable brief; the table-heavy one loses content",
@@ -422,7 +528,12 @@ def build() -> dict:
                  open_threads=["Tables with merged cells are probably a separate problem."]))
     B["merged_cells"] = bug("GDD brief drops tables with merged cells", T["brief"], "P2",
                             "Repro: run the brief on tests/fixtures/gdd_merged.md. The 'Economy' table (merged header cells) is missing "
-                            "from the brief entirely; simple tables render.", ["brief"])
+                            "from the brief entirely; simple tables render.", ["brief"], ["brief/tables.py:112"])
+    I["no_headings"] = issue("Design docs without headings produce an empty brief", "P2",
+                             evidence="Systemic: any doc written as one long page hits it; two of the five studio docs sampled do.",
+                             impact="The brief tool silently returns a blank page for those docs.", components=["brief"],
+                             related_tasks=[T["brief"]], discovered_by="studio sample docs",
+                             body="## Repro\n- Run the brief on a markdown file that has no `#` headings.\n- The outline is empty, so the brief is too.\n")
     at(-4, "16:00")
     handover("a3", thread="contract-as-tool", tasks=[T["contract"]], branch="feature/contract-tool", tip="f2b7d48",
              tldr="Contract tool: error taxonomy settled — fixable, fatal, unknown-type",
@@ -472,12 +583,25 @@ def build() -> dict:
     B["stale_preview"] = bug("Thumbnail cache serves a stale preview after re-import", T["thumbs"], "P1",
                              "Repro: edit hero_idle.png, re-import with THUMBS_V2 on. The preview still shows the old image. "
                              "The read-through wrapper answers from the path-keyed cache without checking the source hash.",
-                             ["thumbs"])
+                             ["thumbs"], ["pipeline/thumbs/wrapper.py:40"])
     call("backlog_idea_create", title="Pre-warm thumbnails at import instead of on first view",
          body="With content-addressed keys a thumbnail could be rendered as part of import, so the first person to open the "
               "asset browser does not wait. Costs import time; worth measuring once thumbnail cache v2 is on by default.",
          tags=["thumbs", "performance"], status="parking-lot", related_tasks=[T["thumbs"]])
+    IDEAS["batch_fetch"] = idea("Fetch asset contracts once per job instead of once per asset",
+                                "A 200-asset job asks for the same five contracts 200 times. Cache them for the life of the job.",
+                                ["contract", "performance"], "candidate")
+    IDEAS["warm_up"] = idea("Warm up the secondary provider connection before a batch starts",
+                            "The first request after failover pays for a cold connection and a token exchange. "
+                            "Opening the connection when the batch is queued would hide that from the job.",
+                            ["providers", "performance"])
+    IDEAS["token_cache"] = idea("Cache provider auth tokens between jobs",
+                                "Tokens are valid for an hour and are requested per job.", ["providers", "performance"])
+    call("backlog_idea_update", idea_id=IDEAS["token_cache"], field="promoted_to", value=T["fallback"])
+    call("backlog_idea_update", idea_id=IDEAS["token_cache"], field="archived", value="true")
 
+    at(-2, "07:20")
+    N["windows"] = note("Second Windows runner: infra said to ask again once beta has a date.")
     at(-2, "07:45")
     handover("c6", thread="thumb-cache-v2", tasks=[T["thumbs"]], branch="feature/thumb-cache-v2", tip="e3c21f8",
              tldr="Thumb cache v2 merged behind THUMBS_V2; stale-preview fix is written but not verified on Windows",
@@ -530,7 +654,18 @@ def build() -> dict:
                  start=["Log the outgoing request body in `pipeline/providers/secondary.py`."]))
     B["negative_prompt"] = bug("Secondary image provider ignores the negative prompt after failover", T["fallback"], "P1",
                                "Seven of 31 failed-over jobs produced images containing excluded content. The mapping table has the "
-                               "field, but the request builder drops keys it does not recognise.", ["providers"])
+                               "field, but the request builder drops keys it does not recognise.", ["providers"],
+                               ["pipeline/providers/request.py:61"])
+    B["seed_dropped"] = bug("Secondary image provider ignores the seed after failover", T["fallback"], "P2",
+                            "Two failed-over jobs with a fixed seed produced different images on rerun.", ["providers"],
+                            ["pipeline/providers/request.py:61", "pipeline/providers/mapping.py:23"])
+    B["style_dropped"] = bug("Secondary image provider ignores the style preset after failover", T["fallback"], "P2",
+                             "Failed-over sprites come back photorealistic although the job asked for the pixel-art preset.",
+                             ["providers"], ["pipeline/providers/request.py:61"])
+    B["footer"] = bug("Brief PDF footer shows the page count of the previous export", T["brief"], "P3",
+                      "Export two briefs in a row; the second one's footer says 'of 3' although it has two pages.",
+                      ["brief"], ["brief/export/pdf.py:77"])
+    call("backlog_bug_update", bug_id=B["footer"], field="status", value="shelved")
     at(-1, "16:45")
     handover("a6", thread="contract-as-tool", tasks=[T["contract"]], branch="feature/contract-tool", tip="b81f3a6",
              tldr="Contract tool wired into the generation agent; validators green on the 50-asset regression set",
@@ -554,7 +689,8 @@ def build() -> dict:
                  blockers=["Waiting on review."],
                  open_threads=["The loose timeout notes from last week are folded into the router's budget and can be retired."]))
     call("backlog_update_task", task_id=T["fallback"], next_step="Rerun the 31 failed-over prompts once the request-builder fix is reviewed")
-    return {"tasks": T, "bugs": B}
+    call("backlog_pick_task", task_id=T["retag03"])
+    return {"tasks": T, "bugs": B, "issues": I, "decisions": D, "ideas": IDEAS, "notes": N}
 
 
 # ── ground truth ──────────────────────────────────────────────────────────
@@ -609,8 +745,50 @@ def compute(seed_root: Path, ids: dict) -> dict:
         return [brief(i) for i in all_ids if rows[i].get("date") == day(offset).isoformat()]
 
     t = ids["tasks"]
+    con = sqlite3.connect(db)
+    todo = con.execute("SELECT count(*) FROM entities WHERE kind='task' AND status='todo' AND archived=0 AND deleted=0").fetchone()[0]
+    total_tasks = con.execute("SELECT count(*) FROM entities WHERE kind='task' AND deleted=0").fetchone()[0]
+    design_docs = [r[0] + " (" + r[1] + ")" for r in con.execute(
+        "SELECT id, status FROM entities WHERE kind='task' AND epic='design-docs' AND deleted=0 ORDER BY id")]
+    con.close()
+
+    def read(tool, **kwargs):
+        patch_clock()
+        return getattr(BS, tool)(**kwargs)
+
     patch_clock()
     return {
+        "todo_tasks": todo,
+        "total_tasks": total_tasks,
+        "design_docs_tasks": design_docs,
+        "rb_next_available": read("backlog_next_available"),
+        "rb_list_todo_default": read("backlog_list_tasks", status="todo")[:400],
+        "rb_deps_contract_depth1": read("backlog_dependencies", task_id=t["contract"]),
+        "rb_deps_contract_depth3": read("backlog_dependencies", task_id=t["contract"], depth=3),
+        "rb_pipeline_thumbs": read("backlog_task_pipeline", task_id=t["thumbs"]),
+        "rb_context_thumbs": read("backlog_context", focus=t["thumbs"], scope="task"),
+        "rb_pipeline_upload": read("backlog_task_pipeline", task_id=t["upload"]),
+        "rb_metrics_notes": read("backlog_get_task", task_id=t["metrics"], sections=["notes"]),
+        "rb_metrics_slim": read("backlog_get_task", task_id=t["metrics"]),
+        "rb_blast_metrics": read("backlog_blast_radius", task_id=t["metrics"]),
+        "rb_phase_status": read("backlog_phase_status"),
+        "rb_bugs_open": read("backlog_bug_list", status="open"),
+        "rb_bugs_default": read("backlog_bug_list"),
+        "rb_bug_patterns": read("backlog_bug_pattern_scan"),
+        "rb_issues_default": read("backlog_issue_list"),
+        "rb_issues_status_open": read("backlog_issue_list", status="open"),
+        "rb_issue_timeouts": read("backlog_issue_get", issue_id=ids["issues"]["timeouts"], verbose=True),
+        "rb_decisions_open": read("backlog_decision", action="list"),
+        "rb_decision_naming": read("backlog_decision", action="get", decision_id=ids["decisions"]["naming"]),
+        "rb_search_naming": read("backlog_search", query="naming scheme"),
+        "rb_area_list": read("backlog_area_list"),
+        "rb_area_brief": read("backlog_area_get", area_id="brief-tool"),
+        "rb_list_tasks_area_brief": read("backlog_list_tasks", area="brief-tool"),
+        "rb_in_review": read("backlog_list_tasks", status="in-review"),
+        "rb_validate": read("backlog_validate"),
+        "rb_paths_providers": read("backlog_query", sql="SELECT kind,id,path,source FROM entity_paths "
+                                                        "WHERE path LIKE 'pipeline/providers%' ORDER BY kind,id"),
+        "rb_batch_preview_ci": read("backlog_batch_preview", operations=f"archive {t['flakes']}\narchive {t['uvcache']}"),
         "total_handovers": len(all_ids),
         "indexed_handovers": len(indexed),
         "archived_handovers": [brief(i) for i in all_ids if i not in indexed],
@@ -635,7 +813,8 @@ def compute(seed_root: Path, ids: dict) -> dict:
 
 
 def render(value, ids: dict, computed: dict):
-    """Fill {h:key} {t:key} {b:key} {iso:-N} {nice:-N} in strings; {c:name} pulls a computed value."""
+    """Fill {h:key} {t:key} {b:key} {i:key} {d:key} {idea:key} {n:key} {iso:-N} {nice:-N} in strings;
+    a string that is exactly {c:name} becomes that computed value."""
     if isinstance(value, dict):
         return {k: render(v, ids, computed) for k, v in value.items()}
     if isinstance(value, list):
@@ -643,6 +822,7 @@ def render(value, ids: dict, computed: dict):
     if not isinstance(value, str):
         return value
     whole = re.fullmatch(r"\{c:(\w+)\}", value)
+    kinds = {"t": "tasks", "b": "bugs", "i": "issues", "d": "decisions", "idea": "ideas", "n": "notes"}
     if whole:
         return computed[whole.group(1)]
 
@@ -650,14 +830,12 @@ def render(value, ids: dict, computed: dict):
         kind, arg = match.group(1), match.group(2)
         if kind == "h":
             return HANDOVERS[arg]
-        if kind == "t":
-            return ids["tasks"][arg]
-        if kind == "b":
-            return ids["bugs"][arg]
+        if kind in kinds:
+            return ids[kinds[kind]][arg]
         d = day(int(arg))
         return d.isoformat() if kind == "iso" else f"{d.strftime('%A')} {d.day} {d.strftime('%B')}"
 
-    return re.sub(r"\{(h|t|b|iso|nice):([\w-]+)\}", sub, value)
+    return re.sub(r"\{(h|t|b|i|d|idea|n|iso|nice):([\w+-]+)\}", sub, value)
 
 
 def check(computed: dict) -> None:

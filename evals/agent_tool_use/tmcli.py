@@ -46,10 +46,14 @@ class ArgError(Exception):
     pass
 
 
-def parse_call_args(raw: list[str]) -> dict:
-    """Tool arguments from the command line, in whichever form survived the shell."""
+def parse_call_args(raw: list[str]) -> tuple[dict, dict]:
+    """Tool arguments from the command line, in whichever form survived the shell.
+
+    Returns `(args, pairs)`: `pairs` holds the raw text of every key=value argument, so the caller
+    can put the text back for parameters the tool declares as strings.
+    """
     if not raw:
-        return {}
+        return {}, {}
     text = None
     if len(raw) == 1 and raw[0] == "-":
         text = sys.stdin.read()
@@ -62,7 +66,7 @@ def parse_call_args(raw: list[str]) -> dict:
         text = " ".join(raw)
     if text is not None:
         try:
-            value = json.loads(text)
+            value = json.loads(text, strict=False)  # a raw newline inside a string is fine
         except json.JSONDecodeError as exc:
             raise ArgError(
                 f"arguments are not valid JSON ({exc}). Received: {text!r}. If your shell stripped the quotes, "
@@ -70,17 +74,26 @@ def parse_call_args(raw: list[str]) -> dict:
             ) from exc
         if not isinstance(value, dict):
             raise ArgError("arguments must be a JSON object")
-        return value
-    args = {}
+        return value, {}
+    args, pairs = {}, {}
     for item in raw:
         key, sep, value = item.partition("=")
         if not sep or not key.isidentifier():
             raise ArgError(f"cannot read argument {item!r}: expected a JSON object, key=value pairs, @file.json or -")
+        pairs[key] = value
         try:
             args[key] = json.loads(value)
         except json.JSONDecodeError:
             args[key] = value
-    return args
+    return args, pairs
+
+
+def restore_string_pairs(args: dict, pairs: dict, schema: dict | None) -> None:
+    """A key=value given for a string parameter stays the text that was typed (`value=[1]`, `sha=1234567`)."""
+    properties = (schema or {}).get("properties") or {}
+    for key, text in pairs.items():
+        if properties.get(key, {}).get("type") == "string":
+            args[key] = text
 
 
 def ensure_run_copy(home: Path, run: str) -> Path:
@@ -168,19 +181,29 @@ async def run(ns, home: Path, log: Log) -> int:
                 print(text)
                 log.write("describe", tool=name, result=text, started=started)
             return status
+        # Which argument names the tool does not have, and which required ones are absent: logged
+        # for every attempt (refused ones too), so guessed names can be told from real tool errors.
+        schema = next((tool.inputSchema for tool in await client.list_tools() if tool.name == ns.tool), None)
+        restore_string_pairs(ns.parsed, ns.pairs, schema)
+        arg_check = {}
+        if schema is not None:
+            known = set((schema.get("properties") or {}))
+            arg_check = {"unknown_args": sorted(set(ns.parsed) - known),
+                         "missing_required": sorted(set(schema.get("required") or []) - set(ns.parsed))}
         # Deferred loading: a tool can be called only once its schema has been fetched in this run.
         if ns.tool not in log.described():
             message = (f"Error: tool `{ns.tool}` is not loaded. Run `describe {ns.tool}` first; "
                        "`names` lists the available tools.")
             print(message)
-            log.write("call", tool=ns.tool, args=ns.parsed, result=message, error=True, not_loaded=True, started=started)
+            log.write("call", tool=ns.tool, args=ns.parsed, result=message, error=True, not_loaded=True,
+                      unknown_tool=schema is None, started=started, **arg_check)
             return 1
         result = await client.call_tool(ns.tool, ns.parsed, raise_on_error=False)
         text = "\n".join(getattr(block, "text", str(block)) for block in result.content)
         protocol_error = bool(getattr(result, "is_error", False))
         print(text)
         log.write("call", tool=ns.tool, args=ns.parsed, result=text, started=started,
-                  error=protocol_error or bool(_ERROR.match(text)), protocol_error=protocol_error)
+                  error=protocol_error or bool(_ERROR.match(text)), protocol_error=protocol_error, **arg_check)
         return 1 if protocol_error else 0
 
 
@@ -206,7 +229,7 @@ def main() -> int:
     log = Log(home, ns.run)
     if ns.action == "call":
         try:
-            ns.parsed = parse_call_args(ns.args)
+            ns.parsed, ns.pairs = parse_call_args(ns.args)
         except ArgError as exc:
             message = f"Error (arguments not sent to the tool): {exc}"
             print(message)

@@ -33,3 +33,70 @@ scenarios:
     request: "What did we get done in the last session?"
   - id: s14-decision-in-body
     request: "Where did we decide the contract's schema version should live, and why?"
+  # ── second batch: tasks, epics/phases, bugs/issues, decisions/ideas/notes, areas, store, links, claims ──
+  - id: s15-next-up
+    request: "What should I pick up next?"
+  - id: s16-downstream-chain
+    request: "If the contract tool slips, what else gets held up? Include anything further down the chain, not just what depends on it directly."
+  - id: s17-ready-to-close
+    request: "Can we close out the thumbnail cache task today? What's still in the way?"
+  - id: s18-start-task
+    request: "I'm starting on the failover metrics task now. Mark it as taken by me."
+  - id: s19-reprioritise
+    request: "Reprioritise three tasks: the glossary section and the retry budget both go to high, and the section-to-task linking goes up to medium."
+  - id: s20-skip-gates-close
+    request: "The upload size limit task was a one-line config change, so the reviews don't apply to it. Skip them and close the task."
+  - id: s21-acceptance-criteria
+    request: "What are the acceptance criteria on the failover metrics task?"
+  - id: s22-count-unstarted
+    request: "How many tasks has nobody started yet?"
+  - id: s23-collision-check
+    request: "Before I start the failover metrics task: which parts of the code does it touch, and does that overlap with anything already in flight?"
+  - id: s24-ready-for-beta
+    request: "Are we ready to move on from alpha to the next phase?"
+  - id: s25-new-epic
+    request: "Start a new epic for localisation, filed under the brief tooling area. It's finished when the brief renders in English, German and Japanese."
+  - id: s26-epic-done
+    request: "CI health is finished. Mark that epic as done."
+  - id: s27-open-bugs
+    request: "Which bugs are still open, and which task was each one found in?"
+  - id: s28-log-bug
+    request: "While working on the GDD brief I noticed the date in the brief's header is printed US-style, month first. Log that so we don't lose it."
+  - id: s29-roll-up-bugs
+    request: "We keep logging bugs about the secondary provider dropping things after failover. If they really are the same problem, roll them up into one properly tracked P1 issue."
+  - id: s30-worst-unresolved-issue
+    request: "What's the most serious issue we haven't resolved yet, and how do I reproduce it?"
+  - id: s31-issue-fixed
+    request: "The empty-brief problem with design docs that have no headings got fixed as part of the GDD brief task. Record that."
+  - id: s32-resolve-decision
+    request: "On where the section-to-task link should live: go with the list on the task, because it survives a rewrite of the design doc. Record that decision."
+  - id: s33-settled-decision
+    request: "What naming scheme did we settle on for generated asset files, and why?"
+  - id: s34-park-idea
+    request: "Park this for later, it isn't a task yet: we could dedupe near-identical generated sprites with a perceptual hash. Tag it as performance."
+  - id: s35-desk-note
+    request: "Leave me a note, pinned: ask infra for the Windows test machine before Friday."
+  - id: s36-area-work
+    request: "What work is filed under the brief tooling area?"
+  - id: s37-area-add-path
+    request: "The brief tooling area should also cover docs/gdd/**. Add that path to it."
+  - id: s38-health-check
+    request: "Give the backlog a health check: is the data consistent, and is the store itself in good shape?"
+  - id: s39-waiting-on-me
+    request: "Is anything stuck waiting on something only I can do or decide?"
+  - id: s40-bugs-by-path
+    request: "Which bugs point at code under pipeline/providers?"
+  - id: s41-add-dependency
+    request: "Batch generation also needs the provider failover task to be finished first. Add that dependency."
+  - id: s42-preview-archive
+    request: "Before I do it for real: what would happen if I archived both finished CI tasks?"
+  - id: s43-drop-task
+    request: "We're not going to do the human-readable error messages task. Take it off the board."
+  - id: s44-record-merge
+    request: "The uv cache work landed on master as commit 9f3c2ab. Record that on its task."
+  - id: s45-park-workstream
+    request: "Park the atlas budget workstream until beta."
+  - id: s46-relate-idea-issue
+    request: "The idea about warming up the secondary provider connection relates to the provider timeout issue. Link the two."
+  - id: s47-stale-claim
+    request: "The re-tagging task for asset pack 03 shows as locked by someone. Is that session still alive? If it's gone, free the task up."
