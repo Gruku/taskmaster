@@ -54,6 +54,14 @@ def _any(connection, kind) -> bool:
                               (kind,)).fetchone() is not None
 
 
+def _open_archived_handovers(connection, snapshot) -> list:
+    """`(id, fields, None)` for the archived handovers that are still open; the thread
+    registry keeps them, as `workflow.open_archived_handover_rows` does for a command."""
+    return [(row[0], snapshot.get("handover", row[0])["fields"], None) for row in connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=1 "
+        "AND json_extract(status_json,'$')='open' ORDER BY public_id").fetchall()]
+
+
 def apply(snapshot, data: dict) -> dict:
     """Recompute the derived keys on a backlog document in place; keys stay sorted."""
     connection = snapshot.connection
@@ -61,7 +69,8 @@ def apply(snapshot, data: dict) -> dict:
         if key in data or _any(connection, kind):
             sync(data, live_rows(connection, snapshot, kind))
     if "handovers" in data or _any(connection, "handover"):
-        sync_handover_index(data, live_rows(connection, snapshot, "handover"))
+        sync_handover_index(data, live_rows(connection, snapshot, "handover"),
+                            archived=_open_archived_handovers(connection, snapshot))
     # The legacy row is stored as sorted JSON and read back before it renders, so
     # every nested mapping arrives key-sorted; the sync functions build theirs in
     # field order.

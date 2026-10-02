@@ -9,6 +9,16 @@ indicate schema breaks or removed surfaces.
 ---
 ## Unreleased
 
+**Tool-surface fixes from the agent tool-use pilot** (tm-audit-030), on both stores.
+
+- **An open thread no longer disappears when its handover leaves the 30-entry index.** The thread registry now keeps any archived handover that is still open, so `backlog_thread_list`, `backlog_thread_resume`, `backlog_thread_update` and the viewer's thread board show that line of work. A legacy store's board is derived from the rows on every read, so no resync is needed.
+- `backlog_thread_resume` on a miss names the closest threads (shared word, then near spelling), or the open threads when none is close, instead of only saying nothing matched.
+- `backlog_changes_since` takes `since`: a date (`YYYY-MM-DD`), an ISO timestamp, or an entity id. A time starts at the first change stamped at or after it (a bare date or naive time is local); an entity id starts right after that entity's first change-log row, its creation. One of `cursor`, `since_seq` or `since`; an id with no change-log row is refused.
+- `backlog_last_session` adds one line when indexed handovers are dated after the changelog entry it returns, naming the newest and where to look. Dates only: a handover from the same day adds nothing.
+- `backlog_search` adds a `matched: …` line under a hit whose title did not match, with the matching prose (FTS5 `snippet`, up to 24 tokens).
+- `backlog_status` labels its table `Epic` instead of `Workstream` and adds one line pointing at `backlog_thread_list()` for open lines of work. PROGRESS.md keeps its `Workstream` header.
+- Descriptions of `backlog_thread_list`, `backlog_thread_resume`, `backlog_handover_list`, `backlog_search`, `backlog_status`, `backlog_last_session` and `backlog_changes_since` now lead with the question each answers and point at their siblings.
+
 **`backlog_handover_list` is dependable for agent callers** (tm-audit-028), on both stores. All new parameters are optional.
 
 - `format="json"` returns `{"handovers": [...], "returned", "total", "truncated", "archived_omitted"}`. Every handover has the same keys, empty when absent: `id`, `date`, `created`, `thread`, `session_kind`, `status`, `tldr`, `next_action`, `task_ids`, `tip_commit`, `branch`, `links` (`[{"type", "target"}]`, supersession included), `superseded_by`. Errors are `{"error": "..."}`.

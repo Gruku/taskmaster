@@ -514,7 +514,10 @@ shape on legacy and native.
 ### `backlog_changes_since`
 
 `backlog_changes_since(cursor="", kinds=None, ids=None, epic="", limit=100, group_commits=True,
-since_seq=None)` answers "what moved since I last looked".
+since_seq=None, since="")` answers "what moved since I last looked".
+
+- `since` starts from a date, an ISO timestamp, or an entity id (everything after that entity
+  was created), instead of a cursor or `since_seq`.
 
 - Call it with no cursor to get a cursor for "now". Keep it, and pass it back later with the
   same filters.

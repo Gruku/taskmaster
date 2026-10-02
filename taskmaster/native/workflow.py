@@ -562,6 +562,15 @@ def live_handover_rows(transaction):
     return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
 
 
+def open_archived_handover_rows(transaction):
+    """`(id, fields, None)` for every archived handover that is still open: outside
+    the index, but still the resume point of its thread."""
+    ids = [row[0] for row in transaction.connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=1 "
+        "AND json_extract(status_json,'$')='open' ORDER BY public_id")]
+    return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
+
+
 def open_thread_handover_ids(connection, thread):
     """Ids of a thread's open handovers, archived ones included, by the thread index.
 
@@ -1365,7 +1374,8 @@ def _thread_update(transaction, arguments):
     # The thread registry is derived from the live handovers, which native
     # commands do not re-derive into this row; derive it here, as the tool's
     # index sync would have, before applying the override.
-    domain_v3.sync_thread_registry(doc, live_handover_rows(transaction))
+    domain_v3.sync_thread_registry(doc, [*live_handover_rows(transaction),
+                                         *open_archived_handover_rows(transaction)])
     domain_v3.update_thread_status(doc, None, name=arguments["name"], status=arguments["status"],
                                    reason=arguments.get("reason", ""))
     transaction.replace("backlog", BACKLOG_ID, doc, entity["body"], before_entity=entity)

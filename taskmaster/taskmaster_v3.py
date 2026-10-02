@@ -2042,6 +2042,7 @@ def sync_handover_index(
     *,
     tx: Any = None,
     cap: int = HANDOVER_INDEX_CAP,
+    archived: "Iterable[tuple[str, Mapping[str, Any], str | None]]" = (),
 ) -> dict[str, Any]:
     """Rebuild `backlog_data['handovers']` from live handover rows; archive overflow.
 
@@ -2050,6 +2051,10 @@ def sync_handover_index(
     first, first `cap` kept as index entries; the rest are archived through
     `tx.archive("handover", id)` when a transaction is supplied (the move to
     `handovers/_archive/<year>/` is the exporter's job). Mutates in place.
+
+    `archived` is the rows already archived. The index never lists them, but one
+    that is still open is still its thread's resume point, so it and any open
+    overflow stay in the thread registry.
     """
     ordered = sort_handover_rows(rows)
     keep = ordered[:cap]
@@ -2061,9 +2066,16 @@ def sync_handover_index(
         for hid, _doc, _body in overflow:
             tx.archive("handover", hid)
 
-    sync_thread_registry(backlog_data, keep)
+    sync_thread_registry(backlog_data, [*keep, *open_handover_rows([*overflow, *archived])])
 
     return backlog_data
+
+
+def open_handover_rows(
+    rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+) -> list[tuple[str, Mapping[str, Any], str | None]]:
+    """The rows whose status is explicitly `open`: the archived handovers a thread still resumes from."""
+    return [row for row in rows if (row[1] or {}).get("status") == "open"]
 
 
 # ── Threads ─────────────────────────────────────────────────────
@@ -2087,7 +2099,8 @@ def sync_thread_registry(
     backlog_data: dict[str, Any],
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
 ) -> dict[str, Any]:
-    """Rebuild `backlog_data['threads']` from live (non-archived) handover rows.
+    """Rebuild `backlog_data['threads']` from the indexed handover rows plus any
+    archived one that is still open (`sync_handover_index` passes both).
 
     Derived status: open if any member handover is open, else closed.
     A `thread_meta` override (parked/closed/open) is honoured only while no

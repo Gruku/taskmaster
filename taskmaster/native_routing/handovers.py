@@ -227,4 +227,8 @@ def last_session(call):
     backlog, legacy_progress = bs._resolve_paths()
     with call.read() as snapshot:
         entity = reads.get(snapshot, "backlog", "__backlog__")
-    return bs._last_session_text(bs._progress_path_for(entity["fields"] if entity else {}, backlog, legacy_progress))
+        # Only ids are compared, and the index is the live handovers.
+        handovers = [{"id": ident} for ident, _fields, _body in
+                     derived.live_rows(snapshot.connection, snapshot, "handover")]
+    return bs._last_session_text(bs._progress_path_for(entity["fields"] if entity else {}, backlog, legacy_progress),
+                                 handovers)

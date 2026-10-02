@@ -1019,7 +1019,10 @@ def _sync_handover_index_tx(data: dict) -> None:
     is the exporter's, not a rename behind the store's back.
     """
     tx = _store_tx()
-    _sync_handover_index(data, tx.list("handover"), tx=tx)
+    live = tx.list("handover")
+    indexed = {ident for ident, _doc, _body in live}
+    _sync_handover_index(data, live, tx=tx, archived=[
+        row for row in tx.list("handover", include_archived=True) if row[0] not in indexed])
 
 
 def _render_after_commit(renderer) -> None:
@@ -2172,7 +2175,8 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
 
 @mcp.tool()
 def backlog_status(verbose: bool = False) -> str:
-    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats.
+    """Where the project stands: progress per epic, in-progress tasks, blocked items, next priorities, and stats.
+    Open lines of work with their next steps are on `backlog_thread_list`, not here.
 
     Args:
         verbose: If True, include archived task count in stats and show up to
@@ -2192,8 +2196,10 @@ def _status_text(data: dict, verbose: bool) -> str:
     if _effective_schema_version(data) < SCHEMA_V4:
         lines.append("Migration available: run `backlog_migrate_v4` for sharded, merge-aware storage.\n")
     lines.append("## Dashboard\n")
-    lines.append("| Workstream | Status | Progress | Current Focus |")
-    lines.append("|-----------|--------|----------|---------------|")
+    # "Epic", not "Workstream": callers read that label as the open lines of
+    # work, which are threads, and answered with epics.
+    lines.append("| Epic | Status | Progress | Current Focus |")
+    lines.append("|------|--------|----------|---------------|")
 
     for epic in data["epics"]:
         if epic.get("status") == "archived":
@@ -2217,6 +2223,7 @@ def _status_text(data: dict, verbose: bool) -> str:
         lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
     lines.append("")
+    lines.append("Open lines of work (threads) and their next steps: `backlog_thread_list()`\n")
 
     # In Progress — split by actual status
     ip = ctx.get("in_progress", [])
@@ -3112,6 +3119,34 @@ def _render_search_row(row) -> str:
     return f"`{eid}` — {title or ''} ({kind}, {status})"
 
 
+_SEARCH_SNIPPET_TOKENS = 24
+_SEARCH_MARKS = ("\x02", "\x03")
+
+
+def _search_body_snippets(con, table: str, match: str, rowids: list) -> dict:
+    """`{rowid: matching body text}` for the listed hits whose title did not match.
+
+    A title hit explains itself; a hit in the prose alone gave no hint of where,
+    and the caller had to open the entity to find out. Asked only for the rows
+    already chosen, so the cost is bounded by the result cap, and best-effort: a
+    failure here must not turn a good result list into the fallback scan.
+    """
+    start, end = _SEARCH_MARKS
+    try:
+        hits = con.execute(
+            f"SELECT rowid, highlight({table},2,?,?), snippet({table},3,?,?,'…',{_SEARCH_SNIPPET_TOKENS}) "
+            f"FROM {table} WHERE {table} MATCH ? AND rowid IN ({','.join('?' * len(rowids))})",
+            (start, end, start, end, match, *rowids)).fetchall()
+    except sqlite3.Error:
+        return {}
+    snippets = {}
+    for rowid, title, body in hits:
+        if start in (title or "") or start not in (body or ""):
+            continue
+        snippets[rowid] = " ".join(body.replace(start, "").replace(end, "").split())
+    return snippets
+
+
 def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
     """FTS5 search across every entity kind, or None to tell the caller to fall back.
 
@@ -3149,7 +3184,8 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
             source = ("FROM entity_fts JOIN entities e ON e.kind = entity_fts.kind AND e.id = entity_fts.id "
                       f"WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ({kinds_sql})")
             columns = ("entity_fts.id, e.kind, e.status, entity_fts.title, "
-                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank ")
+                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank, "
+                       "entity_fts.rowid ")
         else:
             source = ("FROM document_search JOIN document_search_keys k ON k.document_key = document_search.rowid "
                       "JOIN entity_core c ON c.entity_key = k.entity_key "
@@ -3157,7 +3193,7 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
                       f"WHERE document_search MATCH ? AND c.deleted=0 AND c.kind IN ({kinds_sql})")
             columns = ("c.public_id, c.kind, json_extract(c.status_json,'$'), document_search.title, "
                        "json_extract(c.priority_json,'$') AS priority, json_extract(t.epic_json,'$'), "
-                       "bm25(document_search) AS rank ")
+                       "bm25(document_search) AS rank, document_search.rowid ")
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
             # Not "No tasks": this path searches every kind, and `kinds` may
@@ -3166,18 +3202,27 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
         rows = con.execute(
             f"SELECT {columns}"
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
+        snippets = _search_body_snippets(con, "document_search" if native else "entity_fts", match,
+                                         [tuple(r)[7] for r in rows])
     finally:
         if owns_snapshot and con is not None and con.in_transaction:
             con.rollback()
 
-    body = "\n".join(f"- {_render_search_row(tuple(r)[:6])}" for r in rows)
+    lines = []
+    for r in rows:
+        lines.append(f"- {_render_search_row(tuple(r)[:6])}")
+        if tuple(r)[7] in snippets:
+            lines.append(f"  matched: {snippets[tuple(r)[7]]}")
+    body = "\n".join(lines)
     return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
 
 
 @mcp.tool()
 def backlog_search(query: str, kinds: list[str] | None = None) -> str:
-    """Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,
-    decisions and ideas — ranked by relevance (bm25) over the store's FTS index.
+    """What the backlog holds on a topic: full-text search across tasks, epics, bugs, issues,
+    handovers, decisions and ideas, ranked by relevance (bm25); a hit in the prose alone shows the
+    matching text. No date filter: `backlog_handover_list` filters handovers by date, thread, task
+    or status, and `backlog_thread_resume` answers where a line of work left off.
 
     Args:
         query: Search text (case-insensitive). Matched against titles and bodies (notes,
@@ -4278,8 +4323,10 @@ def backlog_handover_list(
     include_archived: bool = False,
     format: str = "text",
 ) -> str:
-    """List handovers, newest first. Text one-liners by default; `format="json"`
-    for a parseable envelope.
+    """Which handovers exist, newest first, filtered by date, thread, task or
+    status. No topic search: `backlog_search` matches text, and
+    `backlog_thread_resume` answers where a line of work left off. Text
+    one-liners by default; `format="json"` for a parseable envelope.
 
     Searches the handover index — the most recent 30. Older handovers are
     archived, not deleted: when any exist the answer says how many went
@@ -4594,24 +4641,30 @@ def _threads_data(bp: Path) -> dict:
     is derived in memory and left uncommitted.
     """
     data = _load()
-    if "threads" in data:
-        return data
-    try:
-        with _transaction(tool="backlog_thread_index_backfill") as tx_data:
-            if "threads" not in tx_data:
-                _sync_handover_index_tx(tx_data)
-                _mutate_and_save(tx_data)
-    except RuntimeError:
-        # Projection-only storage: serve the derived index without persisting it.
-        _sync_handover_index(data, _dict_rows(data, "handover"))
-        return data
-    return _load()
+    if "threads" not in data:
+        try:
+            with _transaction(tool="backlog_thread_index_backfill") as tx_data:
+                if "threads" not in tx_data:
+                    _sync_handover_index_tx(tx_data)
+                    _mutate_and_save(tx_data)
+            data = _load()
+        except RuntimeError:
+            pass  # Projection-only storage: the registry derived below is served unpersisted.
+    # Derived from the rows on every read, on a copy: a registry stored before
+    # open archived handovers counted would leave their threads off the board
+    # until the next handover write.
+    data = dict(data)
+    rows = _dict_rows(data, "handover", include_archived=True)
+    _sync_handover_index(data, [row for row in rows if not row[1].get("archived")],
+                         archived=[row for row in rows if row[1].get("archived")])
+    return data
 
 
 @mcp.tool()
 def backlog_thread_list(include_closed: bool = False) -> str:
-    """The thread board — open (and parked) lines of work with their stable
-    resume tokens. Resume one with `backlog_thread_resume(<name>)`.
+    """What is still open, per line of work (thread / workstream): each open or
+    parked thread with its latest summary, next step and tasks. Resume one with
+    `backlog_thread_resume(<name>)`.
 
     Args:
         include_closed: Also list closed threads (default False).
@@ -4646,14 +4699,44 @@ def _thread_list_text(data: dict, include_closed: bool) -> str:
 
 @mcp.tool()
 def backlog_thread_resume(ref: str) -> str:
-    """Resume a thread: returns its newest handover in full (frontmatter +
-    body) in one call. `ref` is a thread name OR any handover id (stale dated
-    slugs still land on the thread's newest handover).
+    """Where a line of work left off: its thread's newest handover in full
+    (frontmatter + body) in one call. `ref` is a thread name OR any handover id
+    (stale dated slugs still land on the thread's newest handover); a miss
+    answers the closest thread names.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     return _thread_resume_text(_threads_data(bp), bp, ref)
+
+
+_THREAD_MISS_NAMES = 10
+
+
+def _thread_miss_text(data: dict, ref: str) -> str:
+    """A resume that matched nothing, with the names it could have meant.
+
+    A caller rarely knows a thread's exact slug: threads sharing a word with
+    `ref`, then near spellings, are named; with none, the open threads are.
+    """
+    import difflib
+    from taskmaster.taskmaster_v3 import list_threads as _list_threads
+    rows = _list_threads(data)
+    names = [r["name"] for r in rows]
+    wanted = _normalize_thread_name(ref)
+    words = {word for word in wanted.split("-") if len(word) >= 3}
+    close = [name for name in names if words & set(name.split("-"))]
+    close += [name for name in difflib.get_close_matches(wanted, names, n=5, cutoff=0.6) if name not in close]
+    miss = f"No thread or handover matches {ref!r}."
+    if close:
+        return f"{miss} Closest threads: {', '.join(close[:_THREAD_MISS_NAMES])}. Resume one by its exact name."
+    open_names = [r["name"] for r in rows if r["status"] != "closed"]
+    if not open_names:
+        return f"{miss} There are no open threads; `backlog_search` finds a handover by topic."
+    more = len(open_names) - _THREAD_MISS_NAMES
+    listed = ", ".join(open_names[:_THREAD_MISS_NAMES]) + (f" (+{more} more)" if more > 0 else "")
+    return (f"{miss} Open threads: {listed}. `backlog_thread_list()` shows each one's next step; "
+            "`backlog_search` finds a handover by topic.")
 
 
 def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> str:
@@ -4662,8 +4745,7 @@ def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> s
     try:
         tname, hid = _resolve_thread(data, bp, ref, find_handover)
     except KeyError:
-        return (f"No thread or handover matches {ref!r}. "
-                f"See `backlog_thread_list()` for open threads.")
+        return _thread_miss_text(data, ref)
     row = _dict_row(data, "handover", hid)
     if row is None:
         return f"Thread {tname!r} resolved to {hid}, but no such handover exists."
@@ -4691,8 +4773,9 @@ def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    if "threads" not in data:
-        _sync_handover_index_tx(data)
+    # Always, not only when the registry is missing: a stored one may predate
+    # open archived handovers counting as thread members.
+    _sync_handover_index_tx(data)
     from taskmaster.taskmaster_v3 import update_thread_status as _update_thread_status
     try:
         _update_thread_status(data, bp, name=name, status=status, reason=reason)
@@ -6129,6 +6212,54 @@ def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]
         "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
 
 
+_CHANGE_ANCHOR_TIME = re.compile(r"\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?")
+
+
+def _change_query_scope(cursor, kinds, ids, epic, limit, group_commits, since_seq, since) -> list:
+    """A change query's validated scope, or ValueError; one order of refusals for both stores."""
+    from taskmaster.native import cursors
+    scope = cursors.scope(kinds, ids, epic, group_commits)
+    cursors.page(limit)
+    if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
+        raise ValueError("since_seq must be a sequence number of 0 or more")
+    if cursor and since_seq is not None:
+        raise ValueError("pass a cursor or since_seq, not both")
+    if not isinstance(since, str) or len(since) > 256:
+        raise ValueError("since must be a date, an ISO timestamp or an entity id")
+    if since.strip() and (cursor or since_seq is not None):
+        raise ValueError("pass one of cursor, since_seq or since, not several")
+    return scope
+
+
+def _change_anchor_seq(connection, table: str, since: str) -> int:
+    """The sequence a `since` anchor resumes after, in either store's event table.
+
+    A date or timestamp resumes just before the first change stamped at or
+    after it (a bare date or naive time is local, as handover dates are; with
+    none, at the end of history). Anything else is an entity id and resumes at
+    the first change recorded for it, its creation, so the rest of that commit
+    and everything later is reported.
+    """
+    since = since.strip()
+    if _CHANGE_ANCHOR_TIME.fullmatch(since):
+        try:
+            moment = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"since {since!r} is not a valid date or ISO timestamp") from None
+        if moment.tzinfo is None:
+            moment = moment.astimezone()
+        first = connection.execute(f"SELECT MIN(seq) FROM {table} WHERE ts>=?",
+                                   (moment.astimezone(timezone.utc).isoformat(),)).fetchone()[0]
+        if first is None:
+            return int(connection.execute(f"SELECT COALESCE(MAX(seq),0) FROM {table}").fetchone()[0])
+        return int(first) - 1
+    created = connection.execute(f"SELECT MIN(seq) FROM {table} WHERE id=?", (since,)).fetchone()[0]
+    if created is None:
+        raise ValueError(f"since {since!r} is neither a date or ISO timestamp nor the id of an entity "
+                         "the change log has a row for; pass a date, or since_seq")
+    return int(created)
+
+
 @mcp.tool()
 def backlog_changes_since(
     cursor: str = "",
@@ -6138,8 +6269,10 @@ def backlog_changes_since(
     limit: int = 100,
     group_commits: bool = True,
     since_seq: int | None = None,
+    since: str = "",
 ) -> str:
-    """What changed in the backlog since a cursor, as JSON. Resume, don't re-read.
+    """What changed in the backlog since a cursor, a time or an entity's creation, as JSON.
+    Resume, don't re-read.
 
     Call it with no arguments to get a cursor and nothing else ("start watching
     from now"), then pass that cursor back to learn what moved. A cursor survives
@@ -6163,15 +6296,13 @@ def backlog_changes_since(
         limit: Commits (or changes, when ungrouped) per answer, 1-500.
         group_commits: Group each transaction's changes into one commit entry.
         since_seq: Start from this sequence instead of a cursor. 0 is all history.
+        since: Start from a date (YYYY-MM-DD) or ISO timestamp, or from an entity
+            id — "since handover X was written" is since="<X's id>": everything
+            after that entity was created. Instead of a cursor or since_seq.
     """
     from taskmaster.native import cursors
     try:
-        scope = cursors.scope(kinds, ids, epic, group_commits)
-        cursors.page(limit)
-        if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
-            raise ValueError("since_seq must be a sequence number of 0 or more")
-        if cursor and since_seq is not None:
-            raise ValueError("pass a cursor or since_seq, not both")
+        scope = _change_query_scope(cursor, kinds, ids, epic, limit, group_commits, since_seq, since)
     except ValueError as exc:
         return cursors.refusal(exc)
     st = _store()
@@ -6194,10 +6325,14 @@ def backlog_changes_since(
                                       scope=scope, sequence=sequence)
             elif since_seq is not None:
                 after = min(since_seq, sequence)
+            elif since.strip():
+                after = _change_anchor_seq(connection, "changes", since)
             else:
                 return cursors.present(cursors.feed(items=[], last_seq=sequence, more=False, **envelope))
         except cursors.CursorInvalid as exc:
             return cursors.present(cursors.resync(exc, **envelope))
+        except ValueError as exc:
+            return cursors.refusal(exc)
         rows = _legacy_change_rows(connection, scope, after, limit)
         more, rows = len(rows) > limit, rows[:limit]
         items = [cursors.commit(row, [cursors.change(row)]) for row in rows] if group_commits else \
@@ -8153,13 +8288,37 @@ def _git_subprocess_kwargs() -> dict:
 
 @mcp.tool()
 def backlog_last_session() -> str:
-    """Get the most recent session summary from the PROGRESS.md changelog.
-    Returns the last changelog entry (everything between the first and second ### headings)."""
-    return _last_session_text(_progress_path())
+    """What the last logged session did: the newest entry of the PROGRESS.md changelog (everything
+    between its first and second ### headings). Handovers are not read; when some are newer than
+    that entry the answer says so and where to look."""
+    handovers = _load().get("handovers") if _backlog_path().exists() else None
+    return _last_session_text(_progress_path(), handovers)
 
 
-def _last_session_text(progress: Path) -> str:
-    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter."""
+def _newer_handovers_line(entry: str, handovers) -> str:
+    """One line when indexed handovers are dated after a changelog entry, else "".
+
+    The changelog is written by task completions and session logs; a handover
+    writes nothing to it, so its newest entry can trail the newest recorded
+    work. Dates only: an entry with no date in its heading, or a handover from
+    the same day, claims nothing.
+    """
+    dated = re.search(r"\d{4}-\d{2}-\d{2}", entry.splitlines()[0])
+    ids = [str(e.get("id") or "") for e in handovers or []]
+    newer = sorted((i for i in ids if dated and re.match(r"\d{4}-\d{2}-\d{2}-", i) and i[:10] > dated.group()),
+                   reverse=True)
+    if not newer:
+        return ""
+    count = f"{len(newer)} handovers are" if len(newer) != 1 else "1 handover is"
+    return (f"Note: {count} newer than this entry (latest `{newer[0]}`) — the changelog does not record "
+            "handovers; see `backlog_handover_list()` or `backlog_thread_list()` for the most recent work.")
+
+
+def _last_session_text(progress: Path, handovers=None) -> str:
+    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter.
+
+    `handovers` is the backlog's handover index, newest first.
+    """
     try:
         text = progress.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -8185,7 +8344,10 @@ def _last_session_text(progress: Path) -> str:
     else:
         entry = rest[:second_entry_start].strip()
 
-    return f"**Last Session:**\n\n{entry}" if entry else "No session entries found in changelog."
+    if not entry:
+        return "No session entries found in changelog."
+    note = _newer_handovers_line(entry, handovers)
+    return f"**Last Session:**\n\n{entry}" + (f"\n\n{note}" if note else "")
 
 
 # ── Session State (in-memory, per MCP server process) ────
