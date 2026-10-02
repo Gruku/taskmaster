@@ -1,0 +1,229 @@
+# User intent: what a correct answer to each scenario looks like and which tool paths get there,
+# for the orchestrator to grade against. Kept apart from the prompt text and never shown to the
+# test agent; seed.py renders it to <home>/ground_truth.json with real ids and store read-backs.
+#
+# {h:key} {t:key} {b:key} {iso:-N} {nice:-N} are filled from the seed; a value that is exactly
+# {c:name} is replaced by data read back from the seeded store (see seed.py::compute).
+ground_truth:
+  - id: s01-topic-yesterday
+    answer: >-
+      Two handovers, both in thread contract-as-tool, both dated {iso:-1}: {h:a5} (morning
+      checkpoint, superseded) and {h:a6} (evening, open — the live resume point). A complete answer
+      names both and says the evening one replaced the morning one. {h:d4} is also from yesterday
+      but is about provider failover and must not be included.
+    expected_ids: ["{h:a5}", "{h:a6}"]
+    acceptable_paths:
+      - "backlog_thread_list -> backlog_handover_list(thread='contract-as-tool', since={iso:-1}, until={iso:-1})"
+      - "backlog_handover_list(since={iso:-1}, until={iso:-1}) then pick the contract ones by tldr"
+      - "backlog_search('contract', kinds=['handover']) then filter by the date in the id"
+      - "backlog_query over entities/entity_fts with a date filter"
+    failure_modes:
+      - "guesses thread='asset-contract' (or similar), gets 'No handovers match', reports none"
+      - "returns only the open evening handover"
+      - "includes older contract handovers ({h:a3}, {h:a2}) or the unrelated {h:d4}"
+    reference:
+      day: "{c:day_minus_1}"
+      thread: "{c:contract_thread}"
+      search_asset_contract: "{c:search_asset_contract_handovers}"
+      search_contract: "{c:search_contract_handovers}"
+
+  - id: s02-where-left-off
+    answer: >-
+      Thread gdd-brief-tool, newest handover {h:b5} ({iso:-2}): simple tables now reach the brief,
+      tables with merged cells are still dropped. Next action: handle merged cells in
+      brief/tables.py (row_to_bullet must expand spans); repro is tests/fixtures/gdd_merged.md;
+      bug {b:merged_cells} is open on it.
+    expected_ids: ["{h:b5}"]
+    acceptable_paths:
+      - "backlog_thread_list -> backlog_thread_resume('gdd-brief-tool')"
+      - "backlog_search('GDD brief') -> backlog_handover_get({h:b5}, verbose=True)"
+      - "backlog_handover_list(thread='gdd-brief-tool') after finding the thread name"
+    failure_modes:
+      - "answers from an older, superseded GDD handover"
+      - "guesses a thread name such as 'gdd-brief' and reports nothing found"
+    reference: "{c:gdd_thread}"
+
+  - id: s03-open-per-workstream
+    answer: >-
+      One line per open line of work, taken from the newest open handover of each thread — see
+      reference.open_latest_per_thread for the exact set. It includes atlas-budget, whose only
+      handover ({h:f1}) is outside the 30-entry index, and two thread-less/loose ones ({h:h1},
+      {h:h2}). ci-flake-hunt must not be listed (closed).
+    acceptable_paths:
+      - "backlog_handover_list(status='open', latest_per_thread=True, include_archived=True)"
+      - "backlog_thread_list (reference.thread_board) — partial only: verified at seed time, the board omits
+        atlas-budget because its one handover is outside the index, and nothing in the output says so"
+      - "backlog_query on entities WHERE kind='handover' AND status='open'"
+    failure_modes:
+      - "omits atlas-budget because the archived handovers were not searched and the footer was ignored"
+      - "answers from backlog_thread_list alone and states the list is complete"
+      - "lists superseded or closed handovers as open work"
+      - "reports tasks instead of workstreams without saying so"
+    reference:
+      open_latest_per_thread: "{c:open_latest_per_thread}"
+      thread_board: "{c:thread_board}"
+
+  - id: s04-single-day
+    answer: "Four handovers dated {iso:-3}: {h:c4} (superseded), {h:i1}, {h:d3}, {h:c5} (superseded)."
+    expected_ids: ["{h:c4}", "{h:i1}", "{h:d3}", "{h:c5}"]
+    acceptable_paths:
+      - "backlog_handover_list(since={iso:-3}, until={iso:-3})"
+      - "backlog_query on entities WHERE kind='handover' AND id LIKE '{iso:-3}%'"
+    failure_modes:
+      - "uses since= alone and returns everything from that day onward"
+      - "passes a date in another format and stops at the error"
+    reference: "{c:day_minus_3}"
+
+  - id: s05-by-task
+    answer: >-
+      Every handover whose task_ids contains {t:thumbs} — see reference; one of them ({h:c1}) and
+      one auto-stage checkpoint are outside the 30-entry index, so a default list is incomplete.
+    acceptable_paths:
+      - "backlog_handover_list(task_id='{t:thumbs}', include_archived=True)"
+      - "backlog_query on handover_tasks WHERE task_id='{t:thumbs}'"
+    failure_modes:
+      - "lists only the indexed ones and presents that as complete despite the archive footer"
+    reference: "{c:thumbs_task_handovers}"
+
+  - id: s06-what-replaced
+    answer: >-
+      {h:c4} was superseded by {h:c5} (same day, evening). {h:c5} was itself superseded by {h:c6},
+      which is the thread's current open handover. Naming {h:c5} is the required part; mentioning
+      {h:c6} as the live one is the complete answer.
+    expected_ids: ["{h:c5}"]
+    acceptable_paths:
+      - "backlog_handover_get('{h:c4}') and read superseded_by / the links block"
+      - "backlog_handover_list(format='json') or verbose=True and read superseded_by"
+      - "backlog_thread_resume('{h:c4}') lands on {h:c6} — acceptable only if the agent also finds the direct successor"
+    failure_modes:
+      - "answers {h:c6} only (thread_resume on a stale id jumps to the newest)"
+
+  - id: s07-archived-fact
+    answer: >-
+      96 MB of atlas memory per scene (pages limited to 2048x2048 on mobile, 4096x4096 on desktop;
+      enforced at import). The fact exists only in the body of {h:f1}, which is outside the
+      30-entry handover index; the task {t:atlas} does not state it.
+    expected_ids: ["{h:f1}"]
+    acceptable_paths:
+      - "backlog_search('atlas budget') -> backlog_handover_get('{h:f1}', verbose=True)"
+      - "backlog_handover_list(include_archived=True) -> backlog_handover_get(verbose=True)"
+      - "backlog_query over entity_fts"
+    failure_modes:
+      - "reads only the task and says no budget has been decided"
+      - "finds the handover but reads the slim view (no body) and cannot state the number"
+      - "tries the thread route: verified at seed time, backlog_thread_list does not show atlas-budget and
+        backlog_thread_resume('atlas-budget') answers 'No thread or handover matches' (archived-only thread)"
+    reference:
+      search_atlas_budget: "{c:search_atlas_budget}"
+      search_user_phrase: "{c:search_texture_atlas_memory_budget}"
+
+  - id: s08-total-count
+    answer: "{c:total_handovers}"
+    answer_note: "30 are in the index, the rest are archived; an answer of 30 is wrong."
+    acceptable_paths:
+      - "backlog_handover_list(include_archived=True, format='json') -> total"
+      - "backlog_handover_list() and add the 'N older handovers ... were not searched' footer to the count"
+      - "backlog_query SELECT count(*) FROM entities WHERE kind='handover' AND deleted=0"
+    failure_modes:
+      - "counts the default listing and answers 30"
+    reference:
+      indexed: "{c:indexed_handovers}"
+      archived: "{c:archived_handovers}"
+
+  - id: s09-open-as-json
+    answer: >-
+      A JSON array/object covering exactly the open handovers in reference (ids, thread,
+      next_action). It must include {h:f1}, which is open but outside the index.
+    acceptable_paths:
+      - "backlog_handover_list(status='open', format='json', include_archived=True)"
+      - "backlog_query selecting id, thread, next_action from entities WHERE kind='handover' AND status='open'"
+    failure_modes:
+      - "parses the text listing by hand instead of asking for JSON"
+      - "omits the archived open handover although the envelope says truncated/archived_omitted"
+      - "returns latest-per-thread only when all open handovers were asked for"
+    reference: "{c:open_handovers}"
+
+  - id: s10-cross-entity-topic
+    answer: >-
+      At minimum: task {t:thumbs} (Thumbnail cache v2), bug {b:stale_preview} (stale preview after
+      re-import, open, P1), the idea about pre-warming thumbnails at import, and the
+      thumb-cache-v2 handover thread (current open handover {h:c6}; older ones superseded, {h:c1}
+      archived). reference.search_thumbnail is what one full-text search returns.
+    acceptable_paths:
+      - "backlog_search('thumbnail') with no kinds filter"
+      - "backlog_query over entity_fts"
+      - "backlog_search plus backlog_handover_list(task_id='{t:thumbs}', include_archived=True) for the full thread"
+    failure_modes:
+      - "searches one kind only (tasks, or handovers) and stops"
+      - "uses a multi-word query that is ANDed down to nothing and reports no results"
+    reference:
+      search_thumbnail: "{c:search_thumbnail}"
+      search_thumbnails: "{c:search_thumbnails}"
+      search_thumbnail_caching: "{c:search_thumbnail_caching}"
+      thumbs_task_handovers: "{c:thumbs_task_handovers}"
+
+  - id: s11-changed-since-handover
+    answer: >-
+      Everything recorded after {h:c6} was created — see reference.entities (keyed kind/id, in
+      order). In words: the CI uv-cache task was completed (and its handover closed); GDD brief,
+      contract-tool and provider-failover handovers were written, each superseding its
+      predecessor; a new task for contract error messages and a new bug on negative prompts were
+      created; the empty-schema bug was fixed; the failover task's next step changed.
+      The rows right after anchor_seq that were written by the handover's own create (its
+      predecessor's supersession, an index-overflow `archive` of an old handover) may be included
+      or left out. `archive` ops on old handovers are index-overflow bookkeeping, not user changes;
+      every timestamp in the change log is backdated consistently with the handover dates.
+    acceptable_paths:
+      - "backlog_query on changes to find the seq of the handover's create row, then backlog_changes_since(since_seq=<seq>)"
+      - "backlog_query on changes WHERE seq > (that seq)"
+      - "backlog_query on changes WHERE ts > the handover's created timestamp"
+    failure_modes:
+      - "calls backlog_changes_since() with no arguments, gets an empty feed plus a cursor, reports 'nothing changed'"
+      - "passes the handover id as the cursor"
+      - "answers from handover dates alone and misses task/bug changes"
+    reference: "{c:changes_after_anchor}"
+
+  - id: s12-mark-replaced
+    answer: >-
+      One mutating call: backlog_handover_supersede(old_id='{h:h2}', new_id='{h:d5}'). Afterwards
+      {h:h2} has status superseded and superseded_by {h:d5}. Check the run's log for exactly this
+      pair, in this direction.
+    expected_call:
+      tool: backlog_handover_supersede
+      args: {old_id: "{h:h2}", new_id: "{h:d5}"}
+    acceptable_paths:
+      - "backlog_handover_list / backlog_search to find both ids, then backlog_handover_supersede"
+    failure_modes:
+      - "swaps old and new"
+      - "picks {h:d2} (the provider-fallback handover written the same day as the notes) as the old one"
+      - "uses backlog_handover_update_status(status='superseded') — sets the status but records no successor"
+      - "writes a new handover with supersedes= instead of linking the two existing ones"
+
+  - id: s13-last-session
+    answer: >-
+      Ambiguous by design. The session changelog's last entry is from {iso:-2} (CI: uv environment
+      cached, cold runs under two minutes) — that is what reference.last_session returns. The
+      newest recorded work, however, is today's handover {h:d5} (provider failover negative-prompt
+      fix, in review), with contract-tool work yesterday. A good answer reports the most recent
+      work and says which source it used; answering only the {iso:-2} CI entry as "the last
+      session" is stale.
+    acceptable_paths:
+      - "backlog_last_session, cross-checked against backlog_handover_list / backlog_thread_list"
+      - "backlog_handover_list(limit=...) newest first"
+    failure_modes:
+      - "calls backlog_last_session only and presents a two-day-old entry as the last session"
+    reference:
+      last_session: "{c:last_session}"
+
+  - id: s14-decision-in-body
+    answer: >-
+      In the tool response envelope, as `contract_version` — not in the generation agent's system
+      prompt, because a prompt-pinned version went stale as soon as the registry changed. The
+      validator accepts the current version or the one before it and rejects older as fatal. The
+      decision is only in the body of {h:a6}; its tldr and next_action do not state it.
+    expected_ids: ["{h:a6}"]
+    acceptable_paths:
+      - "backlog_thread_list -> backlog_thread_resume('contract-as-tool')"
+      - "backlog_search('contract version' / 'schema version') -> backlog_handover_get('{h:a6}', verbose=True or sections=['decisions'])"
+    failure_modes:
+      - "reads only list output or the slim handover view and reports that no such decision is recorded"

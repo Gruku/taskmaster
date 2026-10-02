@@ -1,0 +1,35 @@
+# User intent: the requests a test agent is given, worded the way a user speaks and never naming
+# a tool or an argument. Prompt text only — the answers live in ground_truth.yaml so that handing
+# an agent this file (or the rendered scenarios.json) cannot leak them.
+#
+# Placeholders are filled by seed.py for the day it runs: {iso:-N} / {nice:-N} are today minus N
+# days, {h:key} / {t:key} are the seeded handover / task ids.
+scenarios:
+  - id: s01-topic-yesterday
+    request: "What handovers do we have about the asset contract from yesterday?"
+  - id: s02-where-left-off
+    request: "Where did we leave off on the GDD brief?"
+  - id: s03-open-per-workstream
+    request: "Give me a one-line status per workstream: what's still open right now?"
+  - id: s04-single-day
+    request: "Which handovers were written on {nice:-3}?"
+  - id: s05-by-task
+    request: "Which handovers are tied to task {t:thumbs}?"
+  - id: s06-what-replaced
+    request: "The handover {h:c4} got replaced at some point. By what?"
+  - id: s07-archived-fact
+    request: "What did we settle on for the texture atlas memory budget per scene?"
+  - id: s08-total-count
+    request: "How many handovers do we have in total?"
+  - id: s09-open-as-json
+    request: "I need the currently open handovers as JSON so I can feed them to a script: id, thread and next action for each."
+  - id: s10-cross-entity-topic
+    request: "Pull together everything we have on thumbnails: tasks, bugs, handovers, ideas, whatever is in there."
+  - id: s11-changed-since-handover
+    request: "What has changed in the backlog since the handover {h:c6} was written?"
+  - id: s12-mark-replaced
+    request: "The loose failover timeout notes from {nice:-5} are obsolete. Mark that handover as replaced by today's provider failover handover."
+  - id: s13-last-session
+    request: "What did we get done in the last session?"
+  - id: s14-decision-in-body
+    request: "Where did we decide the contract's schema version should live, and why?"
