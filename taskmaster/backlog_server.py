@@ -287,6 +287,8 @@ from taskmaster.taskmaster_v3 import (
     set_handover_status_doc as _set_handover_status_doc,
     sync_handover_index as _sync_handover_index,
     sort_handover_rows as _sort_handover_rows,
+    handover_sort_key as _handover_sort_key,
+    plan_thread_supersession as _plan_thread_supersession,
     _handover_index_entry,
     HANDOVER_INDEX_CAP as _HANDOVER_INDEX_CAP,
     normalize_thread_name as _normalize_thread_name,
@@ -4030,10 +4032,12 @@ def _handover_create_in_tx(
 ):
     """Create one handover row and everything that must commit with it.
 
-    Returns `(handover_id, superseded_warning | None)`, or an error string. The
-    supersession, the review flag and the `open_decisions` back-references all
-    ride the caller's transaction, so a handover that names a decision can never
-    half-land. Shared with the test seeding shim so both drive one code path.
+    Returns `(handover_id, superseded_warning | None, thread_supersession)`, or
+    an error string; `thread_supersession` is `{"superseded": [ids], "pinned":
+    [ids]}`. The supersession, the review flag and the `open_decisions`
+    back-references all ride the caller's transaction, so a handover that names
+    a decision can never half-land. Shared with the test seeding shim so both
+    drive one code path.
     """
     tx = _store_tx()
     try:
@@ -4069,6 +4073,22 @@ def _handover_create_in_tx(
             new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
             tx.put("handover", supersedes, new_doc, body=new_body)
 
+    # A thread has one live resume point: an open handover written into it
+    # supersedes the older open ones. A hand-set status is left alone.
+    thread_supersession = {"superseded": [], "pinned": []}
+    if document.get("thread") and document.get("status") == "open":
+        to_supersede, pinned = _plan_thread_supersession(
+            tx.list("handover"),
+            thread=document["thread"],
+            new_key=_handover_sort_key(hid, document),
+            exclude=(hid, supersedes),
+        )
+        for old_id in to_supersede:
+            old_doc, old_body = _tx_doc("handover", old_id)
+            new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
+            tx.put("handover", old_id, new_doc, body=new_body)
+        thread_supersession = {"superseded": to_supersede, "pinned": pinned}
+
     if flag_for_review:
         flagged_doc, flagged_body = _tx_doc("handover", hid)
         tx.put(
@@ -4092,7 +4112,20 @@ def _handover_create_in_tx(
     data = _load()
     _sync_handover_index_tx(data)
     _mutate_and_save(data)
-    return hid, superseded_warning
+    return hid, superseded_warning, thread_supersession
+
+
+def _thread_supersession_lines(thread: str, superseded: list, pinned: list) -> list[str]:
+    """What a create result says about its thread's older open handovers."""
+    lines = []
+    if superseded:
+        lines.append(f"- Auto-superseded (same thread): {', '.join(superseded)}")
+    for handover_id in pinned:
+        lines.append(
+            f"- WARNING: {handover_id} not auto-superseded — its status was set by hand; "
+            f"it is still open in thread {thread}."
+        )
+    return lines
 
 
 @mcp.tool()
@@ -4113,6 +4146,12 @@ def backlog_handover_create(
     start next. body is freeform markdown (Decisions / Blockers / Where I'd
     start / Open threads).
 
+    A thread keeps one open resume point: older open handovers in the same
+    thread are superseded by this one automatically (as `supersedes=` does) and
+    listed in the result as "Auto-superseded". One whose status was set by hand
+    is left open and reported as a WARNING line. A handover born closed
+    (auto-stage) supersedes nothing.
+
     Args:
         tldr: One-line summary. Required.
         next_action: One-line "where to start next session."
@@ -4121,7 +4160,8 @@ def backlog_handover_create(
         session_kind: One of {", ".join(HANDOVER_KINDS)}.
         thread: Thread this handover belongs to (stable resume token). Auto-derived from bundle/epic/task/tldr when empty.
         supersedes: Optional id of an older handover this one supersedes; the old
-            one gets a `superseded_by:` field and a SUPERSEDED callout.
+            one gets a `superseded_by:` field and a SUPERSEDED callout. Only
+            needed across threads — within a thread it is automatic.
         flag_for_review: When True, flags this handover for retro extraction.
         options: Rarely-set fields — branch, tip_commit (frontmatter git
             context), context_size_at_write (compaction marker), review_reason
@@ -4159,7 +4199,7 @@ def backlog_handover_create(
     )
     if isinstance(outcome, str):
         return f"Error: {outcome}"
-    hid, superseded_warning = outcome
+    hid, superseded_warning, thread_supersession = outcome
     target = _handover_path(bp, hid)
     data = _load()
 
@@ -4179,6 +4219,8 @@ def backlog_handover_create(
         lines.append(f"- Superseded: {supersedes}")
     if superseded_warning:
         lines.append(f"- {superseded_warning}")
+    lines.extend(_thread_supersession_lines(
+        _normalize_thread_name(thread_name), thread_supersession["superseded"], thread_supersession["pinned"]))
     if flag_for_review:
         lines.append(f"- Flagged for review: {review_reason}")
     lines.append(f"Resume: {thread_name} — {next_action or tldr}")

@@ -107,6 +107,25 @@ def test_supersede_and_status_match(twins):
     _check(twins)
 
 
+def test_same_thread_create_auto_supersedes_like_the_tool(twins):
+    seeded = "2026-09-17-seeded-handover-about-first"
+    legacy, _native = twins.same("backlog_handover_create", tldr="Next in the seeded thread", task_ids=["test-epic-001"])
+    assert f"- Auto-superseded (same thread): {seeded}" in legacy
+    pinned = "2026-09-17-next-in-the-seeded-thread"
+    twins.same("backlog_handover_update_status", handover_id=pinned, status="open", reason="still using")
+    legacy, _native = twins.same("backlog_handover_create", tldr="Third in the thread", thread="test-epic")
+    assert "WARNING" in legacy and pinned in legacy and "Auto-superseded" not in legacy
+    twins.same("backlog_handover_create", tldr="Explicitly supersedes the third", thread="test-epic",
+               supersedes="2026-09-17-third-in-the-thread")
+    twins.same("backlog_handover_create", tldr="A checkpoint", thread="test-epic", session_kind="auto-stage")
+    twins.same("backlog_handover_create", tldr="Other line", thread="other-line")
+    twins.same("backlog_handover_create", tldr="Supersedes across threads", thread="test-epic",
+               supersedes="2026-09-17-other-line")
+    twins.same("backlog_handover_list", format="json", limit=0)
+    twins.same("backlog_thread_list", include_closed=True)
+    _check(twins)
+
+
 def test_threads_match(twins):
     seeded = "2026-09-17-seeded-handover-about-first"
     twins.same("backlog_handover_create", tldr="Explicit thread one", thread="parked-line")

@@ -62,20 +62,30 @@ def handover_create(call, *, tldr, next_action, body, task_ids, session_kind, th
             bundle = bs._get_session_bundle() or {}
             thread_name = _thread_name(snapshot, task_ids or [], tldr, bundle.get("slug", "") or "")
         superseded_exists = bool(supersedes) and reads.get(snapshot, "handover", supersedes) is not None
+        live = derived.live_rows(snapshot.connection, snapshot, "handover")
     arguments = {"tldr": tldr, "next_action": next_action, "body": body, "task_ids": task_ids or [],
                  "session_kind": session_kind, "thread": thread_name,
                  "context_size_at_write": context_size_at_write or None, "supersedes": supersedes or None,
                  "branch": branch or None, "tip_commit": tip_commit or None}
     try:
-        v3.build_handover_doc(**arguments)
+        planned, _body = v3.build_handover_doc(**arguments)
     except ValueError as exc:
         return f"Error: {exc}"
+    # The handovers the command will leave open because their status was set by
+    # hand: it skips them silently, so the warning is planned from what it reads.
+    pinned = []
+    if planned.get("thread") and planned.get("status") == "open":
+        _supersede, pinned = v3.plan_thread_supersession(
+            live, thread=planned["thread"], new_key=(planned["date"][:10], planned["created"], ""),
+            exclude=(supersedes,))
     refusal = _run(call, "handover.create", dict(arguments, flag_for_review=bool(flag_for_review),
                                                    review_reason=review_reason))
     if refusal:
         return refusal
-    hid = next(item["id"] for item in call.receipts[-1]["affected"]
-               if item["kind"] == "handover" and item["id"] != supersedes)
+    handovers = [item for item in call.receipts[-1]["affected"] if item["kind"] == "handover"]
+    hid = next(item["id"] for item in handovers if item["id"] != supersedes)
+    auto_superseded = [item["id"] for item in handovers if item["id"] not in (hid, supersedes)
+                       and item["fields"].get("superseded_by") == hid]
     target = v3.handover_path(backlog, hid)
     with call.read() as snapshot:
         entries = len(_backlog_document(snapshot).get("handovers") or [])
@@ -85,6 +95,7 @@ def handover_create(call, *, tldr, next_action, body, task_ids, session_kind, th
         lines.append(f"- Superseded: {supersedes}")
     if supersedes and not superseded_exists:
         lines.append(f"- WARNING: supersedes={supersedes} not found on disk; old handover not updated.")
+    lines.extend(bs._thread_supersession_lines(planned.get("thread") or "", auto_superseded, pinned))
     if flag_for_review:
         lines.append(f"- Flagged for review: {review_reason}")
     lines.append(f"Resume: {thread_name} — {next_action or tldr}")

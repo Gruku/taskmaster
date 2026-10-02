@@ -4,6 +4,12 @@ When a new handover replaces an older one for the same task line of work, we **c
 
 This automates what real handovers like `2026-04-27-viewer-redesign-m1-complete-resume-m2.md` do manually at the top of the file.
 
+## Within a thread it is automatic
+
+`backlog_handover_create` supersedes the older **open** handovers of the thread it writes into, with no `supersedes=` needed: each gets `superseded_by:` and the callout, and the result lists them on an `Auto-superseded (same thread): …` line. A handover whose status was set by hand (`backlog_handover_update_status`) is left open and reported on a `WARNING:` line — surface that to the user. A handover born closed (`auto-stage`) supersedes nothing. The new handover gets no `supersedes:` field from this; the pointer lives on the old ones.
+
+The rules below are for chaining **across** threads, where `supersedes=` is still explicit.
+
 ## When to chain
 
 Set `supersedes = <prior_id>` if **all** of:

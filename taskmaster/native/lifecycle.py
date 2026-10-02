@@ -221,7 +221,7 @@ def apply(transaction, operation, arguments):
 
 
 def _handover_created(transaction, ident, doc, extras):
-    """What commits with a new handover: its supersession, review flag and decision back-references.
+    """What commits with a new handover: its supersessions, review flag and decision back-references.
 
     A superseded handover that does not exist is skipped, as the tool skips it
     with a warning, rather than refusing the new handover.
@@ -234,6 +234,17 @@ def _handover_created(transaction, ident, doc, extras):
             old = None
         if old:
             apply(transaction, "handover.supersede", {"id": old, "new_id": ident})
+    # A thread has one live resume point: an open handover written into it
+    # supersedes the older open ones, as the tool does. A hand-set status is
+    # left alone. Overflow is archived once, by the create that called this.
+    if doc.get("thread") and doc.get("status") == "open":
+        supersede, _pinned = domain.plan_thread_supersession(
+            workflow.live_handover_rows(transaction), thread=doc["thread"],
+            new_key=domain.handover_sort_key(ident, doc), exclude=(ident, doc.get("supersedes")))
+        for old in supersede:
+            entity = transaction.snapshot.get("handover", old, include_body=True)
+            superseded, body = domain.supersede_handover_doc(entity["fields"], entity["body"] or "", new_id=ident)
+            transaction.replace("handover", old, superseded, body, before_entity=entity)
     if extras.get("flag_for_review"):
         entity = transaction.snapshot.get("handover", ident, include_body=True)
         flagged = domain.flag_handover_doc_for_review(entity["fields"], review_reason=extras.get("review_reason") or "")

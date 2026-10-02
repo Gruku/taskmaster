@@ -1713,6 +1713,35 @@ def supersede_handover_doc(
     return fm, callout + _strip_supersession_callout(body or "")
 
 
+def plan_thread_supersession(
+    rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+    *,
+    thread: str,
+    new_key: tuple[str, str, str],
+    exclude: "Iterable[str | None]" = (),
+) -> tuple[list[str], list[str]]:
+    """Which handovers of `thread` a new open handover supersedes. Pure.
+
+    Returns `(supersede, pinned)`, newest first: the live rows of the thread
+    that are still open and older than the new handover (`new_key`, a
+    `handover_sort_key`). A row whose status was set by hand is never
+    auto-transitioned, so it comes back as pinned for the caller to warn about.
+    `exclude` names the ids handled elsewhere — the new handover and an
+    explicit `supersedes`.
+    """
+    skip = set(exclude)
+    supersede: list[str] = []
+    pinned: list[str] = []
+    for hid, doc, _body in sort_handover_rows(rows):
+        fm = doc or {}
+        if hid in skip or fm.get("thread") != thread or fm.get("status") != "open":
+            continue
+        if handover_sort_key(hid, fm) >= new_key:
+            continue  # a backdated handover does not supersede a newer one
+        (pinned if fm.get("status_user_set") else supersede).append(hid)
+    return supersede, pinned
+
+
 def flag_handover_doc_for_review(
     doc: Mapping[str, Any], *, review_reason: str
 ) -> dict[str, Any]:
@@ -1971,6 +2000,11 @@ def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
     return {f: fm.get(f) for f in _HANDOVER_INDEX_FIELDS if fm.get(f) is not None}
 
 
+def handover_sort_key(handover_id: str, doc: "Mapping[str, Any] | None") -> tuple[str, str, str]:
+    """A handover's place in time: (id date-prefix, `created`, id). Larger is newer."""
+    return (handover_id[:10], str((doc or {}).get("created") or ""), handover_id)
+
+
 def sort_handover_rows(
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
 ) -> list[tuple[str, Mapping[str, Any], str | None]]:
@@ -1982,11 +2016,7 @@ def sort_handover_rows(
     file-mtime tiebreaker has no row equivalent and the id is a total order
     already, so it is dropped rather than approximated.
     """
-    return sorted(
-        rows,
-        key=lambda row: (row[0][:10], str((row[1] or {}).get("created") or ""), row[0]),
-        reverse=True,
-    )
+    return sorted(rows, key=lambda row: handover_sort_key(row[0], row[1]), reverse=True)
 
 
 def sync_handover_index(
