@@ -266,6 +266,10 @@ class _LazyEntityRows(Mapping):
             }
         return parsed
 
+    def ids(self, kind: str) -> list[str]:
+        """Every id of one kind, archived included, without decoding a document."""
+        return [ident for ident, _doc, _body in self._raw.get(kind, ())]
+
     def __iter__(self):
         return iter(self._raw)
 

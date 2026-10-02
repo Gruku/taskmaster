@@ -92,11 +92,13 @@ def handover_create(call, *, tldr, next_action, body, task_ids, session_kind, th
 
 
 @adapter("backlog_handover_list")
-def handover_list(call, *, task_id, session_kind, since, status, limit, verbose):
+def handover_list(call, *, task_id, session_kind, since, status, limit, verbose, thread, until, latest_per_thread,
+                  include_archived, format):
     if not bs._backlog_path().exists():
-        return "No backlog found."
+        return json.dumps({"error": "No backlog found."}) if format == "json" else "No backlog found."
     with call.read() as snapshot:
-        return bs._handover_list_text(_backlog_document(snapshot), task_id, session_kind, since, status, limit, verbose)
+        return bs._handover_list_text(_backlog_document(snapshot), task_id, session_kind, since, status, limit, verbose,
+                                      thread, until, latest_per_thread, include_archived, format)
 
 
 @adapter("backlog_handover_get")

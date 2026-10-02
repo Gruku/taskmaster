@@ -51,7 +51,16 @@ def test_handover_create_variants_match(twins):
 def test_handover_index_cap_archives_overflow(twins):
     for n in range(31):
         twins.same("backlog_handover_create", tldr=f"Overflow handover number {n}", task_ids=["other-001"])
-    twins.same("backlog_handover_list", limit=0)
+    legacy, _native = twins.same("backlog_handover_list", limit=0)
+    assert "2 older handovers" in legacy
+    for kwargs in ({"format": "json"}, {"format": "json", "include_archived": True, "limit": 0},
+                   {"include_archived": True}, {"include_archived": True, "limit": 0, "verbose": True},
+                   {"include_archived": True, "task_id": "test-epic-001", "format": "json"},
+                   {"task_id": "test-epic-001"}):
+        twins.same("backlog_handover_list", **kwargs)
+    legacy, _native = twins.same("backlog_handover_list", format="json", limit=0)
+    envelope = json.loads(legacy)
+    assert (envelope["returned"], envelope["archived_omitted"], envelope["truncated"]) == (30, 2, True)
     twins.same("backlog_thread_list", include_closed=True)
     _check(twins)
 
@@ -62,8 +71,23 @@ def test_handover_reads_match(twins):
     twins.same("backlog_handover_update_status", handover_id=seeded, status="closed", reason="done")
     for kwargs in ({}, {"verbose": True}, {"task_id": "other-001"}, {"session_kind": "context-handoff"},
                    {"since": "2026-01-01"}, {"since": "yesterday"}, {"status": "closed"}, {"status": "bogus"},
-                   {"limit": 1}, {"task_id": "ghost"}):
+                   {"limit": 1}, {"task_id": "ghost"},
+                   {"format": "json"}, {"format": "json", "limit": 1}, {"format": "json", "status": "bogus"},
+                   {"format": "json", "task_id": "ghost"}, {"format": "xml"},
+                   {"thread": "other"}, {"thread": "no-such-thread"}, {"format": "json", "thread": "Test Epic"},
+                   {"until": "2026-09-17"}, {"until": "2026-09-16"}, {"until": "tomorrow"},
+                   {"since": "2026-09-17", "until": "2026-09-17", "format": "json"},
+                   {"latest_per_thread": True}, {"latest_per_thread": True, "format": "json"},
+                   {"latest_per_thread": True, "status": "closed"}, {"include_archived": True}):
         twins.same("backlog_handover_list", **kwargs)
+    twins.same("backlog_handover_create", tldr="Third handover, with git context", supersedes=seeded,
+               body="Mentions ISS-001 inline", options={"branch": "feature/x", "tip_commit": "abc1234"})
+    legacy, _native = twins.same("backlog_handover_list", format="json")
+    newest = json.loads(legacy)["handovers"][0]
+    assert (newest["branch"], newest["tip_commit"]) == ("feature/x", "abc1234")
+    assert {"type": "supersedes", "target": seeded} in newest["links"]
+    assert {"type": "references", "target": "ISS-001"} in newest["links"]
+    twins.same("backlog_handover_list", verbose=True)
     for kwargs in ({}, {"verbose": True}, {"expand_links": True}, {"verbose": True, "expand_links": True},
                    {"sections": ["decisions", "blockers"]}, {"sections": []}, {"sections": ["nope"]}):
         twins.same("backlog_handover_get", handover_id=seeded, **kwargs)

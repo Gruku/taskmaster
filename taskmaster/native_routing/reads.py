@@ -201,6 +201,11 @@ class NativeRows(Mapping):
                                   for entity in sorted(items, key=lambda e: e["id"])}
         return self._parsed[kind]
 
+    def ids(self, kind) -> list[str]:
+        """Every id of one kind, archived included, without decoding a document."""
+        return [row[0] for row in self._snapshot.connection.execute(
+            "SELECT public_id FROM entity_core WHERE kind=? AND deleted=0 ORDER BY public_id", (kind,))]
+
     def __iter__(self):
         return iter(ROW_KINDS)
 

@@ -287,6 +287,10 @@ from taskmaster.taskmaster_v3 import (
     set_handover_status_doc as _set_handover_status_doc,
     sync_handover_index as _sync_handover_index,
     sort_handover_rows as _sort_handover_rows,
+    _handover_index_entry,
+    HANDOVER_INDEX_CAP as _HANDOVER_INDEX_CAP,
+    normalize_thread_name as _normalize_thread_name,
+    legacy_links_to_typed as _legacy_links_to_typed,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
     ISSUE_SEVERITIES,
@@ -951,6 +955,13 @@ def _dict_rows(data: dict, kind: str, *, include_archived: bool = False) -> list
             continue
         out.append((ident, doc, body))
     return out
+
+
+def _dict_row_ids(data: dict, kind: str) -> list:
+    """Every stored id of one kind, archived included, without decoding a document."""
+    rows = data.get("_rows") or {}
+    ids = getattr(rows, "ids", None)
+    return ids(kind) if ids is not None else list(rows.get(kind) or {})
 
 
 def _dict_row(data: dict, kind: str, ident: str):
@@ -4182,44 +4193,133 @@ def backlog_handover_list(
     status: str = "all",
     limit: int = DEFAULT_LIST_LIMIT,
     verbose: bool = False,
+    thread: str = "",
+    until: str = "",
+    latest_per_thread: bool = False,
+    include_archived: bool = False,
+    format: str = "text",
 ) -> str:
-    """List recent handovers. By default shows slim one-liners (id, date, tldr).
+    """List handovers, newest first. Text one-liners by default; `format="json"`
+    for a parseable envelope.
 
-    Reads from the backlog.yaml index, which is bounded to the most recent 30.
-    Older handovers are still on disk under handovers/_archive/ but not listed
-    here — fetch by id with `backlog_handover_get` if needed.
+    Searches the handover index — the most recent 30. Older handovers are
+    archived, not deleted: when any exist the answer says how many went
+    unsearched, and `include_archived=True` searches them too.
 
     Args:
         task_id: If set, only entries whose `task_ids` list contains this id.
         session_kind: If set, only entries with this session_kind
-            (e.g. "end-of-day", "context-handoff", "milestone-complete").
-        since: ISO date string (YYYY-MM-DD). If set, only entries whose
-            date prefix is >= since. Raises ValueError for invalid formats.
-        status: One of open, closed, superseded, or "all" (default). Filters
-            against the index entry — does not read every file.
-        limit: Max entries returned (default 50). 0 = no cap. An overflow footer
-            reports how many were hidden.
-        verbose: If True, include additional index fields (next_action, task_ids,
-            status) per entry. Slim (default) shows id, date, kind, and tldr.
+            (e.g. "continuity", "deep-context", "milestone").
+        since: YYYY-MM-DD. Only entries dated on or after it. An invalid date
+            is refused with an error.
+        status: One of open, closed, superseded, or "all" (default).
+        limit: Max entries returned (default 50 — above the 30-entry index, so
+            by default it only cuts with include_archived). 0 = no cap.
+        verbose: Text only. Adds next_action, task_ids, status, thread, branch,
+            tip_commit and links per entry. Slim (default) shows id, date,
+            kind and tldr.
+        thread: If set, only entries in this thread (its name as
+            `backlog_thread_list` shows it).
+        until: YYYY-MM-DD, inclusive. Only entries dated on or before it;
+            since=until=one day returns just that day.
+        latest_per_thread: Only the newest open handover of each thread, among
+            those the other filters match. A handover with no thread is its
+            own group.
+        include_archived: Also search and list the archived handovers beyond
+            the 30-entry index.
+        format: "text" (default) or "json". JSON returns {"handovers": [...],
+            "returned", "total", "truncated", "archived_omitted"}. Every
+            handover has the same keys, empty when absent: id, date, created,
+            thread, session_kind, status, tldr, next_action, task_ids,
+            tip_commit, branch, links ([{"type", "target"}], supersession
+            included), superseded_by. `total` counts matches before `limit`;
+            `archived_omitted` counts archived handovers not searched;
+            `truncated` is true when either left something out. Errors are
+            {"error": "..."}.
     """
     bp = _backlog_path()
     if not bp.exists():
-        return "No backlog found."
+        return json.dumps({"error": "No backlog found."}) if format == "json" else "No backlog found."
     _ensure_handover_status_backfilled()
-    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose)
+    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose,
+                               thread, until, latest_per_thread, include_archived, format)
 
 
-def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose) -> str:
+_HANDOVER_LIST_FORMATS = ("text", "json")
+
+
+def _handover_list_object(entry: dict, doc: dict) -> dict:
+    """One handover as `format="json"` returns it: fixed keys, empty when absent.
+
+    The index entry carries the slim fields; `branch`, `tip_commit`, `links` and
+    the supersession pointers live only on the handover's own document.
+    """
+    links = _legacy_links_to_typed(doc, kind="handover")
+    superseded_by = doc.get("superseded_by") or [l["target"] for l in links if l["type"] == "superseded_by"]
+    if isinstance(superseded_by, (list, tuple)):
+        superseded_by = superseded_by[0] if superseded_by else ""
+
+    def text(field):
+        return str(entry.get(field) or doc.get(field) or "")
+
+    return {
+        "id": text("id"),
+        "date": text("date"),
+        "created": text("created"),
+        "thread": text("thread"),
+        "session_kind": text("session_kind"),
+        "status": text("status"),
+        "tldr": text("tldr"),
+        "next_action": text("next_action"),
+        "task_ids": list(entry.get("task_ids") or doc.get("task_ids") or []),
+        "tip_commit": text("tip_commit"),
+        "branch": text("branch"),
+        "links": [{"type": l["type"], "target": l["target"]} for l in links],
+        "superseded_by": str(superseded_by),
+    }
+
+
+def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose,
+                        thread="", until="", latest_per_thread=False, include_archived=False,
+                        format="text") -> str:
     """`backlog_handover_list` over any backlog document; shared with the native adapter."""
-    entries = list(data.get("handovers") or [])
+    if format not in _HANDOVER_LIST_FORMATS:
+        return f"Error: format must be one of {_HANDOVER_LIST_FORMATS}, got {format!r}."
+    as_json = format == "json"
 
-    # Validate `since` before filtering so we fail fast on bad input.
-    if since:
-        from datetime import date as _date
-        try:
-            _date.fromisoformat(since)
-        except ValueError:
-            return f"Error: `since` must be a date in YYYY-MM-DD format, got {since!r}."
+    def refuse(message: str) -> str:
+        return json.dumps({"error": message}) if as_json else f"Error: {message}"
+
+    # Validate the date bounds before filtering so we fail fast on bad input.
+    from datetime import date as _date
+    for name, value in (("since", since), ("until", until)):
+        if value:
+            try:
+                _date.fromisoformat(value)
+            except ValueError:
+                return refuse(f"`{name}` must be a date in YYYY-MM-DD format, got {value!r}.")
+
+    from taskmaster.taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
+    filter_status = bool(status) and status != "all"
+    if filter_status and status not in _STATUSES:
+        return refuse(f"status must be one of {_STATUSES} or 'all', got {status!r}.")
+    if latest_per_thread and filter_status and status != "open":
+        return refuse("latest_per_thread returns open handovers only; status must be 'open' or 'all', "
+                      f"got {status!r}.")
+
+    entries = list(data.get("handovers") or [])
+    # The index holds the newest 30; every other stored handover is archived
+    # overflow. Counting those reads ids only, so the slim listing decodes no
+    # document to say what it left out.
+    indexed = {e.get("id") for e in entries}
+    outside = [ident for ident in _dict_row_ids(data, "handover") if ident not in indexed]
+    docs = {}
+    if as_json or verbose or (include_archived and outside):
+        docs = (data.get("_rows") or {}).get("handover") or {}
+    if include_archived:
+        for ident, doc, _body in _sort_handover_rows([(i, docs[i][0], None) for i in outside]):
+            entries.append({"id": ident, **_handover_index_entry(dict(doc))})
+    archived_omitted = 0 if include_archived else len(outside)
 
     # Apply filters in spec order.
     if task_id:
@@ -4228,19 +4328,50 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
         entries = [e for e in entries if e.get("session_kind") == session_kind]
     if since:
         entries = [e for e in entries if e.get("date", e.get("id", "")) >= since]
-
-    from taskmaster.taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
-    if status and status != "all":
-        if status not in _STATUSES:
-            return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
+    if until:
+        entries = [e for e in entries if str(e.get("date", e.get("id", "")))[:10] <= until]
+    if thread:
+        names = {thread, _normalize_thread_name(thread)}
+        entries = [e for e in entries if e.get("thread") in names]
+    if filter_status:
         entries = [e for e in entries if e.get("status") == status]
-
-    if not entries:
-        filtered = any([task_id, session_kind, since, status != "all"])
-        return "No handovers match those filters." if filtered else "No handovers yet."
+    if latest_per_thread:
+        # Entries are newest-first, so the first open one seen per thread wins.
+        seen, newest = set(), []
+        for e in entries:
+            if e.get("status") != "open" or e.get("thread") in seen:
+                continue
+            if e.get("thread"):
+                seen.add(e["thread"])
+            newest.append(e)
+        entries = newest
 
     # Cap after all filters (limit<=0 = no cap) and report overflow.
+    total = len(entries)
     entries, overflow = _cap_list(entries, limit)
+
+    def doc_of(e):
+        return (docs.get(e.get("id")) or ({}, None))[0]
+
+    if as_json:
+        return json.dumps({
+            "handovers": [_handover_list_object(e, doc_of(e)) for e in entries],
+            "returned": len(entries),
+            "total": total,
+            "truncated": bool(overflow or archived_omitted),
+            "archived_omitted": archived_omitted,
+        }, default=str)
+
+    archive_footer = (
+        f"…{archived_omitted} older handovers outside the {_HANDOVER_INDEX_CAP}-entry index were not "
+        "searched — pass include_archived=True to include them"
+    ) if archived_omitted else ""
+
+    if not entries:
+        filtered = any([task_id, session_kind, since, until, thread, latest_per_thread, status != "all"])
+        empty = "No handovers match those filters." if filtered else "No handovers yet."
+        return f"{empty}\n{archive_footer}" if archive_footer else empty
+
     footer = _overflow_footer(overflow, "handovers")
 
     lines = []
@@ -4260,8 +4391,15 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
                 lines.append(f"  tasks: {', '.join(tids)}")
             if e.get("status"):
                 lines.append(f"  status: {e['status']}")
-    if footer:
-        lines.append(footer)
+            full = _handover_list_object(e, doc_of(e))
+            for field in ("thread", "branch", "tip_commit"):
+                if full[field]:
+                    lines.append(f"  {field}: {full[field]}")
+            if full["links"]:
+                lines.append("  links: " + ", ".join(f"{l['type']} {l['target']}" for l in full["links"]))
+    for line in (footer, archive_footer):
+        if line:
+            lines.append(line)
     return "\n".join(lines)
 
 
