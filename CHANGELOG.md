@@ -7,7 +7,7 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
-## Unreleased
+## 7.1.0
 
 **Tool fixes from the second agent tool-use batch** (tm-audit-030), on both stores.
 
