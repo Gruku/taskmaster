@@ -54,7 +54,7 @@ def test_create_link_query_remove_round_trip(tm_dir):
 
     # All link types we can validate.
     pairs = [
-        ("T-001", "T-002",   "depends_on",  "blocks"),
+        ("T-001", "T-002",   "references",  "referenced_by"),
         ("T-001", "ISS-001", "fixes",        "fixed_in_task"),
         ("T-001", "ISS-001", "relates_to",   "relates_to"),
         ("T-001", "HND-001", "references",   "referenced_by"),
@@ -77,11 +77,9 @@ def test_create_link_query_remove_round_trip(tm_dir):
         assert {"type": t, "target": dst} not in entity_links(src_e)
 
 
-def test_cycle_prevention_blocks_3_node(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    bs.backlog_link_create(source="T-002", target="T-003", type="depends_on")
+def test_a_dependency_between_tasks_is_refused_as_a_link(tm_dir):
     out = bs.backlog_link_create(source="T-003", target="T-001", type="depends_on")
-    assert "cycle" in out.lower()
+    assert out.startswith("Error:") and 'field="depends_on"' in out
 
 
 def test_auto_detection_e2e(tmp_taskmaster):
@@ -116,8 +114,8 @@ def test_auto_detection_e2e(tmp_taskmaster):
 
 
 def test_validate_clean_after_create(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    bs.backlog_link_create(source="T-001", target="T-003", type="depends_on")
+    bs.backlog_link_create(source="T-001", target="T-002", type="references")
+    bs.backlog_link_create(source="T-001", target="T-003", type="references")
     data = json.loads(bs.backlog_link_validate())
     assert data["orphans"] == []
     assert data["asymmetric"] == []

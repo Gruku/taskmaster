@@ -475,14 +475,15 @@ def test_a_typed_link_writes_the_inverse_and_refuses_a_dependency_cycle(workspac
         for suffix in ("1", "2"):
             run(connection, "task.create", {"title": f"Linked {suffix}", "epic": "demo",
                                             "phase": "foundation", "task_id": f"T-{suffix}"}, f"t{suffix}")
-        run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "depends_on",
+        run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "references",
                                         "note": "ordering"}, "link")
         # The note is an operator annotation the tool never stored; the document
         # must keep the exact two-key link shape the round trip expects.
-        assert fields(connection, "task", "T-1")["links"] == [{"type": "depends_on", "target": "T-2"}]
-        assert fields(connection, "task", "T-2")["links"] == [{"type": "blocks", "target": "T-1"}]
-        with pytest.raises(ValueError, match="cycle"):
-            run(connection, "link.create", {"source": "T-2", "target": "T-1", "type": "depends_on"}, "cycle")
+        assert fields(connection, "task", "T-1")["links"] == [{"type": "references", "target": "T-2"}]
+        assert fields(connection, "task", "T-2")["links"] == [{"type": "referenced_by", "target": "T-1"}]
+        # A dependency between tasks is the depends_on field, never a link.
+        with pytest.raises(ValueError, match='field="depends_on"'):
+            run(connection, "link.create", {"source": "T-2", "target": "T-1", "type": "depends_on"}, "dependency")
         run(connection, "link.remove", {"source": "T-1", "target": "T-2"}, "unlink")
         with Repository(connection).snapshot() as query:
             assert "links" not in query.get("task", "T-1")["fields"]

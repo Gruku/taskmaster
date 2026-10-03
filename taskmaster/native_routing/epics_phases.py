@@ -188,7 +188,7 @@ def advance_phase(call, *, force):
     unchecked = [d for d in active.get("deliverables", []) if not d.get("done")]
     if unchecked and not force:
         items = "\n".join(f"  - [ ] {d['text']}" for d in unchecked)
-        return (f"**Blocked:** {len(unchecked)} unchecked deliverable(s) in phase "
+        return (f"Error: blocked — {len(unchecked)} unchecked deliverable(s) in phase "
                 f"**{active['name']}**:\n{items}\n\n"
                 f"Check them off with `backlog_update_phase(phase_id=\"{active['id']}\", "
                 f"field=\"deliverables\", value='{{\"action\":\"toggle\",\"index\":N}}')` "

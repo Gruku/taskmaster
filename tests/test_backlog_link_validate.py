@@ -40,15 +40,16 @@ def test_validate_reports_orphan_target(tm_dir):
 
 
 def test_validate_reports_asymmetric_pair(tm_dir):
-    # Add depends_on on T-001 without inverse on T-002.
+    # Add references on T-001 without inverse on T-002. (A task dependency is the
+    # depends_on field; its other side is derived, so it is never reported here.)
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    set_entity_links(t1, [{"type": "depends_on", "target": "T-002"}])
+    set_entity_links(t1, [{"type": "references", "target": "T-002"}])
     write_entity_anywhere(tm_dir / "backlog.yaml", t1)
 
     out = bs.backlog_link_validate()
     data = json.loads(out)
     assert any(a["source"] == "T-001" and a["target"] == "T-002"
-               and a["missing_inverse"] == "blocks"
+               and a["missing_inverse"] == "referenced_by"
                for a in data["asymmetric"])
 
 

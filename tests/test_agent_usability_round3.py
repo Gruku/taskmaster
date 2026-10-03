@@ -231,7 +231,7 @@ def test_verifying_a_legacy_index_answers_what_was_and_was_not_checked(twins):
 def test_a_phase_with_unfinished_tasks_does_not_advance_unless_forced(twins):
     twins.same("backlog_add_phase", phase_id="next", name="Next")
     blocked, _native = twins.same("backlog_advance_phase")
-    assert blocked.startswith("**Blocked:** 4 tasks in phase **Development** are not done")
+    assert blocked.startswith("Error: blocked — 4 tasks in phase **Development** are not done")
     assert "force=True" in blocked
     assert "**Active Phase:** Development" in twins.same("backlog_status")[0]
     twins.assert_state_matches()

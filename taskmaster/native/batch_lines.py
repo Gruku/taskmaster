@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field as dataclass_field
 from typing import Callable
 
-from taskmaster.taskmaster_v3 import VALID_LANES, compute_gate_state
+from taskmaster.taskmaster_v3 import BATCH_DEPENDENCY_EDIT_REFUSAL, VALID_LANES, compute_gate_state
 from . import claims, domain
 
 TASK_OPS = ("update", "status", "complete", "archive", "pick")
@@ -217,6 +217,8 @@ def _update(doc, ident, field, value, lookups, now):
         doc["docs"][key.strip()] = path.strip()
     elif field == "depends_on":
         dependencies = [d.strip() for d in value.split(",") if d.strip()]
+        if any(d[:1] in ("+", "-") for d in dependencies):
+            return Outcome(f"`{ident}`: {BATCH_DEPENDENCY_EDIT_REFUSAL}")
         missing = [d for d in dependencies if not lookups.task_exists(d)]
         if missing:
             return Outcome(f"`{ident}`: dependencies not found: {', '.join(missing)}")

@@ -2634,6 +2634,19 @@ class Store:
             raw[row["kind"]].append((row["id"], row["doc"], row["body"]))
         return _LazyEntityRows(raw)
 
+    def entity_ids_after(self, kind: str, after: str) -> list[str]:
+        """Ids of every row of `kind`, archived included, that sort after `after`.
+
+        `entity_row`'s discipline (a scan first) over one indexed range read: no
+        document is decoded.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            return sorted(ident for ident in (self._entity_rows_from_projection().get(kind) or {}) if ident > after)
+        self._maybe_scan_on_read()
+        return [row[0] for row in self.connection.execute(
+            "SELECT id FROM entities WHERE kind=? AND deleted=0 AND id>? ORDER BY id", (kind, after))]
+
     def entity_row(
         self, kind: str, ident: str
     ) -> tuple[dict[str, Any], str | None] | None:

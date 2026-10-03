@@ -20,18 +20,18 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
     for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     monkeypatch.setattr(bs, "_backlog_path", lambda: d / "backlog.yaml")
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
+    bs.backlog_link_create(source="T-001", target="T-002", type="references")
     bs.backlog_link_create(source="T-001", target="T-002", type="relates_to")
     return d
 
 
 def test_link_remove_drops_both_sides(tm_dir):
-    out = bs.backlog_link_remove(source="T-001", target="T-002", type="depends_on")
+    out = bs.backlog_link_remove(source="T-001", target="T-002", type="references")
     assert "ok" in out.lower()
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert {"type": "depends_on", "target": "T-002"} not in entity_links(t1)
-    assert {"type": "blocks",     "target": "T-001"} not in entity_links(t2)
+    assert {"type": "references", "target": "T-002"} not in entity_links(t1)
+    assert {"type": "referenced_by", "target": "T-001"} not in entity_links(t2)
     # The other link (relates_to) survives.
     assert {"type": "relates_to", "target": "T-002"} in entity_links(t1)
 
@@ -45,6 +45,6 @@ def test_link_remove_without_type_drops_all_between_pair(tm_dir):
 
 
 def test_link_remove_missing_link_is_noop(tm_dir):
-    bs.backlog_link_remove(source="T-001", target="T-002", type="depends_on")
-    out = bs.backlog_link_remove(source="T-001", target="T-002", type="depends_on")
+    bs.backlog_link_remove(source="T-001", target="T-002", type="references")
+    out = bs.backlog_link_remove(source="T-001", target="T-002", type="references")
     assert "no-op" in out.lower() or "not present" in out.lower() or "ok" in out.lower()

@@ -295,6 +295,7 @@ from taskmaster.taskmaster_v3 import (
     legacy_links_to_typed as _legacy_links_to_typed,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
+    BATCH_DEPENDENCY_EDIT_REFUSAL,
     ISSUE_SEVERITIES,
     BUG_STATUSES,
     build_bug_doc as _build_bug_doc,
@@ -432,6 +433,7 @@ class _LegacyLinks:
 
     def __init__(self, data: "dict | None", backlog_path: Path):
         self._data, self._backlog_path, self._index = data, backlog_path, None
+        self._ids: dict = {}
 
     def tldr_index(self):
         if self._index is None:
@@ -443,8 +445,32 @@ class _LegacyLinks:
         return self._index
 
     def peer(self, target: str):
-        from taskmaster.taskmaster_v3 import read_entity_anywhere
-        return read_entity_anywhere(self._backlog_path, target) if self._backlog_path.exists() else None
+        """The linked entity, from the loaded backlog: a kind is found by id
+        membership, so a pill costs no store read however many kinds it tries."""
+        from taskmaster.taskmaster_v3 import _fallback_links_if_absent, link_kind_candidates
+        if not self._backlog_path.exists():
+            return None
+        if self._data is None:
+            self._data = _load()
+        for kind in link_kind_candidates(target):
+            if kind == "task":
+                found = _find_task(self._data, target)
+                if found is None:
+                    continue
+                entity = deepcopy(found[0])
+            else:
+                ids = self._ids.get(kind)
+                if ids is None:
+                    ids = self._ids[kind] = set(_dict_row_ids(self._data, kind))
+                if target not in ids:
+                    continue
+                doc, body = _dict_row(self._data, kind, target)
+                entity = deepcopy(doc)
+                if body:
+                    entity[_BODY_KEY] = body
+            _fallback_links_if_absent(entity, kind)
+            return entity
+        return None
 
 
 def _append_grouped_links_block(
@@ -4736,8 +4762,13 @@ def _thread_list_text(data: dict, include_closed: bool, include_archived: bool =
             lines.append(f"  tasks: {', '.join(r['task_ids'])}")
     if uncounted:
         count = f"{len(uncounted)} more threads have" if len(uncounted) != 1 else "1 more thread has"
-        lines.append(f"…{count} only archived handovers (outside the {_HANDOVER_INDEX_CAP}-entry index) and "
-                     "are not listed — pass include_archived=True to list them")
+        # Named, so the default answer is complete on an ordinary store; capped,
+        # so one with dozens from before auto-supersede stays readable.
+        names = [r["name"] for r in uncounted]
+        shown = ", ".join(names[:_THREAD_COUNT_NAMES]) + (
+            f" (+{len(names) - _THREAD_COUNT_NAMES} more)" if len(names) > _THREAD_COUNT_NAMES else "")
+        lines.append(f"…{count} only archived handovers (outside the {_HANDOVER_INDEX_CAP}-entry index): "
+                     f"{shown} — pass include_archived=True for their summaries and next steps")
     lines.append("\nResume: `backlog_thread_resume(\"<name>\")`")
     return "\n".join(lines)
 
@@ -4756,6 +4787,7 @@ def backlog_thread_resume(ref: str) -> str:
 
 
 _THREAD_MISS_NAMES = 10
+_THREAD_COUNT_NAMES = 5
 _THREAD_MISS_CLOSEST = 5
 
 
@@ -4810,11 +4842,19 @@ def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> s
     fm = {key: value for key, value in fm.items() if key != _BODY_KEY}
     body = body or ""
     t = (data.get("threads") or {}).get(tname) or {}
+    newest = (t.get("handover_ids") or [hid])[-1]
+    if newest == hid:
+        where = [f"- newest: {hid}"]
+    else:
+        # An older handover is still open, and it is where the work resumes.
+        newest_row = _dict_row(data, "handover", newest)
+        newest_status = (newest_row[0] if newest_row else {}).get("status") or "closed"
+        where = [f"- resume: {hid} (newest open handover)", f"- newest: {newest} ({newest_status})"]
     header = [
         f"# Thread: {tname or '(none — standalone handover)'}",
         f"- status: {t.get('status', 'open')}" if tname else "",
         f"- handovers: {len(t.get('handover_ids') or []) or 1}",
-        f"- newest: {hid}",
+        *where,
         "",
     ]
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
@@ -4859,15 +4899,19 @@ def backlog_link(
     type: str = "",
     note: str = "",
     depth: int = 1,
+    write: bool = False,
 ) -> str:
     """Link two entities of any kind — tasks, bugs, issues, decisions, ideas,
     notes, handovers — and read the links back. The server writes the inverse
-    side automatically and rejects unknown ids, invalid types, kind mismatches
-    and depends_on cycles; `query(source=X)` lists X's links, inverses included.
+    side automatically and rejects unknown ids, invalid types and kind
+    mismatches; `query(source=X)` lists X's links, inverses and the links its
+    fields derive (a task's depends_on) included. A dependency between two tasks
+    is not a link: set it with backlog_update_task(field="depends_on", value="+id").
 
     Params by action: create(source, target, type, note);
     remove(source, target, type); query(source, target, type, depth);
-    validate(); reconcile().
+    validate(); reconcile(write) — reports stored links whose inverse is
+    missing, and adds those inverses only with write=True.
     """
     if action == "create":
         return backlog_link_create(source, target, type, note)
@@ -4878,7 +4922,7 @@ def backlog_link(
     if action == "validate":
         return backlog_link_validate()
     if action == "reconcile":
-        return backlog_link_reconcile()
+        return backlog_link_reconcile(write)
     return json.dumps({"error": f"unknown action {action!r}"})
 
 
@@ -4893,14 +4937,17 @@ def _link_kind(ident: str) -> str | None:
 _LINK_LISTING_KEEPS_ARCHIVED = ("idea",)
 
 
-def _linkable_rows(data: dict):
+def _linkable_rows(data: dict, include_archived: bool = False):
     """`(id, document)` for every non-task entity a link can join, with legacy
-    links synthesized as `read_entity_anywhere` does; tasks come off the tree."""
+    links synthesized as `read_entity_anywhere` does; tasks come off the tree.
+    `include_archived` (validate) lists archived rows of every kind, so a link
+    to one is reported as archived rather than as an orphan."""
     from taskmaster.taskmaster_v3 import LINKABLE_KINDS, _fallback_links_if_absent
     for kind in LINKABLE_KINDS:
         if kind == "task":
             continue
-        for ident, doc, _body in _dict_rows(data, kind, include_archived=kind in _LINK_LISTING_KEEPS_ARCHIVED):
+        for ident, doc, _body in _dict_rows(data, kind, include_archived=include_archived
+                                            or kind in _LINK_LISTING_KEEPS_ARCHIVED):
             entity = dict(doc)
             _fallback_links_if_absent(entity, kind)
             yield ident, entity
@@ -4916,9 +4963,8 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     Idempotent — re-running with the same args is a no-op.
     """
     from taskmaster.taskmaster_v3 import (
-        LINK_TYPES, is_valid_link, entity_kind_of,
-        read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
-        sync_inverse, would_create_cycle,
+        LINK_TYPES, TASK_DEPENDENCY_LINK_TYPES, is_valid_link, read_entity_anywhere,
+        task_dependency_link_refusal, write_entity_anywhere, add_link, sync_inverse,
     )
 
     backlog_path = _backlog_path()
@@ -4935,31 +4981,11 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     if not is_valid_link(type, src_kind, dst_kind):
         return (f"Error: invalid link — type {type!r} cannot go from "
                 f"{src_kind} ({source}) to {dst_kind} ({target})")
+    if type in TASK_DEPENDENCY_LINK_TYPES:
+        return f"Error: {task_dependency_link_refusal(type, source, target)}"
 
-    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind)
-
-    # Cycle check on depends_on / blocks (model both as forward edges in a
-    # single task→task graph; `blocks` is reversed onto `depends_on`).
-    if type in ("depends_on", "blocks"):
-        graph: dict[str, list[str]] = {}
-        data = _load()
-        for epic in data.get("epics", []):
-            for task in epic.get("tasks", []):
-                tid = task.get("id")
-                if not tid:
-                    continue
-                graph.setdefault(tid, [])
-                for link in task.get("links", []) or []:
-                    if link.get("type") == "depends_on":
-                        graph[tid].append(link["target"])
-                    elif link.get("type") == "blocks":
-                        # B blocks A == A depends_on B
-                        graph.setdefault(link["target"], []).append(tid)
-        # Normalize the new edge to a depends_on direction for the check.
-        new_src, new_dst = (source, target) if type == "depends_on" else (target, source)
-        if would_create_cycle(graph, new_src, new_dst):
-            return (f"Error: would create cycle in depends_on chain "
-                    f"({new_src} -> {new_dst})")
+    # The stored document: the links its fields derive stay derived.
+    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind, fallback=False)
 
     added = add_link(src_entity, type, target)
     if added:
@@ -4981,17 +5007,21 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
     If `type` is omitted, removes all link types between the pair.
     """
     from taskmaster.taskmaster_v3 import (
-        LINK_TYPES, entity_kind_of, read_entity_anywhere, write_entity_anywhere,
-        remove_link, entity_links, sync_inverse,
+        LINK_TYPES, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, write_entity_anywhere,
+        remove_link, entity_links, sync_inverse, task_dependency_link_refusal,
     )
 
     backlog_path = _backlog_path()
 
     src_kind = _link_kind(source)
-    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind) if src_kind else None
+    # The stored document: only stored links can be removed.
+    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind, fallback=False) if src_kind else None
     if src_entity is None:
         return f"Error: source {source!r} not found"
     dst_kind = _link_kind(target)
+    between_tasks = src_kind == "task" and dst_kind == "task"
+    if between_tasks and type in TASK_DEPENDENCY_LINK_TYPES:
+        return f"Error: {task_dependency_link_refusal(type, source, target, remove=True)}"
 
     types_to_remove: list[str]
     if type:
@@ -5000,7 +5030,8 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
         types_to_remove = [type]
     else:
         types_to_remove = sorted({link["type"] for link in entity_links(src_entity)
-                                  if link["target"] == target})
+                                  if link["target"] == target
+                                  and not (between_tasks and link["type"] in TASK_DEPENDENCY_LINK_TYPES)})
 
     if not types_to_remove:
         return f"ok: no-op (no links from {source} to {target})"
@@ -5049,7 +5080,8 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
                 tid = task.get("id")
                 if not tid:
                     continue
-                for link in task.get("links", []) or []:
+                # The links its fields derive (depends_on) included, as a read of it shows.
+                for link in _legacy_links_to_typed(task, kind="task"):
                     out.append({"source": tid, "target": link["target"], "type": link["type"]})
         for eid, entity in _linkable_rows(data):
             for link in entity_links(entity):
@@ -5096,7 +5128,7 @@ def backlog_link_validate() -> str:
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
+        REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, entity_links, find_cycle,
     )
 
     backlog_path = _backlog_path()
@@ -5106,8 +5138,8 @@ def backlog_link_validate() -> str:
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id"):
-                    yield task["id"], task
-        yield from _linkable_rows(data)
+                    yield task["id"], {**task, "links": _legacy_links_to_typed(task, kind="task")}
+        yield from _linkable_rows(data, include_archived=True)
 
     orphans: list[dict] = []
     asymmetric: list[dict] = []
@@ -5127,10 +5159,15 @@ def backlog_link_validate() -> str:
                 continue
             target_entity = entities_by_id[tgt]
             # Flag links to archived entities as a warning (not auto-removed).
-            if target_entity.get("status") == "archived":
+            if target_entity.get("status") == "archived" or target_entity.get("archived"):
                 archived_targets.append({"source": eid, "target": tgt, "type": ltype})
             inverse = REVERSE_TYPE.get(ltype)
-            if inverse is None:
+            # A task dependency is the `depends_on` field; its `blocks` side is
+            # derived from the other task's field, so it is never stored.
+            if inverse is None or ltype in TASK_DEPENDENCY_LINK_TYPES:
+                if ltype == "depends_on":
+                    depends_graph.setdefault(eid, []).append(tgt)
+                    depends_graph.setdefault(tgt, depends_graph.get(tgt, []))
                 continue
             peer_links = entity_links(target_entity)
             if {"type": inverse, "target": eid} not in peer_links:
@@ -5159,31 +5196,56 @@ def backlog_link_validate() -> str:
 
 
 @_transactional("backlog_link_reconcile")
-def backlog_link_reconcile() -> str:
-    """Add missing inverse links on peers. Reports unfixable drift.
+def backlog_link_reconcile(write: bool = False) -> str:
+    """Report stored links whose inverse the peer does not hold; add those
+    inverses only when `write` is True.
 
-    Returns JSON {fixed: N, unfixable: [...], cycles: [...]}.
+    Only links an entity stores are repaired, and only onto the peer's stored
+    links: a link its fields derive (a task's `depends_on`, an issue's
+    `related_tasks`) is a read view, and writing it back would freeze it so
+    later edits of the field stopped showing. Task dependencies are never
+    repaired here: they are the `depends_on` field.
+
+    Returns JSON {written, fixed, repairable: [...], unfixable: [...], cycles: [...]}.
     """
     import json as _json
-    from taskmaster.taskmaster_v3 import sync_inverse
+    from taskmaster.taskmaster_v3 import (LINKABLE_KINDS, REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES,
+                                          entity_links, legacy_links_to_typed, sync_inverse)
 
     validation = _json.loads(backlog_link_validate())
-    fixed = 0
-    unfixable: list[dict] = list(validation.get("orphans", []))
-    backlog_path = _backlog_path()
-
-    for entry in validation.get("asymmetric", []):
-        try:
-            sync_inverse(backlog_path,
-                         source=entry["source"],
-                         target=entry["target"],
-                         type=entry["type"])
-            fixed += 1
-        except (KeyError, ValueError) as e:
-            unfixable.append({**entry, "reason": str(e)})
-
-    return _json.dumps({"fixed": fixed, "unfixable": unfixable,
-                        "cycles": validation.get("cycles", [])})
+    data = _load()
+    stored: dict[str, tuple[str, dict]] = {}
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("id"):
+                stored[task["id"]] = ("task", task)
+    for kind in LINKABLE_KINDS:
+        if kind != "task":
+            for ident, doc, _body in _dict_rows(data, kind, include_archived=True):
+                stored[ident] = (kind, doc)
+    repairable = []
+    for ident, (_kind, doc) in stored.items():
+        for link in entity_links(doc):
+            link_type, target = link["type"], link["target"]
+            inverse = REVERSE_TYPE.get(link_type)
+            if inverse is None or link_type in TASK_DEPENDENCY_LINK_TYPES or target not in stored:
+                continue
+            peer_kind, peer = stored[target]
+            if {"type": inverse, "target": ident} in legacy_links_to_typed(peer, peer_kind):
+                continue
+            repairable.append({"source": ident, "target": target, "type": link_type, "missing_inverse": inverse})
+    fixed, unfixable = 0, list(validation.get("orphans", []))
+    if write:
+        backlog_path = _backlog_path()
+        for entry in repairable:
+            try:
+                sync_inverse(backlog_path, source=entry["source"], target=entry["target"], type=entry["type"],
+                             target_kind=stored[entry["target"]][0])
+                fixed += 1
+            except (KeyError, ValueError) as e:
+                unfixable.append({**entry, "reason": str(e)})
+    return _json.dumps({"written": bool(write), "fixed": fixed, "repairable": repairable,
+                        "unfixable": unfixable, "cycles": validation.get("cycles", [])})
 
 
 @mcp.tool()
@@ -6270,8 +6332,8 @@ def backlog_continuity_items(
     action_class: str = "",
 ) -> str:
     """The viewer's continuity rail as JSON: open handovers, tasks, decisions,
-    issues and ideas, each with an `action_class` (review, resume, clean-up,
-    ambient), most actionable first, capped at `limit`. For an agent's question
+    issues and ideas, each with an `action_class` (review, decide, resume,
+    clean-up, ambient), most actionable first, capped at `limit`. For an agent's question
     "what waits on a person" `backlog_list_tasks(waiting_on_human=True)` is the
     direct answer.
 
@@ -6300,7 +6362,8 @@ def backlog_continuity_items(
     return _continuity_answer(items, view, limit, action_class)
 
 
-_CONTINUITY_RANK = {"review": 0, "resume": 1, "clean-up": 2, "ambient": 3}
+# Most actionable first; a class this list does not know still comes before ambient.
+_CONTINUITY_RANK = {"review": 0, "decide": 1, "resume": 2, "clean-up": 3, "ambient": 5}
 
 
 def _continuity_answer(items: list, view: str, limit: int, action_class: str) -> str:
@@ -6314,7 +6377,7 @@ def _continuity_answer(items: list, view: str, limit: int, action_class: str) ->
         items = [item for item in items if item.get("action_class") == action_class]
     answer: dict = {"view": view, "total": len(items)}
     if limit > 0:
-        ranked = sorted(items, key=lambda item: _CONTINUITY_RANK.get(item.get("action_class"), 9))
+        ranked = sorted(items, key=lambda item: _CONTINUITY_RANK.get(item.get("action_class"), 4))
         items = ranked[:limit]
         if len(ranked) > limit:
             answer["truncated"] = True
@@ -7519,10 +7582,10 @@ def backlog_area_update(area_id: str, field: str, value: str | list[str]) -> str
     Args:
         area_id: The area ID (e.g., "desktop-app", "viewer")
         field: Field to update — one of: name, description, anchors
-        value: New value. For anchors: a list of path globs, a JSON array or a
-            comma-separated string, which REPLACES the whole list; or entries
-            each prefixed `+` (add) or `-` (remove), e.g. "+docs/viewer/**",
-            which edit it.
+        value: New value. For anchors: a list of path globs or a JSON array,
+            which REPLACES the whole list ("[]" clears it); or entries each
+            prefixed `+` (add) or `-` (remove), e.g. "+docs/viewer/**", which
+            edit it. A bare string is refused.
     """
     if field not in ALLOWED_AREA_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_AREA_FIELDS))}"
@@ -7567,9 +7630,27 @@ def _apply_list_edit(current: list, items: list) -> "list | None":
         entry = item[1:].strip()
         if item[0] == "+" and entry and entry not in out:
             out.append(entry)
-        elif item[0] == "-" and entry in out:
+        elif item[0] == "-":
+            if entry not in out:
+                raise ValueError(f"`{entry}` is not in the list, so there is nothing to remove")
             out.remove(entry)
     return out
+
+
+def _dependency_edit_problem(task_id: str, added: list, graph: dict) -> str:
+    """Why adding `added` to `task_id`'s depends_on is refused, or "".
+
+    `graph` maps every task id to its declared dependencies. A task cannot
+    depend on itself, and an added edge must not close a cycle: the gates
+    would then wait on each other forever.
+    """
+    from taskmaster.taskmaster_v3 import would_create_cycle
+    if task_id in added:
+        return f"`{task_id}` cannot depend on itself"
+    for dependency in added:
+        if would_create_cycle(graph, task_id, dependency):
+            return f"adding `{dependency}` would create a cycle in the depends_on chain ({task_id} -> {dependency})"
+    return ""
 
 
 def _anchor_items(value) -> list:
@@ -7594,8 +7675,22 @@ def _anchor_items(value) -> list:
     return [item.strip() for item in items if item.strip()]
 
 
+_ANCHOR_REPLACE_HINT = ('pass a list or a JSON array to replace the anchors ("[]" clears them), or entries '
+                        'each prefixed + or - (e.g. "+docs/**") to add or remove one')
+
+
 def _edited_anchors(current: list, value) -> list:
-    """An area's anchors after `value`: a whole new list, or `+`/`-` edits of `current`."""
+    """An area's anchors after `value`: a whole new list, or `+`/`-` edits of `current`.
+
+    A bare string replaces nothing: one glob, a comma list or "" would silently
+    replace or clear the list, so only a list, a JSON array or prefixed edits
+    are taken.
+    """
+    if isinstance(value, str) and not value.strip().startswith("["):
+        items = _anchor_items(value)
+        if not items or _apply_list_edit(list(current), items) is None:
+            raise ValueError(f"anchors: {_ANCHOR_REPLACE_HINT}")
+        return _apply_list_edit(list(current), items)
     items = _anchor_items(value)
     edited = _apply_list_edit(list(current), items)
     return items if edited is None else edited
@@ -8571,17 +8666,17 @@ def backlog_last_session() -> str:
 
 
 def _legacy_handover_ids_after(day: str) -> list[str]:
-    """Ids of every handover file, archived included, that sort after `day`.
+    """Ids of every stored handover, archived included, that sort after `day`.
 
-    A directory listing, not `_load()` and not the store: this tool read one
-    file before it learned to look, and must not start opening the store or
-    decoding the backlog to add a line. The legacy store exports every handover
-    to `handovers/` (the archive beneath it) when it commits.
+    One indexed query over the store's rows, as the native store counts: not
+    `_load()`, which decodes the whole backlog to add one line, and not the
+    files, where a stray file with no row would count. Best-effort.
     """
-    from taskmaster.taskmaster_v3 import handover_dir as _handover_dir
     try:
-        return [path.stem for path in _handover_dir(_backlog_path()).rglob("*.md") if path.stem > day]
-    except OSError:
+        if not _backlog_path().exists():
+            return []
+        return _store().entity_ids_after("handover", day)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError, store.LegacyLayoutError):
         return []
 
 
@@ -8821,11 +8916,17 @@ def backlog_update_task(
         # Comma-separated task IDs, e.g. "cpp-parser-002,cpp-parser-003", or
         # `+id` / `-id` edits of the current list.
         dep_ids = [d.strip() for d in value.split(",") if d.strip()]
+        current = _dependency_ids(task.get("depends_on")) or []
         try:
-            edited = _apply_list_edit(_dependency_ids(task.get("depends_on")) or [], dep_ids)
+            edited = _apply_list_edit(current, dep_ids)
         except ValueError as exc:
             return f"Error: depends_on: {exc}"
         if edited is not None:
+            graph = {t["id"]: list(_dependency_ids(t.get("depends_on")) or []) for ep in data["epics"]
+                     for t in ep.get("tasks", []) if t.get("id")}
+            problem = _dependency_edit_problem(task_id, [d for d in edited if d not in current], graph)
+            if problem:
+                return f"Error: depends_on: {problem}"
             dep_ids = edited
         # Validate all deps exist
         for dep_id in dep_ids:
@@ -9927,7 +10028,7 @@ def _epic_status_text(data: dict, epic_id: str) -> str:
 
 def _unfinished_phase_refusal(phase: dict, stats: dict, incomplete: int) -> str:
     """Why a phase with unfinished tasks was not advanced; shared with the native adapter."""
-    return (f"**Blocked:** {incomplete} tasks in phase **{phase['name']}** are not done "
+    return (f"Error: blocked — {incomplete} tasks in phase **{phase['name']}** are not done "
             f"(todo: {stats['todo']}, in-progress: {stats['in-progress']}, "
             f"in-review: {stats['in-review']}, blocked: {stats['blocked']}). Finish them or move them "
             f"to another phase, or advance with force=True: the phase is then marked done and they "
@@ -9958,7 +10059,7 @@ def backlog_advance_phase(force: bool = False) -> str:
     if unchecked and not force:
         items = "\n".join(f"  - [ ] {d['text']}" for d in unchecked)
         return (
-            f"**Blocked:** {len(unchecked)} unchecked deliverable(s) in phase "
+            f"Error: blocked — {len(unchecked)} unchecked deliverable(s) in phase "
             f"**{active_ph['name']}**:\n{items}\n\n"
             f"Check them off with `backlog_update_phase(phase_id=\"{active_ph['id']}\", "
             f"field=\"deliverables\", value='{{\"action\":\"toggle\",\"index\":N}}')` "
@@ -10161,6 +10262,9 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
             elif field == "depends_on":
                 dep_ids = [d.strip() for d in value.split(",") if d.strip()]
                 bad = [d for d in dep_ids if not _find_task(data, d)]
+                if any(d[:1] in ("+", "-") for d in dep_ids):
+                    errors.append(f"`{task_id}`: {BATCH_DEPENDENCY_EDIT_REFUSAL}")
+                    continue
                 if bad:
                     errors.append(f"`{task_id}`: dependencies not found: {', '.join(bad)}")
                     continue

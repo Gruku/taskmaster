@@ -229,11 +229,17 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
         if field == "depends_on":
             # `+id` / `-id` edit the current list; the command then stores the whole list.
             items = [d.strip() for d in value.split(",") if d.strip()]
+            current = bs._dependency_ids(task.get("depends_on")) or []
             try:
-                edited = bs._apply_list_edit(bs._dependency_ids(task.get("depends_on")) or [], items)
+                edited = bs._apply_list_edit(current, items)
             except ValueError as exc:
                 return f"Error: depends_on: {exc}"
             if edited is not None:
+                graph = {entity["id"]: list(bs._dependency_ids(entity["fields"].get("depends_on")) or [])
+                         for entity in reads.page(snapshot, "task", fields=("id", "depends_on"), include_archived=True)}
+                problem = bs._dependency_edit_problem(task_id, [d for d in edited if d not in current], graph)
+                if problem:
+                    return f"Error: depends_on: {problem}"
                 value = ",".join(edited)
         refusal = _update_refusal(snapshot, task, epic, task_id, field, value)
         if refusal:

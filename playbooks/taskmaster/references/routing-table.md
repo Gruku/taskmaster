@@ -21,7 +21,7 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | "Search for X", "find tasks about X" | `backlog_search` |
 | "Create a phase", "plan the next phase", "set up phases" | `backlog_add_phase` |
 | "Show phase progress", "where are we in the phase?" | `backlog_phase_status` |
-| "Advance to next phase", "this phase is done" | `backlog_advance_phase` |
+| "Advance to next phase", "this phase is done" | `backlog_advance_phase` (refuses unfinished tasks or deliverables; `force=True` only when the user says so) |
 | "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
 | (v3) "Write a handover", "wrap up for tomorrow", "context handoff", "save where I left off", "for tomorrow", "remind future me", "before compaction" | `taskmaster:handover` |
 | (v3) "Show last handover", "where did I leave off", "resume my work" | `backlog_thread_list()` then `backlog_thread_resume(<name>)` |

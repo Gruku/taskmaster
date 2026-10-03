@@ -89,8 +89,10 @@ def test_the_default_board_counts_archived_only_threads_instead_of_listing_them(
     listed, _native = twins.same("backlog_handover_list", limit=0)
     assert ATLAS not in listed and "1 older handovers" in listed  # the premise
     board, _native = twins.same("backlog_thread_list")
-    assert "atlas-budget" not in board and "**filler-29**" in board
-    assert "1 more thread has only archived handovers" in board and "include_archived=True" in board
+    assert "**atlas-budget**" not in board and "**filler-29**" in board
+    # Not listed, but named: the default answer must not lose an open line of work.
+    assert "…1 more thread has only archived handovers (outside the 30-entry index): atlas-budget" in board
+    assert "include_archived=True" in board
 
 
 def test_the_board_lists_archived_only_threads_on_request(twins):
@@ -169,10 +171,10 @@ def test_an_open_thread_is_described_by_its_newest_open_handover(mixed):
 def test_resume_returns_the_newest_open_handover_of_an_open_thread(mixed):
     for name, newest in (("mixed", MIXED_OPEN), ("inner", INNER_OPEN)):
         resumed, _native = mixed.same("backlog_thread_resume", ref=name)
-        assert f"- newest: {newest}" in resumed and "- status: open" in resumed
+        assert f"- resume: {newest} (newest open handover)" in resumed and "- status: open" in resumed
     # Any handover of the thread, the closed newest one included, lands on the same place.
     resumed, _native = mixed.same("backlog_thread_resume", ref="2026-09-17-mixed-side-note")
-    assert f"- newest: {MIXED_OPEN}" in resumed
+    assert f"- resume: {MIXED_OPEN}" in resumed
 
 
 def test_a_thread_with_an_indexed_handover_is_never_counted_as_archived_only(mixed):
@@ -193,7 +195,7 @@ def test_a_legacy_read_does_not_trust_a_registry_stored_before_the_fix(mixed):
     _as_an_older_build_stored_it(mixed, stale)
     with mixed.at(mixed.legacy):
         assert "- **mixed** — Mixed work still open" in bs.backlog_thread_list()
-        assert f"- newest: {MIXED_OPEN}" in bs.backlog_thread_resume("mixed")
+        assert f"- resume: {MIXED_OPEN}" in bs.backlog_thread_resume("mixed")
 
 
 def test_a_legacy_thread_update_does_not_trust_a_registry_stored_before_the_fix(mixed):

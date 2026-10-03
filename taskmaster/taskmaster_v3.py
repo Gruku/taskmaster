@@ -732,6 +732,23 @@ def resolve_link_kind(entity_id: str | None, exists: "Callable[[str, str], bool]
     return None
 
 
+# A dependency between two tasks is the dependent task's `depends_on` field:
+# every gate (next_available, pick_task, context, validate) reads that field and
+# never the `links` array, so these link types are not written between tasks.
+TASK_DEPENDENCY_LINK_TYPES: tuple[str, ...] = ("depends_on", "blocks")
+# `+id` / `-id` edits read the task's current list; a batch line does not.
+BATCH_DEPENDENCY_EDIT_REFUSAL = ("depends_on takes the whole list here; +id / -id edits are made with "
+                                 'backlog_update_task(task_id=..., field="depends_on", value="+id")')
+
+
+def task_dependency_link_refusal(link_type: str, source: str, target: str, *, remove: bool = False) -> str:
+    """Why a task->task dependency link is refused, and the call that does it."""
+    dependent, dependency = (source, target) if link_type == "depends_on" else (target, source)
+    return (f"a dependency between tasks is the `depends_on` field, which every gate reads, not a link; "
+            f'use backlog_update_task(task_id="{dependent}", field="depends_on", '
+            f'value="{"-" if remove else "+"}{dependency}")')
+
+
 def is_valid_link(link_type: str, source_kind: str, target_kind: str) -> bool:
     """Return True if a link of `link_type` may go from source_kind to target_kind."""
     if link_type not in LINK_TYPE_DOMAIN:
@@ -998,15 +1015,17 @@ _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
 
 
 def _fallback_links_if_absent(entity: dict, kind: str) -> None:
-    """If entity has no `links` array but has legacy fields, synthesize a
-    virtual `links` array. Used by read_entity_anywhere for read-fallback
-    on unmigrated projects. Does not write back.
+    """Show the links an entity's fields derive (a task's `depends_on`, an
+    issue's `related_tasks`) beside the ones it stores. Read-only: a write
+    must start from the stored document, or it freezes the derived links into
+    storage and later edits of those fields stop showing as links.
+
+    It used to derive them only when nothing was stored, so a single stored
+    link hid every dependency a task declared.
     """
-    if entity.get(LINK_FIELD):
-        return
-    synthesized = legacy_links_to_typed(entity, kind=kind)
-    if synthesized:
-        entity[LINK_FIELD] = synthesized
+    merged = legacy_links_to_typed(entity, kind=kind)
+    if merged:
+        entity[LINK_FIELD] = merged
 
 
 def task_file_path(backlog_path: Path, task_id: str) -> Path:
@@ -4623,7 +4642,8 @@ def sync_inverse(
         raise ValueError(f"unknown link type {type!r}")
     target_kind = target_kind or resolve_link_kind(
         target, lambda kind, ident: _entity_io("read")(backlog_path, kind, ident) is not None)
-    target_entity = read_entity_anywhere(backlog_path, target, kind=target_kind) if target_kind else None
+    # The stored document: derived links must not be written back as stored ones.
+    target_entity = read_entity_anywhere(backlog_path, target, kind=target_kind, fallback=False) if target_kind else None
     if target_entity is None:
         raise KeyError(f"target entity {target!r} not found")
     inverse_type = REVERSE_TYPE[type]
@@ -4673,6 +4693,8 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
         return []
 
     existing_targets = {link["target"] for link in entity_links(entity)}
+    # Links are added to the stored document, never to the merged read view.
+    stored = read_entity_anywhere(backlog_path, entity_id, fallback=False)
     added: list[str] = []
     for target_id in refs:
         if target_id in existing_targets:
@@ -4684,11 +4706,11 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
         target_entity = read_entity_anywhere(backlog_path, target_id)
         if target_entity is None:
             continue
-        add_link(entity, "references", target_id)
+        add_link(stored, "references", target_id)
         added.append(target_id)
 
     if added:
-        write_entity_anywhere(backlog_path, entity)
+        write_entity_anywhere(backlog_path, stored)
         for target_id in added:
             try:
                 sync_inverse(backlog_path, source=entity_id,

@@ -992,7 +992,7 @@
     },
     "backlog_area_update": {
       "category": "simple-command",
-      "documentation": "Update a single field on an Area.\n\nArgs:\n    area_id: The area ID (e.g., \"desktop-app\", \"viewer\")\n    field: Field to update — one of: name, description, anchors\n    value: New value. For anchors: a list of path globs, a JSON array or a\n        comma-separated string, which REPLACES the whole list; or entries\n        each prefixed `+` (add) or `-` (remove), e.g. \"+docs/viewer/**\",\n        which edit it.",
+      "documentation": "Update a single field on an Area.\n\nArgs:\n    area_id: The area ID (e.g., \"desktop-app\", \"viewer\")\n    field: Field to update — one of: name, description, anchors\n    value: New value. For anchors: a list of path globs or a JSON array,\n        which REPLACES the whole list (\"[]\" clears it); or entries each\n        prefixed `+` (add) or `-` (remove), e.g. \"+docs/viewer/**\", which\n        edit it. A bare string is refused.",
       "parameters": [
         {
           "mode": "positional",
@@ -1658,7 +1658,7 @@
     },
     "backlog_continuity_items": {
       "category": "targeted-query",
-      "documentation": "The viewer's continuity rail as JSON: open handovers, tasks, decisions,\nissues and ideas, each with an `action_class` (review, resume, clean-up,\nambient), most actionable first, capped at `limit`. For an agent's question\n\"what waits on a person\" `backlog_list_tasks(waiting_on_human=True)` is the\ndirect answer.\n\nReturns {\"items\": [...], \"view\", \"total\"}, plus \"truncated\": true when\n`limit` cut the list.\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).\n    limit: Max items (default 50); 0 returns every item in the rail's order.\n    action_class: Only items of this class.",
+      "documentation": "The viewer's continuity rail as JSON: open handovers, tasks, decisions,\nissues and ideas, each with an `action_class` (review, decide, resume,\nclean-up, ambient), most actionable first, capped at `limit`. For an agent's question\n\"what waits on a person\" `backlog_list_tasks(waiting_on_human=True)` is the\ndirect answer.\n\nReturns {\"items\": [...], \"view\", \"total\"}, plus \"truncated\": true when\n`limit` cut the list.\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).\n    limit: Max items (default 50); 0 returns every item in the rail's order.\n    action_class: Only items of this class.",
       "parameters": [
         {
           "default_expression": "'action'",
@@ -3255,7 +3255,16 @@
           {
             "category": "maintenance",
             "function": "backlog_link_reconcile",
-            "parameters": []
+            "parameters": [
+              {
+                "default_expression": "False",
+                "default_value": false,
+                "mode": "positional",
+                "name": "write",
+                "required": false,
+                "type": "bool"
+              }
+            ]
           }
         ],
         "remove": [
@@ -3295,7 +3304,7 @@
         ]
       },
       "category": "action-router",
-      "documentation": "Link two entities of any kind — tasks, bugs, issues, decisions, ideas,\nnotes, handovers — and read the links back. The server writes the inverse\nside automatically and rejects unknown ids, invalid types, kind mismatches\nand depends_on cycles; `query(source=X)` lists X's links, inverses included.\n\nParams by action: create(source, target, type, note);\nremove(source, target, type); query(source, target, type, depth);\nvalidate(); reconcile().",
+      "documentation": "Link two entities of any kind — tasks, bugs, issues, decisions, ideas,\nnotes, handovers — and read the links back. The server writes the inverse\nside automatically and rejects unknown ids, invalid types and kind\nmismatches; `query(source=X)` lists X's links, inverses and the links its\nfields derive (a task's depends_on) included. A dependency between two tasks\nis not a link: set it with backlog_update_task(field=\"depends_on\", value=\"+id\").\n\nParams by action: create(source, target, type, note);\nremove(source, target, type); query(source, target, type, depth);\nvalidate(); reconcile(write) — reports stored links whose inverse is\nmissing, and adds those inverses only with write=True.",
       "parameters": [
         {
           "mode": "positional",
@@ -3342,6 +3351,14 @@
           "name": "depth",
           "required": false,
           "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "write",
+          "required": false,
+          "type": "bool"
         }
       ],
       "returns": "str",

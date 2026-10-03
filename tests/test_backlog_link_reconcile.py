@@ -28,15 +28,15 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
 
 def test_reconcile_adds_missing_inverse(tm_dir):
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    set_entity_links(t1, [{"type": "depends_on", "target": "T-002"}])
+    set_entity_links(t1, [{"type": "references", "target": "T-002"}])
     write_entity_anywhere(tm_dir / "backlog.yaml", t1)
 
-    out = bs.backlog_link_reconcile()
+    out = bs.backlog_link_reconcile(write=True)
     data = json.loads(out)
     assert data["fixed"] >= 1
 
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    assert {"type": "referenced_by", "target": "T-001"} in entity_links(t2)
 
 
 def test_reconcile_reports_unfixable_orphan(tm_dir):
@@ -50,7 +50,7 @@ def test_reconcile_reports_unfixable_orphan(tm_dir):
 
 
 def test_reconcile_idempotent(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
+    bs.backlog_link_create(source="T-001", target="T-002", type="references")
     out1 = bs.backlog_link_reconcile()
     out2 = bs.backlog_link_reconcile()
     d1, d2 = json.loads(out1), json.loads(out2)

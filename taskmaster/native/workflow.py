@@ -500,13 +500,10 @@ def _auto_link(transaction, kind, ident, doc, body):
     references = domain_v3.extract_inline_refs(text, self_id=ident)
     if not references:
         return doc
-    existing = {link["target"] for link in domain_v3.entity_links(doc)}
+    # Targets already linked, derived links included; the reference is added to
+    # the stored document only, so derived links stay derived.
+    existing = {link["target"] for link in domain_v3.legacy_links_to_typed(doc, kind)}
     doc = deepcopy(doc)
-    if kind != "task":
-        # The tools read every non-task entity through `read_entity_anywhere`,
-        # which synthesizes `links` from legacy fields, and write that document
-        # back: the synthesized links persist alongside the new reference.
-        domain_v3._fallback_links_if_absent(doc, kind)
     added = []
     for target in references:
         if target in existing:
@@ -517,19 +514,15 @@ def _auto_link(transaction, kind, ident, doc, body):
         domain_v3.add_link(doc, "references", target)
         added.append((target_kind, target))
     for target_kind, target in added:
-        # Targets outside the task tree are likewise read and written back with
-        # their synthesized links; a task source edits tree targets directly.
-        fallback = kind != "task" or target_kind not in ("task", "epic", "phase")
-        _write_inverse(transaction, target_kind, target, source=ident, link_type="references", fallback=fallback)
+        _write_inverse(transaction, target_kind, target, source=ident, link_type="references")
     return doc
 
 
-def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False, fallback=False):
+def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False):
+    """The inverse link, on the target's stored document: derived links are not written back."""
     inverse = domain_v3.REVERSE_TYPE[link_type]
     entity = _entity(transaction, target_kind, target)
     doc = deepcopy(entity["fields"])
-    if fallback:
-        domain_v3._fallback_links_if_absent(doc, target_kind)
     changed = (domain_v3.remove_link(doc, inverse, source) if remove
                else domain_v3.add_link(doc, inverse, source))
     if changed:
@@ -1305,33 +1298,16 @@ def _link_create(transaction, arguments):
     if not domain_v3.is_valid_link(link_type, source_kind, target_kind):
         raise ValueError(f"invalid link — type {link_type!r} cannot go from "
                          f"{source_kind} ({source_id}) to {target_kind} ({target_id})")
+    if link_type in domain_v3.TASK_DEPENDENCY_LINK_TYPES:
+        raise ValueError(domain_v3.task_dependency_link_refusal(link_type, source_id, target_id))
     entity = _entity(transaction, source_kind, source_id)
-    if link_type in ("depends_on", "blocks"):
-        _assert_no_cycle(transaction, source_id, target_id, link_type)
     doc = deepcopy(entity["fields"])
     del note   # accepted for signature parity; the tool never stored it either
-    # The tool reads both ends through `read_entity_anywhere`, which synthesizes
-    # `links` from legacy fields, and writes that document back.
-    domain_v3._fallback_links_if_absent(doc, source_kind)
+    # The stored document: links its fields derive are not written back.
     if domain_v3.add_link(doc, link_type, target_id):
         transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
-    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type, fallback=True)
+    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type)
     return source_id
-
-
-def _assert_no_cycle(transaction, source_id, target_id, link_type):
-    graph = {}
-    for item in _page(transaction.snapshot, "task", include_archived=True):
-        ident = item["id"]
-        graph.setdefault(ident, [])
-        for link in item["fields"].get("links") or []:
-            if link.get("type") == "depends_on":
-                graph[ident].append(link["target"])
-            elif link.get("type") == "blocks":
-                graph.setdefault(link["target"], []).append(ident)
-    start, end = (source_id, target_id) if link_type == "depends_on" else (target_id, source_id)
-    if domain_v3.would_create_cycle(graph, start, end):
-        raise ValueError(f"would create cycle in depends_on chain ({start} -> {end})")
 
 
 def _link_remove(transaction, arguments):
@@ -1340,12 +1316,15 @@ def _link_remove(transaction, arguments):
     if source_kind is None:
         raise KeyError(f"source {source_id!r} not found")
     target_kind = _link_kind(transaction, target_id)
+    requested = arguments.get("type", "")
+    between_tasks = source_kind == "task" and target_kind == "task"
+    if between_tasks and requested in domain_v3.TASK_DEPENDENCY_LINK_TYPES:
+        raise ValueError(domain_v3.task_dependency_link_refusal(requested, source_id, target_id, remove=True))
     entity = _entity(transaction, source_kind, source_id)
     doc = deepcopy(entity["fields"])
-    domain_v3._fallback_links_if_absent(doc, source_kind)
-    requested = arguments.get("type", "")
     types = [requested] if requested else sorted(
-        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id})
+        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id
+         and not (between_tasks and link["type"] in domain_v3.TASK_DEPENDENCY_LINK_TYPES)})
     if not types:
         return source_id
     # Every type is removed; `any()` over the removals stopped at the first one.
@@ -1355,7 +1334,7 @@ def _link_remove(transaction, arguments):
     for link_type in types:
         if target_kind is not None:
             _write_inverse(transaction, target_kind, target_id, source=source_id,
-                           link_type=link_type, remove=True, fallback=True)
+                           link_type=link_type, remove=True)
     if removed:
         current = _entity(transaction, source_kind, source_id)
         transaction.replace(source_kind, source_id, dict(current["fields"], links=doc.get("links"))

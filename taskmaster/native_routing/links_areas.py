@@ -29,6 +29,12 @@ def _kind(snapshot, ident):
     return v3.resolve_link_kind(ident, lambda kind, eid: reads.get(snapshot, kind, eid) is not None)
 
 
+def _stored(snapshot, ident, kind):
+    """The entity's stored document: the links its fields derive are not in it."""
+    entity = reads.get(snapshot, kind, ident, body=True)
+    return reads.document(entity) if entity is not None else None
+
+
 def _anywhere(snapshot, ident, kind=None):
     """`read_entity_anywhere`: the entity, with legacy links synthesized."""
     kind = kind or _kind(snapshot, ident)
@@ -47,7 +53,7 @@ def _anywhere(snapshot, ident, kind=None):
 
 @adapter("backlog_link", actions=("create", "remove", "query", "validate"),
          unknown=lambda action: json.dumps({"error": f"unknown action {action!r}"}))
-def link(call, *, action, source, target, type, note, depth):
+def link(call, *, action, source, target, type, note, depth, write):
     if action == "create":
         return _create(call, source, target, type, note)
     if action == "remove":
@@ -71,7 +77,9 @@ def _create(call, source, target, link_type, note):
         if not v3.is_valid_link(link_type, source_kind, target_kind):
             return (f"Error: invalid link — type {link_type!r} cannot go from "
                     f"{source_kind} ({source}) to {target_kind} ({target})")
-        source_entity = _anywhere(snapshot, source, source_kind)
+        if link_type in v3.TASK_DEPENDENCY_LINK_TYPES:
+            return f"Error: {v3.task_dependency_link_refusal(link_type, source, target)}"
+        source_entity = _stored(snapshot, source, source_kind)
     added = v3.add_link(deepcopy(source_entity), link_type, target)
     refusal = _run(call, "link.create", {"source": source, "target": target, "type": link_type, "note": note})
     if refusal:
@@ -83,15 +91,20 @@ def _create(call, source, target, link_type, note):
 
 def _remove(call, source, target, link_type):
     with call.read() as snapshot:
-        source_entity = _anywhere(snapshot, source)
+        source_kind = _kind(snapshot, source)
+        source_entity = _stored(snapshot, source, source_kind) if source_kind else None
+        between_tasks = source_kind == "task" and _kind(snapshot, target) == "task"
     if source_entity is None:
         return f"Error: source {source!r} not found"
+    if between_tasks and link_type in v3.TASK_DEPENDENCY_LINK_TYPES:
+        return f"Error: {v3.task_dependency_link_refusal(link_type, source, target, remove=True)}"
     if link_type:
         if link_type not in v3.LINK_TYPES:
             return f"Error: invalid link type {link_type!r}"
         types = [link_type]
     else:
-        types = sorted({item["type"] for item in v3.entity_links(source_entity) if item["target"] == target})
+        types = sorted({item["type"] for item in v3.entity_links(source_entity) if item["target"] == target
+                        and not (between_tasks and item["type"] in v3.TASK_DEPENDENCY_LINK_TYPES)})
     if not types:
         return f"ok: no-op (no links from {source} to {target})"
     probe = deepcopy(source_entity)
@@ -106,14 +119,14 @@ def _remove(call, source, target, link_type):
     return call.finish(f"ok: no-op (links not present between {source} and {target})")
 
 
-def _file_entities(snapshot):
+def _file_entities(snapshot, include_archived=False):
     """`(id, kind)` of every non-task entity a link can join, as the tool's `_linkable_rows` lists them."""
     for kind in v3.LINKABLE_KINDS:
         if kind == "task":
             continue
         for entity in sorted(reads.page(snapshot, kind, include_archived=True), key=lambda e: e["id"]):
-            if kind in bs._LINK_LISTING_KEEPS_ARCHIVED or not entity["archived"]:
-                yield entity["id"], kind
+            if include_archived or kind in bs._LINK_LISTING_KEEPS_ARCHIVED or not entity["archived"]:
+                yield entity["id"], kind, entity["archived"]
 
 
 def _query(snapshot, source, target, link_type, depth):
@@ -145,9 +158,9 @@ def _query(snapshot, source, target, link_type, depth):
         results = []
         for epic in reads.epics(snapshot):
             for task in reads.epic_tasks(snapshot, epic["id"]):
-                for item in task.get("links", []) or []:
+                for item in v3.legacy_links_to_typed(task, kind="task"):
                     results.append({"source": task["id"], "target": item["target"], "type": item["type"]})
-        for ident, kind in _file_entities(snapshot):
+        for ident, kind, _archived in _file_entities(snapshot):
             for item in v3.entity_links(_anywhere(snapshot, ident, kind)):
                 results.append({"source": ident, "target": item["target"], "type": item["type"]})
     if target:
@@ -162,9 +175,12 @@ def _validate(snapshot):
     for epic in reads.epics(snapshot):
         for task in reads.epic_tasks(snapshot, epic["id"]):
             if task.get("id"):
-                entities[task["id"]] = task
-    for ident, kind in _file_entities(snapshot):
+                entities[task["id"]] = {**task, "links": v3.legacy_links_to_typed(task, kind="task")}
+    archived = set()
+    for ident, kind, is_archived in _file_entities(snapshot, include_archived=True):
         entities[ident] = _anywhere(snapshot, ident, kind)
+        if is_archived:
+            archived.add(ident)
     orphans, asymmetric, archived_targets, graph = [], [], [], {}
     for ident, entity in entities.items():
         for item in v3.entity_links(entity):
@@ -173,10 +189,13 @@ def _validate(snapshot):
                 orphans.append({"source": ident, "target": item_target, "type": item_type})
                 continue
             peer = entities[item_target]
-            if peer.get("status") == "archived":
+            if peer.get("status") == "archived" or peer.get("archived") or item_target in archived:
                 archived_targets.append({"source": ident, "target": item_target, "type": item_type})
             inverse = v3.REVERSE_TYPE.get(item_type)
-            if inverse is None:
+            if inverse is None or item_type in v3.TASK_DEPENDENCY_LINK_TYPES:
+                if item_type == "depends_on":
+                    graph.setdefault(ident, []).append(item_target)
+                    graph.setdefault(item_target, graph.get(item_target, []))
                 continue
             if {"type": inverse, "target": ident} not in v3.entity_links(peer):
                 asymmetric.append({"source": ident, "target": item_target, "type": item_type,
