@@ -30,7 +30,7 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
 def test_validate_reports_orphan_target(tm_dir):
     # Hand-edit T-001 to link to a missing target.
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    set_entity_links(t1, [{"type": "depends_on", "target": "T-999"}])
+    set_entity_links(t1, [{"type": "references", "target": "T-999"}])
     write_entity_anywhere(tm_dir / "backlog.yaml", t1)
 
     out = bs.backlog_link_validate()
@@ -54,11 +54,12 @@ def test_validate_reports_asymmetric_pair(tm_dir):
 
 
 def test_validate_reports_cycles(tm_dir):
-    t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    set_entity_links(t1, [{"type": "depends_on", "target": "T-002"}])
+    # A dependency is the `depends_on` field; the cycle graph is drawn from it.
+    t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001", fallback=False)
+    t1["depends_on"] = ["T-002"]
     write_entity_anywhere(tm_dir / "backlog.yaml", t1)
-    t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    set_entity_links(t2, [{"type": "depends_on", "target": "T-001"}])
+    t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002", fallback=False)
+    t2["depends_on"] = ["T-001"]
     write_entity_anywhere(tm_dir / "backlog.yaml", t2)
 
     out = bs.backlog_link_validate()

@@ -480,6 +480,7 @@ def _append_grouped_links_block(
     *,
     expand_links: bool = False,
     links: "_LegacyLinks | None" = None,
+    kind: str | None = None,
 ) -> None:
     """Append a Plan C grouped `links:` block to `lines` for slim-view rendering.
 
@@ -490,7 +491,7 @@ def _append_grouped_links_block(
     from taskmaster.taskmaster_v3 import links_grouped_by_type
 
     links = links or _LegacyLinks(None, backlog_path)
-    grouped = links_grouped_by_type(entity)
+    grouped = links_grouped_by_type(entity, kind)
     if not grouped:
         return
     lines.append("\n**links:**")
@@ -1524,8 +1525,8 @@ def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
     """
     from taskmaster.taskmaster_v3 import (  # noqa: PLC0415 - link helpers
         add_link as _add_link,
-        entity_links as _entity_links,
         extract_inline_refs as _extract_inline_refs,
+        link_view as _link_view,
         read_entity_anywhere as _read_entity_anywhere,
         sync_inverse as _sync_inverse,
     )
@@ -1551,7 +1552,9 @@ def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
         return []
 
     bp = _backlog_path()
-    existing = {link["target"] for link in _entity_links(task)}
+    # What a read already shows as linked, field-derived links included, as the
+    # native auto-link reads it; the reference itself goes on the stored task.
+    existing = {link["target"] for link in _link_view(task, "task")}
     pending: list[tuple[str, dict | None]] = []
     for target_id in refs:
         if target_id in existing:
@@ -2588,7 +2591,7 @@ def backlog_get_task(
         for k, v in slim.items():
             lines.append(f"**{k}:** {v}")
         # Plan C: emit grouped typed-links block.
-        _append_grouped_links_block(lines, task, bp, expand_links=expand_links)
+        _append_grouped_links_block(lines, task, bp, expand_links=expand_links, kind="task")
         return "\n".join(lines)
 
     # ── verbose mode ─────────────────────────────────────────────────────────
@@ -4926,6 +4929,12 @@ def backlog_link(
     return json.dumps({"error": f"unknown action {action!r}"})
 
 
+def _dependents_of(data: dict, task_id: str) -> list:
+    """Ids of the tasks whose `depends_on` names `task_id`, in tree order."""
+    return [task["id"] for epic in data.get("epics", []) for task in epic.get("tasks", [])
+            if task.get("id") and task_id in (_dependency_ids(task.get("depends_on")) or [])]
+
+
 def _link_kind(ident: str) -> str | None:
     """The kind of the linkable entity `ident` names, read the way the link engine reads it."""
     from taskmaster.taskmaster_v3 import resolve_link_kind
@@ -5059,9 +5068,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     array of {source, target, type} entries.
     """
     import json as _json
-    from taskmaster.taskmaster_v3 import (
-        entity_kind_of, read_entity_anywhere, entity_links,
-    )
+    from taskmaster.taskmaster_v3 import entity_links, link_view as _link_view, read_entity_anywhere
 
     backlog_path = _backlog_path()
 
@@ -5069,20 +5076,23 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
         entity = read_entity_anywhere(backlog_path, entity_id)
         if entity is None:
             return []
-        return [{"source": entity_id, "target": link["target"], "type": link["type"]}
-                for link in entity_links(entity)]
+        edges = [{"source": entity_id, "target": link["target"], "type": link["type"]}
+                 for link in entity_links(entity)]
+        # A task's `blocks` side is derived from the tasks that depend on it.
+        return edges + [{"source": entity_id, "target": dependent, "type": "blocks"}
+                        for dependent in _dependents_of(_load(), entity_id)]
 
     def all_edges() -> list[dict]:
         out: list[dict] = []
         data = _load()
-        for epic in data.get("epics", []):
-            for task in epic.get("tasks", []):
-                tid = task.get("id")
-                if not tid:
-                    continue
-                # The links its fields derive (depends_on) included, as a read of it shows.
-                for link in _legacy_links_to_typed(task, kind="task"):
-                    out.append({"source": tid, "target": link["target"], "type": link["type"]})
+        tasks = [task for epic in data.get("epics", []) for task in epic.get("tasks", []) if task.get("id")]
+        for task in tasks:
+            # The links its fields derive (depends_on) included, as a read of it shows.
+            for link in _link_view(task, "task"):
+                out.append({"source": task["id"], "target": link["target"], "type": link["type"]})
+        for task in tasks:
+            for dependency in _dependency_ids(task.get("depends_on")) or []:
+                out.append({"source": dependency, "target": task["id"], "type": "blocks"})
         for eid, entity in _linkable_rows(data):
             for link in entity_links(entity):
                 out.append({"source": eid, "target": link["target"], "type": link["type"]})
@@ -5128,7 +5138,7 @@ def backlog_link_validate() -> str:
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, entity_links, find_cycle,
+        REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, entity_links, find_cycle, link_view,
     )
 
     backlog_path = _backlog_path()
@@ -5138,7 +5148,7 @@ def backlog_link_validate() -> str:
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id"):
-                    yield task["id"], {**task, "links": _legacy_links_to_typed(task, kind="task")}
+                    yield task["id"], {**task, "links": link_view(task, "task")}
         yield from _linkable_rows(data, include_archived=True)
 
     orphans: list[dict] = []
@@ -5203,14 +5213,21 @@ def backlog_link_reconcile(write: bool = False) -> str:
     Only links an entity stores are repaired, and only onto the peer's stored
     links: a link its fields derive (a task's `depends_on`, an issue's
     `related_tasks`) is a read view, and writing it back would freeze it so
-    later edits of the field stopped showing. Task dependencies are never
-    repaired here: they are the `depends_on` field.
+    later edits of the field stopped showing. Asymmetric pairs it will not
+    repair for that reason are listed in `not_repaired`, with why.
 
-    Returns JSON {written, fixed, repairable: [...], unfixable: [...], cycles: [...]}.
+    Task dependencies are the `depends_on` field. The `depends_on` / `blocks`
+    entries a task stores in `links` (an older link migration wrote them) are
+    ignored on read; they are counted in `stored_dependency_links`, and
+    `write=True` drops them (`dropped_dependency_links`).
+
+    Returns JSON {written, fixed, repairable, not_repaired, not_repaired_count,
+    stored_dependency_links, dropped_dependency_links, unfixable, cycles}.
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (LINKABLE_KINDS, REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES,
-                                          entity_links, legacy_links_to_typed, sync_inverse)
+                                          entity_links, link_view, read_entity_anywhere, set_entity_links,
+                                          sync_inverse, write_entity_anywhere)
 
     validation = _json.loads(backlog_link_validate())
     data = _load()
@@ -5231,10 +5248,19 @@ def backlog_link_reconcile(write: bool = False) -> str:
             if inverse is None or link_type in TASK_DEPENDENCY_LINK_TYPES or target not in stored:
                 continue
             peer_kind, peer = stored[target]
-            if {"type": inverse, "target": ident} in legacy_links_to_typed(peer, peer_kind):
+            if {"type": inverse, "target": ident} in link_view(peer, peer_kind):
                 continue
             repairable.append({"source": ident, "target": target, "type": link_type, "missing_inverse": inverse})
-    fixed, unfixable = 0, list(validation.get("orphans", []))
+    planned = {(entry["source"], entry["target"], entry["type"]) for entry in repairable}
+    not_repaired = [
+        {**entry, "reason": f"the link is derived from a field of `{entry['source']}`, not stored; reconcile "
+                            "repairs stored links only — edit that field, or store the link with backlog_link"}
+        for entry in validation.get("asymmetric", [])
+        if (entry["source"], entry["target"], entry["type"]) not in planned]
+    stale = {ident: [link for link in entity_links(doc) if link["type"] in TASK_DEPENDENCY_LINK_TYPES]
+             for ident, (kind, doc) in stored.items() if kind == "task"}
+    stale = {ident: links for ident, links in stale.items() if links}
+    fixed, dropped, unfixable = 0, 0, list(validation.get("orphans", []))
     if write:
         backlog_path = _backlog_path()
         for entry in repairable:
@@ -5244,7 +5270,16 @@ def backlog_link_reconcile(write: bool = False) -> str:
                 fixed += 1
             except (KeyError, ValueError) as e:
                 unfixable.append({**entry, "reason": str(e)})
+        for ident, links in sorted(stale.items()):
+            document = read_entity_anywhere(backlog_path, ident, kind="task", fallback=False)
+            set_entity_links(document, [link for link in entity_links(document)
+                                        if link["type"] not in TASK_DEPENDENCY_LINK_TYPES])
+            write_entity_anywhere(backlog_path, document, kind="task")
+            dropped += len(links)
     return _json.dumps({"written": bool(write), "fixed": fixed, "repairable": repairable,
+                        "not_repaired": not_repaired, "not_repaired_count": len(not_repaired),
+                        "stored_dependency_links": sum(len(links) for links in stale.values()),
+                        "dropped_dependency_links": dropped,
                         "unfixable": unfixable, "cycles": validation.get("cycles", [])})
 
 
@@ -7628,7 +7663,9 @@ def _apply_list_edit(current: list, items: list) -> "list | None":
     out = list(current)
     for item in items:
         entry = item[1:].strip()
-        if item[0] == "+" and entry and entry not in out:
+        if not entry:
+            raise ValueError(f"an empty `{item[0]}` entry names nothing to {'add' if item[0] == '+' else 'remove'}")
+        if item[0] == "+" and entry not in out:
             out.append(entry)
         elif item[0] == "-":
             if entry not in out:
@@ -8922,12 +8959,16 @@ def backlog_update_task(
         except ValueError as exc:
             return f"Error: depends_on: {exc}"
         if edited is not None:
+            dep_ids = edited
+        # Newly named dependencies, however the list was given: a task cannot
+        # depend on itself or close a cycle. Existing entries are not re-judged.
+        added = [d for d in dep_ids if d not in current]
+        if added:
             graph = {t["id"]: list(_dependency_ids(t.get("depends_on")) or []) for ep in data["epics"]
                      for t in ep.get("tasks", []) if t.get("id")}
-            problem = _dependency_edit_problem(task_id, [d for d in edited if d not in current], graph)
+            problem = _dependency_edit_problem(task_id, added, graph)
             if problem:
                 return f"Error: depends_on: {problem}"
-            dep_ids = edited
         # Validate all deps exist
         for dep_id in dep_ids:
             if not _find_task(data, dep_id):

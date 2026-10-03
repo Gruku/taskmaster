@@ -158,9 +158,10 @@ def test_migration_from_legacy_project(tmp_path):
     assert t1["depends_on"] == ["T-002"]
     assert "related_issues" not in t1  # legacy field dropped
 
-    # Inverses materialized.
-    t2 = read_entity_anywhere(d / "backlog.yaml", "T-002")
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    # Inverses materialized — except a task dependency's: its `blocks` side is
+    # derived from T-001's depends_on field, never stored.
+    t2 = read_entity_anywhere(d / "backlog.yaml", "T-002", fallback=False)
+    assert {"type": "blocks", "target": "T-001"} not in entity_links(t2)
 
     iss = read_entity_anywhere(d / "backlog.yaml", "ISS-001")
     assert {"type": "fixed_in_task", "target": "T-001"} in entity_links(iss)

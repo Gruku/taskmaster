@@ -131,10 +131,16 @@ def _file_entities(snapshot, include_archived=False):
 
 def _query(snapshot, source, target, link_type, depth):
     def edges_from(ident):
-        entity = _anywhere(snapshot, ident)
+        kind = _kind(snapshot, ident)
+        entity = _anywhere(snapshot, ident, kind) if kind else None
         if entity is None:
             return []
-        return [{"source": ident, "target": item["target"], "type": item["type"]} for item in v3.entity_links(entity)]
+        edges = [{"source": ident, "target": item["target"], "type": item["type"]} for item in v3.entity_links(entity)]
+        if kind != "task":
+            return edges
+        # A task's `blocks` side is derived from the tasks that depend on it.
+        return edges + [{"source": ident, "target": task["id"], "type": "blocks"}
+                        for task in reads.dependent_tasks(snapshot, ident)]
 
     if source and _anywhere(snapshot, source) is None:
         return f"Error: source {source!r} not found"
@@ -156,10 +162,13 @@ def _query(snapshot, source, target, link_type, depth):
                 frontier = following
     else:
         results = []
-        for epic in reads.epics(snapshot):
-            for task in reads.epic_tasks(snapshot, epic["id"]):
-                for item in v3.legacy_links_to_typed(task, kind="task"):
-                    results.append({"source": task["id"], "target": item["target"], "type": item["type"]})
+        tasks = [task for epic in reads.epics(snapshot) for task in reads.epic_tasks(snapshot, epic["id"])]
+        for task in tasks:
+            for item in v3.link_view(task, "task"):
+                results.append({"source": task["id"], "target": item["target"], "type": item["type"]})
+        for task in tasks:
+            for dependency in bs._dependency_ids(task.get("depends_on")) or []:
+                results.append({"source": dependency, "target": task["id"], "type": "blocks"})
         for ident, kind, _archived in _file_entities(snapshot):
             for item in v3.entity_links(_anywhere(snapshot, ident, kind)):
                 results.append({"source": ident, "target": item["target"], "type": item["type"]})
@@ -175,7 +184,7 @@ def _validate(snapshot):
     for epic in reads.epics(snapshot):
         for task in reads.epic_tasks(snapshot, epic["id"]):
             if task.get("id"):
-                entities[task["id"]] = {**task, "links": v3.legacy_links_to_typed(task, kind="task")}
+                entities[task["id"]] = {**task, "links": v3.link_view(task, "task")}
     archived = set()
     for ident, kind, is_archived in _file_entities(snapshot, include_archived=True):
         entities[ident] = _anywhere(snapshot, ident, kind)

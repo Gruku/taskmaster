@@ -235,12 +235,16 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
             except ValueError as exc:
                 return f"Error: depends_on: {exc}"
             if edited is not None:
+                items = edited
+                value = ",".join(edited)
+            # Newly named dependencies, however the list was given (see the tool).
+            added = [d for d in items if d not in current]
+            if added:
                 graph = {entity["id"]: list(bs._dependency_ids(entity["fields"].get("depends_on")) or [])
                          for entity in reads.page(snapshot, "task", fields=("id", "depends_on"), include_archived=True)}
-                problem = bs._dependency_edit_problem(task_id, [d for d in edited if d not in current], graph)
+                problem = bs._dependency_edit_problem(task_id, added, graph)
                 if problem:
                     return f"Error: depends_on: {problem}"
-                value = ",".join(edited)
         refusal = _update_refusal(snapshot, task, epic, task_id, field, value)
         if refusal:
             return refusal
@@ -720,7 +724,7 @@ def _tldr_index(snapshot, ids) -> dict:
 
 
 def _links_block(snapshot, lines, task, *, expand_links, peers):
-    grouped = links_grouped_by_type(task)
+    grouped = links_grouped_by_type(task, "task")
     if not grouped:
         return
     lines.append("\n**links:**")

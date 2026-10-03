@@ -800,10 +800,16 @@ def remove_link(entity: dict, link_type: str, target: str) -> bool:
     return True
 
 
-def links_grouped_by_type(entity: dict) -> dict[str, list[str]]:
-    """Return {type: [target_id, ...]} grouped view. Used by slim-view rendering."""
+def links_grouped_by_type(entity: dict, kind: str | None = None) -> dict[str, list[str]]:
+    """Return {type: [target_id, ...]} grouped view. Used by slim-view rendering.
+
+    For a task, stored `depends_on` / `blocks` entries are left out: its
+    dependencies are the `depends_on` field, which the view shows on its own.
+    """
     grouped: dict[str, list[str]] = {}
     for link in entity_links(entity):
+        if kind == "task" and link["type"] in TASK_DEPENDENCY_LINK_TYPES:
+            continue
         grouped.setdefault(link["type"], []).append(link["target"])
     return grouped
 
@@ -1014,18 +1020,35 @@ _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
 }
 
 
+def link_view(entity: dict, kind: str) -> list[dict]:
+    """The links a read of `entity` shows: the ones it stores, plus the ones
+    its fields derive (a task's `depends_on`, an issue's `related_tasks`).
+
+    A task's dependencies are its `depends_on` field and nothing else: every
+    gate reads that field. `depends_on` / `blocks` entries a task stores in
+    `links` (an older link migration wrote them) are ignored, so clearing the
+    field clears the dependency everywhere. The derived graph tables keep
+    their own reading (`legacy_links_to_typed`).
+    """
+    if kind == "task":
+        entity = {**entity, LINK_FIELD: [link for link in entity_links(entity)
+                                         if link.get("type") not in TASK_DEPENDENCY_LINK_TYPES]}
+    return legacy_links_to_typed(entity, kind=kind)
+
+
 def _fallback_links_if_absent(entity: dict, kind: str) -> None:
-    """Show the links an entity's fields derive (a task's `depends_on`, an
-    issue's `related_tasks`) beside the ones it stores. Read-only: a write
-    must start from the stored document, or it freezes the derived links into
-    storage and later edits of those fields stop showing as links.
+    """Show `link_view` as the entity's links. Read-only: a write must start
+    from the stored document, or it freezes the derived links into storage and
+    later edits of those fields stop showing as links.
 
     It used to derive them only when nothing was stored, so a single stored
     link hid every dependency a task declared.
     """
-    merged = legacy_links_to_typed(entity, kind=kind)
+    merged = link_view(entity, kind)
     if merged:
         entity[LINK_FIELD] = merged
+    else:
+        entity.pop(LINK_FIELD, None)
 
 
 def task_file_path(backlog_path: Path, task_id: str) -> Path:

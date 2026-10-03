@@ -502,7 +502,7 @@ def _auto_link(transaction, kind, ident, doc, body):
         return doc
     # Targets already linked, derived links included; the reference is added to
     # the stored document only, so derived links stay derived.
-    existing = {link["target"] for link in domain_v3.legacy_links_to_typed(doc, kind)}
+    existing = {link["target"] for link in domain_v3.link_view(doc, kind)}
     doc = deepcopy(doc)
     added = []
     for target in references:

@@ -41,7 +41,7 @@ def test_reconcile_adds_missing_inverse(tm_dir):
 
 def test_reconcile_reports_unfixable_orphan(tm_dir):
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    set_entity_links(t1, [{"type": "depends_on", "target": "T-999"}])
+    set_entity_links(t1, [{"type": "references", "target": "T-999"}])
     write_entity_anywhere(tm_dir / "backlog.yaml", t1)
 
     out = bs.backlog_link_reconcile()
