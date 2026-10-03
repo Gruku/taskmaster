@@ -86,10 +86,10 @@ def link_dir(tmp_path, monkeypatch):
 
 
 def test_link_dispatcher_create_query_remove(link_dir):
-    out = bs.backlog_link(action="create", source="T-001", target="T-002", type="depends_on")
+    out = bs.backlog_link(action="create", source="T-001", target="T-002", type="references")
     assert "ok" in out.lower()
     edges = json.loads(bs.backlog_link(action="query", source="T-001"))
-    assert any(e["target"] == "T-002" and e["type"] == "depends_on" for e in edges)
+    assert any(e["target"] == "T-002" and e["type"] == "references" for e in edges)
     val = json.loads(bs.backlog_link(action="validate"))
     assert val["asymmetric"] == []
     rem = bs.backlog_link(action="remove", source="T-001", target="T-002")
