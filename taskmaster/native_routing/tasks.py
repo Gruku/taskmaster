@@ -226,6 +226,25 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
         if not found:
             return f"Error: task `{task_id}` not found"
         task, epic = found
+        if field == "depends_on":
+            # `+id` / `-id` edit the current list; the command then stores the whole list.
+            items = [d.strip() for d in value.split(",") if d.strip()]
+            current = bs._dependency_ids(task.get("depends_on")) or []
+            try:
+                edited = bs._apply_list_edit(current, items)
+            except ValueError as exc:
+                return f"Error: depends_on: {exc}"
+            if edited is not None:
+                items = edited
+                value = ",".join(edited)
+            # Newly named dependencies, however the list was given (see the tool).
+            added = [d for d in items if d not in current]
+            if added:
+                graph = {entity["id"]: list(bs._dependency_ids(entity["fields"].get("depends_on")) or [])
+                         for entity in reads.page(snapshot, "task", fields=("id", "depends_on"), include_archived=True)}
+                problem = bs._dependency_edit_problem(task_id, added, graph)
+                if problem:
+                    return f"Error: depends_on: {problem}"
         refusal = _update_refusal(snapshot, task, epic, task_id, field, value)
         if refusal:
             return refusal
@@ -705,7 +724,7 @@ def _tldr_index(snapshot, ids) -> dict:
 
 
 def _links_block(snapshot, lines, task, *, expand_links, peers):
-    grouped = links_grouped_by_type(task)
+    grouped = links_grouped_by_type(task, "task")
     if not grouped:
         return
     lines.append("\n**links:**")
@@ -833,7 +852,7 @@ def _verbose_task(snapshot, task, epic, task_id, *, expand_links):
 
 
 @adapter("backlog_list_tasks")
-def list_tasks(call, *, epic, status, priority, phase, area, verbose, limit):
+def list_tasks(call, *, epic, status, priority, phase, area, verbose, limit, waiting_on_human):
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     status_order = {"in-progress": 0, "in-review": 1, "blocked": 2, "todo": 3, "done": 4, "archived": 5}
     results = []
@@ -852,7 +871,9 @@ def list_tasks(call, *, epic, status, priority, phase, area, verbose, limit):
                     continue
                 if phase and t.get("phase") != phase:
                     continue
-                if area and t.get("area") != area:
+                if area and bs._task_area(t, ep) != area:
+                    continue
+                if waiting_on_human and not t.get("human_action"):
                     continue
                 pri = t.get("priority", "medium")
                 entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
@@ -862,6 +883,8 @@ def list_tasks(call, *, epic, status, priority, phase, area, verbose, limit):
         filters = [f"{name}={value}" for name, value in (("epic", epic), ("status", status),
                                                          ("priority", priority), ("phase", phase),
                                                          ("area", area)) if value]
+        if waiting_on_human:
+            filters.append("waiting_on_human")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
     results.sort(key=lambda x: (x[0], x[1], x[2]))
     total = len(results)

@@ -52,7 +52,7 @@ planned → active → done → archived
 |---------|-------------|
 | **One active at a time** | Only one phase can be `active`. `backlog_next_available` only shows tasks from the active phase. |
 | **Tasks belong to phases** | Each task has an optional `phase` field. Tasks without a phase are "unassigned" and shown separately. |
-| **Advancing** | When a phase's work is complete, `backlog_advance_phase` marks it done, archives its done tasks, and activates the next planned phase by order. |
+| **Advancing** | When a phase's work is complete, `backlog_advance_phase` marks it done, archives its done tasks, and activates the next planned phase by order. It refuses while the phase has unchecked deliverables or unfinished tasks; `force=True` advances anyway and leaves those tasks in their status. |
 | **Cross-cutting** | A phase can contain tasks from multiple epics. Epics are thematic (auth, api, ux); phases are temporal (foundation, core features, polish). |
 | **Anchors** | Tasks can declare `anchors` — glob patterns or URLs — to say what files/systems they touch. Displayed prominently on pick. |
 | **Staleness** | `last_referenced` is updated by pick/update/complete (mutations); reads do not bump it. Todo tasks stale for 14+ days are flagged in dashboards. |
@@ -62,5 +62,5 @@ planned → active → done → archived
 1. Create phases in order: `backlog_add_phase("foundation", "Phase 1: Foundation", order=1)`
 2. Assign tasks: `backlog_update_task("auth-001", "phase", "foundation")`
 3. Work through the active phase's tasks
-4. When done: `backlog_advance_phase` — archives done tasks, activates next
+4. When done: `backlog_advance_phase` — archives done tasks, activates next (refused while tasks are unfinished; finish or move them, or pass `force=True`)
 5. Repeat until all phases complete

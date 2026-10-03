@@ -36,6 +36,12 @@ MAX_LIMIT = 500
 # against a project cannot be resumed against its native copy, or the reverse.
 LEGACY_DIGEST = "legacy"
 
+# The rows a store wrote when it first adopted a project's files: every entity
+# "imported" at once, stamped with the moment of the import. A later import of a
+# hand-edited file carries another tool name and is a change like any other.
+# Both stores keep `op` and `tool` on the event row, aliased `e` in the feed.
+STORE_IMPORT = "(e.op='import' AND e.tool='bootstrap')"
+
 # In precedence order: the most fundamental reason a cursor fails is the one named.
 REASONS = ("cursor_unreadable", "store_rebuilt", "history_rewound", "scope_changed", "history_expired")
 
@@ -189,10 +195,27 @@ def fingerprint(value):
     return hashlib.sha256(encode(value).encode()).hexdigest()
 
 
-def issue(*, store_id, source_digest, scope, last_seq):
+def issue(*, store_id, source_digest, scope, last_seq, skip_imports=False):
     payload = {"v": VERSION, "store": [str(store_id), str(source_digest)],
                "scope": fingerprint(scope), "seq": int(last_seq)}
+    if skip_imports:
+        # Present only when set, so every other cursor is byte-for-byte what it was.
+        payload["skip_imports"] = True
     return base64.urlsafe_b64encode(encode(payload).encode()).decode()
+
+
+def skips_imports(cursor):
+    """Whether this cursor continues an answer that left the store import out
+    (one anchored with `since`), so the pages after it leave it out too."""
+    try:
+        return _decode(cursor).get("skip_imports") is True
+    except CursorInvalid:
+        return False
+
+
+def import_note(count):
+    return (f"{count} store-import row{'s' if count != 1 else ''} after this point "
+            f"{'were' if count != 1 else 'was'} left out: the store adopting existing files, not changes")
 
 
 def resume_point(sequence, floor=0):
@@ -242,12 +265,19 @@ def _decode(cursor):
     return payload
 
 
-def feed(*, store_id, source_digest, sequence, scope, items, last_seq, more, group_commits):
-    """The normal answer, with a continuation at the last sequence reported."""
-    return {"store_id": store_id, "sequence": int(sequence),
-            ("commits" if group_commits else "changes"): list(items),
-            "cursor": issue(store_id=store_id, source_digest=source_digest, scope=scope, last_seq=last_seq),
-            "more": bool(more), "resync_required": False, "reason": None}
+def feed(*, store_id, source_digest, sequence, scope, items, last_seq, more, group_commits,
+         skip_imports=False, omitted_imports=0):
+    """The normal answer, with a continuation at the last sequence reported.
+
+    `note` is present only when store-import rows were left out of it."""
+    answer = {"store_id": store_id, "sequence": int(sequence),
+              ("commits" if group_commits else "changes"): list(items),
+              "cursor": issue(store_id=store_id, source_digest=source_digest, scope=scope, last_seq=last_seq,
+                              skip_imports=skip_imports),
+              "more": bool(more), "resync_required": False, "reason": None}
+    if omitted_imports:
+        answer["note"] = import_note(omitted_imports)
+    return answer
 
 
 def resync(exc, *, store_id, source_digest, sequence, scope, group_commits, floor=0):

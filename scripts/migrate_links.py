@@ -42,6 +42,7 @@ from taskmaster import store  # noqa: E402
 from taskmaster.taskmaster_v3 import (  # noqa: E402
     _LEGACY_FIELDS_TO_DROP,
     REVERSE_TYPE,
+    TASK_DEPENDENCY_LINK_TYPES,
     add_link,
     entity_links,
     legacy_links_to_typed,
@@ -90,7 +91,10 @@ def _collect(read_rows) -> dict[str, Entity]:
 def _migrate_one(doc: dict[str, Any], kind: str, *, drop_legacy: bool) -> bool:
     """Fold this entity's legacy fields into its `links`. True when links grew."""
     before = entity_links(doc)
-    after = legacy_links_to_typed(doc, kind=kind)
+    # A task's dependencies stay its `depends_on` field, which every gate reads;
+    # copying them into `links` made a second record nothing could keep in step.
+    after = before + [link for link in legacy_links_to_typed(doc, kind=kind)[len(before):]
+                      if not (kind == "task" and link["type"] in TASK_DEPENDENCY_LINK_TYPES)]
     if drop_legacy:
         for name in _LEGACY_FIELDS_TO_DROP.get(kind, ()):
             doc.pop(name, None)
@@ -109,7 +113,9 @@ def _reconcile_inverses(entities: dict[str, Entity]) -> tuple[int, list[dict]]:
             link_type = link.get("type")
             target = link.get("target")
             inverse = REVERSE_TYPE.get(link_type)
-            if inverse is None or not target:
+            # Task dependencies get no stored inverse: `blocks` is derived from
+            # the dependent task's `depends_on` field on read.
+            if inverse is None or not target or link_type in TASK_DEPENDENCY_LINK_TYPES:
                 continue
             peer = entities.get(target)
             if peer is None:

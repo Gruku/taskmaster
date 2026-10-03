@@ -48,19 +48,16 @@ def test_link_create_and_remove_match(twins):
     _check(twins)
 
 
-def test_a_link_between_two_non_task_entities_persists_natively_but_not_in_legacy(twins):
-    """Legacy defect found by N08, not reproduced: the legacy link engine writes a
-    non-task entity through the store without latching the transaction, so unless a
-    task was also written the whole commit rolls back while the tool reports
-    `ok: linked`. The native command commits both ends."""
-    legacy_answer, native_answer = twins.call("backlog_link", action="create", source="ISS-001",
-                                              target="IDEA-001", type="relates_to")
-    assert legacy_answer == "ok: linked ISS-001 -[relates_to]-> IDEA-001"
-    assert normalize(native_answer) == legacy_answer + " [seq #]"
-    legacy, native = committed(twins.legacy), committed(twins.native)
-    assert {"type": "relates_to", "target": "IDEA-001"} not in (legacy[("issue", "ISS-001")][0].get("links") or [])
-    assert {"type": "relates_to", "target": "IDEA-001"} in native[("issue", "ISS-001")][0]["links"]
-    assert {"type": "relates_to", "target": "ISS-001"} in native[("idea", "IDEA-001")][0]["links"]
+def test_a_link_between_two_non_task_entities_persists_on_both_stores(twins):
+    """The legacy link engine used to write a non-task entity without latching the
+    transaction, so the commit rolled back while the tool reported `ok: linked`
+    (found by N08). Both stores now commit both ends."""
+    legacy_answer, _native = twins.same("backlog_link", action="create", source="ISS-001",
+                                        target="IDEA-001", type="relates_to")
+    assert normalize(legacy_answer) == "ok: linked ISS-001 -[relates_to]-> IDEA-001 [seq #]"
+    for side in (committed(twins.legacy), committed(twins.native)):
+        assert {"type": "relates_to", "target": "IDEA-001"} in side[("issue", "ISS-001")][0]["links"]
+        assert {"type": "relates_to", "target": "ISS-001"} in side[("idea", "IDEA-001")][0]["links"]
 
 
 def test_link_query_and_validate_match(twins):
@@ -92,12 +89,13 @@ def test_areas_match(twins):
     _check(twins)
 
 
-def test_non_text_area_anchors_are_refused_natively(twins):
-    """Recorded N08 difference: the legacy tool stores `[1, 2]` as area anchors;
-    the native core admits only text anchors and refuses the edit."""
-    legacy, native = twins.call("backlog_area_update", area_id="viewer", field="anchors", value="[1, 2]")
-    assert legacy.startswith("Area updated") and native == "Error: anchors value must be a JSON array of strings"
+def test_non_text_area_anchors_are_refused_on_both_stores(twins):
+    """The legacy tool used to store `[1, 2]` as area anchors while the native core
+    refused it; both now admit only text anchors."""
+    legacy, _native = twins.same("backlog_area_update", area_id="viewer", field="anchors", value="[1, 2]")
+    assert legacy == "Error: anchors value must be a list of strings"
     assert committed(twins.native)[("area", "viewer")][0]["anchors"] == ["viewer/**"]
+    assert committed(twins.legacy)[("area", "viewer")][0]["anchors"] == ["viewer/**"]
 
 
 def test_viewer_prefs_read_matches(twins):

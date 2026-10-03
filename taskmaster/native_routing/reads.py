@@ -330,9 +330,13 @@ class NativeLinks:
         return _TldrIndex(self._snapshot)
 
     def peer(self, target):
-        from taskmaster.taskmaster_v3 import entity_kind_of
-        kind = entity_kind_of(target)
-        if kind is None or not self._backlog_path.exists():
+        from taskmaster.taskmaster_v3 import resolve_link_kind
+        if not self._backlog_path.exists():
+            return None
+        # By lookup, as the legacy `read_entity_anywhere` resolves it: a task's
+        # id carries its epic's prefix, not a kind's.
+        kind = resolve_link_kind(target, lambda kind, ident: get(self._snapshot, kind, ident) is not None)
+        if kind is None:
             return None
         entity = get(self._snapshot, kind, target, body=True)
         return document(entity) if entity is not None else None

@@ -295,6 +295,7 @@ from taskmaster.taskmaster_v3 import (
     legacy_links_to_typed as _legacy_links_to_typed,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
+    BATCH_DEPENDENCY_EDIT_REFUSAL,
     ISSUE_SEVERITIES,
     BUG_STATUSES,
     build_bug_doc as _build_bug_doc,
@@ -432,6 +433,7 @@ class _LegacyLinks:
 
     def __init__(self, data: "dict | None", backlog_path: Path):
         self._data, self._backlog_path, self._index = data, backlog_path, None
+        self._ids: dict = {}
 
     def tldr_index(self):
         if self._index is None:
@@ -443,8 +445,32 @@ class _LegacyLinks:
         return self._index
 
     def peer(self, target: str):
-        from taskmaster.taskmaster_v3 import read_entity_anywhere
-        return read_entity_anywhere(self._backlog_path, target) if self._backlog_path.exists() else None
+        """The linked entity, from the loaded backlog: a kind is found by id
+        membership, so a pill costs no store read however many kinds it tries."""
+        from taskmaster.taskmaster_v3 import _fallback_links_if_absent, link_kind_candidates
+        if not self._backlog_path.exists():
+            return None
+        if self._data is None:
+            self._data = _load()
+        for kind in link_kind_candidates(target):
+            if kind == "task":
+                found = _find_task(self._data, target)
+                if found is None:
+                    continue
+                entity = deepcopy(found[0])
+            else:
+                ids = self._ids.get(kind)
+                if ids is None:
+                    ids = self._ids[kind] = set(_dict_row_ids(self._data, kind))
+                if target not in ids:
+                    continue
+                doc, body = _dict_row(self._data, kind, target)
+                entity = deepcopy(doc)
+                if body:
+                    entity[_BODY_KEY] = body
+            _fallback_links_if_absent(entity, kind)
+            return entity
+        return None
 
 
 def _append_grouped_links_block(
@@ -454,6 +480,7 @@ def _append_grouped_links_block(
     *,
     expand_links: bool = False,
     links: "_LegacyLinks | None" = None,
+    kind: str | None = None,
 ) -> None:
     """Append a Plan C grouped `links:` block to `lines` for slim-view rendering.
 
@@ -464,7 +491,7 @@ def _append_grouped_links_block(
     from taskmaster.taskmaster_v3 import links_grouped_by_type
 
     links = links or _LegacyLinks(None, backlog_path)
-    grouped = links_grouped_by_type(entity)
+    grouped = links_grouped_by_type(entity, kind)
     if not grouped:
         return
     lines.append("\n**links:**")
@@ -1011,7 +1038,7 @@ def _sync_tracker_index_tx(data: dict) -> None:
     _sync_tracker_index(data, _tx_rows("tracker"))
 
 
-def _sync_handover_index_tx(data: dict) -> None:
+def _sync_handover_index_tx(data: dict, archived_only: bool = False) -> None:
     """Rebuild the handover index and thread registry from the store's rows.
 
     The transaction is handed in so overflow past the 30-entry cap is archived
@@ -1019,7 +1046,9 @@ def _sync_handover_index_tx(data: dict) -> None:
     is the exporter's, not a rename behind the store's back.
     """
     tx = _store_tx()
-    _sync_handover_index(data, tx.list("handover"), tx=tx)
+    from taskmaster.taskmaster_v3 import THREAD_MEMBER_FIELDS
+    _sync_handover_index(data, tx.list("handover"), tx=tx, archived_only=archived_only,
+                         archived=tx.archived_fields("handover", "open", THREAD_MEMBER_FIELDS))
 
 
 def _render_after_commit(renderer) -> None:
@@ -1400,6 +1429,10 @@ def _store_write_entity(backlog_path: Path | None, kind: str, entity: dict) -> N
 
     if _active_tx() is not None:
         apply()
+        # Latch the caller's transaction: a write that does not is rolled back
+        # when the tool returns, and the link engine reported links as created
+        # that no commit ever held.
+        _mutate_and_save(_load())
         return
     with _transaction(
         tool=f"store:write-{kind}",
@@ -1492,8 +1525,8 @@ def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
     """
     from taskmaster.taskmaster_v3 import (  # noqa: PLC0415 - link helpers
         add_link as _add_link,
-        entity_links as _entity_links,
         extract_inline_refs as _extract_inline_refs,
+        link_view as _link_view,
         read_entity_anywhere as _read_entity_anywhere,
         sync_inverse as _sync_inverse,
     )
@@ -1519,7 +1552,9 @@ def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
         return []
 
     bp = _backlog_path()
-    existing = {link["target"] for link in _entity_links(task)}
+    # What a read already shows as linked, field-derived links included, as the
+    # native auto-link reads it; the reference itself goes on the stored task.
+    existing = {link["target"] for link in _link_view(task, "task")}
     pending: list[tuple[str, dict | None]] = []
     for target_id in refs:
         if target_id in existing:
@@ -2172,7 +2207,8 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
 
 @mcp.tool()
 def backlog_status(verbose: bool = False) -> str:
-    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats.
+    """Where the project stands: progress per epic, in-progress tasks, blocked items, next priorities, and stats.
+    Open lines of work with their next steps are on `backlog_thread_list`, not here.
 
     Args:
         verbose: If True, include archived task count in stats and show up to
@@ -2192,8 +2228,10 @@ def _status_text(data: dict, verbose: bool) -> str:
     if _effective_schema_version(data) < SCHEMA_V4:
         lines.append("Migration available: run `backlog_migrate_v4` for sharded, merge-aware storage.\n")
     lines.append("## Dashboard\n")
-    lines.append("| Workstream | Status | Progress | Current Focus |")
-    lines.append("|-----------|--------|----------|---------------|")
+    # "Epic", not "Workstream": callers read that label as the open lines of
+    # work, which are threads, and answered with epics.
+    lines.append("| Epic | Status | Progress | Current Focus |")
+    lines.append("|------|--------|----------|---------------|")
 
     for epic in data["epics"]:
         if epic.get("status") == "archived":
@@ -2217,6 +2255,7 @@ def _status_text(data: dict, verbose: bool) -> str:
         lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
     lines.append("")
+    lines.append("Open lines of work (threads) and their next steps: `backlog_thread_list()`\n")
 
     # In Progress — split by actual status
     ip = ctx.get("in_progress", [])
@@ -2349,19 +2388,25 @@ def backlog_list_tasks(
     area: str = "",
     verbose: bool = False,
     limit: int = 50,
+    waiting_on_human: bool = False,
 ) -> str:
-    """List tasks with optional filters. Active tasks sort first; output is
-    capped at `limit` rows with an overflow footer.
+    """Which tasks match: by epic, status, priority, phase, area or waiting on a
+    person, one line each, active tasks first, capped at `limit` with an
+    overflow footer. A row shows `waiting-on-human:` when the task has a
+    human_action.
 
     Args:
         epic: Filter by epic ID
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
-        area: Filter by area ID
+        area: Filter by area ID: tasks tagged with it, and the untagged tasks
+            of epics filed under it.
         verbose: If True, include heavy fields (notes) per task entry. Slim
             (default) shows id, title, tldr, priority, epic, and status only.
         limit: Max rows returned (default 50). 0 = no cap.
+        waiting_on_human: Only tasks with a human_action set — what waits on
+            someone to act or decide.
     """
     data = _load()
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -2390,7 +2435,9 @@ def backlog_list_tasks(
                 continue
             if phase and t.get("phase") != phase:
                 continue
-            if area and t.get("area") != area:
+            if area and _task_area(t, ep) != area:
+                continue
+            if waiting_on_human and not t.get("human_action"):
                 continue
             pri = t.get("priority", "medium")
             entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
@@ -2414,6 +2461,8 @@ def backlog_list_tasks(
             filters.append(f"phase={phase}")
         if area:
             filters.append(f"area={area}")
+        if waiting_on_human:
+            filters.append("waiting_on_human")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1], x[2]))
@@ -2459,6 +2508,11 @@ def backlog_list_tasks(
     return "\n".join(lines)
 
 
+def _task_area(task: dict, epic: dict) -> str:
+    """The area a task belongs to: its own, else its epic's."""
+    return task.get("area") or epic.get("area") or ""
+
+
 @mcp.tool()
 def backlog_get_task(
     task_id: str,
@@ -2468,6 +2522,8 @@ def backlog_get_task(
     provenance: bool = False,
 ) -> str:
     """Get details for a single task including epic context and related tasks.
+    For what blocks it or whether it can close now, `backlog_context(focus=<id>,
+    scope="task")` answers in one call.
 
     By default returns a slim view (tldr, status, priority, key links) to
     minimise token cost. Use verbose=True for the full body (notes, review
@@ -2535,7 +2591,7 @@ def backlog_get_task(
         for k, v in slim.items():
             lines.append(f"**{k}:** {v}")
         # Plan C: emit grouped typed-links block.
-        _append_grouped_links_block(lines, task, bp, expand_links=expand_links)
+        _append_grouped_links_block(lines, task, bp, expand_links=expand_links, kind="task")
         return "\n".join(lines)
 
     # ── verbose mode ─────────────────────────────────────────────────────────
@@ -2696,7 +2752,7 @@ def backlog_document(
     doc, body = row
     header = _document_header(kind, entity_id, doc.get("title") or "")
     if sections is None:
-        return _render_document_body(header, body)
+        return _render_document_body(header, body, doc)
     try:
         resolved = _resolve_sections_with_provenance(
             doc, kind=kind, sections=sections, body=body,
@@ -2765,9 +2821,10 @@ def backlog_index_status(rebuild: bool = False, verify: bool = False) -> str:
             `links`, `handover_tasks` and `related` (not search): they are compared
             with the full oracle and only the differing rows are replaced, in one
             transaction.
-        verify: Native stores only. Compare the graph tables with the full oracle
-            and report the differences and the cost, changing nothing. Refused on
-            a legacy store, with or without `rebuild`.
+        verify: On a native store, compare the graph tables with the full oracle
+            and report the differences and the cost, changing nothing. A legacy
+            store has no such verifier: it reports the row counts and says that
+            nothing was compared, and does not rebuild.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2775,11 +2832,12 @@ def backlog_index_status(rebuild: bool = False, verify: bool = False) -> str:
         # project that has no backlog yet, and must not open a store beside one
         # that does not exist. `rebuild=True` has nothing to rebuild either.
         return f"no backlog found at {bp}"
-    if verify:
-        return ("Error: verify=True checks a native store's graph tables against the full oracle; "
-                "this legacy store has no separate verifier. Use rebuild=True to recompute every "
-                "derived table. Nothing was changed.")
     st = _store()
+    if verify:
+        return (_render_derived_report(st.derived_status(), st.db_path) +
+                "\nVerify: the row counts above were read; the derived tables were not compared with the "
+                "entity rows, because a legacy store has no verifier that can do that without rewriting "
+                "them. Nothing was changed. rebuild=True recomputes every derived table from the rows.")
     if rebuild:
         # Derived rows only: `entities`, `changes` and `projection` are the
         # authority and a rebuild must never be able to lose one of them.
@@ -3112,6 +3170,46 @@ def _render_search_row(row) -> str:
     return f"`{eid}` — {title or ''} ({kind}, {status})"
 
 
+_SEARCH_SNIPPET_TOKENS = 24
+_SEARCH_MARKS = ("\x02", "\x03")
+
+
+def _search_body_snippets(con, table: str, match: str, rowids: list) -> dict:
+    """`{rowid: matching body text}` for the listed hits whose title did not match.
+
+    A title hit explains itself; a hit in the prose alone gave no hint of where,
+    and the caller had to open the entity to find out. Asked only for the rows
+    already chosen, so the cost is bounded by the result cap, and best-effort: a
+    failure here must not turn a good result list into the fallback scan.
+    """
+    start, end = _SEARCH_MARKS
+    try:
+        hits = con.execute(
+            f"SELECT rowid, highlight({table},2,?,?), snippet({table},3,?,?,'…',{_SEARCH_SNIPPET_TOKENS}) "
+            f"FROM {table} WHERE {table} MATCH ? AND rowid IN ({','.join('?' * len(rowids))})",
+            (start, end, start, end, match, *rowids)).fetchall()
+    except sqlite3.Error:
+        return {}
+    snippets = {}
+    for rowid, title, body in hits:
+        if start in (title or "") or start not in (body or ""):
+            continue
+        snippets[rowid] = _search_snippet_line(body.replace(start, "").replace(end, ""))
+    return snippets
+
+
+def _search_snippet_line(text: str) -> str:
+    """Prose cut from the middle of a document, as one line that is only text.
+
+    A window can open inside a code fence or a table and close nowhere: the
+    characters that would start a block or leave a code span open are taken out,
+    so the snippet cannot restyle the result lines after it.
+    """
+    text = text.replace("`", "'").replace("|", "/")
+    text = re.sub(r"#+|\*{2,}|~{3,}", " ", text)
+    return " ".join(text.split())
+
+
 def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
     """FTS5 search across every entity kind, or None to tell the caller to fall back.
 
@@ -3149,7 +3247,8 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
             source = ("FROM entity_fts JOIN entities e ON e.kind = entity_fts.kind AND e.id = entity_fts.id "
                       f"WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ({kinds_sql})")
             columns = ("entity_fts.id, e.kind, e.status, entity_fts.title, "
-                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank ")
+                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank, "
+                       "entity_fts.rowid ")
         else:
             source = ("FROM document_search JOIN document_search_keys k ON k.document_key = document_search.rowid "
                       "JOIN entity_core c ON c.entity_key = k.entity_key "
@@ -3157,7 +3256,7 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
                       f"WHERE document_search MATCH ? AND c.deleted=0 AND c.kind IN ({kinds_sql})")
             columns = ("c.public_id, c.kind, json_extract(c.status_json,'$'), document_search.title, "
                        "json_extract(c.priority_json,'$') AS priority, json_extract(t.epic_json,'$'), "
-                       "bm25(document_search) AS rank ")
+                       "bm25(document_search) AS rank, document_search.rowid ")
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
             # Not "No tasks": this path searches every kind, and `kinds` may
@@ -3166,18 +3265,27 @@ def _search_index_text(con, query: str, selected: list, match: str, *, native: b
         rows = con.execute(
             f"SELECT {columns}"
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
+        snippets = _search_body_snippets(con, "document_search" if native else "entity_fts", match,
+                                         [tuple(r)[7] for r in rows])
     finally:
         if owns_snapshot and con is not None and con.in_transaction:
             con.rollback()
 
-    body = "\n".join(f"- {_render_search_row(tuple(r)[:6])}" for r in rows)
+    lines = []
+    for r in rows:
+        lines.append(f"- {_render_search_row(tuple(r)[:6])}")
+        if tuple(r)[7] in snippets:
+            lines.append(f"  matched: {snippets[tuple(r)[7]]}")
+    body = "\n".join(lines)
     return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
 
 
 @mcp.tool()
 def backlog_search(query: str, kinds: list[str] | None = None) -> str:
-    """Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,
-    decisions and ideas — ranked by relevance (bm25) over the store's FTS index.
+    """What the backlog holds on a topic: full-text search across tasks, epics, bugs, issues,
+    handovers, decisions and ideas, ranked by relevance (bm25); a hit in the prose alone shows the
+    matching text. No date filter: `backlog_handover_list` filters handovers by date, thread, task
+    or status, and `backlog_thread_resume` answers where a line of work left off.
 
     Args:
         query: Search text (case-insensitive). Matched against titles and bodies (notes,
@@ -4278,8 +4386,10 @@ def backlog_handover_list(
     include_archived: bool = False,
     format: str = "text",
 ) -> str:
-    """List handovers, newest first. Text one-liners by default; `format="json"`
-    for a parseable envelope.
+    """Which handovers exist, newest first, filtered by date, thread, task or
+    status. No topic search: `backlog_search` matches text, and
+    `backlog_thread_resume` answers where a line of work left off. Text
+    one-liners by default; `format="json"` for a parseable envelope.
 
     Searches the handover index — the most recent 30. Older handovers are
     archived, not deleted: when any exist the answer says how many went
@@ -4594,66 +4704,131 @@ def _threads_data(bp: Path) -> dict:
     is derived in memory and left uncommitted.
     """
     data = _load()
-    if "threads" in data:
-        return data
-    try:
-        with _transaction(tool="backlog_thread_index_backfill") as tx_data:
-            if "threads" not in tx_data:
-                _sync_handover_index_tx(tx_data)
-                _mutate_and_save(tx_data)
-    except RuntimeError:
-        # Projection-only storage: serve the derived index without persisting it.
-        _sync_handover_index(data, _dict_rows(data, "handover"))
-        return data
-    return _load()
+    if "threads" not in data:
+        try:
+            with _transaction(tool="backlog_thread_index_backfill") as tx_data:
+                if "threads" not in tx_data:
+                    _sync_handover_index_tx(tx_data)
+                    _mutate_and_save(tx_data)
+            data = _load()
+        except RuntimeError:
+            pass  # Projection-only storage: the registry derived below is served unpersisted.
+    # Derived from the rows on every read, on a copy. The stored registry leaves
+    # out the threads whose handovers are all archived, and one written by an
+    # older build knows nothing of open archived handovers at all.
+    data = dict(data)
+    rows = _dict_rows(data, "handover", include_archived=True)
+    _sync_handover_index(data, [row for row in rows if not row[1].get("archived")],
+                         archived=[row for row in rows if row[1].get("archived")], archived_only=True)
+    return data
 
 
 @mcp.tool()
-def backlog_thread_list(include_closed: bool = False) -> str:
-    """The thread board — open (and parked) lines of work with their stable
-    resume tokens. Resume one with `backlog_thread_resume(<name>)`.
+def backlog_thread_list(include_closed: bool = False, include_archived: bool = False) -> str:
+    """What is still open, per line of work (thread / workstream): each open or
+    parked thread with its newest open handover's summary, next step and tasks.
+    Resume one with `backlog_thread_resume(<name>)`.
 
     Args:
         include_closed: Also list closed threads (default False).
+        include_archived: Also list threads whose handovers are all outside the
+            30-entry handover index; by default they are only counted.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    return _thread_list_text(_threads_data(bp), include_closed)
+    return _thread_list_text(_threads_data(bp), include_closed, include_archived)
 
 
-def _thread_list_text(data: dict, include_closed: bool) -> str:
+def _thread_list_text(data: dict, include_closed: bool, include_archived: bool = False) -> str:
     """`backlog_thread_list` over any backlog document; shared with the native adapter."""
     from taskmaster.taskmaster_v3 import list_threads as _list_threads
-    rows = _list_threads(data)
+    rows = _list_threads(data, archived_only=True)
     if not include_closed:
         rows = [r for r in rows if r["status"] != "closed"]
-    if not rows:
+    # Old stores hold many open handovers from before a new one superseded its
+    # thread's last; listing each as a thread buried the live ones.
+    uncounted = [] if include_archived else [r for r in rows if r.get("archived_only")]
+    rows = [r for r in rows if include_archived or not r.get("archived_only")]
+    if not rows and not uncounted:
         return "No open threads. Write a handover to start one."
     lines = []
     for r in rows:
         stale = f" · {r['staleness_days']}d" if r["staleness_days"] else ""
         park = " [parked]" if r["status"] == "parked" else ""
+        archived = " [archived]" if r.get("archived_only") else ""
         branch = f" · {r['branch']}" if r["branch"] else ""
-        lines.append(f"- **{r['name']}**{park}{stale}{branch} — {r['tldr']}")
+        lines.append(f"- **{r['name']}**{park}{archived}{stale}{branch} — {r['tldr']}")
         if r["next_action"]:
             lines.append(f"  next: {r['next_action']}")
         if r["task_ids"]:
             lines.append(f"  tasks: {', '.join(r['task_ids'])}")
+    if uncounted:
+        count = f"{len(uncounted)} more threads have" if len(uncounted) != 1 else "1 more thread has"
+        # Named, so the default answer is complete on an ordinary store; capped,
+        # so one with dozens from before auto-supersede stays readable.
+        names = [r["name"] for r in uncounted]
+        shown = ", ".join(names[:_THREAD_COUNT_NAMES]) + (
+            f" (+{len(names) - _THREAD_COUNT_NAMES} more)" if len(names) > _THREAD_COUNT_NAMES else "")
+        lines.append(f"…{count} only archived handovers (outside the {_HANDOVER_INDEX_CAP}-entry index): "
+                     f"{shown} — pass include_archived=True for their summaries and next steps")
     lines.append("\nResume: `backlog_thread_resume(\"<name>\")`")
     return "\n".join(lines)
 
 
 @mcp.tool()
 def backlog_thread_resume(ref: str) -> str:
-    """Resume a thread: returns its newest handover in full (frontmatter +
-    body) in one call. `ref` is a thread name OR any handover id (stale dated
-    slugs still land on the thread's newest handover).
+    """Where a line of work left off: its thread's newest open handover (its
+    newest when none is open) in full, frontmatter + body, in one call. `ref`
+    is a thread name OR any handover id of the thread, however stale; a miss
+    answers the closest thread names.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     return _thread_resume_text(_threads_data(bp), bp, ref)
+
+
+_THREAD_MISS_NAMES = 10
+_THREAD_COUNT_NAMES = 5
+_THREAD_MISS_CLOSEST = 5
+
+
+def _thread_miss_text(data: dict, ref: str) -> str:
+    """A resume that matched nothing, with the names it could have meant.
+
+    A caller rarely knows a thread's exact slug. Candidates share a word with
+    `ref` or are spelt nearly like it, and are ranked by how many words they
+    share plus how near the spelling is, never by board order: one common word
+    must not crowd out the thread that was meant. With no candidate, the open
+    threads of the default board are named.
+    """
+    import difflib
+    from taskmaster.taskmaster_v3 import list_threads as _list_threads
+    rows = _list_threads(data, archived_only=True)
+    wanted = _normalize_thread_name(ref)
+    words = {word for word in wanted.split("-") if len(word) >= 3}
+    scored = []
+    for position, r in enumerate(rows):
+        shared = len(words & set(r["name"].split("-")))
+        nearness = difflib.SequenceMatcher(None, wanted, r["name"]).ratio()
+        if shared or nearness >= 0.6:
+            scored.append((-(shared + nearness), bool(r.get("archived_only")), position, r))
+    miss = f"No thread or handover matches {ref!r}."
+    if scored:
+        def label(r):
+            marks = [mark for mark, on in (("closed", r["status"] == "closed"),
+                                           ("archived", r.get("archived_only"))) if on]
+            return r["name"] + (f" ({', '.join(marks)})" if marks else "")
+        closest = ", ".join(label(entry[3]) for entry in sorted(scored, key=lambda e: e[:3])[:_THREAD_MISS_CLOSEST])
+        return f"{miss} Closest threads: {closest}. Resume one by its exact name."
+    open_names = [r["name"] for r in rows if r["status"] != "closed" and not r.get("archived_only")]
+    if not open_names:
+        return f"{miss} There are no open threads; `backlog_search` finds a handover by topic."
+    more = len(open_names) - _THREAD_MISS_NAMES
+    listed = ", ".join(open_names[:_THREAD_MISS_NAMES]) + (f" (+{more} more)" if more > 0 else "")
+    return (f"{miss} Open threads: {listed}. `backlog_thread_list()` shows each one's next step; "
+            "`backlog_search` finds a handover by topic.")
 
 
 def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> str:
@@ -4662,8 +4837,7 @@ def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> s
     try:
         tname, hid = _resolve_thread(data, bp, ref, find_handover)
     except KeyError:
-        return (f"No thread or handover matches {ref!r}. "
-                f"See `backlog_thread_list()` for open threads.")
+        return _thread_miss_text(data, ref)
     row = _dict_row(data, "handover", hid)
     if row is None:
         return f"Thread {tname!r} resolved to {hid}, but no such handover exists."
@@ -4671,11 +4845,19 @@ def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> s
     fm = {key: value for key, value in fm.items() if key != _BODY_KEY}
     body = body or ""
     t = (data.get("threads") or {}).get(tname) or {}
+    newest = (t.get("handover_ids") or [hid])[-1]
+    if newest == hid:
+        where = [f"- newest: {hid}"]
+    else:
+        # An older handover is still open, and it is where the work resumes.
+        newest_row = _dict_row(data, "handover", newest)
+        newest_status = (newest_row[0] if newest_row else {}).get("status") or "closed"
+        where = [f"- resume: {hid} (newest open handover)", f"- newest: {newest} ({newest_status})"]
     header = [
         f"# Thread: {tname or '(none — standalone handover)'}",
         f"- status: {t.get('status', 'open')}" if tname else "",
         f"- handovers: {len(t.get('handover_ids') or []) or 1}",
-        f"- newest: {hid}",
+        *where,
         "",
     ]
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
@@ -4691,8 +4873,11 @@ def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    if "threads" not in data:
-        _sync_handover_index_tx(data)
+    # Always, and with the archived-only threads the stored registry leaves
+    # out: one of those can be parked or closed too. Its override is kept in
+    # `thread_meta`; the thread itself is dropped again before the save.
+    _sync_handover_index_tx(data, archived_only=True)
+    from taskmaster.taskmaster_v3 import indexed_threads as _indexed_threads
     from taskmaster.taskmaster_v3 import update_thread_status as _update_thread_status
     try:
         _update_thread_status(data, bp, name=name, status=status, reason=reason)
@@ -4700,6 +4885,8 @@ def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
         return f"Error: {exc}"
     except KeyError:
         return f"Error: no thread named {name!r}. See `backlog_thread_list()`."
+    finally:
+        data["threads"] = _indexed_threads(data.get("threads") or {})
     _mutate_and_save(data)
     return f"Thread {name} → {status}." + (f" ({reason})" if reason else "")
 
@@ -4715,14 +4902,19 @@ def backlog_link(
     type: str = "",
     note: str = "",
     depth: int = 1,
+    write: bool = False,
 ) -> str:
-    """Manage typed links between entities. The server writes the inverse side
-    automatically and rejects invalid types, kind mismatches, and depends_on
-    cycles.
+    """Link two entities of any kind — tasks, bugs, issues, decisions, ideas,
+    notes, handovers — and read the links back. The server writes the inverse
+    side automatically and rejects unknown ids, invalid types and kind
+    mismatches; `query(source=X)` lists X's links, inverses and the links its
+    fields derive (a task's depends_on) included. A dependency between two tasks
+    is not a link: set it with backlog_update_task(field="depends_on", value="+id").
 
     Params by action: create(source, target, type, note);
     remove(source, target, type); query(source, target, type, depth);
-    validate(); reconcile().
+    validate(); reconcile(write) — reports stored links whose inverse is
+    missing, and adds those inverses only with write=True.
     """
     if action == "create":
         return backlog_link_create(source, target, type, note)
@@ -4733,8 +4925,41 @@ def backlog_link(
     if action == "validate":
         return backlog_link_validate()
     if action == "reconcile":
-        return backlog_link_reconcile()
+        return backlog_link_reconcile(write)
     return json.dumps({"error": f"unknown action {action!r}"})
+
+
+def _dependents_of(data: dict, task_id: str) -> list:
+    """Ids of the tasks whose `depends_on` names `task_id`, in tree order."""
+    return [task["id"] for epic in data.get("epics", []) for task in epic.get("tasks", [])
+            if task.get("id") and task_id in (_dependency_ids(task.get("depends_on")) or [])]
+
+
+def _link_kind(ident: str) -> str | None:
+    """The kind of the linkable entity `ident` names, read the way the link engine reads it."""
+    from taskmaster.taskmaster_v3 import resolve_link_kind
+    bp = _backlog_path()
+    return resolve_link_kind(ident, lambda kind, eid: _store_read_entity(bp, kind, eid) is not None)
+
+
+# Archived rows of these kinds are still listed: they stay in their directory.
+_LINK_LISTING_KEEPS_ARCHIVED = ("idea",)
+
+
+def _linkable_rows(data: dict, include_archived: bool = False):
+    """`(id, document)` for every non-task entity a link can join, with legacy
+    links synthesized as `read_entity_anywhere` does; tasks come off the tree.
+    `include_archived` (validate) lists archived rows of every kind, so a link
+    to one is reported as archived rather than as an orphan."""
+    from taskmaster.taskmaster_v3 import LINKABLE_KINDS, _fallback_links_if_absent
+    for kind in LINKABLE_KINDS:
+        if kind == "task":
+            continue
+        for ident, doc, _body in _dict_rows(data, kind, include_archived=include_archived
+                                            or kind in _LINK_LISTING_KEEPS_ARCHIVED):
+            entity = dict(doc)
+            _fallback_links_if_absent(entity, kind)
+            yield ident, entity
 
 
 @_transactional("backlog_link_create")
@@ -4747,9 +4972,8 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     Idempotent — re-running with the same args is a no-op.
     """
     from taskmaster.taskmaster_v3 import (
-        LINK_TYPES, is_valid_link, entity_kind_of,
-        read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
-        sync_inverse, would_create_cycle,
+        LINK_TYPES, TASK_DEPENDENCY_LINK_TYPES, is_valid_link, read_entity_anywhere,
+        task_dependency_link_refusal, write_entity_anywhere, add_link, sync_inverse,
     )
 
     backlog_path = _backlog_path()
@@ -4757,51 +4981,26 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     if type not in LINK_TYPES:
         return f"Error: invalid link type {type!r} (valid: {sorted(LINK_TYPES)})"
 
-    src_kind = entity_kind_of(source)
-    dst_kind = entity_kind_of(target)
+    src_kind = _link_kind(source)
     if src_kind is None:
-        return f"Error: invalid source ID {source!r}"
+        return f"Error: source {source!r} not found"
+    dst_kind = _link_kind(target)
     if dst_kind is None:
-        return f"Error: invalid target ID {target!r}"
+        return f"Error: target {target!r} not found"
     if not is_valid_link(type, src_kind, dst_kind):
         return (f"Error: invalid link — type {type!r} cannot go from "
                 f"{src_kind} ({source}) to {dst_kind} ({target})")
+    if type in TASK_DEPENDENCY_LINK_TYPES:
+        return f"Error: {task_dependency_link_refusal(type, source, target)}"
 
-    src_entity = read_entity_anywhere(backlog_path, source)
-    if src_entity is None:
-        return f"Error: source {source!r} not found"
-    dst_entity = read_entity_anywhere(backlog_path, target)
-    if dst_entity is None:
-        return f"Error: target {target!r} not found"
-
-    # Cycle check on depends_on / blocks (model both as forward edges in a
-    # single task→task graph; `blocks` is reversed onto `depends_on`).
-    if type in ("depends_on", "blocks"):
-        graph: dict[str, list[str]] = {}
-        data = _load()
-        for epic in data.get("epics", []):
-            for task in epic.get("tasks", []):
-                tid = task.get("id")
-                if not tid:
-                    continue
-                graph.setdefault(tid, [])
-                for link in task.get("links", []) or []:
-                    if link.get("type") == "depends_on":
-                        graph[tid].append(link["target"])
-                    elif link.get("type") == "blocks":
-                        # B blocks A == A depends_on B
-                        graph.setdefault(link["target"], []).append(tid)
-        # Normalize the new edge to a depends_on direction for the check.
-        new_src, new_dst = (source, target) if type == "depends_on" else (target, source)
-        if would_create_cycle(graph, new_src, new_dst):
-            return (f"Error: would create cycle in depends_on chain "
-                    f"({new_src} -> {new_dst})")
+    # The stored document: the links its fields derive stay derived.
+    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind, fallback=False)
 
     added = add_link(src_entity, type, target)
     if added:
-        write_entity_anywhere(backlog_path, src_entity)
+        write_entity_anywhere(backlog_path, src_entity, kind=src_kind)
     try:
-        sync_inverse(backlog_path, source=source, target=target, type=type)
+        sync_inverse(backlog_path, source=source, target=target, type=type, target_kind=dst_kind)
     except KeyError as e:
         return f"Error: {e}"
 
@@ -4817,20 +5016,21 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
     If `type` is omitted, removes all link types between the pair.
     """
     from taskmaster.taskmaster_v3 import (
-        LINK_TYPES, entity_kind_of, read_entity_anywhere, write_entity_anywhere,
-        remove_link, entity_links, sync_inverse,
+        LINK_TYPES, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, write_entity_anywhere,
+        remove_link, entity_links, sync_inverse, task_dependency_link_refusal,
     )
 
     backlog_path = _backlog_path()
 
-    if entity_kind_of(source) is None:
-        return f"Error: invalid source ID {source!r}"
-    if entity_kind_of(target) is None:
-        return f"Error: invalid target ID {target!r}"
-
-    src_entity = read_entity_anywhere(backlog_path, source)
+    src_kind = _link_kind(source)
+    # The stored document: only stored links can be removed.
+    src_entity = read_entity_anywhere(backlog_path, source, kind=src_kind, fallback=False) if src_kind else None
     if src_entity is None:
         return f"Error: source {source!r} not found"
+    dst_kind = _link_kind(target)
+    between_tasks = src_kind == "task" and dst_kind == "task"
+    if between_tasks and type in TASK_DEPENDENCY_LINK_TYPES:
+        return f"Error: {task_dependency_link_refusal(type, source, target, remove=True)}"
 
     types_to_remove: list[str]
     if type:
@@ -4839,7 +5039,8 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
         types_to_remove = [type]
     else:
         types_to_remove = sorted({link["type"] for link in entity_links(src_entity)
-                                  if link["target"] == target})
+                                  if link["target"] == target
+                                  and not (between_tasks and link["type"] in TASK_DEPENDENCY_LINK_TYPES)})
 
     if not types_to_remove:
         return f"ok: no-op (no links from {source} to {target})"
@@ -4849,11 +5050,12 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
         if remove_link(src_entity, t, target):
             removed_any = True
         try:
-            sync_inverse(backlog_path, source=source, target=target, type=t, remove=True)
+            if dst_kind:
+                sync_inverse(backlog_path, source=source, target=target, type=t, remove=True, target_kind=dst_kind)
         except KeyError:
             pass
     if removed_any:
-        write_entity_anywhere(backlog_path, src_entity)
+        write_entity_anywhere(backlog_path, src_entity, kind=src_kind)
         return f"ok: removed {len(types_to_remove)} link(s) between {source} and {target}"
     return f"ok: no-op (links not present between {source} and {target})"
 
@@ -4866,9 +5068,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     array of {source, target, type} entries.
     """
     import json as _json
-    from taskmaster.taskmaster_v3 import (
-        entity_kind_of, read_entity_anywhere, entity_links,
-    )
+    from taskmaster.taskmaster_v3 import entity_links, link_view as _link_view, read_entity_anywhere
 
     backlog_path = _backlog_path()
 
@@ -4876,37 +5076,27 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
         entity = read_entity_anywhere(backlog_path, entity_id)
         if entity is None:
             return []
-        return [{"source": entity_id, "target": link["target"], "type": link["type"]}
-                for link in entity_links(entity)]
+        edges = [{"source": entity_id, "target": link["target"], "type": link["type"]}
+                 for link in entity_links(entity)]
+        # A task's `blocks` side is derived from the tasks that depend on it.
+        return edges + [{"source": entity_id, "target": dependent, "type": "blocks"}
+                        for dependent in _dependents_of(_load(), entity_id)]
 
     def all_edges() -> list[dict]:
         out: list[dict] = []
         data = _load()
-        for epic in data.get("epics", []):
-            for task in epic.get("tasks", []):
-                tid = task.get("id")
-                if not tid:
-                    continue
-                for link in task.get("links", []) or []:
-                    out.append({"source": tid, "target": link["target"], "type": link["type"]})
-        for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
-                            ("ideas", "IDEA")):
-            sub_dir = backlog_path.parent / sub
-            if not sub_dir.exists():
-                continue
-            for fp in sub_dir.glob(f"{prefix}-*.md"):
-                eid = fp.stem
-                entity = read_entity_anywhere(backlog_path, eid)
-                if entity is None:
-                    continue
-                for link in entity_links(entity):
-                    out.append({"source": eid, "target": link["target"], "type": link["type"]})
+        tasks = [task for epic in data.get("epics", []) for task in epic.get("tasks", []) if task.get("id")]
+        for task in tasks:
+            # The links its fields derive (depends_on) included, as a read of it shows.
+            for link in _link_view(task, "task"):
+                out.append({"source": task["id"], "target": link["target"], "type": link["type"]})
+        for task in tasks:
+            for dependency in _dependency_ids(task.get("depends_on")) or []:
+                out.append({"source": dependency, "target": task["id"], "type": "blocks"})
+        for eid, entity in _linkable_rows(data):
+            for link in entity_links(entity):
+                out.append({"source": eid, "target": link["target"], "type": link["type"]})
         return out
-
-    if source and entity_kind_of(source) is None:
-        return f"Error: invalid source ID {source!r}"
-    if target and entity_kind_of(target) is None:
-        return f"Error: invalid target ID {target!r}"
 
     if source and read_entity_anywhere(backlog_path, source) is None:
         return f"Error: source {source!r} not found"
@@ -4948,7 +5138,7 @@ def backlog_link_validate() -> str:
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
+        REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES, read_entity_anywhere, entity_links, find_cycle, link_view,
     )
 
     backlog_path = _backlog_path()
@@ -4958,17 +5148,8 @@ def backlog_link_validate() -> str:
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id"):
-                    yield task["id"], task
-        for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
-                            ("ideas", "IDEA")):
-            sub_dir = backlog_path.parent / sub
-            if not sub_dir.exists():
-                continue
-            for fp in sub_dir.glob(f"{prefix}-*.md"):
-                eid = fp.stem
-                entity = read_entity_anywhere(backlog_path, eid)
-                if entity is not None:
-                    yield eid, entity
+                    yield task["id"], {**task, "links": link_view(task, "task")}
+        yield from _linkable_rows(data, include_archived=True)
 
     orphans: list[dict] = []
     asymmetric: list[dict] = []
@@ -4988,10 +5169,15 @@ def backlog_link_validate() -> str:
                 continue
             target_entity = entities_by_id[tgt]
             # Flag links to archived entities as a warning (not auto-removed).
-            if target_entity.get("status") == "archived":
+            if target_entity.get("status") == "archived" or target_entity.get("archived"):
                 archived_targets.append({"source": eid, "target": tgt, "type": ltype})
             inverse = REVERSE_TYPE.get(ltype)
-            if inverse is None:
+            # A task dependency is the `depends_on` field; its `blocks` side is
+            # derived from the other task's field, so it is never stored.
+            if inverse is None or ltype in TASK_DEPENDENCY_LINK_TYPES:
+                if ltype == "depends_on":
+                    depends_graph.setdefault(eid, []).append(tgt)
+                    depends_graph.setdefault(tgt, depends_graph.get(tgt, []))
                 continue
             peer_links = entity_links(target_entity)
             if {"type": inverse, "target": eid} not in peer_links:
@@ -5020,31 +5206,81 @@ def backlog_link_validate() -> str:
 
 
 @_transactional("backlog_link_reconcile")
-def backlog_link_reconcile() -> str:
-    """Add missing inverse links on peers. Reports unfixable drift.
+def backlog_link_reconcile(write: bool = False) -> str:
+    """Report stored links whose inverse the peer does not hold; add those
+    inverses only when `write` is True.
 
-    Returns JSON {fixed: N, unfixable: [...], cycles: [...]}.
+    Only links an entity stores are repaired, and only onto the peer's stored
+    links: a link its fields derive (a task's `depends_on`, an issue's
+    `related_tasks`) is a read view, and writing it back would freeze it so
+    later edits of the field stopped showing. Asymmetric pairs it will not
+    repair for that reason are listed in `not_repaired`, with why.
+
+    Task dependencies are the `depends_on` field. The `depends_on` / `blocks`
+    entries a task stores in `links` (an older link migration wrote them) are
+    ignored on read; they are counted in `stored_dependency_links`, and
+    `write=True` drops them (`dropped_dependency_links`).
+
+    Returns JSON {written, fixed, repairable, not_repaired, not_repaired_count,
+    stored_dependency_links, dropped_dependency_links, unfixable, cycles}.
     """
     import json as _json
-    from taskmaster.taskmaster_v3 import sync_inverse
+    from taskmaster.taskmaster_v3 import (LINKABLE_KINDS, REVERSE_TYPE, TASK_DEPENDENCY_LINK_TYPES,
+                                          entity_links, link_view, read_entity_anywhere, set_entity_links,
+                                          sync_inverse, write_entity_anywhere)
 
     validation = _json.loads(backlog_link_validate())
-    fixed = 0
-    unfixable: list[dict] = list(validation.get("orphans", []))
-    backlog_path = _backlog_path()
-
-    for entry in validation.get("asymmetric", []):
-        try:
-            sync_inverse(backlog_path,
-                         source=entry["source"],
-                         target=entry["target"],
-                         type=entry["type"])
-            fixed += 1
-        except (KeyError, ValueError) as e:
-            unfixable.append({**entry, "reason": str(e)})
-
-    return _json.dumps({"fixed": fixed, "unfixable": unfixable,
-                        "cycles": validation.get("cycles", [])})
+    data = _load()
+    stored: dict[str, tuple[str, dict]] = {}
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("id"):
+                stored[task["id"]] = ("task", task)
+    for kind in LINKABLE_KINDS:
+        if kind != "task":
+            for ident, doc, _body in _dict_rows(data, kind, include_archived=True):
+                stored[ident] = (kind, doc)
+    repairable = []
+    for ident, (_kind, doc) in stored.items():
+        for link in entity_links(doc):
+            link_type, target = link["type"], link["target"]
+            inverse = REVERSE_TYPE.get(link_type)
+            if inverse is None or link_type in TASK_DEPENDENCY_LINK_TYPES or target not in stored:
+                continue
+            peer_kind, peer = stored[target]
+            if {"type": inverse, "target": ident} in link_view(peer, peer_kind):
+                continue
+            repairable.append({"source": ident, "target": target, "type": link_type, "missing_inverse": inverse})
+    planned = {(entry["source"], entry["target"], entry["type"]) for entry in repairable}
+    not_repaired = [
+        {**entry, "reason": f"the link is derived from a field of `{entry['source']}`, not stored; reconcile "
+                            "repairs stored links only — edit that field, or store the link with backlog_link"}
+        for entry in validation.get("asymmetric", [])
+        if (entry["source"], entry["target"], entry["type"]) not in planned]
+    stale = {ident: [link for link in entity_links(doc) if link["type"] in TASK_DEPENDENCY_LINK_TYPES]
+             for ident, (kind, doc) in stored.items() if kind == "task"}
+    stale = {ident: links for ident, links in stale.items() if links}
+    fixed, dropped, unfixable = 0, 0, list(validation.get("orphans", []))
+    if write:
+        backlog_path = _backlog_path()
+        for entry in repairable:
+            try:
+                sync_inverse(backlog_path, source=entry["source"], target=entry["target"], type=entry["type"],
+                             target_kind=stored[entry["target"]][0])
+                fixed += 1
+            except (KeyError, ValueError) as e:
+                unfixable.append({**entry, "reason": str(e)})
+        for ident, links in sorted(stale.items()):
+            document = read_entity_anywhere(backlog_path, ident, kind="task", fallback=False)
+            set_entity_links(document, [link for link in entity_links(document)
+                                        if link["type"] not in TASK_DEPENDENCY_LINK_TYPES])
+            write_entity_anywhere(backlog_path, document, kind="task")
+            dropped += len(links)
+    return _json.dumps({"written": bool(write), "fixed": fixed, "repairable": repairable,
+                        "not_repaired": not_repaired, "not_repaired_count": len(not_repaired),
+                        "stored_dependency_links": sum(len(links) for links in stale.values()),
+                        "dropped_dependency_links": dropped,
+                        "unfixable": unfixable, "cycles": validation.get("cycles", [])})
 
 
 @mcp.tool()
@@ -5209,29 +5445,37 @@ def backlog_issue_list(
     status: str = "",
     limit: int = DEFAULT_LIST_LIMIT,
     verbose: bool = False,
+    path: str = "",
 ) -> str:
-    """List issues, optionally filtered by severity and/or status.
-
-    Reads from the backlog.yaml index (sorted P0 → P3). Default lists active
-    issues regardless of status — pass `status=open` to focus on what still
-    needs work.
+    """Which issues exist, filtered by severity, status or the code path they
+    point at, sorted P0 → P3. With no status every active issue is listed;
+    `status="unresolved"` is what still needs work (open and investigating).
 
     Args:
         severity: Filter by severity: P0, P1, P2, P3.
-        status: Filter by status: open, investigating, fixed, wontfix, duplicate.
+        status: Filter by status: open, investigating, fixed, wontfix, duplicate,
+            or unresolved (open + investigating).
         limit: Max entries returned (default 50). 0 = no cap. An overflow footer
             reports how many were hidden.
         verbose: If True, include body content (repro steps) per entry. Slim
             (default) shows id, severity, status, title, and tldr.
+        path: Only issues whose `location` points under this path or matches
+            this glob; each row then shows the matching locations.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    return _issue_list_text(_load(), severity, status, limit, verbose)
+    return _issue_list_text(_load(), severity, status, limit, verbose, path)
 
 
-def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose: bool) -> str:
+_ISSUE_UNRESOLVED = ("open", "investigating")
+
+
+def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose: bool, path: str = "") -> str:
     """`backlog_issue_list` over any compatibility rows; shared with the native adapter."""
+    if status and status != "unresolved" and status not in ISSUE_STATUSES:
+        return (f"Error: status must be one of {', '.join(ISSUE_STATUSES)}, or unresolved "
+                f"(open + investigating); got {status!r}")
     rows = _dict_rows(data, "issue")
     docs = {ident: doc for ident, doc, _body in rows}
     bodies = {ident: (body or "") for ident, _doc, body in rows}
@@ -5239,7 +5483,12 @@ def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose
     if severity:
         entries = [e for e in entries if e.get("severity") == severity]
     if status:
-        entries = [e for e in entries if e.get("status") == status]
+        wanted = _ISSUE_UNRESOLVED if status == "unresolved" else (status,)
+        entries = [e for e in entries if e.get("status") in wanted]
+    where = {}
+    if path:
+        where = {e["id"]: _locations_under((docs.get(e["id"]) or {}).get("location"), path) for e in entries}
+        entries = [e for e in entries if where[e["id"]]]
     entries, overflow = _cap_list(list(entries), limit)
     if not entries:
         return "No issues match."
@@ -5264,6 +5513,8 @@ def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose
             body = bodies.get(e["id"]) or ""
             if body.strip():
                 lines.append(f"  body: {body.strip()[:200]}")
+        if where.get(e["id"]):
+            lines.append(f"  at: {', '.join(where[e['id']])}")
     footer = _overflow_footer(overflow, "issues")
     if footer:
         lines.append(footer)
@@ -5501,10 +5752,12 @@ def backlog_bug_list(
     found_in: str = "",
     limit: int = DEFAULT_LIST_LIMIT,
     include_archive: bool = False,
+    path: str = "",
 ) -> str:
-    """List Bugs from the active set (and optionally archive).
+    """Which bugs exist, filtered by status, the task they were found in, or the
+    code path they point at; the active set by default (and optionally archive).
 
-    Defaults to the active set sorted by (status weight asc, discovered desc).
+    Sorted by (status weight asc, discovered desc).
 
     Args:
         status: Filter by status: open, fixed, shelved, adopted, promoted.
@@ -5512,14 +5765,39 @@ def backlog_bug_list(
         limit: Max entries returned (default 50). 0 = no cap. An overflow footer
             reports how many were hidden.
         include_archive: If True, also include archived bugs.
+        path: Only bugs whose `location` points under this path (a directory or
+            file, e.g. "pipeline/providers") or matches this glob ("viewer/*.js").
+            Each row then shows the matching locations.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    return _bug_list_text(_load(), status, found_in, limit, include_archive)
+    return _bug_list_text(_load(), status, found_in, limit, include_archive, path)
 
 
-def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_archive: bool) -> str:
+def _location_path(location: str) -> str:
+    """A `location` entry's path: `file:line` and `file:12-20` lose the line part."""
+    text = str(location).strip().replace("\\", "/")
+    text = re.sub(r":\d+(?:-\d+)?$", "", text)
+    return text[2:] if text.startswith("./") else text
+
+
+def _locations_under(locations, pattern: str) -> list:
+    """The `locations` whose path is `pattern`, sits under it, or matches it as a glob."""
+    import fnmatch
+    wanted = _location_path(pattern).rstrip("/")
+    globbed = any(mark in wanted for mark in "*?[")
+    matched = []
+    for location in locations or []:
+        here = _location_path(location)
+        if (fnmatch.fnmatchcase(here, wanted) if globbed
+                else here == wanted or here.startswith(wanted + "/")):
+            matched.append(str(location))
+    return matched
+
+
+def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_archive: bool,
+                   path: str = "") -> str:
     """`backlog_bug_list` over any compatibility rows; shared with the native adapter."""
     # A list is a read: derive the index from the rows rather than re-syncing
     # (and thereby mutating) the caller's dict.
@@ -5541,6 +5819,12 @@ def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_a
         entries = [e for e in entries if e.get("status") == status]
     if found_in:
         entries = [e for e in entries if e.get("found_in") == found_in]
+    where = {}
+    if path:
+        documents = {ident: doc for ident, doc, _body in _dict_rows(data, "bug", include_archived=True)}
+        for e in entries:
+            where[e["id"]] = _locations_under((documents.get(e["id"]) or {}).get("location"), path)
+        entries = [e for e in entries if where[e["id"]]]
     entries, overflow = _cap_list(entries, limit)
     if not entries:
         return "No bugs match."
@@ -5552,6 +5836,8 @@ def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_a
         if e.get("found_in"):
             line += f"  (found_in: {e['found_in']})"
         lines.append(line)
+        if where.get(e["id"]):
+            lines.append(f"  at: {', '.join(where[e['id']])}")
     footer = _overflow_footer(overflow, "bugs")
     if footer:
         lines.append(footer)
@@ -5903,7 +6189,8 @@ def backlog_decision(
     """Read and transition existing decisions (DEC-NNN). To CREATE a decision use
     backlog_decision_create. Route through the taskmaster:decision skill.
 
-    Params by action: list(status, task_id, limit); get(decision_id);
+    Params by action: list(status — default "open"; "all" for every state —,
+    task_id, limit); get(decision_id);
     resolve(decision_id, resolved_with, rationale, resolved_in);
     drop(decision_id, reason); update(decision_id, title, options,
     recommendation, body).
@@ -5937,20 +6224,26 @@ def backlog_decision_list(
 def _decision_list_text(data: dict, status: str, task_id: str, limit: int) -> str:
     """`backlog_decision(list)` over any compatibility rows; shared with the native adapter."""
     rows: list[str] = []
+    other_status = 0
     for did, fm, _body in _dict_rows(data, "decision"):
-        if status != "all" and fm.get("status") != status:
-            continue
         if task_id and fm.get("task_id") != task_id:
+            continue
+        if status != "all" and fm.get("status") != status:
+            other_status += 1
             continue
         rec = fm.get("recommendation")
         rec_str = f" [rec={rec}]" if rec else ""
         rows.append(f"{did} · {fm.get('status')} · {fm.get('title')}{rec_str}")
+    # The default shows open decisions only; say what that left out.
+    elsewhere = (f"…{other_status} more decision{'s' if other_status != 1 else ''} in other statuses — "
+                 'status="all" lists every one') if other_status else ""
     if not rows:
-        return f"No decisions matching status={status}."
+        return f"No decisions matching status={status}." + (f"\n{elsewhere}" if elsewhere else "")
     rows, overflow = _cap_list(rows, limit)
     footer = _overflow_footer(overflow, "decisions")
-    if footer:
-        rows.append(footer)
+    for line in (footer, elsewhere):
+        if line:
+            rows.append(line)
     return "\n".join(rows)
 
 
@@ -6070,15 +6363,23 @@ def backlog_decision_update(
 def backlog_continuity_items(
     view: str = "action",
     include_auto_stage: bool = False,
+    limit: int = DEFAULT_LIST_LIMIT,
+    action_class: str = "",
 ) -> str:
-    """Return all continuity items as JSON: {"items": [...], "view": "..."}.
+    """The viewer's continuity rail as JSON: open handovers, tasks, decisions,
+    issues and ideas, each with an `action_class` (review, decide, resume,
+    clean-up, ambient), most actionable first, capped at `limit`. For an agent's question
+    "what waits on a person" `backlog_list_tasks(waiting_on_human=True)` is the
+    direct answer.
 
-    `view` is informational only — the server returns the full set; the client
-    decides grouping (Action / Time / Entity).
+    Returns {"items": [...], "view", "total"}, plus "truncated": true when
+    `limit` cut the list.
 
     Args:
         view: "action" | "time" | "entity" (echoed in the response).
         include_auto_stage: When True, include auto-stage handovers (debug).
+        limit: Max items (default 50); 0 returns every item in the rail's order.
+        action_class: Only items of this class.
     """
     import json
     bp = _backlog_path()
@@ -6093,7 +6394,30 @@ def backlog_continuity_items(
         handover_rows=_dict_rows(tree, "handover"),
         data=tree,
     )
-    return json.dumps({"items": items, "view": view}, default=str)
+    return _continuity_answer(items, view, limit, action_class)
+
+
+# Most actionable first; a class this list does not know still comes before ambient.
+_CONTINUITY_RANK = {"review": 0, "decide": 1, "resume": 2, "clean-up": 3, "ambient": 5}
+
+
+def _continuity_answer(items: list, view: str, limit: int, action_class: str) -> str:
+    """`backlog_continuity_items`' JSON over the projected items; shared with the native adapter.
+
+    `limit=0` is the viewer's whole rail, in its own order. A capped answer puts
+    the most actionable classes first, so the cut drops ambient items before
+    anything that asks for attention.
+    """
+    if action_class:
+        items = [item for item in items if item.get("action_class") == action_class]
+    answer: dict = {"view": view, "total": len(items)}
+    if limit > 0:
+        ranked = sorted(items, key=lambda item: _CONTINUITY_RANK.get(item.get("action_class"), 4))
+        items = ranked[:limit]
+        if len(ranked) > limit:
+            answer["truncated"] = True
+    answer["items"] = items
+    return json.dumps(answer, default=str)
 
 
 def _legacy_change_identity(connection) -> tuple[str, int]:
@@ -6108,8 +6432,9 @@ def _legacy_change_identity(connection) -> tuple[str, int]:
     return (token[0] if token else ""), int(sequence)
 
 
-def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]:
-    """The legacy `changes` table under the same scope the native feed applies."""
+def _legacy_change_rows(connection, scope, after: int, limit: int, skip_imports: bool = False) -> tuple[list[dict], int]:
+    """The legacy `changes` table under the same scope the native feed applies,
+    and how many store-import rows `skip_imports` left out of it."""
     from taskmaster.native import cursors
 
     _label, kinds, ids, epic, _grouped = scope
@@ -6124,9 +6449,100 @@ def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]
         conditions.append(cursors.epic_condition(
             "changes", "e", "SELECT epic FROM entities WHERE kind='task' AND id=e.id"))
         args.extend([epic] * 4)
+    omitted = 0
+    if skip_imports:
+        omitted = int(connection.execute("SELECT COUNT(*) FROM changes e WHERE " + " AND ".join(conditions) +
+                                         " AND " + cursors.STORE_IMPORT, args).fetchone()[0])
+        conditions.append("NOT " + cursors.STORE_IMPORT)
     return [dict(row) for row in connection.execute(
         "SELECT seq,ts,session,tool operation,kind,id,op,fields,seq first_seq,seq final_seq "
-        "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
+        "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])], omitted
+
+
+_CHANGE_ANCHOR_TIME = re.compile(r"\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?")
+
+
+def _change_query_scope(cursor, kinds, ids, epic, limit, group_commits, since_seq, since) -> list:
+    """A change query's validated scope, or ValueError; one order of refusals for both stores."""
+    from taskmaster.native import cursors
+    scope = cursors.scope(kinds, ids, epic, group_commits)
+    cursors.page(limit)
+    if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
+        raise ValueError("since_seq must be a sequence number of 0 or more")
+    if cursor and since_seq is not None:
+        raise ValueError("pass a cursor or since_seq, not both")
+    if not isinstance(since, str) or len(since) > 256:
+        raise ValueError("since must be a date, an ISO timestamp or an entity id")
+    if since.strip() and (cursor or since_seq is not None):
+        raise ValueError("pass one of cursor, since_seq or since, not several")
+    return scope
+
+
+def _as_local(moment: datetime) -> datetime:
+    """A naive time as the machine's local time, which is how a caller means it."""
+    return moment.astimezone()
+
+
+def _change_anchor_moment(text: str) -> "datetime | None":
+    """`text` as a UTC instant, None when it is not a date or timestamp at all.
+
+    ValueError when it reads as one this platform cannot place: a year the local
+    clock has no rules for, or one an offset pushes out of range.
+    """
+    if not _CHANGE_ANCHOR_TIME.fullmatch(text):
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if moment.tzinfo is None:
+            moment = _as_local(moment)
+        return moment.astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        raise ValueError(f"since {text!r} is not a date or time this store can place") from None
+
+
+def _change_anchor_seq(connection, table: str, since: str, created_of) -> int:
+    """The sequence a `since` anchor resumes after, in either store's event table.
+
+    An entity id is tried first, since a handover id can read like a timestamp.
+    It resumes at the entity's first change-log row, its creation, so the rest
+    of that commit and everything later is reported. When that first row is an
+    import (the store adopted the entity from a file, at whatever moment that
+    happened) the row says nothing about when the entity was written, so the
+    entity's own `created` anchors it, as a time. `created_of(id)` answers that
+    timestamp, "" for an entity without one, None for no such entity.
+
+    A date or timestamp resumes just before the first change stamped at or
+    after it (a bare date or naive time is local, as handover dates are; with
+    none, at the end of history).
+    """
+    since = since.strip()
+    first = connection.execute(f"SELECT seq,op FROM {table} WHERE id=? ORDER BY seq LIMIT 1", (since,)).fetchone()
+    if first is not None and first[1] != "import":
+        return int(first[0])
+    created = created_of(since)
+    moment = _change_anchor_moment(str(created)) if created else None
+    if moment is None:
+        if first is not None:
+            return int(first[0])  # imported, and its document does not say when it was written
+        if created is not None:
+            raise ValueError(f"since {since!r} names an entity with no change-log row and no `created` "
+                             "timestamp; pass a date, or since_seq")
+        moment = _change_anchor_moment(since)
+    if moment is None:
+        raise ValueError(f"since {since!r} is neither a date or ISO timestamp nor the id of an entity "
+                         "in this backlog; pass a date, or since_seq")
+    at_or_after = connection.execute(f"SELECT MIN(seq) FROM {table} WHERE ts>=?", (moment.isoformat(),)).fetchone()[0]
+    if at_or_after is None:
+        return int(connection.execute(f"SELECT COALESCE(MAX(seq),0) FROM {table}").fetchone()[0])
+    return int(at_or_after) - 1
+
+
+def _legacy_created_of(connection, ident: str) -> "str | None":
+    """`_change_anchor_seq`'s `created_of` over the legacy `entities` table."""
+    row = connection.execute(
+        "SELECT COALESCE(json_extract(doc,'$.created'),json_extract(doc,'$.date'),'') FROM entities "
+        "WHERE id=? AND deleted=0 ORDER BY kind LIMIT 1", (ident,)).fetchone()
+    return None if row is None else str(row[0])
 
 
 @mcp.tool()
@@ -6138,8 +6554,10 @@ def backlog_changes_since(
     limit: int = 100,
     group_commits: bool = True,
     since_seq: int | None = None,
+    since: str = "",
 ) -> str:
-    """What changed in the backlog since a cursor, as JSON. Resume, don't re-read.
+    """What changed in the backlog since a cursor, a time or an entity's creation, as JSON.
+    Resume, don't re-read.
 
     Call it with no arguments to get a cursor and nothing else ("start watching
     from now"), then pass that cursor back to learn what moved. A cursor survives
@@ -6163,15 +6581,14 @@ def backlog_changes_since(
         limit: Commits (or changes, when ungrouped) per answer, 1-500.
         group_commits: Group each transaction's changes into one commit entry.
         since_seq: Start from this sequence instead of a cursor. 0 is all history.
+        since: Start from a date (YYYY-MM-DD) or ISO timestamp, or from an entity
+            id — "since handover X was written" is since="<X's id>": everything
+            after that entity was created. Instead of a cursor or since_seq. The
+            store's own import of existing files is left out, and counted in `note`.
     """
     from taskmaster.native import cursors
     try:
-        scope = cursors.scope(kinds, ids, epic, group_commits)
-        cursors.page(limit)
-        if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
-            raise ValueError("since_seq must be a sequence number of 0 or more")
-        if cursor and since_seq is not None:
-            raise ValueError("pass a cursor or since_seq, not both")
+        scope = _change_query_scope(cursor, kinds, ids, epic, limit, group_commits, since_seq, since)
     except ValueError as exc:
         return cursors.refusal(exc)
     st = _store()
@@ -6194,11 +6611,21 @@ def backlog_changes_since(
                                       scope=scope, sequence=sequence)
             elif since_seq is not None:
                 after = min(since_seq, sequence)
+            elif since.strip():
+                after = _change_anchor_seq(connection, "changes", since,
+                                           lambda ident: _legacy_created_of(connection, ident))
             else:
                 return cursors.present(cursors.feed(items=[], last_seq=sequence, more=False, **envelope))
         except cursors.CursorInvalid as exc:
             return cursors.present(cursors.resync(exc, **envelope))
-        rows = _legacy_change_rows(connection, scope, after, limit)
+        except ValueError as exc:
+            return cursors.refusal(exc)
+        # Anchored on a time or an entity, the question is what people and tools
+        # changed since; the rows of the store adopting its files are not that.
+        # A cursor issued by such an answer carries the choice on.
+        skip_imports = bool(since.strip()) or (bool(cursor) and cursors.skips_imports(cursor))
+        rows, omitted = _legacy_change_rows(connection, scope, after, limit, skip_imports)
+        envelope.update(skip_imports=skip_imports, omitted_imports=omitted)
         more, rows = len(rows) > limit, rows[:limit]
         items = [cursors.commit(row, [cursors.change(row)]) for row in rows] if group_commits else \
             [cursors.flat(row) for row in rows]
@@ -6410,10 +6837,11 @@ def backlog_context(
     include: list[str] | None = None,
     cursor: str = "",
 ) -> str:
-    """What you need to know before working on a task, as JSON, bounded by bytes.
+    """What is in the way of a task — can it start, can it close today — and what
+    to know before working on it, as JSON, bounded by bytes.
 
-    One call in place of status + next_available + get_task + dependencies +
-    handover_list. `mandatory` is what blocks the task — unsatisfied review gates,
+    One call in place of status + next_available + get_task + task_pipeline +
+    dependencies + bug and handover reads: `focus=<task id>, scope="task"`. `mandatory` is what blocks the task — unsatisfied review gates,
     unmet or unresolvable dependencies, open bugs filed against it, open handovers
     asking for an action, a human action it waits on, and a live peer's claim. It
     is never trimmed to fit: when the budget cannot hold it, `over_budget` is true,
@@ -7055,7 +7483,7 @@ def backlog_note_archive(note_id: str) -> str:
 @mcp.tool()
 @_transactional("backlog_area_create")
 def backlog_area_create(
-    area_id: str, name: str, description: str = "", anchors: list[str] | None = None
+    area_id: str, name: str, description: str = "", anchors: list[str] | str | None = None
 ) -> str:
     """Create a new Area — a long-lived subsystem/workstream with NO status
     lifecycle (e.g. "desktop-app", "viewer", "mcp-server").
@@ -7063,10 +7491,16 @@ def backlog_area_create(
     Areas group epics and tasks by where they live in the codebase rather
     than by when they finish — an area never completes or archives. If an
     epic can say when it's done, it's an epic; if it can't, it's an area.
+    `anchors` is a list of path globs, or the same as a JSON array or a
+    comma-separated string.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        anchors = _anchor_items(anchors)
+    except ValueError as exc:
+        return f"Error: {exc}"
     from taskmaster.taskmaster_v3 import (
         area_path as _area_path,
         validate_area_doc as _validate_area_doc,
@@ -7130,15 +7564,21 @@ def _area_list_text(data: dict, limit: int) -> str:
 
 @mcp.tool()
 def backlog_area_get(area_id: str) -> str:
-    """Read one Area in full (frontmatter + body)."""
+    """What an Area is and what work is under it: its frontmatter and body, the
+    epics filed under it with their progress, and how many tasks it holds."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    return _area_get_text(_load(), area_id)
+    data = _load()
+    return _area_get_text(data, area_id, data.get("epics") or [])
 
 
-def _area_get_text(data: dict, area_id: str) -> str:
-    """`backlog_area_get` over any compatibility rows; shared with the native adapter."""
+def _area_get_text(data: dict, area_id: str, epics: list) -> str:
+    """`backlog_area_get` over any compatibility rows; shared with the native adapter.
+
+    `epics` carry their `tasks` (with `status` and `area`); archived ones are
+    left out as `backlog_list_tasks` leaves them out.
+    """
     row = _dict_row(data, "area", area_id)
     if row is None:
         return f"Area not found: {area_id}"
@@ -7147,19 +7587,40 @@ def _area_get_text(data: dict, area_id: str) -> str:
     out = "---\n" + "\n".join(fm_lines) + "\n---"
     if body:
         out += "\n" + body
+    filed, through_epic, tagged = [], 0, 0
+    for epic in epics:
+        if epic.get("status") == "archived":
+            continue
+        live = [t for t in epic.get("tasks") or [] if t.get("status") != "archived"]
+        if epic.get("area") == area_id:
+            done = sum(1 for t in live if t.get("status") == "done")
+            filed.append(f"- {epic['id']} — {epic.get('name', '')} ({epic.get('status', 'planned')}, "
+                         f"{done}/{len(live)} done)")
+        for task in live:
+            if _task_area(task, epic) == area_id:
+                if task.get("area"):
+                    tagged += 1
+                else:
+                    through_epic += 1
+    out += "\n\nEpics under this area:" + ("\n" + "\n".join(filed) if filed else " none")
+    total = through_epic + tagged
+    out += (f"\nWork in this area: {total} tasks ({through_epic} through their epic, {tagged} tagged directly)"
+            f" — `backlog_list_tasks(area=\"{area_id}\")` lists them.")
     return out
 
 
 @mcp.tool()
 @_transactional("backlog_area_update")
-def backlog_area_update(area_id: str, field: str, value: str) -> str:
+def backlog_area_update(area_id: str, field: str, value: str | list[str]) -> str:
     """Update a single field on an Area.
 
     Args:
         area_id: The area ID (e.g., "desktop-app", "viewer")
         field: Field to update — one of: name, description, anchors
-        value: New value. For anchors, pass a JSON array of path/glob
-            strings (e.g., '["viewer/**", "docs/viewer/**"]').
+        value: New value. For anchors: a list of path globs or a JSON array,
+            which REPLACES the whole list ("[]" clears it); or entries each
+            prefixed `+` (add) or `-` (remove), e.g. "+docs/viewer/**", which
+            edit it. A bare string is refused.
     """
     if field not in ALLOWED_AREA_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_AREA_FIELDS))}"
@@ -7167,20 +7628,19 @@ def backlog_area_update(area_id: str, field: str, value: str) -> str:
     if not bp.exists():
         return "No backlog found."
     from taskmaster.taskmaster_v3 import apply_area_updates as _apply_area_updates
-    if field == "anchors":
-        try:
-            parsed = json.loads(value)
-        except (ValueError, TypeError):
-            return "Error: anchors value must be a JSON array of strings"
-        if not isinstance(parsed, list):
-            return "Error: anchors value must be a JSON array of strings"
-        updates: dict = {"anchors": parsed}
-    else:
-        updates = {field: value}
     try:
         document, body = _tx_doc("area", area_id)
     except KeyError:
         return f"Area not found: {area_id}"
+    if field == "anchors":
+        try:
+            updates: dict = {"anchors": _edited_anchors(document.get("anchors") or [], value)}
+        except ValueError as exc:
+            return f"Error: {exc}"
+    elif not isinstance(value, str):
+        return f"Error: `{field}` takes a string"
+    else:
+        updates = {field: value}
     try:
         fm = _apply_area_updates(document, updates)
     except ValueError as exc:
@@ -7188,6 +7648,89 @@ def backlog_area_update(area_id: str, field: str, value: str) -> str:
     _store_tx().put("area", area_id, fm, body=body)
     _mutate_and_save(_load())
     return f"Area updated: {area_id} \u2014 field `{field}`"
+
+
+def _apply_list_edit(current: list, items: list) -> "list | None":
+    """`items` each prefixed `+` (add) or `-` (remove), applied to `current`; None
+    when no item is prefixed, meaning `items` is the whole new list. A mix is
+    refused: it is either a slip or a guess, and both drop entries silently."""
+    marked = [item for item in items if item[:1] in ("+", "-")]
+    if not marked:
+        return None
+    if len(marked) != len(items):
+        raise ValueError("prefix every entry with + (add) or - (remove), or none of them "
+                         "to replace the whole list")
+    out = list(current)
+    for item in items:
+        entry = item[1:].strip()
+        if not entry:
+            raise ValueError(f"an empty `{item[0]}` entry names nothing to {'add' if item[0] == '+' else 'remove'}")
+        if item[0] == "+" and entry not in out:
+            out.append(entry)
+        elif item[0] == "-":
+            if entry not in out:
+                raise ValueError(f"`{entry}` is not in the list, so there is nothing to remove")
+            out.remove(entry)
+    return out
+
+
+def _dependency_edit_problem(task_id: str, added: list, graph: dict) -> str:
+    """Why adding `added` to `task_id`'s depends_on is refused, or "".
+
+    `graph` maps every task id to its declared dependencies. A task cannot
+    depend on itself, and an added edge must not close a cycle: the gates
+    would then wait on each other forever.
+    """
+    from taskmaster.taskmaster_v3 import would_create_cycle
+    if task_id in added:
+        return f"`{task_id}` cannot depend on itself"
+    for dependency in added:
+        if would_create_cycle(graph, task_id, dependency):
+            return f"adding `{dependency}` would create a cycle in the depends_on chain ({task_id} -> {dependency})"
+    return ""
+
+
+def _anchor_items(value) -> list:
+    """Area anchors as a list, from a list, a JSON array or a comma-separated string."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+    elif isinstance(value, str) and value.strip().startswith("["):
+        try:
+            items = json.loads(value)
+        except ValueError:
+            raise ValueError("anchors value is not a valid JSON array of strings") from None
+        if not isinstance(items, list):
+            raise ValueError("anchors value must be a list of strings")
+    elif isinstance(value, str):
+        items = value.split(",")
+    else:
+        raise ValueError("anchors value must be a list of strings")
+    if not all(isinstance(item, str) for item in items):
+        raise ValueError("anchors value must be a list of strings")
+    return [item.strip() for item in items if item.strip()]
+
+
+_ANCHOR_REPLACE_HINT = ('pass a list or a JSON array to replace the anchors ("[]" clears them), or entries '
+                        'each prefixed + or - (e.g. "+docs/**") to add or remove one')
+
+
+def _edited_anchors(current: list, value) -> list:
+    """An area's anchors after `value`: a whole new list, or `+`/`-` edits of `current`.
+
+    A bare string replaces nothing: one glob, a comma list or "" would silently
+    replace or clear the list, so only a list, a JSON array or prefixed edits
+    are taken.
+    """
+    if isinstance(value, str) and not value.strip().startswith("["):
+        items = _anchor_items(value)
+        if not items or _apply_list_edit(list(current), items) is None:
+            raise ValueError(f"anchors: {_ANCHOR_REPLACE_HINT}")
+        return _apply_list_edit(list(current), items)
+    items = _anchor_items(value)
+    edited = _apply_list_edit(list(current), items)
+    return items if edited is None else edited
 
 
 @mcp.tool()
@@ -8153,13 +8696,55 @@ def _git_subprocess_kwargs() -> dict:
 
 @mcp.tool()
 def backlog_last_session() -> str:
-    """Get the most recent session summary from the PROGRESS.md changelog.
-    Returns the last changelog entry (everything between the first and second ### headings)."""
-    return _last_session_text(_progress_path())
+    """What the last logged session did: the newest entry of the PROGRESS.md changelog (everything
+    between its first and second ### headings). Handovers are not read; when some are dated after
+    that entry the answer says how many and where to look."""
+    return _last_session_text(_progress_path(), _legacy_handover_ids_after)
 
 
-def _last_session_text(progress: Path) -> str:
-    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter."""
+def _legacy_handover_ids_after(day: str) -> list[str]:
+    """Ids of every stored handover, archived included, that sort after `day`.
+
+    One indexed query over the store's rows, as the native store counts: not
+    `_load()`, which decodes the whole backlog to add one line, and not the
+    files, where a stray file with no row would count. Best-effort.
+    """
+    try:
+        if not _backlog_path().exists():
+            return []
+        return _store().entity_ids_after("handover", day)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError, store.LegacyLayoutError):
+        return []
+
+
+def _newer_handovers_line(entry: str, handover_ids_after) -> str:
+    """One line when handovers are dated after a changelog entry, else "".
+
+    The changelog is written by task completions and session logs; a handover
+    writes nothing to it, so its newest entry can trail the newest recorded
+    work. Dates only: an entry with no date in its heading, or a handover from
+    the same day, claims nothing. A heading spanning several days is as recent
+    as its latest date. `handover_ids_after(day)` answers the stored handover
+    ids sorting after a `YYYY-MM-DD`, and is asked only when there is a date.
+    """
+    dates = re.findall(r"\d{4}-\d{2}-\d{2}", entry.splitlines()[0])
+    if not dates or handover_ids_after is None:
+        return ""
+    day = max(dates)
+    newer = sorted((ident for ident in handover_ids_after(day)
+                    if re.match(r"\d{4}-\d{2}-\d{2}-", ident) and ident[:10] > day), reverse=True)
+    if not newer:
+        return ""
+    count = f"{len(newer)} handovers are" if len(newer) != 1 else "1 handover is"
+    return (f"Note: {count} newer than this entry (latest `{newer[0]}`) — the changelog does not record "
+            "handovers; see `backlog_handover_list()` or `backlog_thread_list()` for the most recent work.")
+
+
+def _last_session_text(progress: Path, handover_ids_after=None) -> str:
+    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter.
+
+    `handover_ids_after` is the store's answer to `_newer_handovers_line`.
+    """
     try:
         text = progress.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -8185,7 +8770,10 @@ def _last_session_text(progress: Path) -> str:
     else:
         entry = rest[:second_entry_start].strip()
 
-    return f"**Last Session:**\n\n{entry}" if entry else "No session entries found in changelog."
+    if not entry:
+        return "No session entries found in changelog."
+    note = _newer_handovers_line(entry, handover_ids_after)
+    return f"**Last Session:**\n\n{entry}" + (f"\n\n{note}" if note else "")
 
 
 # ── Session State (in-memory, per MCP server process) ────
@@ -8247,7 +8835,9 @@ def backlog_update_task(
             patchnote, release, tldr, next_step, human_action
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
-            - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
+            - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003"),
+              which REPLACE the whole list; or ids each prefixed + or - ("+cpp-parser-004"),
+              which add to or remove from it
             - stage: integer
             - estimate: size string (e.g., "S", "M", "L")
             - sub_repo: sub-repo directory name for monorepo projects
@@ -8360,8 +8950,25 @@ def backlog_update_task(
             task["docs"] = {}
         task["docs"][doc_key] = doc_path
     elif field == "depends_on":
-        # Comma-separated task IDs, e.g. "cpp-parser-002,cpp-parser-003"
+        # Comma-separated task IDs, e.g. "cpp-parser-002,cpp-parser-003", or
+        # `+id` / `-id` edits of the current list.
         dep_ids = [d.strip() for d in value.split(",") if d.strip()]
+        current = _dependency_ids(task.get("depends_on")) or []
+        try:
+            edited = _apply_list_edit(current, dep_ids)
+        except ValueError as exc:
+            return f"Error: depends_on: {exc}"
+        if edited is not None:
+            dep_ids = edited
+        # Newly named dependencies, however the list was given: a task cannot
+        # depend on itself or close a cycle. Existing entries are not re-judged.
+        added = [d for d in dep_ids if d not in current]
+        if added:
+            graph = {t["id"]: list(_dependency_ids(t.get("depends_on")) or []) for ep in data["epics"]
+                     for t in ep.get("tasks", []) if t.get("id")}
+            problem = _dependency_edit_problem(task_id, added, graph)
+            if problem:
+                return f"Error: depends_on: {problem}"
         # Validate all deps exist
         for dep_id in dep_ids:
             if not _find_task(data, dep_id):
@@ -8727,7 +9334,9 @@ def backlog_clear_gate(task_id: str, gate: str) -> str:
 def backlog_task_pipeline(task_id: str) -> str:
     """Show a task's lane, its required gate pipeline, and each gate's recorded
     state (pass/done/skipped/fail/pending), plus the one-line gate_state and the
-    list of outstanding gates blocking `done`.
+    list of outstanding gates blocking `done`. For everything else in the way
+    (dependencies, open bugs, handovers, a human action), use
+    `backlog_context(focus=<id>, scope="task")`.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -9458,15 +10067,25 @@ def _epic_status_text(data: dict, epic_id: str) -> str:
     return "\n".join(lines)
 
 
+def _unfinished_phase_refusal(phase: dict, stats: dict, incomplete: int) -> str:
+    """Why a phase with unfinished tasks was not advanced; shared with the native adapter."""
+    return (f"Error: blocked — {incomplete} tasks in phase **{phase['name']}** are not done "
+            f"(todo: {stats['todo']}, in-progress: {stats['in-progress']}, "
+            f"in-review: {stats['in-review']}, blocked: {stats['blocked']}). Finish them or move them "
+            f"to another phase, or advance with force=True: the phase is then marked done and they "
+            f"keep their status.")
+
+
 @mcp.tool()
 @_transactional("backlog_advance_phase")
 def backlog_advance_phase(force: bool = False) -> str:
     """Complete the active phase and activate the next one in sequence.
     Archives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.
-    Blocks if phase has unchecked deliverables unless force=True.
+    Refuses while the phase has unchecked deliverables or tasks that are not done, unless force=True.
 
     Args:
-        force: If True, advance even if deliverables are incomplete.
+        force: If True, advance anyway: the phase is marked done and its unfinished
+            tasks keep their status.
     """
     data = _load()
     active_ph = _active_phase(data)
@@ -9481,15 +10100,16 @@ def backlog_advance_phase(force: bool = False) -> str:
     if unchecked and not force:
         items = "\n".join(f"  - [ ] {d['text']}" for d in unchecked)
         return (
-            f"**Blocked:** {len(unchecked)} unchecked deliverable(s) in phase "
+            f"Error: blocked — {len(unchecked)} unchecked deliverable(s) in phase "
             f"**{active_ph['name']}**:\n{items}\n\n"
             f"Check them off with `backlog_update_phase(phase_id=\"{active_ph['id']}\", "
             f"field=\"deliverables\", value='{{\"action\":\"toggle\",\"index\":N}}')` "
             f"or advance with force=True."
         )
 
-    # Warn if there are incomplete tasks
     incomplete = ph_stats["todo"] + ph_stats["in-progress"] + ph_stats["in-review"] + ph_stats["blocked"]
+    if incomplete and not force:
+        return _unfinished_phase_refusal(active_ph, ph_stats, incomplete)
     warning = ""
     if incomplete > 0:
         warning = (
@@ -9683,6 +10303,9 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
             elif field == "depends_on":
                 dep_ids = [d.strip() for d in value.split(",") if d.strip()]
                 bad = [d for d in dep_ids if not _find_task(data, d)]
+                if any(d[:1] in ("+", "-") for d in dep_ids):
+                    errors.append(f"`{task_id}`: {BATCH_DEPENDENCY_EDIT_REFUSAL}")
+                    continue
                 if bad:
                     errors.append(f"`{task_id}`: dependencies not found: {', '.join(bad)}")
                     continue
@@ -11024,7 +11647,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             include_auto = qs.get("include_auto_stage", ["0"])[0] in ("1", "true")
-            payload = json.loads(backlog_continuity_items(include_auto_stage=include_auto))
+            payload = json.loads(backlog_continuity_items(include_auto_stage=include_auto, limit=0))
             self._send_json(200, payload)
             return
         elif m := re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)", clean_path):
