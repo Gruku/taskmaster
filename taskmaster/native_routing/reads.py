@@ -201,6 +201,11 @@ class NativeRows(Mapping):
                                   for entity in sorted(items, key=lambda e: e["id"])}
         return self._parsed[kind]
 
+    def ids(self, kind) -> list[str]:
+        """Every id of one kind, archived included, without decoding a document."""
+        return [row[0] for row in self._snapshot.connection.execute(
+            "SELECT public_id FROM entity_core WHERE kind=? AND deleted=0 ORDER BY public_id", (kind,))]
+
     def __iter__(self):
         return iter(ROW_KINDS)
 
@@ -325,9 +330,13 @@ class NativeLinks:
         return _TldrIndex(self._snapshot)
 
     def peer(self, target):
-        from taskmaster.taskmaster_v3 import entity_kind_of
-        kind = entity_kind_of(target)
-        if kind is None or not self._backlog_path.exists():
+        from taskmaster.taskmaster_v3 import resolve_link_kind
+        if not self._backlog_path.exists():
+            return None
+        # By lookup, as the legacy `read_entity_anywhere` resolves it: a task's
+        # id carries its epic's prefix, not a kind's.
+        kind = resolve_link_kind(target, lambda kind, ident: get(self._snapshot, kind, ident) is not None)
+        if kind is None:
             return None
         entity = get(self._snapshot, kind, target, body=True)
         return document(entity) if entity is not None else None

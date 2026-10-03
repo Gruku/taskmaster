@@ -155,7 +155,9 @@ def test_migrate_links_is_idempotent(tmp_path):
     assert entity_links(t1).count({"type": "depends_on", "target": "T-002"}) == 1
 
 
-def test_migrate_links_adds_inverses(tmp_path):
+def test_migrate_links_keeps_task_dependencies_in_the_field(tmp_path):
+    """A task's dependencies stay its `depends_on` field: the migration neither copies
+    them into `links` nor stores a `blocks` inverse; reads still show both sides."""
     tm_dir = _seed_project(tmp_path)
     subprocess.run(
         [sys.executable, "-m", "scripts.migrate_links",
@@ -163,8 +165,12 @@ def test_migrate_links_adds_inverses(tmp_path):
         check=True,
         cwd=str(Path(__file__).resolve().parents[1]),
     )
-    t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    stored_t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001", fallback=False)
+    stored_t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002", fallback=False)
+    assert all(link["type"] not in ("depends_on", "blocks") for link in entity_links(stored_t1))
+    assert all(link["type"] not in ("depends_on", "blocks") for link in entity_links(stored_t2))
+    t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
+    assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
 
 
 # ── Read-fallback shim test ─────────────────────────────────────────────

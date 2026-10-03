@@ -252,14 +252,15 @@ def test_migrate_links_translates_and_reconciles_in_one_transaction(
     assert transactions.count("scripts/migrate_links") == 1
 
     t1 = _row(root, "task", "T-001")[0]
-    assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
+    # A task's dependency stays its `depends_on` field: never copied into links.
+    assert {"type": "depends_on", "target": "T-002"} not in entity_links(t1)
     assert {"type": "relates_to", "target": "ISS-001"} in entity_links(t1)
     assert {"type": "fixes", "target": "ISS-001"} in entity_links(t1)
     assert t1["depends_on"] == ["T-002"]  # live schema, kept
     assert "related_issues" not in t1
 
     t2 = _row(root, "task", "T-002")[0]
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    assert {"type": "blocks", "target": "T-001"} not in entity_links(t2)  # derived on read
 
     issue_doc, issue_body = _row(root, "issue", "ISS-001")
     assert {"type": "fixed_in_task", "target": "T-001"} in entity_links(issue_doc)
@@ -296,7 +297,7 @@ def test_migrate_links_keeps_depends_on_and_the_dependency_gate(
 
     t1 = _row(root, "task", "T-001")[0]
     assert t1["depends_on"] == ["T-002"]
-    assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
+    assert {"type": "depends_on", "target": "T-002"} not in entity_links(t1)
 
     # The gate must still see the dependency after the migration.
     after = bs.backlog_dependencies("T-001")
@@ -358,11 +359,11 @@ def test_migrate_links_keeps_the_issue_resolution_fields(tm_epic_phase, capsys):
 
 def test_migrate_links_reports_an_orphan_target(tm_epic_phase, capsys):
     root = tm_epic_phase
-    _seed_task(root, "T-001", title="First", tldr="a", depends_on=["T-404"])
+    _seed_task(root, "T-001", title="First", tldr="a", related_issues=["ISS-404"])
     assert links_script.main(["--root", str(root)]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary["reconcile"]["orphans"] == [
-        {"source": "T-001", "target": "T-404", "type": "depends_on"}
+        {"source": "T-001", "target": "ISS-404", "type": "relates_to"}
     ]
 
 
@@ -377,7 +378,7 @@ def test_migrate_links_is_idempotent(legacy_links, capsys):
     summary = json.loads(capsys.readouterr().out)
     assert summary["status"] == "no changes"
     assert entity_links(_row(root, "task", "T-001")[0]).count(
-        {"type": "depends_on", "target": "T-002"}
+        {"type": "relates_to", "target": "ISS-001"}
     ) == 1
 
 
@@ -386,7 +387,7 @@ def test_migrate_links_keep_legacy_leaves_the_old_fields(legacy_links):
     assert links_script.main(["--root", str(root), "--keep-legacy"]) == 0
     t1 = _row(root, "task", "T-001")[0]
     assert t1["depends_on"] == ["T-002"]
-    assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
+    assert {"type": "relates_to", "target": "ISS-001"} in entity_links(t1)
 
 
 def test_migrate_links_dry_run_opens_no_write_transaction(
@@ -400,7 +401,7 @@ def test_migrate_links_dry_run_opens_no_write_transaction(
     assert "depends_on" in _row(root, "task", "T-001")[0]
     summary = json.loads(capsys.readouterr().out)
     assert summary["dry_run"] is True
-    assert summary["would_write"] == ["ISS-001", "T-001", "T-002"]
+    assert summary["would_write"] == ["ISS-001", "T-001"]  # T-002 gets no stored `blocks`
 
 
 # ── migrate_handover_statuses ──────────────────────────────────────────────

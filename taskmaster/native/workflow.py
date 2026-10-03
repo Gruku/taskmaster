@@ -500,13 +500,10 @@ def _auto_link(transaction, kind, ident, doc, body):
     references = domain_v3.extract_inline_refs(text, self_id=ident)
     if not references:
         return doc
-    existing = {link["target"] for link in domain_v3.entity_links(doc)}
+    # Targets already linked, derived links included; the reference is added to
+    # the stored document only, so derived links stay derived.
+    existing = {link["target"] for link in domain_v3.link_view(doc, kind)}
     doc = deepcopy(doc)
-    if kind != "task":
-        # The tools read every non-task entity through `read_entity_anywhere`,
-        # which synthesizes `links` from legacy fields, and write that document
-        # back: the synthesized links persist alongside the new reference.
-        domain_v3._fallback_links_if_absent(doc, kind)
     added = []
     for target in references:
         if target in existing:
@@ -517,19 +514,15 @@ def _auto_link(transaction, kind, ident, doc, body):
         domain_v3.add_link(doc, "references", target)
         added.append((target_kind, target))
     for target_kind, target in added:
-        # Targets outside the task tree are likewise read and written back with
-        # their synthesized links; a task source edits tree targets directly.
-        fallback = kind != "task" or target_kind not in ("task", "epic", "phase")
-        _write_inverse(transaction, target_kind, target, source=ident, link_type="references", fallback=fallback)
+        _write_inverse(transaction, target_kind, target, source=ident, link_type="references")
     return doc
 
 
-def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False, fallback=False):
+def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False):
+    """The inverse link, on the target's stored document: derived links are not written back."""
     inverse = domain_v3.REVERSE_TYPE[link_type]
     entity = _entity(transaction, target_kind, target)
     doc = deepcopy(entity["fields"])
-    if fallback:
-        domain_v3._fallback_links_if_absent(doc, target_kind)
     changed = (domain_v3.remove_link(doc, inverse, source) if remove
                else domain_v3.add_link(doc, inverse, source))
     if changed:
@@ -560,6 +553,49 @@ def live_handover_rows(transaction):
     ids = [row[0] for row in transaction.connection.execute(
         "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=0")]
     return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
+
+
+def open_archived_handover_rows(snapshot, threads=None):
+    """`(id, fields, None)` for every archived handover that is still open: outside
+    the index, but still a resume point of its thread.
+
+    A store can hold hundreds of these, and one whole-document read each made
+    every thread command and every tree read scale with them. `threads` names
+    the only threads the caller's registry can hold, and the thread index then
+    finds their few members; without it the read is paged and takes only the
+    fields the registry reads.
+    """
+    if threads is not None:
+        names = sorted({name for name in threads if isinstance(name, str) and name})
+        if not names:
+            return []
+        ids = [row[0] for row in snapshot.connection.execute(
+            "SELECT c.public_id FROM handover_operational h JOIN entity_core c ON c.entity_key=h.entity_key "
+            f"WHERE json_extract(h.thread_json,'$') IN ({','.join('?' for _ in names)}) AND c.kind='handover' "
+            "AND c.deleted=0 AND c.archived=1 AND json_extract(c.status_json,'$')='open' ORDER BY c.public_id", names)]
+        return [(ident, snapshot.get("handover", ident)["fields"], None) for ident in ids]
+    from .queries import MAX_PAGE
+    out, cursor = [], None
+    while True:
+        page = snapshot.list("handover", status="open", include_archived=True,
+                             fields=domain_v3.THREAD_MEMBER_FIELDS, limit=MAX_PAGE, cursor=cursor)
+        out.extend((entity["id"], entity["fields"], None) for entity in page["items"] if entity["archived"])
+        cursor = page["cursor"]
+        if cursor is None:
+            return out
+
+
+def open_thread_handover_ids(connection, thread):
+    """Ids of a thread's open handovers, archived ones included, by the thread index.
+
+    A new handover supersedes these (`lifecycle._handover_created`); the archive
+    is included because a resume point that fell out of the 30-entry index is
+    still open.
+    """
+    return [row[0] for row in connection.execute(
+        "SELECT c.public_id FROM handover_operational h JOIN entity_core c ON c.entity_key=h.entity_key "
+        "WHERE json_extract(h.thread_json,'$')=? AND c.kind='handover' AND c.deleted=0 "
+        "AND json_extract(c.status_json,'$')='open' ORDER BY c.public_id", (thread,))]
 
 
 def archive_handover_overflow(transaction):
@@ -1194,6 +1230,11 @@ def _phase_advance(transaction, arguments):
     if unchecked and not arguments.get("force", False):
         raise ValueError(f"blocked: {len(unchecked)} unchecked deliverable(s) in phase "
                          f"{active['fields'].get('name', active['id'])}")
+    unfinished = [item["id"] for item in _page(transaction.snapshot, "task", phase=active["id"])
+                  if item["fields"].get("status") in ("todo", "in-progress", "in-review", "blocked")]
+    if unfinished and not arguments.get("force", False):
+        raise ValueError(f"blocked: {len(unfinished)} tasks in phase "
+                         f"{active['fields'].get('name', active['id'])} are not done; pass force to advance anyway")
     entity = _entity(transaction, "phase", active["id"])
     done = dict(entity["fields"], status="done", completed=domain.now_stamp())
     transaction.replace("phase", active["id"], done, entity["body"], before_entity=entity)
@@ -1240,63 +1281,50 @@ def _bug_promote(transaction, arguments):
     return issue_id
 
 
+def _link_kind(transaction, ident):
+    """The kind of the linkable entity `ident` names, by lookup, not by prefix."""
+    return domain_v3.resolve_link_kind(ident, lambda kind, eid: _exists(transaction, kind, eid))
+
+
 def _link_create(transaction, arguments):
     source_id, target_id = arguments["source"], arguments["target"]
     link_type, note = arguments["type"], arguments.get("note", "")
-    source_kind = domain_v3.entity_kind_of(source_id)
-    target_kind = domain_v3.entity_kind_of(target_id)
+    source_kind = _link_kind(transaction, source_id)
     if source_kind is None:
-        raise ValueError(f"invalid source ID {source_id!r}")
+        raise KeyError(f"source {source_id!r} not found")
+    target_kind = _link_kind(transaction, target_id)
     if target_kind is None:
-        raise ValueError(f"invalid target ID {target_id!r}")
+        raise KeyError(f"target {target_id!r} not found")
     if not domain_v3.is_valid_link(link_type, source_kind, target_kind):
         raise ValueError(f"invalid link — type {link_type!r} cannot go from "
                          f"{source_kind} ({source_id}) to {target_kind} ({target_id})")
+    if link_type in domain_v3.TASK_DEPENDENCY_LINK_TYPES:
+        raise ValueError(domain_v3.task_dependency_link_refusal(link_type, source_id, target_id))
     entity = _entity(transaction, source_kind, source_id)
-    if not _exists(transaction, target_kind, target_id):
-        raise KeyError(f"target {target_id!r} not found")
-    if link_type in ("depends_on", "blocks"):
-        _assert_no_cycle(transaction, source_id, target_id, link_type)
     doc = deepcopy(entity["fields"])
     del note   # accepted for signature parity; the tool never stored it either
-    # The tool reads both ends through `read_entity_anywhere`, which synthesizes
-    # `links` from legacy fields, and writes that document back.
-    domain_v3._fallback_links_if_absent(doc, source_kind)
+    # The stored document: links its fields derive are not written back.
     if domain_v3.add_link(doc, link_type, target_id):
         transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
-    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type, fallback=True)
+    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type)
     return source_id
-
-
-def _assert_no_cycle(transaction, source_id, target_id, link_type):
-    graph = {}
-    for item in _page(transaction.snapshot, "task", include_archived=True):
-        ident = item["id"]
-        graph.setdefault(ident, [])
-        for link in item["fields"].get("links") or []:
-            if link.get("type") == "depends_on":
-                graph[ident].append(link["target"])
-            elif link.get("type") == "blocks":
-                graph.setdefault(link["target"], []).append(ident)
-    start, end = (source_id, target_id) if link_type == "depends_on" else (target_id, source_id)
-    if domain_v3.would_create_cycle(graph, start, end):
-        raise ValueError(f"would create cycle in depends_on chain ({start} -> {end})")
 
 
 def _link_remove(transaction, arguments):
     source_id, target_id = arguments["source"], arguments["target"]
-    source_kind = domain_v3.entity_kind_of(source_id)
-    target_kind = domain_v3.entity_kind_of(target_id)
+    source_kind = _link_kind(transaction, source_id)
     if source_kind is None:
-        raise ValueError(f"invalid source ID {source_id!r}")
-    if target_kind is None:
-        raise ValueError(f"invalid target ID {target_id!r}")
+        raise KeyError(f"source {source_id!r} not found")
+    target_kind = _link_kind(transaction, target_id)
+    requested = arguments.get("type", "")
+    between_tasks = source_kind == "task" and target_kind == "task"
+    if between_tasks and requested in domain_v3.TASK_DEPENDENCY_LINK_TYPES:
+        raise ValueError(domain_v3.task_dependency_link_refusal(requested, source_id, target_id, remove=True))
     entity = _entity(transaction, source_kind, source_id)
     doc = deepcopy(entity["fields"])
-    domain_v3._fallback_links_if_absent(doc, source_kind)
-    requested = arguments.get("type", "")
     types = [requested] if requested else sorted(
-        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id})
+        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id
+         and not (between_tasks and link["type"] in domain_v3.TASK_DEPENDENCY_LINK_TYPES)})
     if not types:
         return source_id
     # Every type is removed; `any()` over the removals stopped at the first one.
@@ -1304,9 +1332,9 @@ def _link_remove(transaction, arguments):
     for link_type in types:
         removed = domain_v3.remove_link(doc, link_type, target_id) or removed
     for link_type in types:
-        if _exists(transaction, target_kind, target_id):
+        if target_kind is not None:
             _write_inverse(transaction, target_kind, target_id, source=source_id,
-                           link_type=link_type, remove=True, fallback=True)
+                           link_type=link_type, remove=True)
     if removed:
         current = _entity(transaction, source_kind, source_id)
         transaction.replace(source_kind, source_id, dict(current["fields"], links=doc.get("links"))
@@ -1352,9 +1380,18 @@ def _thread_update(transaction, arguments):
     # The thread registry is derived from the live handovers, which native
     # commands do not re-derive into this row; derive it here, as the tool's
     # index sync would have, before applying the override.
-    domain_v3.sync_thread_registry(doc, live_handover_rows(transaction))
+    # With the named thread even when its handovers are all archived: it can be
+    # parked or closed too. The override lives in `thread_meta`, which is why
+    # the threads already holding one are read as well, and the archived-only
+    # threads are dropped again below.
+    live = live_handover_rows(transaction)
+    wanted = {fields.get("thread") for _ident, fields, _body in live} | set(doc.get("thread_meta") or {})
+    wanted.add(domain_v3.normalize_thread_name(arguments["name"]))
+    domain_v3.sync_thread_registry(doc, live, archived=open_archived_handover_rows(transaction.snapshot, wanted),
+                                   archived_only=True)
     domain_v3.update_thread_status(doc, None, name=arguments["name"], status=arguments["status"],
                                    reason=arguments.get("reason", ""))
+    doc["threads"] = domain_v3.indexed_threads(doc["threads"])
     transaction.replace("backlog", BACKLOG_ID, doc, entity["body"], before_entity=entity)
     return arguments["name"]
 

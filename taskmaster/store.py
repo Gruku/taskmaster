@@ -266,6 +266,10 @@ class _LazyEntityRows(Mapping):
             }
         return parsed
 
+    def ids(self, kind: str) -> list[str]:
+        """Every id of one kind, archived included, without decoding a document."""
+        return [ident for ident, _doc, _body in self._raw.get(kind, ())]
+
     def __iter__(self):
         return iter(self._raw)
 
@@ -2629,6 +2633,19 @@ class Store:
         ):
             raw[row["kind"]].append((row["id"], row["doc"], row["body"]))
         return _LazyEntityRows(raw)
+
+    def entity_ids_after(self, kind: str, after: str) -> list[str]:
+        """Ids of every row of `kind`, archived included, that sort after `after`.
+
+        `entity_row`'s discipline (a scan first) over one indexed range read: no
+        document is decoded.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            return sorted(ident for ident in (self._entity_rows_from_projection().get(kind) or {}) if ident > after)
+        self._maybe_scan_on_read()
+        return [row[0] for row in self.connection.execute(
+            "SELECT id FROM entities WHERE kind=? AND deleted=0 AND id>? ORDER BY id", (kind, after))]
 
     def entity_row(
         self, kind: str, ident: str
@@ -6406,6 +6423,26 @@ class Transaction:
         return [
             (row["id"], _from_json(row["doc"], {}), row["body"])
             for row in self.connection.execute(sql + " ORDER BY id", (kind,))
+        ]
+
+    def archived_fields(
+        self, kind: str, status: str, fields: "tuple[str, ...]"
+    ) -> list[tuple[str, dict[str, Any], None]]:
+        """Archived rows of `kind` in one status, as `(id, {field: value}, None)`.
+
+        Only the named fields are read, by SQLite, and no body: a store can hold
+        hundreds of archived handovers, and decoding each whole document inside
+        the writer transaction made every handover write scale with them.
+        """
+        # One json_array per row: each document is parsed once, whatever the
+        # number of fields, and an array or object field keeps its type.
+        values = ",".join(f"json_extract(doc,'$.{field}')" for field in fields)
+        return [
+            (row[0], {field: value for field, value in zip(fields, _from_json(row[1], [])) if value is not None}, None)
+            for row in self.connection.execute(
+                f"SELECT id,json_array({values}) FROM entities WHERE kind=? AND deleted=0 AND archived=1 "
+                "AND json_extract(doc,'$.status')=? ORDER BY id", (kind, status),
+            )
         ]
 
     def linear_enqueue(

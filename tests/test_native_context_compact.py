@@ -144,8 +144,9 @@ def test_gate_state_is_left_out_when_a_gate_blocker_already_says_it():
 @pytest.mark.parametrize("side", ["legacy", "native"])
 def test_a_handover_row_carries_no_date_its_id_already_spells(twins, side):
     with twins.at(getattr(twins, side)):
-        bs.backlog_handover_create(tldr="Quiet one", task_ids=[FOCUS])
-        bs.backlog_handover_create(tldr="Asking one", next_action="do the thing", task_ids=[FOCUS])
+        # Separate threads: within one, the second would supersede the first.
+        bs.backlog_handover_create(tldr="Quiet one", task_ids=[FOCUS], thread="quiet")
+        bs.backlog_handover_create(tldr="Asking one", next_action="do the thing", task_ids=[FOCUS], thread="asking")
         rows = json.loads(bs.backlog_context(focus=FOCUS, scope="task", include=["handovers"]))[
             "selected"]["handovers"]
     assert sorted(rows, key=lambda r: r["id"]) == [

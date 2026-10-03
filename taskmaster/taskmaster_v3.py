@@ -278,9 +278,25 @@ def document_header(kind: str, ident: str, title: str = "") -> str:
     return f"## {kind} `{ident}`" + (f" — {title}" if title else "")
 
 
-def render_document_body(header: str, body: str) -> str:
-    """The whole-document answer: no sections were selected, so this is the prose."""
-    return f"{header}\n\n{body}" if (body or "").strip() else f"{header}\n\n(no body)"
+# Fields that hold an entity's prose when its document body is empty — a task
+# keeps its text in `notes` — in the order the whole-document answer shows them.
+DOCUMENT_TEXT_FIELDS = ("description", "notes", "review_instructions")
+
+
+def render_document_body(header: str, body: str, fields: "Mapping[str, Any] | None" = None) -> str:
+    """The whole-document answer: no sections were selected, so this is the prose.
+
+    With no body, the text fields of `fields` stand in for it, named as the
+    sections they are; "(no body)" only when there is no text anywhere.
+    """
+    if (body or "").strip():
+        return f"{header}\n\n{body}"
+    found = {name: str(fields[name]).strip() for name in DOCUMENT_TEXT_FIELDS
+             if fields and isinstance(fields.get(name), str) and fields[name].strip()}
+    if not found:
+        return f"{header}\n\n(no body)"
+    return (f"{header}\n\nNo document body; its text is in these fields:\n\n"
+            + "\n\n".join(f"### {name}\n{text}" for name, text in found.items()))
 
 
 def section_provenance_line(entry: dict[str, Any]) -> str:
@@ -689,6 +705,50 @@ def entity_kind_of(entity_id: str | None) -> str | None:
     return None
 
 
+# Every kind a typed link can join. An id whose prefix names no kind (a task's
+# id is its epic's, `asset-pipeline-007`) is looked up in this order.
+LINKABLE_KINDS: tuple[str, ...] = ("task", "issue", "handover", "idea", "bug", "decision", "note")
+# Id prefixes the link engine can guess a kind from before it looks; a guess is
+# only a first try, never a verdict.
+_LINK_PREFIX_GUESS: dict[str, str] = {"B": "bug", "DEC": "decision", "NOTE": "note"}
+
+
+def link_kind_candidates(entity_id: str | None) -> list[str]:
+    """The kinds an id may name, most likely first."""
+    if not entity_id or not isinstance(entity_id, str):
+        return []
+    guess = entity_kind_of(entity_id) or next(
+        (kind for prefix, kind in _LINK_PREFIX_GUESS.items() if entity_id.startswith(prefix + "-")), None)
+    return ([guess] if guess else []) + [kind for kind in LINKABLE_KINDS if kind != guess]
+
+
+def resolve_link_kind(entity_id: str | None, exists: "Callable[[str, str], bool]") -> str | None:
+    """The kind of the entity `entity_id` names, by asking `exists(kind, id)`; None
+    when no linkable entity has that id. The prefix alone decided this before,
+    which refused every task id and every bug, decision and note."""
+    for kind in link_kind_candidates(entity_id):
+        if exists(kind, entity_id):
+            return kind
+    return None
+
+
+# A dependency between two tasks is the dependent task's `depends_on` field:
+# every gate (next_available, pick_task, context, validate) reads that field and
+# never the `links` array, so these link types are not written between tasks.
+TASK_DEPENDENCY_LINK_TYPES: tuple[str, ...] = ("depends_on", "blocks")
+# `+id` / `-id` edits read the task's current list; a batch line does not.
+BATCH_DEPENDENCY_EDIT_REFUSAL = ("depends_on takes the whole list here; +id / -id edits are made with "
+                                 'backlog_update_task(task_id=..., field="depends_on", value="+id")')
+
+
+def task_dependency_link_refusal(link_type: str, source: str, target: str, *, remove: bool = False) -> str:
+    """Why a task->task dependency link is refused, and the call that does it."""
+    dependent, dependency = (source, target) if link_type == "depends_on" else (target, source)
+    return (f"a dependency between tasks is the `depends_on` field, which every gate reads, not a link; "
+            f'use backlog_update_task(task_id="{dependent}", field="depends_on", '
+            f'value="{"-" if remove else "+"}{dependency}")')
+
+
 def is_valid_link(link_type: str, source_kind: str, target_kind: str) -> bool:
     """Return True if a link of `link_type` may go from source_kind to target_kind."""
     if link_type not in LINK_TYPE_DOMAIN:
@@ -740,10 +800,16 @@ def remove_link(entity: dict, link_type: str, target: str) -> bool:
     return True
 
 
-def links_grouped_by_type(entity: dict) -> dict[str, list[str]]:
-    """Return {type: [target_id, ...]} grouped view. Used by slim-view rendering."""
+def links_grouped_by_type(entity: dict, kind: str | None = None) -> dict[str, list[str]]:
+    """Return {type: [target_id, ...]} grouped view. Used by slim-view rendering.
+
+    For a task, stored `depends_on` / `blocks` entries are left out: its
+    dependencies are the `depends_on` field, which the view shows on its own.
+    """
     grouped: dict[str, list[str]] = {}
     for link in entity_links(entity):
+        if kind == "task" and link["type"] in TASK_DEPENDENCY_LINK_TYPES:
+            continue
         grouped.setdefault(link["type"], []).append(link["target"])
     return grouped
 
@@ -954,16 +1020,35 @@ _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
 }
 
 
-def _fallback_links_if_absent(entity: dict, kind: str) -> None:
-    """If entity has no `links` array but has legacy fields, synthesize a
-    virtual `links` array. Used by read_entity_anywhere for read-fallback
-    on unmigrated projects. Does not write back.
+def link_view(entity: dict, kind: str) -> list[dict]:
+    """The links a read of `entity` shows: the ones it stores, plus the ones
+    its fields derive (a task's `depends_on`, an issue's `related_tasks`).
+
+    A task's dependencies are its `depends_on` field and nothing else: every
+    gate reads that field. `depends_on` / `blocks` entries a task stores in
+    `links` (an older link migration wrote them) are ignored, so clearing the
+    field clears the dependency everywhere. The derived graph tables keep
+    their own reading (`legacy_links_to_typed`).
     """
-    if entity.get(LINK_FIELD):
-        return
-    synthesized = legacy_links_to_typed(entity, kind=kind)
-    if synthesized:
-        entity[LINK_FIELD] = synthesized
+    if kind == "task":
+        entity = {**entity, LINK_FIELD: [link for link in entity_links(entity)
+                                         if link.get("type") not in TASK_DEPENDENCY_LINK_TYPES]}
+    return legacy_links_to_typed(entity, kind=kind)
+
+
+def _fallback_links_if_absent(entity: dict, kind: str) -> None:
+    """Show `link_view` as the entity's links. Read-only: a write must start
+    from the stored document, or it freezes the derived links into storage and
+    later edits of those fields stop showing as links.
+
+    It used to derive them only when nothing was stored, so a single stored
+    link hid every dependency a task declared.
+    """
+    merged = link_view(entity, kind)
+    if merged:
+        entity[LINK_FIELD] = merged
+    else:
+        entity.pop(LINK_FIELD, None)
 
 
 def task_file_path(backlog_path: Path, task_id: str) -> Path:
@@ -1713,6 +1798,52 @@ def supersede_handover_doc(
     return fm, callout + _strip_supersession_callout(body or "")
 
 
+def plan_thread_supersession(
+    rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+    *,
+    thread: str,
+    new_key: tuple[str, str, str],
+    exclude: "Iterable[str | None]" = (),
+    task_ids: "Iterable[str] | None" = None,
+) -> tuple[list[str], list[str]]:
+    """Which handovers of `thread` a new open handover supersedes. Pure.
+
+    Returns `(supersede, pinned)`, newest first: the rows of the thread —
+    archived ones included, when the caller passes them — that are still open
+    and older than the new handover (`new_key`, a `handover_sort_key`).
+
+    `task_ids` is given when the thread was derived rather than named. A derived
+    thread is a whole epic or bundle, so only a row sharing a task with the new
+    handover (or both naming none) is the same line of work; a sibling task's
+    resume point is left alone, silently.
+
+    A row whose status was set by hand is never auto-transitioned. It comes back
+    as pinned for the caller to warn about, unless it already carries a
+    `superseded_by` pointer — then the chain is recorded and there is nothing
+    left to say. `exclude` names the ids handled elsewhere: the new handover and
+    an explicit `supersedes`.
+    """
+    skip = set(exclude)
+    tasks = None if task_ids is None else set(task_ids)
+    supersede: list[str] = []
+    pinned: list[str] = []
+    for hid, doc, _body in sort_handover_rows(rows):
+        fm = doc or {}
+        if hid in skip or fm.get("thread") != thread or fm.get("status") != "open":
+            continue
+        if handover_sort_key(hid, fm) >= new_key:
+            continue  # a backdated handover does not supersede a newer one
+        if tasks is not None:
+            theirs = set(fm.get("task_ids") or [])
+            if (tasks or theirs) and not tasks & theirs:
+                continue
+        if not fm.get("status_user_set"):
+            supersede.append(hid)
+        elif not fm.get("superseded_by"):
+            pinned.append(hid)
+    return supersede, pinned
+
+
 def flag_handover_doc_for_review(
     doc: Mapping[str, Any], *, review_reason: str
 ) -> dict[str, Any]:
@@ -1971,6 +2102,11 @@ def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
     return {f: fm.get(f) for f in _HANDOVER_INDEX_FIELDS if fm.get(f) is not None}
 
 
+def handover_sort_key(handover_id: str, doc: "Mapping[str, Any] | None") -> tuple[str, str, str]:
+    """A handover's place in time: (id date-prefix, `created`, id). Larger is newer."""
+    return (handover_id[:10], str((doc or {}).get("created") or ""), handover_id)
+
+
 def sort_handover_rows(
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
 ) -> list[tuple[str, Mapping[str, Any], str | None]]:
@@ -1982,11 +2118,7 @@ def sort_handover_rows(
     file-mtime tiebreaker has no row equivalent and the id is a total order
     already, so it is dropped rather than approximated.
     """
-    return sorted(
-        rows,
-        key=lambda row: (row[0][:10], str((row[1] or {}).get("created") or ""), row[0]),
-        reverse=True,
-    )
+    return sorted(rows, key=lambda row: handover_sort_key(row[0], row[1]), reverse=True)
 
 
 def sync_handover_index(
@@ -1995,6 +2127,8 @@ def sync_handover_index(
     *,
     tx: Any = None,
     cap: int = HANDOVER_INDEX_CAP,
+    archived: "Iterable[tuple[str, Mapping[str, Any], str | None]]" = (),
+    archived_only: bool = False,
 ) -> dict[str, Any]:
     """Rebuild `backlog_data['handovers']` from live handover rows; archive overflow.
 
@@ -2003,6 +2137,10 @@ def sync_handover_index(
     first, first `cap` kept as index entries; the rest are archived through
     `tx.archive("handover", id)` when a transaction is supplied (the move to
     `handovers/_archive/<year>/` is the exporter's job). Mutates in place.
+
+    `archived` is the rows already archived. The index never lists them, but one
+    that is still open is still a resume point of its thread, so it and any open
+    overflow are members in the thread registry (`archived_only` as there).
     """
     ordered = sort_handover_rows(rows)
     keep = ordered[:cap]
@@ -2014,9 +2152,22 @@ def sync_handover_index(
         for hid, _doc, _body in overflow:
             tx.archive("handover", hid)
 
-    sync_thread_registry(backlog_data, keep)
+    sync_thread_registry(backlog_data, keep, archived=open_handover_rows([*overflow, *archived]),
+                         archived_only=archived_only)
 
     return backlog_data
+
+
+# What the thread registry reads off a handover: enough to describe a thread
+# without decoding the whole document of every archived open one.
+THREAD_MEMBER_FIELDS = ("thread", "status", "created", "date", "tldr", "next_action", "branch", "task_ids")
+
+
+def open_handover_rows(
+    rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+) -> list[tuple[str, Mapping[str, Any], str | None]]:
+    """The rows whose status is explicitly `open`: the archived handovers a thread still resumes from."""
+    return [row for row in rows if (row[1] or {}).get("status") == "open"]
 
 
 # ── Threads ─────────────────────────────────────────────────────
@@ -2039,15 +2190,29 @@ def _ts_or_min(raw: str):
 def sync_thread_registry(
     backlog_data: dict[str, Any],
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
+    archived: "Iterable[tuple[str, Mapping[str, Any], str | None]]" = (),
+    archived_only: bool = False,
 ) -> dict[str, Any]:
-    """Rebuild `backlog_data['threads']` from live (non-archived) handover rows.
+    """Rebuild `backlog_data['threads']` from the indexed handover `rows` plus the
+    `archived` ones that are still open (`sync_handover_index` passes both).
 
-    Derived status: open if any member handover is open, else closed.
+    A thread with no indexed member is kept only when `archived_only` asks, and
+    then carries `archived_only: True`. The stored registry never holds them: a
+    store can carry hundreds from before handovers superseded each other, and
+    every write re-renders the document the registry lives in. The thread tools
+    ask for them at read time instead; their overrides stay in `thread_meta`.
+
+    Derived status: open if any member handover is open, else closed. A thread
+    is described (tldr, next_action, branch) by its newest open member, and
+    only when none is open by its newest; `resume` names that open member when
+    it is not the newest, and is absent otherwise.
     A `thread_meta` override (parked/closed/open) is honoured only while no
     member handover is newer than the override's set_at; stale overrides and
     overrides for vanished threads are pruned. Mutates in place.
     """
-    ordered = sort_handover_rows(rows)  # newest-first
+    archived = list(archived)
+    outside_index = {row[0] for row in archived}
+    ordered = sort_handover_rows([*rows, *archived])  # newest-first
     threads: dict[str, dict[str, Any]] = {}
     for hid, doc, _body in reversed(ordered):   # oldest-first -> chronological chains
         fm = doc or {}
@@ -2064,6 +2229,7 @@ def sync_thread_registry(
             "next_action": "",
             "branch": "",
             "_any_open": False,
+            "_indexed": False,
         })
         t["handover_ids"].append(hid)
         for tid in fm.get("task_ids") or []:
@@ -2072,15 +2238,26 @@ def sync_thread_registry(
         # `ordered` is newest-first, so this reversed loop is oldest-first: the
         # last-iterated member of each thread is the newest by definition.
         t["last_touched"] = fm.get("created") or fm.get("date") or ""
-        t["tldr"] = fm.get("tldr", "")
-        t["next_action"] = fm.get("next_action", "")
-        if fm.get("branch"):
-            t["branch"] = fm["branch"]
-        if fm.get("status", "open") == "open":
+        is_open = fm.get("status", "open") == "open"
+        # A newer closed member does not speak for a thread an older one keeps
+        # open: the open one is where the work resumes.
+        if is_open or not t["_any_open"]:
+            t["tldr"] = fm.get("tldr", "")
+            t["next_action"] = fm.get("next_action", "")
+            if fm.get("branch"):
+                t["branch"] = fm["branch"]
+        if is_open:
             t["_any_open"] = True
+            t["resume"] = hid
+        if hid not in outside_index:
+            t["_indexed"] = True
 
     meta = dict(backlog_data.get("thread_meta") or {})
     for name, t in threads.items():
+        if t.get("resume") in (None, t["handover_ids"][-1]):
+            t.pop("resume", None)
+        if not t.pop("_indexed"):
+            t["archived_only"] = True
         derived = "open" if t.pop("_any_open") else "closed"
         override = meta.get(name)
         if override and _ts_or_min(str(override.get("set_at", ""))) >= _ts_or_min(t["last_touched"]):
@@ -2089,10 +2266,17 @@ def sync_thread_registry(
             meta.pop(name, None)  # stale/absent — newer handover reopens
             t["status"] = derived
     meta = {k: v for k, v in meta.items() if k in threads}
+    if not archived_only:
+        threads = indexed_threads(threads)
 
     backlog_data["threads"] = threads
     backlog_data["thread_meta"] = meta
     return backlog_data
+
+
+def indexed_threads(threads: "Mapping[str, dict[str, Any]]") -> dict[str, dict[str, Any]]:
+    """A registry without its archived-only threads: the part that is stored."""
+    return {name: t for name, t in threads.items() if not t.get("archived_only")}
 
 
 def update_thread_status(
@@ -2134,7 +2318,8 @@ def resolve_thread(
     ref: str,
     find_handover: "Callable[[str], dict[str, Any] | None] | None" = None,
 ) -> tuple[str, str]:
-    """Resolve a resume token to (thread_name, newest_handover_id).
+    """Resolve a resume token to (thread_name, handover_id): the thread's newest
+    open handover, or its newest when none is open.
 
     `ref` may be a thread name (normalized) or a handover id — live or
     archived — whose `thread` field routes to the thread's newest handover.
@@ -2144,7 +2329,7 @@ def resolve_thread(
     threads = backlog_data.get("threads") or {}
     name = normalize_thread_name(ref)
     if name in threads and threads[name]["handover_ids"]:
-        return name, threads[name]["handover_ids"][-1]
+        return name, threads[name].get("resume") or threads[name]["handover_ids"][-1]
 
     fm: dict[str, Any] | None = None
     if find_handover is not None:
@@ -2164,17 +2349,24 @@ def resolve_thread(
         raise KeyError(ref)
     tname = fm.get("thread") or ""
     if tname and tname in threads and threads[tname]["handover_ids"]:
-        return tname, threads[tname]["handover_ids"][-1]
+        return tname, threads[tname].get("resume") or threads[tname]["handover_ids"][-1]
     return tname, str(fm.get("id") or ref)
 
 
-def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
+def list_threads(backlog_data: dict[str, Any], *, archived_only: bool = False) -> list[dict[str, Any]]:
     """Board rows from the registry — open first, then parked, then closed;
     newest-touched first within each status. staleness_days is whole days
-    since last_touched (0 when unparseable)."""
+    since last_touched (0 when unparseable).
+
+    Threads with no handover in the index are left out unless `archived_only`
+    asks for them; those rows then carry `archived_only: True`. A store can
+    hold hundreds from before handovers superseded each other, and the board
+    must stay readable."""
     rows: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for name, t in (backlog_data.get("threads") or {}).items():
+        if t.get("archived_only") and not archived_only:
+            continue
         try:
             staleness = max(0, (now - _parse_iso8601(t["last_touched"])).days)
         except (ValueError, KeyError, TypeError):
@@ -2188,6 +2380,7 @@ def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
             "branch": t.get("branch", ""),
             "last_touched": t.get("last_touched", ""),
             "staleness_days": staleness,
+            **({"archived_only": True} if t.get("archived_only") else {}),
         })
     order = {"open": 0, "parked": 1, "closed": 2}
     rows.sort(key=lambda r: _ts_or_min(r["last_touched"]), reverse=True)
@@ -4411,6 +4604,7 @@ def read_entity_anywhere(
     entity_id: str,
     *,
     fallback: bool = True,
+    kind: str | None = None,
 ) -> dict | None:
     """Read any entity (task/issue/handover/idea) by ID. Returns its
     in-memory dict (frontmatter for non-task entities; merged dict for tasks).
@@ -4423,10 +4617,13 @@ def read_entity_anywhere(
     The fallback is read-only — does not write back. Pass fallback=False to
     get the raw entity (used by the migration script).
     """
-    kind = entity_kind_of(entity_id)
-    if kind is None:
-        return None
-    entity = _entity_io("read")(backlog_path, kind, entity_id)
+    read = _entity_io("read")
+    entity = None
+    for candidate in ([kind] if kind else link_kind_candidates(entity_id)):
+        entity = read(backlog_path, candidate, entity_id)
+        if entity is not None:
+            kind = candidate
+            break
     if entity is None:
         return None
     entity = dict(entity)
@@ -4435,7 +4632,7 @@ def read_entity_anywhere(
     return entity
 
 
-def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
+def write_entity_anywhere(backlog_path: Path, entity: dict, kind: str | None = None) -> None:
     """Persist an entity's frontmatter + body through the store.
 
     Every kind — task, handover, issue, idea — hands the whole document to the
@@ -4443,7 +4640,7 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
     The body travels under BODY_KEY and the hook splits it out.
     """
     entity_id = entity.get("id")
-    kind = entity_kind_of(entity_id)
+    kind = kind or entity_kind_of(entity_id)
     if kind is None:
         raise ValueError(f"unknown entity kind for id={entity_id!r}")
     _entity_io("write")(backlog_path, kind, dict(entity))
@@ -4456,6 +4653,7 @@ def sync_inverse(
     type: str,
     *,
     remove: bool = False,
+    target_kind: str | None = None,
 ) -> None:
     """Write (or remove) the inverse link on the target entity.
 
@@ -4465,7 +4663,10 @@ def sync_inverse(
     """
     if type not in REVERSE_TYPE:
         raise ValueError(f"unknown link type {type!r}")
-    target_entity = read_entity_anywhere(backlog_path, target)
+    target_kind = target_kind or resolve_link_kind(
+        target, lambda kind, ident: _entity_io("read")(backlog_path, kind, ident) is not None)
+    # The stored document: derived links must not be written back as stored ones.
+    target_entity = read_entity_anywhere(backlog_path, target, kind=target_kind, fallback=False) if target_kind else None
     if target_entity is None:
         raise KeyError(f"target entity {target!r} not found")
     inverse_type = REVERSE_TYPE[type]
@@ -4474,7 +4675,7 @@ def sync_inverse(
     else:
         changed = add_link(target_entity, inverse_type, source)
     if changed:
-        write_entity_anywhere(backlog_path, target_entity)
+        write_entity_anywhere(backlog_path, target_entity, kind=target_kind)
 
 
 def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
@@ -4515,6 +4716,8 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
         return []
 
     existing_targets = {link["target"] for link in entity_links(entity)}
+    # Links are added to the stored document, never to the merged read view.
+    stored = read_entity_anywhere(backlog_path, entity_id, fallback=False)
     added: list[str] = []
     for target_id in refs:
         if target_id in existing_targets:
@@ -4526,11 +4729,11 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
         target_entity = read_entity_anywhere(backlog_path, target_id)
         if target_entity is None:
             continue
-        add_link(entity, "references", target_id)
+        add_link(stored, "references", target_id)
         added.append(target_id)
 
     if added:
-        write_entity_anywhere(backlog_path, entity)
+        write_entity_anywhere(backlog_path, stored)
         for target_id in added:
             try:
                 sync_inverse(backlog_path, source=entity_id,

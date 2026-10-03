@@ -427,7 +427,10 @@ def test_only_one_phase_is_active_and_advance_archives_done_tasks(workspace):
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "in-progress"}, "start")
         express(connection, "demo-001", "advance")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
-        run(connection, "phase.advance", {}, "advance")
+        # demo-002 is still todo: the phase does not advance unless forced.
+        with pytest.raises(ValueError, match="tasks in phase Foundation are not done"):
+            run(connection, "phase.advance", {}, "unfinished")
+        run(connection, "phase.advance", {"force": True}, "advance")
         with Repository(connection).snapshot() as query:
             assert query.get("phase", "foundation")["fields"]["status"] == "done"
             assert query.get("phase", "polish")["fields"]["status"] == "active"
@@ -472,14 +475,15 @@ def test_a_typed_link_writes_the_inverse_and_refuses_a_dependency_cycle(workspac
         for suffix in ("1", "2"):
             run(connection, "task.create", {"title": f"Linked {suffix}", "epic": "demo",
                                             "phase": "foundation", "task_id": f"T-{suffix}"}, f"t{suffix}")
-        run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "depends_on",
+        run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "references",
                                         "note": "ordering"}, "link")
         # The note is an operator annotation the tool never stored; the document
         # must keep the exact two-key link shape the round trip expects.
-        assert fields(connection, "task", "T-1")["links"] == [{"type": "depends_on", "target": "T-2"}]
-        assert fields(connection, "task", "T-2")["links"] == [{"type": "blocks", "target": "T-1"}]
-        with pytest.raises(ValueError, match="cycle"):
-            run(connection, "link.create", {"source": "T-2", "target": "T-1", "type": "depends_on"}, "cycle")
+        assert fields(connection, "task", "T-1")["links"] == [{"type": "references", "target": "T-2"}]
+        assert fields(connection, "task", "T-2")["links"] == [{"type": "referenced_by", "target": "T-1"}]
+        # A dependency between tasks is the depends_on field, never a link.
+        with pytest.raises(ValueError, match='field="depends_on"'):
+            run(connection, "link.create", {"source": "T-2", "target": "T-1", "type": "depends_on"}, "dependency")
         run(connection, "link.remove", {"source": "T-1", "target": "T-2"}, "unlink")
         with Repository(connection).snapshot() as query:
             assert "links" not in query.get("task", "T-1")["fields"]
@@ -492,8 +496,11 @@ def test_link_domains_and_unknown_targets_are_refused(workspace):
                                         "task_id": "T-1"}, "t1")
         issue = created(connection, "issue.create", {"title": "Known", "severity": "P2",
                                                      "evidence": "seen"}, "issue")
-        with pytest.raises(ValueError, match="invalid source ID"):
-            run(connection, "link.create", {"source": "demo-001", "target": issue, "type": "fixes"}, "kebab")
+        # A task id names its epic, not its kind: it is looked up, and links.
+        run(connection, "link.create", {"source": "demo-001", "target": issue, "type": "fixes"}, "kebab")
+        assert {"type": "fixes", "target": issue} in fields(connection, "task", "demo-001")["links"]
+        with pytest.raises(KeyError, match="not found"):
+            run(connection, "link.create", {"source": "nothing-001", "target": issue, "type": "fixes"}, "unknown")
         with pytest.raises(ValueError, match="cannot go from"):
             run(connection, "link.create", {"source": issue, "target": "T-1", "type": "duplicate_of"}, "domain")
         with pytest.raises(KeyError, match="not found"):
@@ -679,7 +686,7 @@ def test_advancing_a_phase_queues_no_linear_push_for_the_tasks_it_archives(works
         express(connection, "demo-001", "advance")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
         connection.execute("DELETE FROM linear_queue WHERE target_id='demo-001'")
-        run(connection, "phase.advance", {}, "advance")
+        run(connection, "phase.advance", {"force": True}, "advance")
         assert _queued(connection, "demo-001") == []
         with Repository(connection).snapshot() as query:
             assert query.get("task", "demo-001")["archived"]

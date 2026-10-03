@@ -89,25 +89,25 @@ def test_read_entity_anywhere_unknown_returns_none(tm_dir):
 
 def test_write_entity_anywhere_task_roundtrip(tm_dir):
     entity = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    entity["links"] = [{"type": "depends_on", "target": "T-002"}]
+    entity["links"] = [{"type": "references", "target": "T-002"}]
     write_entity_anywhere(tm_dir / "backlog.yaml", entity)
     again = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
-    assert again["links"] == [{"type": "depends_on", "target": "T-002"}]
+    assert again["links"] == [{"type": "references", "target": "T-002"}]
 
 
 def test_sync_inverse_writes_inverse_on_target(tm_dir):
     _seed_task(tm_dir, "T-002")
-    sync_inverse(tm_dir / "backlog.yaml", source="T-001", target="T-002", type="depends_on")
+    sync_inverse(tm_dir / "backlog.yaml", source="T-001", target="T-002", type="references")
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    assert {"type": "referenced_by", "target": "T-001"} in entity_links(t2)
 
 
 def test_sync_inverse_idempotent(tm_dir):
     _seed_task(tm_dir, "T-002")
-    sync_inverse(tm_dir / "backlog.yaml", "T-001", "T-002", "depends_on")
-    sync_inverse(tm_dir / "backlog.yaml", "T-001", "T-002", "depends_on")
+    sync_inverse(tm_dir / "backlog.yaml", "T-001", "T-002", "references")
+    sync_inverse(tm_dir / "backlog.yaml", "T-001", "T-002", "references")
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert entity_links(t2).count({"type": "blocks", "target": "T-001"}) == 1
+    assert entity_links(t2).count({"type": "referenced_by", "target": "T-001"}) == 1
 
 
 def test_sync_inverse_relates_to_is_symmetric(tm_dir):

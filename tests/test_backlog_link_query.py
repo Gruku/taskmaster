@@ -13,16 +13,15 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
     (d / "backlog.yaml").write_text(yaml.safe_dump({
         "meta": {"schema_version": 3},
         "epics": [{"id": "e1", "title": "E", "tasks": [
-            {"id": "T-001", "title": "First", "status": "todo"},
-            {"id": "T-002", "title": "Second", "status": "todo"},
+            # A dependency is the `depends_on` field; queries show it as a link.
+            {"id": "T-001", "title": "First", "status": "todo", "depends_on": ["T-002"]},
+            {"id": "T-002", "title": "Second", "status": "todo", "depends_on": ["T-003"]},
             {"id": "T-003", "title": "Third", "status": "todo"},
         ]}],
     }))
     for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     monkeypatch.setattr(bs, "_backlog_path", lambda: d / "backlog.yaml")
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    bs.backlog_link_create(source="T-002", target="T-003", type="depends_on")
     return d
 
 

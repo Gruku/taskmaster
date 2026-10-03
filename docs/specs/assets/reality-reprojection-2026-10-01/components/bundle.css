@@ -1,0 +1,4252 @@
+/* Reality Reprojection — component stylesheet
+   Loaded after tokens.css. Every value reads a token; the only
+   literal extras are the grain texture and the card-glow recipe.
+   Themes: data-theme="dark|light|survivalist" (this system) and the
+   source attributes data-polarity / data-mode are both honoured. */
+
+:root {
+  /* Procedural grain — inline SVG noise, tileable. Not a token: url() */
+  --grain-texture: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  --halftone-dot-color: rgba(255, 255, 255, 1);
+}
+
+
+/* --- foundations/reset.css --- */
+/* ==========================================================
+   Reality Reprojection — Reset
+   Modern CSS reset. Box-sizing, smooth scroll, selection color.
+   ========================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  -webkit-text-size-adjust: 100%;
+  -moz-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  line-height: 1.5;
+}
+
+img, picture, video, canvas, svg {
+  display: block;
+  max-width: 100%;
+}
+
+input, button, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul, ol {
+  list-style: none;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* Selection — signature hue at 0.2 opacity */
+::selection {
+  background: rgba(94, 121, 230, 0.2);
+  color: inherit;
+}
+
+::-moz-selection {
+  background: rgba(94, 121, 230, 0.2);
+  color: inherit;
+}
+
+/* Scrollbar — warm, considered, matches ground */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ground-40, #66645f);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ground-50, #7d7b76);
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+
+/* ---------------------------------------------------
+   VOICE CLASSES — Each has ONE job.
+   --------------------------------------------------- */
+
+/* The Declaration — commands, headlines, names */
+.declaration {
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  text-transform: uppercase;
+}
+
+.declaration--hero { font-size: var(--size-declaration-hero); }
+.declaration--h1   { font-size: var(--size-declaration-h1); }
+.declaration--h2   { font-size: var(--size-declaration-h2); }
+.declaration--h3   { font-size: var(--size-declaration-h3); }
+.declaration--h4   { font-size: var(--size-declaration-h4); }
+.declaration--h5   { font-size: var(--size-declaration-h5); }
+
+/* The Narrator — reading, explaining, describing */
+.narrator {
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  line-height: var(--leading-body);
+  letter-spacing: var(--tracking-normal);
+}
+
+.narrator--large   { font-size: var(--size-narrator-large); font-weight: var(--font-narrator-weight-semi); }
+.narrator--default { font-size: var(--size-narrator-default); }
+.narrator--small   { font-size: var(--size-narrator-small); font-weight: var(--font-narrator-weight-medium); }
+.narrator--whisper { font-size: var(--size-narrator-whisper); font-weight: var(--font-narrator-weight-medium); letter-spacing: 0.005em; }
+
+.narrator--medium {
+  font-weight: var(--font-narrator-weight-medium);
+}
+
+.narrator--semi {
+  font-weight: var(--font-narrator-weight-semi);
+}
+
+/* The Technical — measuring, labeling, code */
+.technical {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  line-height: var(--leading-body);
+  letter-spacing: var(--tracking-wide);
+}
+
+.technical--default { font-size: var(--size-technical-default); }
+.technical--small   { font-size: var(--size-technical-small); }
+.technical--label   { font-size: var(--size-technical-label); font-weight: 800; }
+
+/* Section label — Technical voice, ultra-wide tracking */
+.section-label {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  line-height: var(--leading-tight);
+}
+
+/* ---------------------------------------------------
+   BODY DEFAULT — Narrator at default size.
+   --------------------------------------------------- */
+body {
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-body);
+  color: var(--foreground-default);
+  background: var(--surface-ground);
+}
+
+
+
+/* Voice additions woven from Layer 2 typography */
+.declaration-alt {
+  font-family: var(--font-declaration-alt);
+  font-weight: var(--font-declaration-alt-weight);
+  line-height: var(--leading-heading);
+  letter-spacing: 0;
+  text-transform: none;
+  font-optical-sizing: auto;
+}
+.declaration-alt--hero { font-size: var(--size-declaration-hero); }
+.declaration-alt--h1   { font-size: var(--size-declaration-h1); }
+.declaration-alt--dropcap::first-letter {
+  font-family: var(--font-declaration-alt);
+  font-weight: var(--font-declaration-alt-weight);
+  float: left;
+  font-size: 88px;
+  line-height: 0.8;
+  padding: 6px var(--space-sm) 0 0;
+  color: var(--foreground-bold);
+}
+.narrator--header  { font-size: var(--size-narrator-large); font-weight: var(--font-narrator-weight-semi); line-height: var(--leading-heading); color: var(--foreground-bold); }
+.narrator--whisper { color: var(--foreground-subtle); }
+.technical--metric { font-size: 18px; line-height: var(--leading-tight); font-variant-numeric: tabular-nums; color: var(--foreground-bold); }
+.section-label { font-size: var(--size-section-label); color: var(--signature-text); }
+
+/* Semantic shapes — the non-hue fallback. Color is never the only signal. */
+.shape { display: inline-block; font-family: var(--font-technical); line-height: 1; }
+.shape--success::before  { content: "\25CF"; color: var(--color-success); }
+.shape--warning::before  { content: "\25B2"; color: var(--color-warning); }
+.shape--critical::before { content: "\25C6"; color: var(--color-critical); }
+.shape--info::before     { content: "\24D8"; color: var(--color-info); }
+
+/* Bespoke icon pack — 24px box, 2.25 stroke, round caps and joins */
+.rr-icon { width: 24px; height: 24px; flex: none; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
+.rr-icon--sm { width: 16px; height: 16px; }
+
+
+/* ---------------------------------------------------
+   CONTAINER CLASSES
+   --------------------------------------------------- */
+.container {
+  width: 100%;
+  max-width: var(--container-max);
+  margin-inline: auto;
+  padding-inline: var(--container-padding);
+}
+
+.container--narrow {
+  max-width: var(--container-narrow);
+}
+
+.container--wide {
+  max-width: var(--container-wide);
+}
+
+/* ---------------------------------------------------
+   GAP UTILITIES — For flex/grid children.
+   --------------------------------------------------- */
+.gap-micro  { gap: var(--space-micro); }
+.gap-xs     { gap: var(--space-xs); }
+.gap-sm     { gap: var(--space-sm); }
+.gap-md     { gap: var(--space-md); }
+.gap-lg     { gap: var(--space-lg); }
+.gap-xl     { gap: var(--space-xl); }
+.gap-2xl    { gap: var(--space-2xl); }
+.gap-3xl    { gap: var(--space-3xl); }
+
+/* ---------------------------------------------------
+   PADDING UTILITIES
+   --------------------------------------------------- */
+.p-micro  { padding: var(--space-micro); }
+.p-xs     { padding: var(--space-xs); }
+.p-sm     { padding: var(--space-sm); }
+.p-md     { padding: var(--space-md); }
+.p-lg     { padding: var(--space-lg); }
+.p-xl     { padding: var(--space-xl); }
+.p-2xl    { padding: var(--space-2xl); }
+.p-3xl    { padding: var(--space-3xl); }
+
+/* ---------------------------------------------------
+   MARGIN UTILITIES — Vertical spacing (block axis).
+   --------------------------------------------------- */
+.mb-xs    { margin-bottom: var(--space-xs); }
+.mb-sm    { margin-bottom: var(--space-sm); }
+.mb-md    { margin-bottom: var(--space-md); }
+.mb-lg    { margin-bottom: var(--space-lg); }
+.mb-xl    { margin-bottom: var(--space-xl); }
+.mb-2xl   { margin-bottom: var(--space-2xl); }
+.mb-3xl   { margin-bottom: var(--space-3xl); }
+
+/* Emitter-based margins — voice-appropriate spacing */
+.mb-declaration { margin-bottom: var(--emitter-declaration); }
+.mb-narrator    { margin-bottom: var(--emitter-narrator); }
+.mb-technical   { margin-bottom: var(--emitter-technical); }
+
+
+/* ---------------------------------------------------
+   TRANSITION UTILITIES — Pre-composed transitions.
+   --------------------------------------------------- */
+.transition-colors {
+  transition-property: color, background-color, border-color;
+  transition-duration: var(--dur-standard);
+  transition-timing-function: var(--ease-hourglass);
+}
+
+.transition-transform {
+  transition-property: transform;
+  transition-duration: var(--dur-standard);
+  transition-timing-function: var(--ease-hourglass);
+}
+
+.transition-shadow {
+  transition-property: box-shadow;
+  transition-duration: var(--dur-standard);
+  transition-timing-function: var(--ease-hourglass);
+}
+
+.transition-all {
+  transition-property: color, background-color, border-color, transform, box-shadow, opacity;
+  transition-duration: var(--dur-standard);
+  transition-timing-function: var(--ease-hourglass);
+}
+
+/* ---------------------------------------------------
+   STAGGER UTILITY — Apply via style="--i: N" per child.
+   --------------------------------------------------- */
+.stagger-children > * {
+  transition-delay: calc(var(--i, 0) * var(--stagger-base));
+}
+
+
+/* ---------------------------------------------------
+   GRAIN BASE — Shared ::before setup.
+   All grain classes extend this pattern.
+   --------------------------------------------------- */
+.mat-grain-fine,
+.mat-grain-coarse,
+.mat-grain-concrete,
+.mat-grain-gradient,
+.mat-grain-edge {
+  position: relative;
+  isolation: isolate;
+}
+
+.mat-grain-fine::before,
+.mat-grain-coarse::before,
+.mat-grain-concrete::before,
+.mat-grain-gradient::before,
+.mat-grain-edge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--grain-texture);
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: inherit;
+  mix-blend-mode: soft-light;
+  filter: contrast(0.85);
+
+  /* GPU-promote to prevent scroll flicker */
+  will-change: opacity;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+/* ---------------------------------------------------
+   GRAIN VARIANTS
+   --------------------------------------------------- */
+
+/* Fine — injection-molded feel. Cards, quotes, settings headers. */
+.mat-grain-fine::before {
+  opacity: var(--grain-fine-opacity);
+}
+
+/* Coarse — brushed aluminum authority. Dashboard headers, elevated. */
+.mat-grain-coarse::before {
+  opacity: var(--grain-coarse-opacity);
+}
+
+/* Concrete — architectural. Section backgrounds. */
+.mat-grain-concrete::before {
+  opacity: var(--grain-concrete-opacity);
+}
+
+/* Gradient — universal anti-banding. EVERY gradient needs this. */
+.mat-grain-gradient::before {
+  opacity: var(--grain-gradient-opacity);
+}
+
+/* Edge — barely visible at borders. Felt, not seen. */
+.mat-grain-edge::before {
+  opacity: var(--grain-edge-opacity);
+  mask-image: linear-gradient(
+    to bottom,
+    black 0%, transparent 4px,
+    transparent calc(100% - 4px), black 100%
+  );
+}
+
+/* ---------------------------------------------------
+   FROST-GRAIN — The "gold standard" composite.
+   Overlay blend, higher opacity, larger scale.
+   Used on frosted surfaces where grain adds tactile roughness.
+   --------------------------------------------------- */
+.mat-frost-grain {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.mat-frost-grain::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--grain-texture);
+  background-size: 512px 512px;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: inherit;
+  mix-blend-mode: overlay;
+  opacity: 0.185;
+  filter: contrast(0.75);
+
+  will-change: opacity;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+/* High bg-alpha → lower grain density */
+.mat-frost-grain--dense::before {
+  opacity: 0.12;
+  background-size: 384px 384px;
+}
+
+/* ---------------------------------------------------
+   DOT HALFTONE — Thematic accent, opt-in only.
+   Full coverage, soft-light. NOT a default treatment.
+   Polarity-aware: white dots on dark, dark dots on light.
+   2px dot, 22px gap, 0.15 opacity.
+   --------------------------------------------------- */
+.mat-grain-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 2;
+  background-image: radial-gradient(
+    circle at center,
+    var(--halftone-dot-color, rgba(255, 255, 255, 1)) 0 1px,
+    transparent 2px
+  );
+  background-size: 22px 22px;
+  opacity: 0.15;
+  mix-blend-mode: soft-light;
+}
+
+/* Light polarity — dark dots on light surfaces */
+:is([data-theme="light"], [data-polarity="light"]) {
+  --halftone-dot-color: rgba(13, 13, 12, 1);
+}
+
+/* ---------------------------------------------------
+   MATERIAL HIERARCHY (encoding meaning):
+   - No grain (matte) = baseline, standard
+   - Fine grain = elevated, professional
+   - Coarse grain = premium, mission-critical
+   - Concrete = architectural foundation
+   - Frost-grain = tactile frosted glass (signature)
+   --------------------------------------------------- */
+
+
+/* ---------------------------------------------------
+   FROST CLASSES
+   --------------------------------------------------- */
+.mat-frost-light {
+  background: var(--frost-bg-light);
+  backdrop-filter: blur(var(--frost-blur-light));
+  -webkit-backdrop-filter: blur(var(--frost-blur-light));
+}
+
+.mat-frost-medium {
+  background: var(--frost-bg-medium);
+  backdrop-filter: blur(var(--frost-blur-medium));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium));
+}
+
+.mat-frost-heavy {
+  background: var(--frost-bg-heavy);
+  backdrop-filter: blur(var(--frost-blur-heavy));
+  -webkit-backdrop-filter: blur(var(--frost-blur-heavy));
+}
+
+/* ---------------------------------------------------
+   FROST + BORDER — Common combo for elevated panels.
+   --------------------------------------------------- */
+.mat-frost-light,
+.mat-frost-medium,
+.mat-frost-heavy {
+  border: 1px solid var(--border-subtle);
+}
+
+/* ---------------------------------------------------
+   SHADOW UTILITY CLASSES
+   --------------------------------------------------- */
+.mat-shadow-sm       { box-shadow: var(--shadow-sm); }
+.mat-shadow-md       { box-shadow: var(--shadow-md); }
+.mat-shadow-lg       { box-shadow: var(--shadow-lg); }
+.mat-shadow-elevated { box-shadow: var(--shadow-elevated); }
+.mat-shadow-glow     { box-shadow: var(--shadow-signature); }
+.mat-shadow-inset    { box-shadow: var(--shadow-inset); }
+.mat-shadow-none     { box-shadow: none; }
+
+
+/* Utility classes */
+.rounded-xs   { border-radius: var(--radius-xs); }
+.rounded-sm   { border-radius: var(--radius-sm); }
+.rounded-md   { border-radius: var(--radius-md); }
+.rounded-lg   { border-radius: var(--radius-lg); }
+.rounded-xl   { border-radius: var(--radius-xl); }
+.rounded-full { border-radius: var(--radius-full); }
+.rounded-none { border-radius: 0; }
+
+
+/* ---------------------------------------------------
+   POLARITY TRANSITION — Physical flip, not a flash.
+   --------------------------------------------------- */
+html {
+  transition:
+    background-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+
+/* ---------------------------------------------------
+   LIGHT POLARITY — Accent-fill component overrides.
+   Fills use --signature-fill, text uses --on-signature
+   for proper contrast on light backgrounds.
+   --------------------------------------------------- */
+:is([data-theme="light"], [data-polarity="light"]) .btn--primary {
+  background: var(--signature-fill);
+  color: var(--on-signature);
+  border-color: var(--signature-fill);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .btn--primary:hover {
+  background: var(--signature-fill-hover);
+  color: var(--on-signature);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .badge--accent {
+  background: var(--signature-fill);
+  color: var(--on-signature);
+  border-color: transparent;
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .tag--signature {
+  background: var(--signature-fill);
+  color: var(--on-signature);
+  border-color: transparent;
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .tab.is-active {
+  color: var(--on-signature);
+  background: var(--signature-fill);
+}
+
+
+/* ---------------------------------------------------
+   KILL MATERIALS — No grain, blur, shadows.
+   --------------------------------------------------- */
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-grain-fine::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-grain-coarse::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-grain-concrete::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-grain-gradient::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-grain-edge::before {
+  display: none;
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-frost-light,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-frost-medium,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-frost-heavy {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface-overlay);
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-shadow-sm,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-shadow-md,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-shadow-lg,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-shadow-elevated,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .mat-shadow-glow {
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------
+   KEEP SHAPES — Semantic shapes remain for meaning.
+   ::before content with shapes is NOT removed.
+   Badges still show ● ▲ ◆ in survivalist mode.
+   --------------------------------------------------- */
+
+/* ---------------------------------------------------
+   SIMPLIFY INTERACTIONS — No transforms in survivalist.
+   --------------------------------------------------- */
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .btn:hover {
+  transform: none;
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .btn:active {
+  transform: none;
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .card--tilt:hover {
+  transform: none;
+}
+
+/* ---------------------------------------------------
+   BORDER-BASED DIFFERENTIATION
+   In monochrome, filled vs. outlined replaces color.
+   --------------------------------------------------- */
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .btn--primary {
+  background: var(--ground-100);
+  color: var(--ground-0);
+  border: 2px solid var(--ground-100);
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .btn--secondary {
+  background: transparent;
+  color: var(--ground-100);
+  border: 1px solid var(--ground-60);
+}
+
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .btn--ghost {
+  background: transparent;
+  color: var(--ground-80);
+  border: 1px solid var(--ground-30);
+}
+
+
+
+/* Survivalist: filled vs outlined replaces hue; fonts fall to the system stack */
+:is([data-theme="survivalist"], [data-mode="survivalist"]) body, :is([data-theme="survivalist"], [data-mode="survivalist"]) .narrator { font-family: var(--font-survivalist); }
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .frost-backdrop::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .section-frost-bg::before,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .card-glow__light,
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .card-glow__border { display: none; }
+:is([data-theme="survivalist"], [data-mode="survivalist"]) .alert { background: var(--surface-raised); border-color: var(--border-default); }
+
+
+/* --- components/buttons.css --- */
+/* ==========================================================
+   Reality Reprojection — Buttons
+   Declaration voice. Inner highlight signature.
+   Hover: translateY(-1px), NEVER scale.
+   Active: translateY(0), dur-micro snap.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE BUTTON
+   --------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-lg);
+
+  /* Declaration voice */
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-technical-default);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  line-height: var(--leading-tight);
+
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+
+  /* All micro-duration for snappy interactive response */
+  transition:
+    transform var(--dur-micro) var(--ease-hourglass),
+    background-color var(--dur-micro) var(--ease-hourglass),
+    box-shadow var(--dur-micro) var(--ease-hourglass),
+    border-color var(--dur-micro) var(--ease-hourglass),
+    color var(--dur-micro) var(--ease-hourglass);
+
+  /* GPU compositing for snappy transforms */
+  will-change: transform;
+}
+
+/* ---------------------------------------------------
+   PRIMARY — Signature fill, inner highlight.
+   --------------------------------------------------- */
+.btn--primary {
+  background: var(--signature-fill);
+  color: var(--on-signature);
+  border-color: var(--signature-fill);
+  border-bottom-color: var(--signature-muted);
+  box-shadow: var(--highlight-inner);
+}
+
+.btn--primary:hover {
+  transform: translateY(-1px);
+  background: var(--signature-fill-hover);
+  box-shadow: var(--highlight-inner), var(--shadow-hover-signature); /* chromatic fringe retired 2026-02-20 */
+}
+
+.btn--primary:active {
+  transform: translateY(0);
+  background: var(--signature-muted);
+  box-shadow: var(--shadow-inset);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   SECONDARY — Outlined, signature border.
+   --------------------------------------------------- */
+.btn--secondary {
+  background: transparent;
+  color: var(--signature);
+  border-color: var(--signature-muted);
+}
+
+.btn--secondary:hover {
+  transform: translateY(-1px);
+  border-color: var(--signature);
+  background: var(--signature-glow);
+  box-shadow: var(--shadow-hover-signature-subtle);
+}
+
+.btn--secondary:active {
+  transform: translateY(0);
+  background: var(--signature-glow-strong);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   GHOST — Minimal, text only.
+   --------------------------------------------------- */
+.btn--ghost {
+  background: transparent;
+  color: var(--foreground-subtle);
+  border-color: var(--border-default);
+}
+
+.btn--ghost:hover {
+  transform: translateY(-1px);
+  color: var(--foreground-default);
+  border-color: var(--foreground-subtle);
+  background: var(--ground-15);
+}
+
+.btn--ghost:active {
+  transform: translateY(0);
+  background: var(--ground-20);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   SEMANTIC VARIANTS
+   --------------------------------------------------- */
+.btn--critical {
+  background: var(--color-critical);
+  color: var(--foreground-on-accent);
+  border-color: var(--color-critical);
+  border-bottom-color: var(--color-critical-bold);
+  box-shadow: var(--highlight-inner);
+}
+
+.btn--critical:hover {
+  transform: translateY(-1px);
+  background: var(--color-critical-bold);
+  box-shadow: var(--highlight-inner), var(--shadow-hover-critical);
+}
+
+.btn--critical:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-inset);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   SIZES
+   --------------------------------------------------- */
+.btn--sm {
+  padding: var(--space-micro) var(--space-md);
+  font-size: var(--size-technical-small);
+}
+
+.btn--lg {
+  padding: var(--space-md) var(--space-xl);
+  font-size: var(--size-narrator-default);
+}
+
+/* Small buttons: hover lift is too pronounced. Suppress. */
+.btn--sm:hover {
+  transform: none;
+}
+
+.btn--sm:active {
+  transform: translateY(1px);
+}
+
+/* ---------------------------------------------------
+   DISABLED STATE
+   --------------------------------------------------- */
+.btn[disabled],
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: var(--ground-20);
+  border-color: var(--ground-20);
+  color: var(--foreground-disabled);
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------
+   ICON BUTTON — Square aspect, centered icon.
+   --------------------------------------------------- */
+.btn--icon {
+  padding: var(--space-sm);
+  aspect-ratio: 1;
+}
+
+
+/* --- components/cards.css --- */
+/* ==========================================================
+   Reality Reprojection — Cards
+   Elevation through tokens. Tilt is signature, opt-in only.
+   Hover: border-color + shadow deepen, NOT transform.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE CARD
+   --------------------------------------------------- */
+.card {
+  padding: var(--space-lg);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+
+  transition:
+    border-color var(--dur-micro) var(--ease-bell),
+    box-shadow var(--dur-standard) var(--ease-hourglass);
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+/* ---------------------------------------------------
+   CARD PADDING VARIANTS
+   --------------------------------------------------- */
+.card--compact {
+  padding: var(--space-md);
+}
+
+.card--spacious {
+  padding: var(--space-xl);
+}
+
+/* ---------------------------------------------------
+   CARD ELEVATION VARIANTS
+   --------------------------------------------------- */
+.card--flat {
+  box-shadow: none;
+  border-color: var(--border-subtle);
+}
+
+.card--flat:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.card--elevated {
+  box-shadow: var(--shadow-md);
+}
+
+.card--elevated:hover {
+  box-shadow: var(--shadow-lg);
+}
+
+/* ---------------------------------------------------
+   CARD TILT — Signature effect. Reserved.
+   Only .card--tilt gets perspective rotation.
+   Regular cards NEVER transform on hover.
+   --------------------------------------------------- */
+.card--tilt {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+  transition:
+    border-color var(--dur-micro) var(--ease-bell),
+    box-shadow var(--dur-standard) var(--ease-hourglass),
+    transform var(--dur-macro) var(--ease-hourglass);
+}
+
+.card--tilt:hover {
+  border-color: var(--signature-muted);
+  box-shadow: var(--shadow-signature);
+  transform: perspective(1000px) rotateY(2deg) translateY(-3px);
+}
+
+.card--tilt:not(:hover) {
+  transition-timing-function: var(--ease-hourglass-settle);
+}
+
+/* ---------------------------------------------------
+   CARD HEADER / BODY / FOOTER
+   --------------------------------------------------- */
+.card__header {
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-md);
+}
+
+.card__body {
+  /* Default flow spacing */
+}
+
+.card__body > * + * {
+  margin-top: var(--space-sm);
+}
+
+.card__footer {
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-md);
+}
+
+/* ---------------------------------------------------
+   CARD WITH MATERIALS — Composable.
+   --------------------------------------------------- */
+.card.mat-grain-fine { /* Grain applied via material class */ }
+
+.card--signature {
+  border-color: var(--signature-dim);
+}
+
+.card--signature:hover {
+  border-color: var(--signature-muted);
+  box-shadow: var(--shadow-signature);
+}
+
+/* ---------------------------------------------------
+   INTERACTIVE CARD — Responsive cursor, signature glow hover.
+   --------------------------------------------------- */
+.card--interactive {
+  cursor: pointer;
+}
+
+.card--interactive:hover {
+  border-color: var(--signature-muted);
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--signature-dim), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.card--interactive:active {
+  box-shadow: var(--shadow-sm);
+  transition-duration: var(--dur-micro);
+}
+
+
+/* --- components/badges.css --- */
+/* ==========================================================
+   Reality Reprojection — Badges
+   Technical voice. Semantic shapes ALWAYS present.
+   Shapes: Success ● | Warning ▲ | Critical ◆
+   Shapes remain in survivalist mode.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE BADGE
+   --------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  padding: 2px var(--space-xs);
+
+  /* Technical voice */
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--foreground-default);
+
+  transition:
+    background-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass),
+    border-color var(--dur-standard) var(--ease-hourglass);
+}
+
+/* ---------------------------------------------------
+   SEMANTIC VARIANTS — Each MUST have ::before shape.
+   --------------------------------------------------- */
+
+/* Success — filled circle ● */
+.badge--success {
+  color: var(--color-success);
+  border-color: var(--color-success);
+  background: var(--color-success-subtle);
+}
+
+.badge--success::before {
+  content: '\25CF\00a0';
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* Warning — triangle ▲ */
+.badge--warning {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  background: var(--color-warning-subtle);
+}
+
+.badge--warning::before {
+  content: '\25B2\00a0';
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* Critical — diamond ◆ + heavier border */
+.badge--critical {
+  color: var(--color-critical);
+  border-color: var(--color-critical);
+  border-width: 2px;
+  background: var(--color-critical-subtle);
+}
+
+.badge--critical::before {
+  content: '\25C6\00a0';
+  font-size: 8px;
+  line-height: 1;
+}
+
+/* Informational — no shape needed (neutral) */
+.badge--info {
+  color: var(--color-info);
+  border-color: var(--color-info);
+  background: var(--color-info-subtle);
+}
+
+/* ---------------------------------------------------
+   ACCENT BADGE — Signature hue.
+   --------------------------------------------------- */
+.badge--accent {
+  color: var(--signature);
+  border-color: var(--signature-muted);
+  background: var(--signature-glow);
+}
+
+/* ---------------------------------------------------
+   LIME BADGE — Energy/positive accent.
+   --------------------------------------------------- */
+.badge--lime {
+  color: var(--accent-lime);
+  border-color: rgba(100, 250, 0, 0.3);
+  background: var(--accent-lime-subtle);
+}
+
+/* ---------------------------------------------------
+   PINK BADGE — Warmth/emphasis accent.
+   --------------------------------------------------- */
+.badge--pink {
+  color: var(--accent-pink);
+  border-color: rgba(250, 1, 123, 0.3);
+  background: var(--accent-pink-subtle);
+}
+
+/* ---------------------------------------------------
+   BADGE SIZES
+   --------------------------------------------------- */
+.badge--sm {
+  font-size: var(--size-section-label);
+  padding: 1px var(--space-micro);
+}
+
+.badge--lg {
+  font-size: var(--size-technical-default);
+  padding: var(--space-micro) var(--space-sm);
+}
+
+/* ---------------------------------------------------
+   PILL VARIANT — Full radius.
+   --------------------------------------------------- */
+.badge--pill {
+  border-radius: var(--radius-full);
+  padding-inline: var(--space-sm);
+}
+
+/* ---------------------------------------------------
+   PULSE — Attention indicator for unread/new
+   --------------------------------------------------- */
+/* Signature cyan ring pulse — expands outward and fades */
+@keyframes accent-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(94, 121, 230, 0.4); }
+  70%  { box-shadow: 0 0 0 8px rgba(94, 121, 230, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(94, 121, 230, 0); }
+}
+
+.badge--pulse {
+  box-shadow: 0 0 0 0 rgba(94, 121, 230, 0.4);
+  animation: accent-pulse 2s var(--ease-pendulum) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge--pulse {
+    animation: none;
+  }
+}
+
+
+/* --- components/forms.css --- */
+/* ==========================================================
+   Reality Reprojection — Forms
+   Inputs, selects, textareas, checkboxes, radios.
+   Focus: signature hue ring. Labels: Technical voice.
+   ========================================================== */
+
+/* Form group — label + input pairing */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.form-group + .form-group { margin-top: var(--space-md); }
+
+/* Label — Technical voice */
+.form-label {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
+}
+
+/* Text inputs — shared base. Recessed surface, milled channel feel. */
+.input, .select, .textarea {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-default);
+  background: var(--surface-recessed);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-recessed);
+  transition:
+    border-color var(--dur-standard) var(--ease-hourglass),
+    box-shadow var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.input::placeholder, .textarea::placeholder { color: var(--foreground-disabled); }
+
+/* Focus — surface lifts from recessed to elevated. Signature glow. */
+.input:focus, .select:focus, .textarea:focus {
+  outline: none;
+  border-color: var(--signature);
+  background: var(--surface-ground);
+  box-shadow: 0 0 0 3px var(--signature-glow-strong);
+}
+
+/* Hover */
+.input:hover:not(:focus):not(:disabled),
+.select:hover:not(:focus):not(:disabled),
+.textarea:hover:not(:focus):not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+/* Disabled */
+.input:disabled, .select:disabled, .textarea:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--surface-raised);
+}
+
+/* Error state */
+.input--error, .select--error, .textarea--error { border-color: var(--color-critical); }
+.input--error:focus, .select--error:focus, .textarea--error:focus {
+  box-shadow: 0 0 0 3px var(--color-critical-subtle);
+}
+
+/* Textarea — multi-line */
+.textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: var(--leading-body);
+}
+
+/* Select — custom arrow via mask (uses token color) */
+.select {
+  appearance: none;
+  padding-right: var(--space-xl);
+  background: var(--surface-recessed);
+}
+
+.select-wrap { position: relative; }
+
+.select-wrap::after {
+  content: '';
+  position: absolute;
+  right: var(--space-sm);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 8px;
+  background: var(--foreground-subtle);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='black' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  pointer-events: none;
+}
+
+/* Checkbox & Radio */
+.checkbox, .radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-default);
+}
+
+.checkbox input, .radio input {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-recessed);
+  box-shadow: var(--shadow-recessed);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    box-shadow var(--dur-standard) var(--ease-hourglass);
+}
+
+.checkbox input { border-radius: var(--radius-xs); }
+.radio input { border-radius: var(--radius-full); }
+
+.checkbox input:checked, .radio input:checked {
+  background: var(--signature);
+  border-color: var(--signature);
+  box-shadow: var(--highlight-inner);
+}
+
+.checkbox input:checked::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 9px;
+  margin: 1px auto;
+  border: solid var(--ground-100);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.radio input:checked::after {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 4px auto;
+  border-radius: var(--radius-full);
+  background: var(--ground-100);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.checkbox input:focus, .radio input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--signature-glow-strong);
+}
+
+/* Help & Error text */
+.form-help {
+  font-size: var(--size-narrator-whisper);
+  color: var(--foreground-subtle);
+}
+
+.form-error {
+  font-size: var(--size-narrator-whisper);
+  color: var(--color-critical);
+}
+
+/* ---------------------------------------------------
+   VALIDATION SHAKE — Alarm character for errors
+   --------------------------------------------------- */
+@keyframes input-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-4px); }
+  30% { transform: translateX(3px); }
+  45% { transform: translateX(-2px); }
+  60% { transform: translateX(1px); }
+}
+
+.input--shake,
+.select--shake,
+.textarea--shake {
+  animation: input-shake 0.4s var(--ease-hourglass);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input--shake,
+  .select--shake,
+  .textarea--shake {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------
+   CHECKBOX/RADIO TRANSITIONS
+   --------------------------------------------------- */
+.checkbox input + *::before,
+.radio input + *::before {
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass-settle),
+    opacity var(--dur-standard) var(--ease-hourglass);
+}
+
+
+/* --- components/navigation.css --- */
+/* ==========================================================
+   Reality Reprojection — Navigation
+   .nav, .nav-item. Active state indicator.
+   Hover: translateX(2px), NOT color change only.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   NAV CONTAINER
+   --------------------------------------------------- */
+.nav {
+  display: flex;
+  gap: var(--space-micro);
+}
+
+/* Horizontal (default) */
+.nav--horizontal {
+  flex-direction: row;
+  align-items: center;
+}
+
+/* Vertical */
+.nav--vertical {
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------
+   NAV ITEM
+   --------------------------------------------------- */
+.nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight-medium);
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-subtle);
+
+  border-radius: var(--radius-md);
+  cursor: pointer;
+
+  transition:
+    color var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    transform var(--dur-standard) var(--ease-hourglass);
+}
+
+.nav-item:hover {
+  color: var(--foreground-default);
+  background: var(--ground-15);
+  transform: translateX(2px);
+}
+
+/* ---------------------------------------------------
+   ACTIVE STATE — Signature indicator.
+   --------------------------------------------------- */
+.nav-item.is-active {
+  color: var(--signature);
+  background: var(--signature-glow);
+}
+
+.nav-item.is-active:hover {
+  background: var(--signature-glow-strong);
+}
+
+/* Vertical nav — left border indicator */
+.nav--vertical .nav-item.is-active {
+  position: relative;
+}
+
+.nav--vertical .nav-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-xs);
+  bottom: var(--space-xs);
+  width: 2px;
+  background: var(--signature);
+  border-radius: var(--radius-full);
+}
+
+/* ---------------------------------------------------
+   NAV DIVIDER — Subtle separator between groups.
+   --------------------------------------------------- */
+.nav-divider {
+  width: 1px;
+  height: var(--space-md);
+  background: var(--border-subtle);
+  align-self: center;
+}
+
+.nav--vertical .nav-divider {
+  width: auto;
+  height: 1px;
+  margin-block: var(--space-xs);
+}
+
+/* ---------------------------------------------------
+   NAV LABEL — Section label within vertical nav.
+   --------------------------------------------------- */
+.nav-label {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-section-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-disabled);
+  padding: var(--space-sm) var(--space-md);
+}
+
+/* ---------------------------------------------------
+   HORIZONTAL NAV — Active underline (gradient).
+   Scoped to horizontal only. Vertical uses ::before bar.
+   --------------------------------------------------- */
+.nav--horizontal .nav-item.is-active {
+  position: relative;
+}
+
+.nav--horizontal .nav-item.is-active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--signature), rgba(94, 121, 230, 0.3));
+  border-radius: var(--radius-full);
+}
+
+/* ---------------------------------------------------
+   NAV BADGE — Count/indicator alongside nav item.
+   --------------------------------------------------- */
+.nav-item .badge {
+  margin-left: auto;
+}
+
+
+/* --- components/modals.css --- */
+/* ==========================================================
+   Reality Reprojection — Modals
+   Frost overlay with blur. Centered flex. Depth expression.
+   Hourglass easing for enter/exit.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   MODAL OVERLAY — Frost backdrop.
+   --------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+
+  background: var(--overlay-bg);
+  backdrop-filter: blur(var(--frost-blur-light));
+  -webkit-backdrop-filter: blur(var(--frost-blur-light));
+
+  /* Hidden by default */
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--dur-macro) var(--ease-hourglass),
+    visibility var(--dur-macro) var(--ease-hourglass);
+}
+
+.modal-overlay.is-active {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ---------------------------------------------------
+   MODAL — Content panel.
+   --------------------------------------------------- */
+.modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 85dvh;
+  overflow-y: auto;
+
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-elevated);
+
+  /* Enter animation */
+  transform: translateY(16px);
+  opacity: 0;
+  transition:
+    transform var(--dur-macro) var(--ease-hourglass),
+    opacity var(--dur-macro) var(--ease-hourglass);
+}
+
+.modal-overlay.is-active .modal {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* ---------------------------------------------------
+   MODAL SECTIONS
+   --------------------------------------------------- */
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal__body {
+  padding: var(--space-lg);
+}
+
+.modal__body > * + * {
+  margin-top: var(--space-md);
+}
+
+.modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---------------------------------------------------
+   MODAL SIZES
+   --------------------------------------------------- */
+.modal--sm {
+  max-width: 400px;
+}
+
+.modal--lg {
+  max-width: 720px;
+}
+
+.modal--full {
+  max-width: calc(100vw - var(--space-2xl));
+  max-height: calc(100dvh - var(--space-2xl));
+}
+
+
+/* --- components/tables.css --- */
+/* ==========================================================
+   Reality Reprojection — Tables
+   Technical font for data. Row striping with ground-10.
+   Hover row highlight.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   TABLE BASE
+   --------------------------------------------------- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-default);
+}
+
+/* ---------------------------------------------------
+   TABLE HEADER
+   --------------------------------------------------- */
+.table thead th {
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
+
+  border-bottom: 2px solid var(--border-default);
+}
+
+/* ---------------------------------------------------
+   TABLE BODY
+   --------------------------------------------------- */
+.table tbody td {
+  padding: var(--space-sm) var(--space-md);
+  color: var(--foreground-default);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+/* Row striping — alternate rows with ground-10 */
+.table--striped tbody tr:nth-child(even) {
+  background: var(--ground-10);
+}
+
+/* Row hover */
+.table--hoverable tbody tr {
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.table--hoverable tbody tr:hover {
+  background: var(--ground-15);
+}
+
+/* ---------------------------------------------------
+   TABLE VARIANTS
+   --------------------------------------------------- */
+
+/* Compact — tighter padding */
+.table--compact thead th,
+.table--compact tbody td {
+  padding: var(--space-micro) var(--space-sm);
+}
+
+/* Bordered — visible cell borders */
+.table--bordered thead th,
+.table--bordered tbody td {
+  border: 1px solid var(--border-default);
+}
+
+/* ---------------------------------------------------
+   TABLE CELL ALIGNMENT
+   --------------------------------------------------- */
+.table .text-right { text-align: right; }
+.table .text-center { text-align: center; }
+.table .text-left { text-align: left; }
+
+/* ---------------------------------------------------
+   TABLE FOOTER
+   --------------------------------------------------- */
+.table tfoot td {
+  padding: var(--space-sm) var(--space-md);
+  font-weight: var(--font-narrator-weight-semi);
+  border-top: 2px solid var(--border-default);
+  color: var(--foreground-bold);
+}
+
+/* ---------------------------------------------------
+   RESPONSIVE TABLE WRAPPER
+   --------------------------------------------------- */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+
+/* --- components/lists.css --- */
+/* ==========================================================
+   Reality Reprojection — Lists
+   Narrator rhythm (24px gaps). Nested spacing.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE LIST
+   --------------------------------------------------- */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--emitter-narrator);
+}
+
+/* ---------------------------------------------------
+   LIST ITEM
+   --------------------------------------------------- */
+.list-item {
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--foreground-default);
+
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.list-item:last-child {
+  border-bottom: none;
+}
+
+.list-item:hover {
+  background: var(--ground-10);
+}
+
+/* ---------------------------------------------------
+   LIST VARIANTS
+   --------------------------------------------------- */
+
+/* Compact — Technical density */
+.list--compact {
+  gap: var(--emitter-technical);
+}
+
+.list--compact .list-item {
+  padding: var(--space-xs) var(--space-md);
+}
+
+/* Bordered — full border per item */
+.list--bordered .list-item {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-xs);
+}
+
+.list--bordered .list-item:last-child {
+  margin-bottom: 0;
+}
+
+/* Flush — no padding, minimal decoration */
+.list--flush .list-item {
+  padding-inline: 0;
+}
+
+/* ---------------------------------------------------
+   NESTED LISTS — Tighter spacing, indented.
+   --------------------------------------------------- */
+.list .list {
+  gap: var(--emitter-technical);
+  margin-top: var(--space-sm);
+  padding-left: var(--space-lg);
+}
+
+.list .list .list-item {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--size-narrator-small);
+}
+
+/* ---------------------------------------------------
+   LIST WITH ICON / ACTION
+   --------------------------------------------------- */
+.list-item--with-icon {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
+.list-item__action {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+
+/* --- components/headers.css --- */
+/* ==========================================================
+   Reality Reprojection — Headers
+   Layout patterns. Grain option via material class.
+   Polarity toggle button placement.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   HEADER BASE
+   --------------------------------------------------- */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-default);
+}
+
+/* ---------------------------------------------------
+   HEADER SECTIONS
+   --------------------------------------------------- */
+.header__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.header__brand-name {
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-declaration-h5);
+  letter-spacing: var(--tracking-tight);
+  text-transform: uppercase;
+  color: var(--foreground-bold);
+}
+
+.header__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-micro);
+}
+
+.header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* ---------------------------------------------------
+   HEADER VARIANTS
+   --------------------------------------------------- */
+
+/* Transparent — overlay on content */
+.header--transparent {
+  background: transparent;
+  border-bottom: none;
+}
+
+/* Sticky */
+.header--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+/* With frost material */
+.header--frost {
+  background: var(--frost-bg-medium);
+  backdrop-filter: blur(var(--frost-blur-medium));
+  -webkit-backdrop-filter: blur(var(--frost-blur-medium));
+  border-bottom-color: var(--border-subtle);
+}
+
+/* ---------------------------------------------------
+   POLARITY TOGGLE BUTTON — Placed in header actions.
+   --------------------------------------------------- */
+.polarity-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-ground);
+  color: var(--foreground-subtle);
+  cursor: pointer;
+
+  transition:
+    border-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+.polarity-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground-default);
+}
+
+/* ---------------------------------------------------
+   HEADER NAV ITEMS — Etched in, no movement.
+   Text does NOT move on hover. Background change only.
+   --------------------------------------------------- */
+.header .nav-item:hover {
+  transform: none;
+  background: var(--ground-15);
+}
+
+.header .nav-item.is-active {
+  color: var(--foreground-bold);
+}
+
+/* Light polarity — signature identity preserved, not washed out */
+:is([data-theme="light"], [data-polarity="light"]) .header {
+  border-bottom-color: rgba(94, 121, 230, 0.15);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .header .nav-item {
+  color: var(--foreground-subtle);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .header .nav-item:hover {
+  color: var(--foreground-bold);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .header .nav-item.is-active {
+  color: var(--signature);
+  background: rgba(94, 121, 230, 0.06);
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .header .nav-item.is-active::after {
+  background: linear-gradient(90deg, var(--signature), rgba(94, 121, 230, 0.2));
+}
+
+:is([data-theme="light"], [data-polarity="light"]) .header__brand-name {
+  color: var(--signature);
+}
+
+
+/* --- components/footers.css --- */
+/* ==========================================================
+   Reality Reprojection — Footers
+   Technical voice for metadata. Quiet, informational.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   FOOTER BASE
+   --------------------------------------------------- */
+.footer {
+  position: relative;
+  padding: var(--space-xl) var(--space-lg);
+  border-top: 1px solid rgba(94, 121, 230, 0.12);
+  background: var(--surface-ground);
+}
+
+/* Accent glow — subtle signature light bleeding from the border */
+.footer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  background: linear-gradient(to bottom, rgba(94, 121, 230, 0.03), transparent);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   FOOTER CONTENT
+   --------------------------------------------------- */
+.footer__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+/* Metadata — Technical voice */
+.footer__meta {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-subtle);
+}
+
+/* Footer links */
+.footer__links {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.footer__link {
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-whisper);
+  color: var(--foreground-subtle);
+
+  transition: color var(--dur-standard) var(--ease-hourglass);
+}
+
+.footer__link:hover {
+  color: var(--signature);
+}
+
+/* ---------------------------------------------------
+   FOOTER VARIANTS
+   --------------------------------------------------- */
+
+/* Minimal — single line, less padding */
+.footer--minimal {
+  padding: var(--space-md) var(--space-lg);
+}
+
+/* Stacked — column layout for richer footers */
+.footer--stacked .footer__content {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+
+/* --- components/toggles.css --- */
+/* ==========================================================
+   Reality Reprojection — Toggles
+   Clockwork thumb motion. Signature active state.
+   Thumb: ease-hourglass-settle for elastic snap.
+   Track: ease-hourglass for background/border.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   TOGGLE SWITCH
+   --------------------------------------------------- */
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  cursor: pointer;
+}
+
+.toggle__track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--ground-30);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-recessed);
+  transition:
+    background var(--dur-standard) var(--ease-hourglass),
+    border-color var(--dur-standard) var(--ease-hourglass),
+    box-shadow var(--dur-standard) var(--ease-hourglass);
+}
+
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  background: var(--ground-70);
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass-settle),
+    background var(--dur-standard) var(--ease-hourglass);
+}
+
+/* ---------------------------------------------------
+   ACTIVE / CHECKED STATE
+   --------------------------------------------------- */
+.toggle.is-active .toggle__track {
+  background: var(--signature-dim);
+  border-color: var(--signature-muted);
+  box-shadow: var(--shadow-recessed), inset 0 0 8px rgba(94, 121, 230, 0.15);
+}
+
+.toggle.is-active .toggle__thumb {
+  transform: translateX(16px);
+  background: var(--signature-vivid);
+  box-shadow: var(--highlight-inner);
+}
+
+/* ---------------------------------------------------
+   HOVER STATE
+   --------------------------------------------------- */
+.toggle:hover .toggle__track {
+  border-color: var(--border-strong);
+}
+
+.toggle.is-active:hover .toggle__track {
+  border-color: var(--signature);
+}
+
+/* ---------------------------------------------------
+   LABEL
+   --------------------------------------------------- */
+.toggle__label {
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+  font-weight: var(--font-narrator-weight);
+  color: var(--foreground-subtle);
+  user-select: none;
+}
+
+.toggle.is-active .toggle__label {
+  color: var(--foreground-default);
+}
+
+/* ---------------------------------------------------
+   DISABLED STATE
+   --------------------------------------------------- */
+.toggle[aria-disabled="true"],
+.toggle.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   SIZE VARIANTS
+   --------------------------------------------------- */
+.toggle--sm .toggle__track {
+  width: 28px;
+  height: 16px;
+}
+
+.toggle--sm .toggle__thumb {
+  width: 10px;
+  height: 10px;
+  top: 2px;
+  left: 2px;
+}
+
+.toggle--sm.is-active .toggle__thumb {
+  transform: translateX(12px);
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .toggle__thumb,
+  .toggle__track {
+    transition: none;
+  }
+}
+
+
+/* --- components/tags.css --- */
+/* ==========================================================
+   Reality Reprojection — Tags
+   Technical voice. Interactive chips with translateX hover.
+   Dismissible with close indicator. NEVER scale.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE TAG
+   --------------------------------------------------- */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  padding: 2px var(--space-sm);
+
+  /* Technical voice */
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  cursor: default;
+
+  /* Hourglass transitions, NEVER ease */
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    border-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+/* ---------------------------------------------------
+   VARIANTS
+   --------------------------------------------------- */
+.tag--default {
+  background: var(--ground-20);
+  color: var(--foreground-subtle);
+  border-color: var(--border-subtle);
+}
+
+.tag--signature {
+  background: var(--signature-glow);
+  color: var(--signature-vivid);
+  border-color: var(--signature-dim);
+}
+
+.tag--success {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.tag--warning {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.tag--critical {
+  background: var(--color-critical-subtle);
+  color: var(--color-critical);
+  border-color: var(--color-critical);
+}
+
+/* ---------------------------------------------------
+   INTERACTIVE — Clickable tags, translateX(2px).
+   --------------------------------------------------- */
+.tag--interactive {
+  cursor: pointer;
+}
+
+.tag--interactive:hover {
+  transform: translateX(2px);
+}
+
+.tag--default.tag--interactive:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground-default);
+}
+
+.tag--signature.tag--interactive:hover {
+  border-color: var(--signature-muted);
+  background: var(--signature-glow-strong);
+}
+
+.tag--success.tag--interactive:hover {
+  background: var(--color-success-subtle);
+  border-color: var(--color-success-bold);
+}
+
+.tag--warning.tag--interactive:hover {
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning-bold);
+}
+
+.tag--critical.tag--interactive:hover {
+  background: var(--color-critical-subtle);
+  border-color: var(--color-critical-bold);
+}
+
+.tag--interactive:active {
+  transform: translateX(0);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   DISMISSIBLE — Close indicator.
+   --------------------------------------------------- */
+.tag__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: var(--space-micro);
+
+  font-size: 10px;
+  line-height: 1;
+  color: inherit;
+
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  opacity: 0.5;
+
+  transition: opacity var(--dur-micro) var(--ease-hourglass);
+}
+
+.tag__dismiss:hover {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------
+   DISABLED
+   --------------------------------------------------- */
+.tag[aria-disabled="true"],
+.tag.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .tag,
+  .tag__dismiss {
+    transition: none;
+  }
+}
+
+
+/* --- components/tabs.css --- */
+/* ==========================================================
+   Reality Reprojection — Tabs
+   Narrator voice. Signature underline. Clockwork transitions.
+   NEVER scale or translateY. Color transitions only.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   TAB LIST — Horizontal container.
+   --------------------------------------------------- */
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---------------------------------------------------
+   TAB ITEM
+   --------------------------------------------------- */
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+
+  /* Narrator voice */
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-tight);
+
+  color: var(--foreground-subtle);
+  background: none;
+  border: none;
+  cursor: pointer;
+
+  /* Hourglass transitions, NEVER ease */
+  transition:
+    color var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.tab:hover {
+  color: var(--foreground-default);
+}
+
+/* Active state — signature underline with glow background */
+.tab.is-active {
+  color: var(--foreground-bold);
+  background: var(--signature-glow);
+}
+
+.tab.is-active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: var(--space-md);
+  right: var(--space-md);
+  height: 2px;
+  background: var(--signature);
+  border-radius: 2px;
+  transition:
+    left var(--dur-standard) var(--ease-pendulum),
+    right var(--dur-standard) var(--ease-pendulum);
+}
+
+/* ---------------------------------------------------
+   TAB WITH BADGE/COUNT
+   --------------------------------------------------- */
+.tab .badge {
+  font-size: var(--size-section-label);
+  padding: 1px var(--space-xs);
+}
+
+/* ---------------------------------------------------
+   TAB PANEL
+   --------------------------------------------------- */
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.is-active {
+  display: block;
+}
+
+/* ---------------------------------------------------
+   VERTICAL TABS
+   --------------------------------------------------- */
+.tabs--vertical {
+  flex-direction: column;
+  border-bottom: none;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.tabs--vertical .tab {
+  justify-content: flex-start;
+}
+
+.tabs--vertical .tab.is-active::after {
+  top: var(--space-sm);
+  bottom: var(--space-sm);
+  left: auto;
+  right: -1px;
+  width: 2px;
+  height: auto;
+}
+
+/* ---------------------------------------------------
+   DISABLED
+   --------------------------------------------------- */
+.tab[disabled],
+.tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .tab {
+    transition: none;
+  }
+}
+
+
+/* --- components/tooltips.css --- */
+/* ==========================================================
+   Reality Reprojection — Tooltips
+   Narrator whisper voice. Pendulum enter motion.
+   Precise arrow positioning. Surface-overlay material.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE TOOLTIP
+   --------------------------------------------------- */
+.tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.tooltip__content {
+  position: absolute;
+  z-index: 100;
+  max-width: 240px;
+  padding: var(--space-xs) var(--space-sm);
+
+  /* Narrator whisper voice */
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight-light);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-body);
+  color: var(--foreground-default);
+
+  /* Material: overlay surface, fine edge */
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+
+  /* Hidden by default */
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+
+  /* Pendulum enter */
+  transition:
+    opacity var(--dur-standard) var(--ease-pendulum),
+    transform var(--dur-standard) var(--ease-pendulum);
+}
+
+/* Show on hover/focus */
+.tooltip:hover .tooltip__content,
+.tooltip:focus-within .tooltip__content {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------
+   ARROW — CSS triangle, 6px, precise.
+   --------------------------------------------------- */
+.tooltip__content::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  transform: rotate(45deg);
+}
+
+/* ---------------------------------------------------
+   POSITION VARIANTS
+   --------------------------------------------------- */
+
+/* Top (default) */
+.tooltip--top .tooltip__content {
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  margin-bottom: var(--space-xs);
+}
+
+.tooltip--top:hover .tooltip__content,
+.tooltip--top:focus-within .tooltip__content {
+  transform: translateX(-50%) translateY(0);
+}
+
+.tooltip--top .tooltip__content::after {
+  top: 100%;
+  left: 50%;
+  margin-left: -3px;
+  margin-top: -4px;
+  border-top: none;
+  border-left: none;
+}
+
+/* Bottom */
+.tooltip--bottom .tooltip__content {
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  margin-top: var(--space-xs);
+}
+
+.tooltip--bottom:hover .tooltip__content,
+.tooltip--bottom:focus-within .tooltip__content {
+  transform: translateX(-50%) translateY(0);
+}
+
+.tooltip--bottom .tooltip__content::after {
+  bottom: 100%;
+  left: 50%;
+  margin-left: -3px;
+  margin-bottom: -4px;
+  border-bottom: none;
+  border-right: none;
+}
+
+/* Left */
+.tooltip--left .tooltip__content {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  margin-right: var(--space-xs);
+}
+
+.tooltip--left:hover .tooltip__content,
+.tooltip--left:focus-within .tooltip__content {
+  transform: translateY(-50%) translateX(0);
+}
+
+.tooltip--left .tooltip__content::after {
+  left: 100%;
+  top: 50%;
+  margin-top: -3px;
+  margin-left: -4px;
+  border-left: none;
+  border-bottom: none;
+}
+
+/* Right */
+.tooltip--right .tooltip__content {
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  margin-left: var(--space-xs);
+}
+
+.tooltip--right:hover .tooltip__content,
+.tooltip--right:focus-within .tooltip__content {
+  transform: translateY(-50%) translateX(0);
+}
+
+.tooltip--right .tooltip__content::after {
+  right: 100%;
+  top: 50%;
+  margin-top: -3px;
+  margin-right: -4px;
+  border-right: none;
+  border-top: none;
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .tooltip__content {
+    transform: none !important;
+    transition: opacity var(--dur-standard) var(--ease-pendulum);
+  }
+
+  .tooltip:hover .tooltip__content,
+  .tooltip:focus-within .tooltip__content {
+    transform: translateX(-50%) !important;
+  }
+
+  .tooltip--left:hover .tooltip__content,
+  .tooltip--left:focus-within .tooltip__content,
+  .tooltip--right:hover .tooltip__content,
+  .tooltip--right:focus-within .tooltip__content {
+    transform: translateY(-50%) !important;
+  }
+}
+
+
+/* --- components/dropdowns.css --- */
+/* ==========================================================
+   Reality Reprojection — Dropdowns / Menus
+   Flip Clock motion: scaleY(0)→scaleY(1) from top origin.
+   Items: translateX(2px) hover (tag DNA).
+   Surface-overlay material, fine grain, elevated shadow.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   DROPDOWN CONTAINER
+   --------------------------------------------------- */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+/* ---------------------------------------------------
+   DROPDOWN MENU
+   --------------------------------------------------- */
+.dropdown__menu {
+  position: absolute;
+  z-index: 100;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  margin-top: var(--space-micro);
+  padding: var(--space-micro) 0;
+
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+
+  /* Flip Clock: origin top, scaleY entrance */
+  transform-origin: top;
+  transform: scaleY(0);
+  opacity: 0;
+  pointer-events: none;
+
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass),
+    opacity var(--dur-standard) var(--ease-hourglass);
+}
+
+/* Open state */
+.dropdown.is-open .dropdown__menu {
+  transform: scaleY(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Right-aligned variant */
+.dropdown--right .dropdown__menu {
+  left: auto;
+  right: 0;
+}
+
+/* ---------------------------------------------------
+   MENU ITEMS
+   --------------------------------------------------- */
+.dropdown__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-xs) var(--space-md);
+
+  /* Narrator voice */
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  color: var(--foreground-default);
+  line-height: var(--leading-tight);
+
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+/* Hover — translateX(2px) matches tag DNA */
+.dropdown__item:hover {
+  transform: translateX(2px);
+  background: var(--ground-15);
+  color: var(--foreground-bold);
+}
+
+/* Active/selected item */
+.dropdown__item.is-active {
+  color: var(--signature);
+  background: var(--signature-glow);
+}
+
+/* Disabled item */
+.dropdown__item[disabled],
+.dropdown__item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   SHORTCUT HINT — Technical voice for keyboard hints
+   --------------------------------------------------- */
+.dropdown__shortcut {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-subtle);
+}
+
+/* ---------------------------------------------------
+   SEPARATOR
+   --------------------------------------------------- */
+.dropdown__separator {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-xs) 0;
+}
+
+/* ---------------------------------------------------
+   NESTED MENUS — Caret indicator for children
+   --------------------------------------------------- */
+.dropdown__item--has-children::after {
+  content: '\203A';
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-subtle);
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------
+   DROPDOWN HEADER — Section label inside menu
+   --------------------------------------------------- */
+.dropdown__header {
+  padding: var(--space-xs) var(--space-md);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-section-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-disabled);
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .dropdown__menu {
+    transform: none;
+    transition: opacity var(--dur-standard) var(--ease-hourglass);
+  }
+
+  .dropdown.is-open .dropdown__menu {
+    transform: none;
+  }
+
+  .dropdown__item:hover {
+    transform: none;
+  }
+}
+
+
+/* --- components/progress.css --- */
+/* ==========================================================
+   Reality Reprojection — Progress Bars
+   Recessed track. Signature gradient fill with grain overlay.
+   Hourglass transition on width. Pendulum sweep for indeterminate.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   PROGRESS TRACK
+   --------------------------------------------------- */
+.progress {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--ground-10);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-recessed);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------
+   PROGRESS FILL — Signature gradient with grain
+   --------------------------------------------------- */
+.progress__fill {
+  height: 100%;
+  min-width: 0;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(90deg, var(--signature-muted), var(--signature), var(--signature-vivid));
+  box-shadow: var(--shadow-inner-glow);
+
+  /* Hourglass transition on width changes */
+  transition: width var(--dur-macro) var(--ease-hourglass);
+}
+
+/* Gradient grain overlay — anti-banding */
+.progress__fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-xs);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.06;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   SEMANTIC FILL COLORS
+   --------------------------------------------------- */
+.progress--success .progress__fill {
+  background: linear-gradient(90deg, var(--color-success-bold), var(--color-success));
+}
+
+.progress--warning .progress__fill {
+  background: linear-gradient(90deg, var(--color-warning-bold), var(--color-warning));
+}
+
+.progress--critical .progress__fill {
+  background: linear-gradient(90deg, var(--color-critical-bold), var(--color-critical));
+}
+
+/* ---------------------------------------------------
+   SIZE VARIANTS
+   --------------------------------------------------- */
+.progress--sm {
+  height: 4px;
+}
+
+.progress--lg {
+  height: 12px;
+}
+
+/* ---------------------------------------------------
+   INDETERMINATE — Pendulum sweep shimmer
+   --------------------------------------------------- */
+@keyframes progress-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.progress--indeterminate .progress__fill {
+  width: 30% !important;
+  animation: progress-sweep 1.8s var(--ease-pendulum) infinite;
+}
+
+/* ---------------------------------------------------
+   PROGRESS LABEL — Technical voice
+   --------------------------------------------------- */
+.progress__label {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-subtle);
+  margin-bottom: var(--space-xs);
+}
+
+.progress__value {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-default);
+}
+
+/* Progress with label layout */
+.progress-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.progress-group__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .progress--indeterminate .progress__fill {
+    animation: none;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
+
+/* --- components/alerts.css --- */
+/* ==========================================================
+   Reality Reprojection — Alerts / Notifications
+   Left accent border (3px semantic). Bell enter motion.
+   Narrator voice. Semantic shapes from badges system.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE ALERT
+   --------------------------------------------------- */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  padding-left: calc(var(--space-lg) + 3px);
+
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+
+  /* Bell enter motion */
+  animation: alert-enter var(--dur-standard) var(--ease-bell) both;
+}
+
+@keyframes alert-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------
+   ALERT ICON — Semantic shape indicator
+   --------------------------------------------------- */
+.alert__icon {
+  flex-shrink: 0;
+  font-size: var(--size-narrator-default);
+  line-height: 1;
+  margin-top: 2px;
+}
+
+/* ---------------------------------------------------
+   ALERT CONTENT
+   --------------------------------------------------- */
+.alert__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert__title {
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight-semi);
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-bold);
+  line-height: var(--leading-tight);
+}
+
+.alert__body {
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  color: var(--foreground-default);
+  line-height: var(--leading-body);
+  margin-top: var(--space-micro);
+}
+
+.alert__meta {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-subtle);
+  margin-top: var(--space-xs);
+}
+
+/* ---------------------------------------------------
+   DISMISS BUTTON — Ghost, subtle presence
+   --------------------------------------------------- */
+.alert__dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--foreground-subtle);
+  opacity: 0.5;
+  cursor: pointer;
+  transition:
+    opacity var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+.alert__dismiss:hover {
+  opacity: 1;
+  color: var(--foreground-default);
+}
+
+/* ---------------------------------------------------
+   SEMANTIC VARIANTS — Accent border + icon color
+   --------------------------------------------------- */
+
+/* Success — ● */
+.alert--success {
+  border-color: rgba(58,154,91,0.28);
+  background: rgba(58,154,91,0.10);
+}
+
+.alert--success .alert__icon {
+  color: var(--color-success);
+}
+
+.alert--success .alert__icon::before {
+  content: '\25CF';
+}
+
+/* Warning — ▲ */
+.alert--warning {
+  border-color: rgba(196,136,29,0.28);
+  background: rgba(196,136,29,0.10);
+}
+
+.alert--warning .alert__icon {
+  color: var(--color-warning);
+}
+
+.alert--warning .alert__icon::before {
+  content: '\25B2';
+}
+
+/* Critical — ◆ */
+.alert--critical {
+  border-color: rgba(209,67,67,0.28);
+  background: rgba(209,67,67,0.10);
+}
+
+.alert--critical .alert__icon {
+  color: var(--color-critical);
+}
+
+.alert--critical .alert__icon::before {
+  content: '\25C6';
+}
+
+/* Info */
+.alert--info {
+  border-color: rgba(91,143,199,0.28);
+  background: rgba(91,143,199,0.10);
+}
+
+.alert--info .alert__icon {
+  color: var(--color-info);
+}
+
+.alert--info .alert__icon::before {
+  content: '\2139';
+}
+
+/* ---------------------------------------------------
+   TOAST VARIANT — Elevated, fixed position, frost
+   --------------------------------------------------- */
+.alert--toast {
+  position: fixed;
+  top: var(--space-lg);
+  right: var(--space-lg);
+  z-index: 1000;
+  max-width: 400px;
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Toast exit animation */
+.alert--toast.is-exiting {
+  animation: toast-exit var(--dur-standard) var(--ease-hourglass) forwards;
+}
+
+@keyframes toast-exit {
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .alert {
+    animation: none;
+  }
+
+  .alert--toast.is-exiting {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+
+/* --- components/breadcrumbs.css --- */
+/* ==========================================================
+   Reality Reprojection — Breadcrumbs
+   Technical voice. Ultra-wide tracking. Compact and precise.
+   The navigation instrument.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BREADCRUMB CONTAINER
+   --------------------------------------------------- */
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ---------------------------------------------------
+   BREADCRUMB ITEM
+   --------------------------------------------------- */
+.breadcrumb {
+  display: inline-flex;
+  align-items: center;
+
+  /* Technical voice — instrument precision */
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  line-height: var(--leading-tight);
+}
+
+/* Separator — › after each item except last */
+.breadcrumb:not(:last-child)::after {
+  content: '\203A';
+  padding: 0 var(--space-xs);
+  color: var(--ground-40);
+  font-size: var(--size-narrator-small);
+}
+
+/* ---------------------------------------------------
+   BREADCRUMB LINK
+   --------------------------------------------------- */
+.breadcrumb a,
+.breadcrumb__link {
+  color: var(--foreground-subtle);
+  text-decoration: none;
+  transition: color var(--dur-micro) var(--ease-hourglass);
+}
+
+.breadcrumb a:hover,
+.breadcrumb__link:hover {
+  color: var(--signature);
+}
+
+/* ---------------------------------------------------
+   CURRENT ITEM — Bold, no hover
+   --------------------------------------------------- */
+.breadcrumb:last-child,
+.breadcrumb.is-current {
+  color: var(--foreground-bold);
+  pointer-events: none;
+}
+
+.breadcrumb:last-child a,
+.breadcrumb.is-current a {
+  color: var(--foreground-bold);
+  pointer-events: none;
+}
+
+
+/* --- components/pagination.css --- */
+/* ==========================================================
+   Reality Reprojection — Pagination
+   Technical voice for page numbers. Ghost button style.
+   Hover: translateY(-1px) like buttons. Manufactured edges.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   PAGINATION CONTAINER
+   --------------------------------------------------- */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-micro);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ---------------------------------------------------
+   PAGE ITEM
+   --------------------------------------------------- */
+.pagination__item {
+  display: inline-flex;
+}
+
+/* ---------------------------------------------------
+   PAGE LINK / BUTTON
+   --------------------------------------------------- */
+.pagination__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 var(--space-xs);
+
+  /* Technical voice for numbers */
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-default);
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--leading-tight);
+
+  color: var(--foreground-default);
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass),
+    box-shadow var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    border-color var(--dur-standard) var(--ease-hourglass),
+    color var(--dur-standard) var(--ease-hourglass);
+}
+
+/* Hover — button DNA: translateY(-1px) */
+.pagination__link:hover {
+  transform: translateY(-1px);
+  border-color: var(--foreground-subtle);
+  background: var(--ground-15);
+  color: var(--foreground-bold);
+}
+
+.pagination__link:active {
+  transform: translateY(0);
+  transition-duration: var(--dur-micro);
+}
+
+/* ---------------------------------------------------
+   CURRENT PAGE — Signature fill, manufactured highlight
+   --------------------------------------------------- */
+.pagination__link.is-current,
+.pagination__link[aria-current="page"] {
+  background: var(--signature);
+  border-color: var(--signature);
+  color: var(--foreground-on-accent);
+  box-shadow: var(--highlight-inner);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   PREV / NEXT ARROWS
+   --------------------------------------------------- */
+.pagination__prev,
+.pagination__next {
+  font-size: var(--size-narrator-default);
+}
+
+/* ---------------------------------------------------
+   DISABLED — No highlight, faded
+   --------------------------------------------------- */
+.pagination__link[disabled],
+.pagination__link:disabled,
+.pagination__link.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------
+   ELLIPSIS — Non-interactive spacer
+   --------------------------------------------------- */
+.pagination__ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  font-family: var(--font-technical);
+  font-size: var(--size-technical-default);
+  color: var(--ground-40);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .pagination__link {
+    transition: none;
+  }
+
+  .pagination__link:hover {
+    transform: none;
+  }
+}
+
+
+/* --- components/accordion.css --- */
+/* ==========================================================
+   Reality Reprojection — Accordion
+   Progressive revelation. Flip Clock motion for expand.
+   Narrator voice. Hourglass easing. Caret rotation.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   ACCORDION CONTAINER
+   --------------------------------------------------- */
+.accordion {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------
+   ACCORDION ITEM
+   --------------------------------------------------- */
+.accordion__item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.accordion__item:last-child {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------
+   ACCORDION HEADER — Clickable trigger
+   --------------------------------------------------- */
+.accordion__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: var(--space-md);
+
+  /* Narrator semi voice */
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight-semi);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-tight);
+  color: var(--foreground-bold);
+
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.accordion__header:hover {
+  background: var(--ground-10);
+}
+
+/* ---------------------------------------------------
+   CARET — Rotates on expand, Hourglass easing
+   --------------------------------------------------- */
+.accordion__caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: var(--ground-15);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.15);
+  transition:
+    transform var(--dur-standard) var(--ease-hourglass),
+    background-color var(--dur-standard) var(--ease-hourglass),
+    border-color var(--dur-standard) var(--ease-hourglass);
+}
+
+.accordion__caret::after {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--foreground-subtle);
+  border-bottom: 2px solid var(--foreground-subtle);
+  transform: rotate(-45deg);
+  margin-left: -1px;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
+}
+
+/* Expanded: rotate, signature tint, depth shift */
+.accordion__item.is-expanded .accordion__caret {
+  transform: rotate(90deg);
+  background: var(--signature-dim);
+  border-color: var(--signature-muted);
+}
+
+.accordion__item.is-expanded .accordion__caret::after {
+  border-color: var(--signature-vivid);
+}
+
+/* ---------------------------------------------------
+   ACCORDION CONTENT — Flip Clock reveal via grid
+   --------------------------------------------------- */
+.accordion__content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-standard) var(--ease-hourglass);
+}
+
+.accordion__item.is-expanded .accordion__content {
+  grid-template-rows: 1fr;
+}
+
+.accordion__body {
+  overflow: hidden;
+}
+
+.accordion__body-inner {
+  padding: 0 var(--space-md) var(--space-md);
+
+  /* Narrator default voice */
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-body);
+  color: var(--foreground-default);
+}
+
+/* ---------------------------------------------------
+   FLUSH VARIANT — No outer border
+   --------------------------------------------------- */
+.accordion--flush {
+  border: none;
+  border-radius: 0;
+}
+
+.accordion--flush .accordion__item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .accordion__content {
+    transition: none;
+  }
+
+  .accordion__caret {
+    transition: none;
+  }
+}
+
+
+/* --- components/avatar.css --- */
+/* ==========================================================
+   Reality Reprojection — Avatar
+   Manufactured radius (NOT circle). Declaration voice initials.
+   Signature background. Ring edge treatment.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE AVATAR
+   --------------------------------------------------- */
+.avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+
+  /* Default: ground placeholder */
+  background: var(--ground-20);
+  border: 2px solid var(--border-default);
+  box-shadow: var(--highlight-inner);
+
+  /* Declaration voice for initials */
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--foreground-on-accent);
+}
+
+/* ---------------------------------------------------
+   AVATAR IMAGE
+   --------------------------------------------------- */
+.avatar img,
+.avatar__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---------------------------------------------------
+   INITIALS — Signature background
+   --------------------------------------------------- */
+.avatar--initials {
+  background: var(--signature);
+}
+
+/* ---------------------------------------------------
+   PLACEHOLDER — Ground with SVG person icon via mask
+   --------------------------------------------------- */
+.avatar--placeholder::after {
+  content: '';
+  width: 60%;
+  height: 60%;
+  background: var(--ground-50);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+/* ---------------------------------------------------
+   SIZE VARIANTS
+   --------------------------------------------------- */
+.avatar--sm {
+  width: 24px;
+  height: 24px;
+  font-size: var(--size-section-label);
+  border-width: 1px;
+}
+
+.avatar--lg {
+  width: 48px;
+  height: 48px;
+  font-size: var(--size-narrator-small);
+}
+
+.avatar--xl {
+  width: 64px;
+  height: 64px;
+  font-size: var(--size-narrator-default);
+  border-radius: var(--radius-lg);
+}
+
+/* ---------------------------------------------------
+   AVATAR GROUP — Overlapping stack
+   --------------------------------------------------- */
+.avatar-group {
+  display: flex;
+  align-items: center;
+}
+
+.avatar-group .avatar {
+  margin-left: -8px;
+}
+
+.avatar-group .avatar:first-child {
+  margin-left: 0;
+}
+
+/* Stacking: later avatars on top */
+.avatar-group .avatar:nth-child(1) { z-index: 5; }
+.avatar-group .avatar:nth-child(2) { z-index: 4; }
+.avatar-group .avatar:nth-child(3) { z-index: 3; }
+.avatar-group .avatar:nth-child(4) { z-index: 2; }
+.avatar-group .avatar:nth-child(5) { z-index: 1; }
+
+/* ---------------------------------------------------
+   STATUS DOT — Positioned indicator
+   --------------------------------------------------- */
+.avatar__status {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--surface-ground);
+  background: var(--ground-40);
+}
+
+.avatar__status--online  { background: var(--color-success); }
+.avatar__status--away    { background: var(--color-warning); }
+.avatar__status--busy    { background: var(--color-critical); }
+.avatar__status--offline { background: var(--ground-40); }
+
+/* Scale status dot with avatar size */
+.avatar--lg .avatar__status {
+  width: 10px;
+  height: 10px;
+}
+
+.avatar--xl .avatar__status {
+  width: 12px;
+  height: 12px;
+  bottom: 0;
+  right: 0;
+}
+
+
+/* --- components/skeleton.css --- */
+/* ==========================================================
+   Reality Reprojection — Skeleton Loaders
+   Warm-biased shimmer. Pendulum sweep keyframe.
+   Radii match target content. Never cool tones.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE SKELETON
+   --------------------------------------------------- */
+.skeleton {
+  background: var(--ground-15);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+}
+
+/* Pendulum sweep shimmer — warm ground tones */
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ground-20) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.8s var(--ease-pendulum) infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ---------------------------------------------------
+   TEXT LINES
+   --------------------------------------------------- */
+.skeleton--text {
+  height: 14px;
+}
+
+.skeleton--text + .skeleton--text {
+  margin-top: var(--space-xs);
+}
+
+/* Last line shorter for natural look */
+.skeleton--text:last-child {
+  width: 60%;
+}
+
+/* Line width variants */
+.skeleton--text-full   { width: 100%; }
+.skeleton--text-medium { width: 80%; }
+.skeleton--text-short  { width: 60%; }
+
+/* ---------------------------------------------------
+   SHAPE VARIANTS
+   --------------------------------------------------- */
+
+/* Circle — for icon/avatar placeholders */
+.skeleton--circle {
+  border-radius: var(--radius-full);
+  aspect-ratio: 1;
+}
+
+/* Avatar — manufactured radius, matches avatar component */
+.skeleton--avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+}
+
+.skeleton--avatar-sm { width: 24px; height: 24px; }
+.skeleton--avatar-lg { width: 48px; height: 48px; }
+
+/* Card — full card placeholder */
+.skeleton--card {
+  border-radius: var(--radius-lg);
+  min-height: 120px;
+}
+
+/* Heading — taller text line */
+.skeleton--heading {
+  height: 24px;
+  width: 60%;
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-md);
+}
+
+/* Button — matches button dimensions */
+.skeleton--button {
+  height: 36px;
+  width: 120px;
+  border-radius: var(--radius-md);
+}
+
+/* ---------------------------------------------------
+   SKELETON GROUP — Common loading layouts
+   --------------------------------------------------- */
+.skeleton-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+/* Article-style: heading + lines */
+.skeleton-group--article .skeleton--heading {
+  margin-bottom: var(--space-sm);
+}
+
+/* Profile-style: avatar + text */
+.skeleton-group--profile {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.skeleton-group--profile .skeleton-group__text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION — No shimmer, just solid fill
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+    display: none;
+  }
+}
+
+
+/* --- components/chips.css --- */
+/* ==========================================================
+   Reality Reprojection — Chips
+   Solid-fill colored labels with dark text on bright backgrounds.
+   Three accent variants: signature (cyan), lime, pink.
+   Technical voice, uppercase, weight 700.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   BASE CHIP
+   --------------------------------------------------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+
+  font-family: var(--font-technical);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ground-0);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+/* ---------------------------------------------------
+   ACCENT VARIANTS — Solid fills, dark text.
+   --------------------------------------------------- */
+.chip--signature { background: var(--signature); }
+.chip--lime { background: var(--accent-lime); }
+.chip--pink { background: var(--accent-pink); }
+
+
+/* --- compositions/frost-backdrop.css --- */
+/* ==========================================================
+   Reality Reprojection — Frost Backdrop
+   Tri-color radial gradient atmospheric container.
+   Uses all three identity colors: cyan, pink, lime.
+   Content must be z-index: 2 above the gradient + grain.
+   ========================================================== */
+
+.frost-backdrop {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  padding: var(--space-xl);
+}
+
+.frost-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: -15%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(94, 121, 230, 0.32), transparent 45%),
+    radial-gradient(circle at 80% 70%, rgba(250, 1, 123, 0.26), transparent 48%),
+    radial-gradient(circle at 50% 85%, rgba(100, 250, 0, 0.2), transparent 42%);
+  filter: blur(4px);
+  z-index: 0;
+}
+
+.frost-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background-image: var(--grain-texture);
+  background-size: 512px 512px;
+  opacity: 0.06;
+  mix-blend-mode: soft-light;
+}
+
+.frost-backdrop > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Section-level frost tint — subtle gradient orbs */
+.section-frost-bg {
+  position: relative;
+}
+
+.section-frost-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 25% 20%, rgba(94, 121, 230, 0.12), transparent 50%),
+    radial-gradient(ellipse at 75% 80%, rgba(250, 1, 123, 0.08), transparent 50%);
+}
+
+.section-frost-bg > * {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* --- compositions/shimmer-pass.css --- */
+/* ==========================================================
+   Reality Reprojection — Shimmer Pass
+   Sweep material for frosted surfaces. Different from skeleton
+   shimmer — this is a continuous ambient sweep, not a loading state.
+   ========================================================== */
+
+.shimmer-pass {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.04) 45%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 55%,
+    transparent 60%
+  );
+  background-size: 250% 100%;
+  animation: shimmer-sweep 6s var(--ease-hourglass) infinite;
+}
+
+@keyframes shimmer-sweep {
+  0%   { background-position: 200% 0; }
+  40%  { background-position: -50% 0; }
+  100% { background-position: -50% 0; }
+}
+
+
+/* --- compositions/entrance-animation.css --- */
+/* ==========================================================
+   Reality Reprojection — Entrance Animation
+   Scroll-triggered float-in. Apply .material-float-in to elements,
+   add .is-visible via IntersectionObserver.
+   Stagger via --i custom property: style="--i: 0", "--i: 1", etc.
+   ========================================================== */
+
+@keyframes material-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.material-float-in.is-visible {
+  animation: material-float-in 0.6s var(--ease-hourglass) both;
+  animation-delay: calc(var(--i, 0) * 80ms);
+}
+
+/* ---------------------------------------------------
+   REDUCED MOTION — Kill all entrance animations + shimmer.
+   --------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-pass {
+    animation: none;
+    display: none;
+  }
+
+  .material-float-in.is-visible {
+    animation: none;
+  }
+}
+
+
+/* --- utilities/layout.css --- */
+/* ==========================================================
+   Reality Reprojection — Layout Utilities
+   Container, grid, flex helpers.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   GRID
+   --------------------------------------------------- */
+.grid {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+/* Column variants */
+.grid--2 { grid-template-columns: repeat(2, 1fr); }
+.grid--3 { grid-template-columns: repeat(3, 1fr); }
+.grid--4 { grid-template-columns: repeat(4, 1fr); }
+
+/* Auto-fit responsive grid */
+.grid--auto {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+/* Responsive: stack on small screens */
+@media (max-width: 768px) {
+  .grid--2,
+  .grid--3,
+  .grid--4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .grid--3,
+  .grid--4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ---------------------------------------------------
+   FLEX UTILITIES
+   --------------------------------------------------- */
+.flex          { display: flex; }
+.flex-col      { flex-direction: column; }
+.flex-row      { flex-direction: row; }
+.flex-wrap     { flex-wrap: wrap; }
+
+.items-start   { align-items: flex-start; }
+.items-center  { align-items: center; }
+.items-end     { align-items: flex-end; }
+.items-stretch { align-items: stretch; }
+
+.justify-start   { justify-content: flex-start; }
+.justify-center  { justify-content: center; }
+.justify-end     { justify-content: flex-end; }
+.justify-between { justify-content: space-between; }
+
+.flex-1    { flex: 1; }
+.flex-auto { flex: auto; }
+.flex-none { flex: none; }
+
+/* ---------------------------------------------------
+   STACK — Vertical flow with consistent gaps.
+   --------------------------------------------------- */
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.stack > * + * {
+  margin-top: var(--space-lg);
+}
+
+.stack--sm > * + * { margin-top: var(--space-sm); }
+.stack--md > * + * { margin-top: var(--space-md); }
+.stack--xl > * + * { margin-top: var(--space-xl); }
+
+/* ---------------------------------------------------
+   CLUSTER — Horizontal flow, wrapping.
+   --------------------------------------------------- */
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+/* ---------------------------------------------------
+   CENTER — Centered content block.
+   --------------------------------------------------- */
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------------------------------------------
+   FULL-BLEED — Break container for full-width.
+   --------------------------------------------------- */
+.full-bleed {
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+}
+
+
+/* --- utilities/visibility.css --- */
+/* ==========================================================
+   Reality Reprojection — Visibility Utilities
+   Screen reader, hidden, responsive visibility.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   VISUALLY HIDDEN — Accessible to screen readers.
+   --------------------------------------------------- */
+.visually-hidden,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ---------------------------------------------------
+   HIDDEN — Fully removed.
+   --------------------------------------------------- */
+.hidden {
+  display: none !important;
+}
+
+/* ---------------------------------------------------
+   OPACITY UTILITIES
+   --------------------------------------------------- */
+.opacity-0   { opacity: 0; }
+.opacity-50  { opacity: 0.5; }
+.opacity-100 { opacity: 1; }
+
+/* ---------------------------------------------------
+   RESPONSIVE VISIBILITY
+   --------------------------------------------------- */
+@media (max-width: 768px) {
+  .hide-mobile { display: none !important; }
+}
+
+@media (min-width: 769px) {
+  .hide-desktop { display: none !important; }
+}
+
+/* ---------------------------------------------------
+   OVERFLOW CONTROL
+   --------------------------------------------------- */
+.overflow-hidden  { overflow: hidden; }
+.overflow-auto    { overflow: auto; }
+.overflow-x-auto  { overflow-x: auto; }
+.overflow-y-auto  { overflow-y: auto; }
+
+/* ---------------------------------------------------
+   TRUNCATE — Single line with ellipsis.
+   --------------------------------------------------- */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* --- utilities/states.css --- */
+/* ==========================================================
+   Reality Reprojection — State Utilities
+   Disabled, ARIA selectors, active/loading states.
+   ========================================================== */
+
+/* ---------------------------------------------------
+   DISABLED STATE — Universal.
+   --------------------------------------------------- */
+[disabled],
+[aria-disabled="true"],
+.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Material-aware disabled — flatten surface, remove highlights */
+.btn[disabled],
+.btn:disabled {
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------
+   ACTIVE STATE — Signature accent.
+   --------------------------------------------------- */
+.is-active {
+  color: var(--signature);
+}
+
+/* ---------------------------------------------------
+   LOADING STATE — Pulse animation.
+   --------------------------------------------------- */
+.is-loading {
+  position: relative;
+  pointer-events: none;
+  color: transparent !important;
+}
+
+.is-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--ground-30);
+  border-top-color: var(--signature);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-inner-glow);
+  animation: spin 1s var(--ease-hourglass) infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------
+   ARIA STATES
+   --------------------------------------------------- */
+[aria-expanded="true"] {
+  /* Expanded panels, accordions */
+}
+
+[aria-selected="true"] {
+  color: var(--signature);
+  background: var(--signature-glow);
+}
+
+[aria-current="page"] {
+  color: var(--signature);
+}
+
+[aria-invalid="true"] {
+  border-color: var(--color-critical);
+}
+
+/* ---------------------------------------------------
+   FOCUS VISIBLE — Keyboard navigation only.
+   --------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--signature);
+  outline-offset: 2px;
+}
+
+/* Remove outline for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------------------------------------------------
+   INTERACTIVE HINT — Pointer cursor.
+   --------------------------------------------------- */
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="link"] {
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------
+   SCROLL REVEAL — Pendulum stagger entry.
+   Activated by IntersectionObserver adding .is-visible.
+   JS lives in consuming pages, not in the system.
+   --------------------------------------------------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.5s var(--ease-hourglass),
+    transform 0.5s var(--ease-hourglass);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger delay for children inside reveal containers */
+.reveal-stagger > .reveal:nth-child(1) { transition-delay: 0ms; }
+.reveal-stagger > .reveal:nth-child(2) { transition-delay: 50ms; }
+.reveal-stagger > .reveal:nth-child(3) { transition-delay: 100ms; }
+.reveal-stagger > .reveal:nth-child(4) { transition-delay: 150ms; }
+.reveal-stagger > .reveal:nth-child(5) { transition-delay: 200ms; }
+.reveal-stagger > .reveal:nth-child(6) { transition-delay: 250ms; }
+
+/* Reduced motion: skip reveal animation */
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+
+
+
+/* --- components/card-glow.css (recreated from the catalog spec) ---
+   Cursor-following light + border-only glow. JS sets --glow-x/--glow-y
+   in px and --glow-opacity on enter/leave. */
+.card-glow { position: relative; --glow-x: 50%; --glow-y: 50%; --glow-opacity: 0; }
+.card-glow__light,
+.card-glow__border {
+  position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  opacity: var(--glow-opacity);
+}
+.card-glow__light {
+  background: radial-gradient(360px circle at var(--glow-x) var(--glow-y), var(--signature-glow), transparent 60%);
+  transition: opacity var(--dur-standard) var(--ease-hourglass);
+}
+.card-glow__border {
+  padding: 1px;
+  background: radial-gradient(240px circle at var(--glow-x) var(--glow-y), var(--signature-glow-intense), transparent 55%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  transition: opacity var(--dur-micro) var(--ease-bell);
+}
+.card-glow > .card__body, .card-glow > .card__header, .card-glow > .card__footer { position: relative; z-index: 1; }
+
+
+
+/* Fix: the generic .is-active utility painted whole modal overlays and tab
+   panels in signature. Containers that merely are "open" keep their ink. */
+.modal-overlay.is-active, .tab-panel.is-active { color: var(--foreground-default); }

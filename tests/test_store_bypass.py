@@ -351,18 +351,18 @@ def two_tasks(tmp_taskmaster):
 
 def test_link_create_between_two_tasks_commits_through_the_store(two_tasks):
     out = bs.backlog_link(action="create", source="T-001",
-                          target="T-002", type="blocks")
+                          target="T-002", type="references")
     assert out.startswith("ok:"), out
     tasks = _tasks(two_tasks)
     src = [(l["type"], l["target"]) for l in tasks["T-001"].get("links", [])]
     dst = [(l["type"], l["target"]) for l in tasks["T-002"].get("links", [])]
-    assert ("blocks", "T-002") in src
-    assert ("depends_on", "T-001") in dst
+    assert ("references", "T-002") in src
+    assert ("referenced_by", "T-001") in dst
 
 
 def test_link_remove_between_two_tasks_commits_through_the_store(two_tasks):
     bs.backlog_link(action="create", source="T-001",
-                    target="T-002", type="blocks")
+                    target="T-002", type="references")
     out = bs.backlog_link(action="remove", source="T-001",
                           target="T-002")
     assert out.startswith("ok:"), out

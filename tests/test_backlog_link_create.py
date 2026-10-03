@@ -25,12 +25,12 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
 
 
 def test_link_create_writes_both_sides(tm_dir):
-    out = bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
+    out = bs.backlog_link_create(source="T-001", target="T-002", type="references")
     assert "ok" in out.lower()
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
-    assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
-    assert {"type": "blocks", "target": "T-001"} in entity_links(t2)
+    assert {"type": "references", "target": "T-002"} in entity_links(t1)
+    assert {"type": "referenced_by", "target": "T-001"} in entity_links(t2)
 
 
 def test_link_create_rejects_unknown_type(tm_dir):
@@ -39,9 +39,11 @@ def test_link_create_rejects_unknown_type(tm_dir):
 
 
 def test_link_create_rejects_domain_mismatch(tm_dir):
-    # depends_on is task->task; T-001 -> ISS-007 should fail.
-    out = bs.backlog_link_create(source="T-001", target="ISS-007", type="depends_on")
-    assert "invalid" in out.lower()
+    # depends_on is task->task; a task -> an existing issue should fail.
+    from tests.entity_helpers import write_issue
+    issue, _path = write_issue(tm_dir / "backlog.yaml", title="Known", severity="P2", evidence="seen")
+    out = bs.backlog_link_create(source="T-001", target=issue, type="depends_on")
+    assert "invalid" in out.lower() and "issue" in out
 
 
 def test_link_create_rejects_missing_target(tm_dir):
@@ -49,30 +51,22 @@ def test_link_create_rejects_missing_target(tm_dir):
     assert "not found" in out.lower() or "missing" in out.lower()
 
 
-def test_link_create_rejects_self_cycle(tm_dir):
-    out = bs.backlog_link_create(source="T-001", target="T-001", type="depends_on")
-    assert "cycle" in out.lower()
+@pytest.mark.parametrize("link_type", ["depends_on", "blocks"])
+@pytest.mark.parametrize("target", ["T-002", "T-001"])
+def test_link_create_refuses_a_dependency_between_tasks(tm_dir, link_type, target):
+    """Every gate reads `depends_on`, never `links`: a dependency link between tasks
+    would be reported as made and gate nothing, so it is refused with the call that
+    sets the field (whose +id form refuses self-dependencies and cycles)."""
+    out = bs.backlog_link_create(source="T-001", target=target, type=link_type)
+    assert out.startswith("Error:") and "backlog_update_task" in out
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
     assert entity_links(t1) == []
 
 
-def test_link_create_rejects_two_node_cycle(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    out = bs.backlog_link_create(source="T-002", target="T-001", type="depends_on")
-    assert "cycle" in out.lower()
-
-
-def test_link_create_rejects_three_node_cycle(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    bs.backlog_link_create(source="T-002", target="T-003", type="depends_on")
-    out = bs.backlog_link_create(source="T-003", target="T-001", type="depends_on")
-    assert "cycle" in out.lower()
-
-
 def test_link_create_idempotent(tm_dir):
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
-    bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
+    bs.backlog_link_create(source="T-001", target="T-002", type="references")
+    bs.backlog_link_create(source="T-001", target="T-002", type="references")
     t1 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-001")
     count = sum(1 for link in entity_links(t1)
-                if link == {"type": "depends_on", "target": "T-002"})
+                if link == {"type": "references", "target": "T-002"})
     assert count == 1

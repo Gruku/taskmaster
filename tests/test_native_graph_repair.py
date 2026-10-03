@@ -196,13 +196,16 @@ def test_normal_commands_keep_the_tables_equal_to_the_oracle(twins):
 
 
 def test_legacy_rebuild_is_unchanged_and_verify_is_native_only(twins):
+    """A legacy store has no verifier: `verify` reports the counts, says nothing was
+    compared, and changes nothing, with or without `rebuild`."""
     with twins.at(twins.legacy):
         rebuilt = bs.backlog_index_status(rebuild=True)
         before = _legacy_links(twins.legacy)
-        refused = [bs.backlog_index_status(verify=True), bs.backlog_index_status(rebuild=True, verify=True)]
+        answers = [bs.backlog_index_status(verify=True), bs.backlog_index_status(rebuild=True, verify=True)]
     assert rebuilt.startswith("Store: ") and "Graph check" not in rebuilt, rebuilt
-    for answer in refused:
-        assert answer.startswith("Error: ") and "rebuild=True" in answer and "Nothing was changed" in answer, answer
+    for answer in answers:
+        assert answer.startswith("Store: ") and "not compared" in answer and "Nothing was changed" in answer, answer
+        assert "rebuild=True" in answer and "Graph check" not in answer, answer
     assert _legacy_links(twins.legacy) == before
 
 

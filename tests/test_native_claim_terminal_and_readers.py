@@ -103,7 +103,8 @@ def _stranded(status, holder):
 @pytest.mark.parametrize("holder", [LIVE_PEER, REMOTE], ids=["live-peer", "unjudgeable"])
 def test_the_phase_advance_archive_releases_the_claim_on_both_stores(tmp_path, monkeypatch, holder):
     twins = make_twins(tmp_path, monkeypatch, _stranded("done", holder))
-    for text in twins.same("backlog_advance_phase"):
+    # Forced: the seed's other tasks in the phase are unfinished.
+    for text in twins.same("backlog_advance_phase", force=True):
         assert not text.startswith("Error"), text
     assert _status(twins) == "archived"
     assert _holder(twins) == ""
