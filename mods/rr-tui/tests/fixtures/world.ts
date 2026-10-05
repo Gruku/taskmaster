@@ -2,20 +2,25 @@
 // polarity and the gallery can be driven without a session.
 import type { On } from 'claude-code'
 
-export type RrWorld = { opened: string[]; toasts: string[]; theme: string }
+export type RrWorld = { opened: string[]; toasts: string[]; registered: string[]; theme: string }
 
-export function rrWorldOf(on: On, theme = 'dark'): RrWorld {
-  const world: RrWorld = { opened: [], toasts: [], theme }
+// `configFails` makes every $.config.list throw, standing for a host whose config read fails during session.start.
+export function rrWorldOf(on: On, theme = 'dark', opts: { configFails?: boolean } = {}): RrWorld {
+  const world: RrWorld = { opened: [], toasts: [], registered: [], theme }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({}))
-  on('config.list', () =>
-    ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: world.theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] }) as never,
-  )
+  on('config.list', () => {
+    if (opts.configFails) throw new Error('config unavailable')
+    return { value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: world.theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] } as never
+  })
   on('config.set', ($, e) => {
     if (e.key === 'theme' && typeof e.value === 'string') world.theme = e.value
     return { value: e.value }
   })
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.register', ($, e) => {
+    world.registered.push(e.name)
+    return { value: { command: e.name } }
+  })
   on('ui.open', ($, e) => {
     world.opened.push(e.id)
     return { value: { isPlaced: true } } as never

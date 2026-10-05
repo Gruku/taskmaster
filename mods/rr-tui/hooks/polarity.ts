@@ -7,8 +7,12 @@ const TONES: readonly RrTone[] = ['success', 'warning', 'critical', 'info', 'sig
 const GROUNDS: readonly RrGround[] = ['page', 'raised', 'overlay']
 const cache = new Map<RrPolarity, RrTokens>()
 
+export function isPolarity(value: unknown): value is RrPolarity {
+  return value === 'dark' || value === 'light' || value === 'survivalist'
+}
+
 export function resolvePolarity(setting: string, theme: unknown): RrPolarity {
-  if (setting === 'dark' || setting === 'light' || setting === 'survivalist') return setting
+  if (isPolarity(setting)) return setting
   return typeof theme === 'string' && theme.toLowerCase().includes('light') ? 'light' : 'dark'
 }
 
@@ -29,7 +33,12 @@ export function tokensFor(polarity: RrPolarity): RrTokens {
     ) as Record<RrGround, Record<RrTone, string>>
   const made: RrTokens = {
     polarity,
-    surface: { raised: pick('surface-raised'), overlay: pick('surface-overlay'), recessed: pick('surface-recessed') },
+    surface: {
+      page: pick('bg-page'),
+      raised: pick('surface-raised'),
+      overlay: pick('surface-overlay'),
+      recessed: pick('surface-recessed'),
+    },
     fg: {
       bold: pick('foreground-bold'),
       default: pick('foreground-default'),

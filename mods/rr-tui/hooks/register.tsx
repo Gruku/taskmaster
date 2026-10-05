@@ -5,8 +5,9 @@ import type { EngineInterface, Register, RenderNode } from 'claude-code'
 
 import type { Rr, RrNode, RrPolarity, RrTokens } from '../types'
 import { galleryTree } from './gallery'
+import type { Demo } from './gallery'
 import * as kit from './kit'
-import { resolvePolarity, tokensFor } from './polarity'
+import { isPolarity, resolvePolarity, tokensFor } from './polarity'
 
 const POLARITY = atom({ plugin: 'rr-tui', key: 'polarity' } as const, 'dark' as RrPolarity)
 const OVERRIDE = atom({ plugin: 'rr-tui', key: 'override' } as const, 'none' as RrPolarity | 'none')
@@ -21,8 +22,8 @@ const back = (nodes: readonly RrNode[]): RenderNode[] => nodes as unknown as Ren
 const mod = { setting: 'auto' }
 
 async function effective($: EngineInterface): Promise<RrPolarity> {
-  const override = await read($, OVERRIDE)
-  if (override !== 'none') return override
+  const override: unknown = await read($, OVERRIDE)
+  if (isPolarity(override)) return override // anything else stored there counts as 'none'
   return resolvePolarity(mod.setting, (await $.config.list()).find(row => row.key === 'theme')?.value)
 }
 
@@ -74,8 +75,8 @@ export const register: Register = (on, options) => {
   on('rr.chip', async ($, a) => ({ value: out(kit.chip(await tokensOf($), a)) }))
 
   on('session.start', async ($, e, next) => {
-    await publish($)
     await $.command.register({ name: GALLERY, description: 'Open the Reality Reprojection gallery: every $.rr element in every state' })
+    await publish($)
     return next(e)
   })
 
@@ -106,11 +107,16 @@ export const register: Register = (on, options) => {
       await update($, OVERRIDE, () => to)
       await publish($)
     }
-    const demo = (key: string, label: string): RenderNode => (
-      <Button key={key} plain label={label} onPress={() => $.ui.toast(`rr-gallery: pressed ${label}`)} />
-    )
+    const demo: Demo = (key, label, variant) => {
+      const press = () => $.ui.toast(`rr-gallery: pressed ${key}`)
+      return variant ? (
+        <Button key={key} variant={variant} label={label} onPress={press} />
+      ) : (
+        <Button key={key} plain label={label} onPress={press} />
+      )
+    }
     return (
-      <Box flexDirection="column" rowGap={1}>
+      <Box {...kit.surfaceProps(t, { level: 'page' })} flexGrow={1} rowGap={1}>
         <Box flexDirection="row" columnGap={2}>
           {kit.label(t, { text: `polarity ${shown}` })}
           <Button key="pol-dark" hotkey="1" plain label="dark" onPress={flip('dark')} />

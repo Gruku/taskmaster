@@ -10,10 +10,27 @@ const LEVELS: readonly RrLevel[] = ['raised', 'overlay', 'recessed']
 const KINDS: readonly RrSignalKind[] = ['success', 'warning', 'critical', 'info']
 const TONES: readonly RrTone[] = ['success', 'warning', 'critical', 'info', 'signature']
 const CHIP_GROUNDS: readonly Exclude<RrGround, 'page'>[] = ['raised', 'overlay']
+// Tuning round 1: a Button's label has no colour of its own, so three ways of drawing one are compared by eye.
+const LABEL_SETS: readonly { tone: RrTone; labels: readonly string[] }[] = [
+  { tone: 'success', labels: ['done'] },
+  { tone: 'warning', labels: ['back to agent'] },
+  { tone: 'signature', labels: ['skip', 'open'] },
+]
+const VARIANT_CAPTIONS = ['a  chip, engine label', 'b  variant=primary', 'c  plain › + own text'] as const
+const VARIANT_NOTES = [
+  'a: chip treatment; the engine draws the label in the terminal default foreground',
+  'b: Button variant=primary; the engine draws [ label ] in its accent colour, no tint',
+  'c: plain Button holding the glyph ›, then our Text in foreground-bold on the chip tint',
+] as const
+const VARIANT_WIDTH = 22
+
+const slug = (text: string) => text.replace(/\s+/g, '-')
 
 const box = (props: Record<string, unknown>, ...children: unknown[]): RenderNode => h('Box', props, ...children) as RenderNode
 
-export function galleryTree(t: RrTokens, width: number, demo: (key: string, label: string) => RenderNode): RenderNode {
+export type Demo = (key: string, label: string, variant?: 'primary') => RenderNode
+
+export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode {
   const section = (name: string, ...rows: RenderNode[]) => box({ flexDirection: 'column' }, kit.label(t, { text: name }), ...rows)
   const buttons = (on: RrGround) =>
     box(
@@ -40,6 +57,32 @@ export function galleryTree(t: RrTokens, width: number, demo: (key: string, labe
       'buttons',
       buttons('page'),
       ...CHIP_GROUNDS.map(on => kit.surface(t, { level: on, children: [kit.row(t, { cells: [`on ${on}`], emphasis: 'quiet' }), buttons(on)] })),
+    ),
+    section(
+      'button labels',
+      box(
+        { flexDirection: 'row', columnGap: 1 },
+        ...VARIANT_CAPTIONS.map(caption => box({ width: VARIANT_WIDTH }, kit.row(t, { cells: [caption], emphasis: 'quiet' }))),
+      ),
+      ...LABEL_SETS.map(({ tone, labels }) => {
+        const chip = kit.button(t, { treatment: 'chip', tone })
+        const cell = (...children: RenderNode[]) => box({ flexDirection: 'row', columnGap: 1, width: VARIANT_WIDTH }, ...children)
+        return box(
+          { flexDirection: 'row', columnGap: 1 },
+          cell(...labels.map(text => box(chip, demo(`labels-a-${slug(text)}`, text)))),
+          cell(...labels.map(text => demo(`labels-b-${slug(text)}`, text, 'primary'))),
+          cell(
+            ...labels.map(text =>
+              box(
+                { key: `labels-c-${slug(text)}-box`, flexDirection: 'row', ...chip },
+                demo(`labels-c-${slug(text)}`, '›'),
+                h('Text', { color: t.fg.bold }, ` ${text}`),
+              ),
+            ),
+          ),
+        )
+      }),
+      ...VARIANT_NOTES.map(note => kit.row(t, { cells: [note], emphasis: 'quiet' })),
     ),
     section(
       'states',

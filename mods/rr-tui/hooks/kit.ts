@@ -6,6 +6,9 @@ import type { RrBoxProps, RrGround, RrLevel, RrSignalKind, RrStrength, RrTokens,
 
 export const SIGNAL_GLYPH: Readonly<Record<RrSignalKind, string>> = { success: '●', warning: '▲', critical: '◆', info: 'ⓘ' }
 
+// Survivalist has no hue to tint a chip button with, so it steps one surface up from its ground instead.
+const NEXT_STEP: Readonly<Record<RrGround, Exclude<RrLevel, 'page' | 'recessed'>>> = { page: 'raised', raised: 'overlay', overlay: 'raised' }
+
 const el = (tag: 'Box' | 'Text', props: Record<string, unknown>, ...children: unknown[]): RenderNode =>
   h(tag, props, ...children) as RenderNode
 
@@ -53,7 +56,9 @@ export function rule(t: RrTokens, a: { width: number }): RenderNode {
 
 export function button(t: RrTokens, a: { treatment: RrTreatment; tone: RrTone; on?: RrGround }): RrBoxProps {
   if (t.polarity === 'survivalist') {
-    return a.treatment === 'outline' ? { borderStyle: 'bold', borderColor: t.fg.bold } : { paddingX: 1 }
+    return a.treatment === 'outline'
+      ? { borderStyle: 'bold', borderColor: t.fg.bold }
+      : { backgroundColor: t.surface[NEXT_STEP[a.on ?? 'page']], paddingX: 1 }
   }
   return a.treatment === 'outline'
     ? { borderStyle: 'round', borderColor: t.tone[a.tone] }

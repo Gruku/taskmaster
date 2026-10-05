@@ -3,7 +3,11 @@
 export type RrPolarity = 'dark' | 'light' | 'survivalist'
 export type RrTone = 'success' | 'warning' | 'critical' | 'info' | 'signature'
 export type RrSignalKind = 'success' | 'warning' | 'critical' | 'info'
-export type RrLevel = 'raised' | 'overlay' | 'recessed'
+/**
+ * A surface step. `'page'` paints RR bg-page and is for pane roots only: a pane paints its own ground because the host's pane
+ * background is not RR's page. The band never paints its ground, so a band never uses `'page'`.
+ */
+export type RrLevel = 'page' | 'raised' | 'overlay' | 'recessed'
 export type RrGround = 'page' | 'raised' | 'overlay'
 export type RrTreatment = 'outline' | 'chip'
 export type RrStrength = 12 | 24

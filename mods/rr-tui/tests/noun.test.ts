@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { tokensFor } from '../hooks/polarity'
 import { CONSUMER } from './fixtures/consumer'
 import { command, GALLERY_PANE, SESSION } from './fixtures/inputs'
 import { rrWorldOf, stateWorldOf } from './fixtures/world'
@@ -82,17 +83,43 @@ describe('$.rr', () => {
     expect(JSON.stringify(answers.chip)).toContain('[◆ refused]')
   })
 
+  test('an override in $.state that is not a polarity counts as none', { plugins: [CONSUMER] }, async ($, on) => {
+    rrWorldOf(on, 'light')
+    stateWorldOf(on, { 'rr-tui.override': 'neon' })
+    await $.session.start(SESSION)
+    expect(await probe($)).toMatchObject({ polarity: 'light' })
+    const ui = await $.ui.mount({ plugin: 'rr-tui', ...GALLERY_PANE })
+    expect(await ui.find({ type: 'Text', text: /POLARITY LIGHT/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('/rr-gallery is registered even when the first publish fails', async ($, on) => {
+    const world = rrWorldOf(on, 'dark', { configFails: true })
+    await $.session.start(SESSION).catch(() => undefined)
+    expect(world.registered).toEqual(['rr-gallery'])
+  })
+
   test('every element validates on the terminal and the desktop in every polarity', async ($, on) => {
-    rrWorldOf(on, 'dark')
+    const world = rrWorldOf(on, 'dark')
     await $.session.start(SESSION)
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: 'rr-tui', ...GALLERY_PANE, surface })
-      for (const key of ['pol-dark', 'pol-light', 'pol-survivalist']) {
+      for (const [key, polarity] of [['pol-dark', 'dark'], ['pol-light', 'light'], ['pol-survivalist', 'survivalist']] as const) {
         await ui.press({ key })
+        expect((await ui.find({ type: 'Box' }))?.props.backgroundColor).toBe(tokensFor(polarity).surface.page)
         expect(await ui.find({ type: 'Button', key: 'outline-page' })).toBeDefined()
         expect(await ui.find({ type: 'Button', key: 'open-overlay' })).toBeDefined()
+        for (const variant of ['a', 'b', 'c']) {
+          for (const label of ['done', 'back-to-agent', 'skip', 'open']) {
+            expect(await ui.find({ type: 'Button', key: `labels-${variant}-${label}` })).toBeDefined()
+          }
+        }
       }
+      await ui.press({ key: 'labels-c-open' })
+      await ui.press({ key: 'labels-b-done' })
       await ui.unmount()
     }
+    const perSurface = ['rr-gallery: pressed labels-c-open', 'rr-gallery: pressed labels-b-done']
+    expect(world.toasts).toEqual([...perSurface, ...perSurface])
   })
 })
