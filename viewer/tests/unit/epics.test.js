@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EPIC_PALETTE, assignEpicColors, epicColor, epicCssVar } from '../../js/lib/epics.js';
+import { EPIC_PALETTE, assignEpicColors, epicColor, epicCssVar, epicSwatch } from '../../js/lib/epics.js';
+
+test('epicSwatch — the epic\'s position among the epics, wrapping after 6; null when not found', () => {
+  const seven = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => ({ id }));
+  assert.equal(epicSwatch('b', [{ id: 'a' }, { id: 'b' }]), 2);
+  assert.equal(epicSwatch('a', seven), 1);
+  assert.equal(epicSwatch('g', seven), 1);
+  assert.equal(epicSwatch('f', seven), 6);
+  assert.equal(epicSwatch('nope', seven), null);
+  assert.equal(epicSwatch(null, seven), null);
+  assert.equal(epicSwatch('b', [{ name: 'no id' }, null, { id: 'a' }, { id: 'b' }]), 2, 'entries without an id do not count');
+  assert.equal(epicSwatch('a', undefined), null);
+});
 
 test('EPIC_PALETTE is the locked spec §5 palette', () => {
   assert.deepEqual(EPIC_PALETTE, [

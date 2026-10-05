@@ -39,6 +39,13 @@ export function assignEpicColors(epics) {
   return map;
 }
 
+/** The epic's categorical swatch (1–6, for `--cat-N`): its position among the epics with an id, wrapping after 6. */
+export function epicSwatch(epicId, epics) {
+  if (!epicId || !Array.isArray(epics)) return null;
+  const at = epics.filter((ep) => ep && ep.id).findIndex((ep) => ep.id === epicId);
+  return at < 0 ? null : (at % 6) + 1;
+}
+
 export function epicColor(epicId, colorMap) {
   if (!epicId) return FALLBACK;
   return (colorMap && colorMap[epicId]) || FALLBACK;

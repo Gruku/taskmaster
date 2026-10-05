@@ -12,7 +12,9 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'components/edit-fields.css', 'components/markdown.css', 'components/entity-modal.css',
   'screens/task-detail.css', 'components/state.css', 'components/handover-status.css',
   'components/rows.css', 'components/popover.css',
-  'components/conflict-banner.css'];
+  'components/conflict-banner.css',
+  'components/chips.css',
+  'components/overflow-row.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
