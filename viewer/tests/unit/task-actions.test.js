@@ -235,7 +235,8 @@ async function conflicted({ patch }) {
 test('409: the banner lists only the fields the user changed, the form is held, and focus moves to the banner', async () => {
   await conflicted({ patch: [stale(SERVER)] });
   assert.ok(banner());
-  assert.deepEqual(bannerKeys(), ['title', 'branch'], 'not priority or last_referenced: the user never touched them');
+  // Named by the form's own labels, never the raw field keys.
+  assert.deepEqual(bannerKeys(), ['Title', 'Branch'], 'not priority or last_referenced: the user never touched them');
   assert.equal(alertText(), 'Conflict — see banner');
   assert.equal(control('title').disabled, true);
   assert.equal(saveBtn().textContent, 'Save', 'not stuck on "Saving…"');
@@ -263,7 +264,7 @@ test('409 → "Apply choices" keeping mine: one more PATCH with only my fields, 
 
 test('409 → taking the server\'s value for one field sends only the other', async () => {
   const { api } = await conflicted({ patch: [stale(SERVER), {}] });
-  const row = [...banner().querySelectorAll('.cb-multi-row')].find((r) => r.querySelector('.cb-key').textContent === 'title');
+  const row = [...banner().querySelectorAll('.cb-multi-row')].find((r) => r.querySelector('.cb-key').textContent === 'Title');
   const useServer = row.querySelector('input[value="server"]');
   useServer.checked = true;
   fire(useServer, 'change');
@@ -318,7 +319,7 @@ test('409 → a merged save that fails leaves the form open and editable with th
 
 test('409 → a merged save that fails never stores the fresh revision, so the next save is compared again instead of overwriting a "use server" pick (M2)', async () => {
   const { store, api } = await conflicted({ patch: [stale(SERVER), new TypeError('Failed to fetch'), stale(SERVER)] });
-  const row = [...banner().querySelectorAll('.cb-multi-row')].find((r) => r.querySelector('.cb-key').textContent === 'title');
+  const row = [...banner().querySelectorAll('.cb-multi-row')].find((r) => r.querySelector('.cb-key').textContent === 'Title');
   const useServer = row.querySelector('input[value="server"]');
   useServer.checked = true;
   fire(useServer, 'change');

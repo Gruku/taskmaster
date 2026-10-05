@@ -50,6 +50,8 @@ export function openTaskEditModal({ store, api, task }) {
         // Only the user's own changes are in question; what else moved on the server is simply the server's.
         localDraft: { ...current, ...changes }, currentValue: current,
         currentEtag: e.current_etag,
+        // Each field is named as the form names it, never by its stored key.
+        labels: Object.fromEntries(schema.fields.map((f) => [f.key, f.label])),
         onResolve: async (merged) => {
           const patch = Object.fromEntries(Object.keys(changes)
             .filter((k) => !sameValue(merged[k], current[k])).map((k) => [k, merged[k]]));

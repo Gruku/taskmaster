@@ -12,6 +12,8 @@ body.modal-open { overflow: hidden; }
   display: grid;
   place-items: start center;
   padding: var(--space-2xl) var(--space-md);
+  /* A conflict banner (conflict-banner.js sets its height) sits above the dialog, never over its header. */
+  padding-top: calc(var(--space-2xl) + var(--conflict-banner-height));
   background: var(--overlay-bg);
   backdrop-filter: blur(var(--frost-blur-light));
   animation: modal-overlay-in var(--dur-standard) var(--ease-hourglass) backwards;
@@ -22,7 +24,7 @@ body.modal-open { overflow: hidden; }
   display: flex;
   flex-direction: column;
   width: min(640px, 100%);
-  max-height: calc(100vh - 2 * var(--space-2xl));
+  max-height: calc(100vh - 2 * var(--space-2xl) - var(--conflict-banner-height));
   overflow: hidden;
   background: var(--overlay-surface);
   border: 1px solid var(--border-default);
@@ -101,7 +103,7 @@ body.modal-open { overflow: hidden; }
 .modal--confirm .modal-footer { justify-content: flex-end; }
 
 @media (max-width: 768px) {
-  .modal-overlay { padding: 0; }
+  .modal-overlay { padding: var(--conflict-banner-height) 0 0; }
   .modal,
   .modal--sm,
   .modal--md,
