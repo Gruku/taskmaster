@@ -112,10 +112,10 @@ export function openPopover({
 
   if (focus !== 'none') {
     const list = items();
-    const target = (focus === 'checked' && list.find(isOn)) || list[0]
-      || [...el.querySelectorAll(FOCUSABLE)].find(usable);
+    // The first of these that takes focus: an item that is no control itself (a parked count) passes to the next.
     // Placed inside the viewport already; scrolling to it would read as a scroll away and close it.
-    target?.focus({ preventScroll: true });
+    const target = [focus === 'checked' && list.find(isOn), list[0], ...[...el.querySelectorAll(FOCUSABLE)].filter(usable)]
+      .filter(Boolean).find((n) => { n.focus({ preventScroll: true }); return doc.activeElement === n; });
     // Within a list that scrolls inside itself, though, a checked item far down is brought into sight.
     target?.scrollIntoView?.({ block: 'nearest' });
   }

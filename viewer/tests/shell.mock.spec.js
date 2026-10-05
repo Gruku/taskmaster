@@ -545,6 +545,8 @@ test.describe('topbar row 2 at phone width', () => {
     await expect(pop.locator('.tm-subcount')).toBeVisible();
     const add = pop.locator('[aria-label="Add task"]');
     await expect(add).toBeVisible();
+    // The count parked first is no control: focus goes on to the first one that is.
+    await expect(add).toBeFocused();
     await add.click();
     await expect(page.getByRole('dialog', { name: 'Create task' })).toBeVisible();
   });
