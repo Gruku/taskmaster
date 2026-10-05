@@ -545,8 +545,10 @@ test.describe('topbar row 2 at phone width', () => {
     await expect(pop.locator('.tm-subcount')).toBeVisible();
     const add = pop.locator('[aria-label="Add task"]');
     await expect(add).toBeVisible();
+    // The count parked first is no control: focus goes on to the first one that is.
+    await expect(add).toBeFocused();
     await add.click();
-    await expect(page.locator('[aria-modal="true"]')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create task' })).toBeVisible();
   });
 
   test('parked controls are a column in the Filters popover and a parked chip row wraps', async ({ page }) => {
@@ -599,6 +601,70 @@ test.describe('topbar row 2 at phone width', () => {
     await expect(filtersPopover(page).locator('.tm-subcount')).toHaveCount(1);
     expect(errors).toEqual([]);
   });
+
+  test('Filters counts the controls it holds; an empty chip group is neither parked nor counted', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/ideas');
+    await expect(filters(page)).toBeVisible();
+    // With no ideas the status and tag groups have no chips yet: they stay in the row, taking no room.
+    await expect(page.locator('#topbar-actions > .ideas__status-chips:empty')).toHaveCount(1);
+    await expect(page.locator('#topbar-actions > .ideas__tag-chips:empty')).toHaveCount(1);
+    await filters(page).click();
+    const items = filtersPopover(page).locator('.overflow-list > *');
+    await expect(items.first()).toBeVisible();
+    const sizes = await items.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width));
+    expect(sizes.every((w) => w > 0)).toBe(true);
+    await expect(filters(page).locator('.overflow-more__count')).toHaveText(String(sizes.length));
+  });
+
+  test('a parked segmented control stays one piece', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/issues');
+    await expect(filters(page)).toBeVisible();
+    await filters(page).click();
+    const seg = filtersPopover(page).locator('.tm-segmented');
+    await expect(seg).toBeVisible();
+    const look = await seg.evaluate((el) => ({
+      wrap: getComputedStyle(el).flexWrap,
+      rows: new Set([...el.children].map((b) => Math.round(b.getBoundingClientRect().top))).size,
+    }));
+    expect(look).toEqual({ wrap: 'nowrap', rows: 1 });
+  });
+});
+
+test('an empty child keeps its place in a row while the others park and come back', async ({ page }) => {
+  await mockApi(page, withContent());
+  await page.goto('/#/settings');
+  await expect(page.locator('#page-title')).toHaveText('Settings');
+  await page.evaluate(async () => {
+    const { overflowRow } = await import('/js/components/overflow-row.js');
+    const row = document.createElement('div');
+    row.id = 'probe-row';
+    row.style.cssText = 'display: flex; gap: 8px; width: 260px; min-width: 0; overflow: hidden';
+    const child = (k, text) => {
+      const el = document.createElement(text ? 'button' : 'div');
+      el.dataset.k = k;
+      el.style.cssText = 'flex-shrink: 0';
+      if (text) Object.assign(el, { type: 'button', textContent: text, style: 'flex-shrink: 0; width: 100px' });
+      return el;
+    };
+    // The empty child sits between the two that park, so only putting each back in its own place keeps the order.
+    row.append(child('a', 'Alpha'), child('b', 'Bravo'), child('e', ''), child('c', 'Charlie'));
+    document.getElementById('screen-mount').replaceChildren(row);
+    window.__ov = overflowRow(row);
+  });
+  const look = () => page.evaluate(() => ({
+    row: [...document.getElementById('probe-row').children].filter((c) => !c.hidden && c.dataset.k).map((c) => c.dataset.k),
+    count: window.__ov.more.hidden ? null : window.__ov.more.querySelector('.overflow-more__count').textContent,
+  }));
+  await expect.poll(look).toEqual({ row: ['a', 'e'], count: '2' });
+  // The empty child fills while Bravo and Charlie are parked; when room comes back each returns to its own side of it.
+  await page.evaluate(() => {
+    document.querySelector('[data-k="e"]').textContent = 'Echo';
+    document.getElementById('probe-row').style.width = '1200px';
+  });
+  await expect.poll(look).toEqual({ row: ['a', 'b', 'e', 'c'], count: null });
+  await page.evaluate(() => window.__ov.destroy());
 });
 
 test('at desktop width the Table parks nothing and Filters is hidden', async ({ page }) => {
@@ -608,7 +674,9 @@ test('at desktop width the Table parks nothing and Filters is hidden', async ({ 
   await expect(page.locator('#topbar-actions [aria-label="Add task"]')).toBeVisible();
   await expect(filters(page)).toHaveCount(1);
   await expect(filters(page)).toBeHidden();
-  await expect(page.locator('#topbar-actions [data-popover-item]')).toHaveCount(0);
+  // Parked controls leave the document, so the row is checked from what stays: everything, and a count of none.
+  await expect(page.locator('#topbar-actions > .tm-subcount')).toBeVisible();
+  await expect(filters(page).locator('.overflow-more__count')).toHaveText('0');
   expect(await rowFits(page)).toEqual({ overflow: 0, cut: [] });
 });
 

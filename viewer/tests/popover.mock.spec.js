@@ -117,6 +117,28 @@ test('placement: inside a phone viewport, and above the button when there is no 
   expect(above.y).toBeGreaterThanOrEqual(0);
 });
 
+test('placement: a list opened while its dialog is still rising ends up at its field', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const detail = await dialogOver(page);
+  await detail.locator('[data-action="edit"]').click();
+  const form = page.locator('.modal--form');
+  await expect(form).toBeVisible();
+  // Typed at once, while the Edit dialog's rise is still running and its transform makes it the list's frame.
+  const input = form.locator('[data-key="depends_on"] input').first();
+  await input.fill('T-1');
+  const list = page.getByRole('listbox', { name: 'Depends on suggestions' });
+  await expect(list).toBeVisible();
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
+  await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => ok())));
+  const field = await input.boundingBox();
+  const box = await list.boundingBox();
+  expect(Math.abs(box.x - field.x)).toBeLessThanOrEqual(1);
+  const gap = box.y >= field.y ? box.y - (field.y + field.height) : field.y - (box.y + box.height);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(8);
+  await page.keyboard.press('Escape');
+});
+
 for (const theme of ['dark', 'light']) {
   test(`${theme}: the open menu has no shadow and no axe violation`, async ({ page }) => {
     await taskPage(page, theme);

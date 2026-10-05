@@ -87,6 +87,11 @@ export function openPopover({
   on(el, 'focusout', onFocusOut);
   on(anchor, 'focusout', onFocusOut);
   on(view, 'resize', () => handle.reposition());
+  // A dialog still rising when this opened was its containing block, transformed and moving the anchor with it;
+  // once its animation ends the popover is placed again, or it would stand off by the dialog's offset.
+  const settled = (e) => { if (e.target !== el && e.target.contains?.(el)) handle.reposition(); };
+  on(doc, 'animationend', settled, true);
+  on(doc, 'animationcancel', settled, true);
   // A scroll already under way when it opened (the one that brought the anchor into view) is dispatched at the next
   // frame's scroll step, before animation-frame callbacks; listening from that frame on lets it pass.
   const armScroll = () => on(doc, 'scroll', (e) => { if (!el.contains(e.target)) handle.close('scroll'); }, true);
@@ -107,10 +112,10 @@ export function openPopover({
 
   if (focus !== 'none') {
     const list = items();
-    const target = (focus === 'checked' && list.find(isOn)) || list[0]
-      || [...el.querySelectorAll(FOCUSABLE)].find(usable);
+    // The first of these that takes focus: an item that is no control itself (a parked count) passes to the next.
     // Placed inside the viewport already; scrolling to it would read as a scroll away and close it.
-    target?.focus({ preventScroll: true });
+    const target = [focus === 'checked' && list.find(isOn), list[0], ...[...el.querySelectorAll(FOCUSABLE)].filter(usable)]
+      .filter(Boolean).find((n) => { n.focus({ preventScroll: true }); return doc.activeElement === n; });
     // Within a list that scrolls inside itself, though, a checked item far down is brought into sight.
     target?.scrollIntoView?.({ block: 'nearest' });
   }

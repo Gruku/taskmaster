@@ -224,9 +224,11 @@ body, .shell, .sidebar, .topbar, .main {
 .topbar-row2 > .tm-chip-row { flex-wrap: nowrap; align-self: stretch; align-items: center; }
 .topbar-row2 > .tm-chip-row > * { flex-shrink: 0; }
 /* In the Filters popover parked controls are a column, and a parked chip group wraps to the popover's width.
-   A parked group of controls starts at the popover's edge and wraps too, rather than scrolling the popover sideways. */
+   A parked group of controls starts at the popover's edge and wraps too, rather than scrolling the popover sideways;
+   a segmented control is one control and never comes apart. */
 .overflow-list .tm-chip-row { flex-wrap: wrap; }
-.topbar-row2 .overflow-list > * { margin-left: 0; flex-wrap: wrap; }
+.topbar-row2 .overflow-list > * { margin-left: 0; }
+.topbar-row2 .overflow-list > :not(.tm-segmented) { flex-wrap: wrap; }
 /* League Spartan's capitals sit above the middle of its line box; the top padding puts them on the row's centre line. */
 #page-title {
   margin: 0;

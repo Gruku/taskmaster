@@ -1,4 +1,5 @@
-// User intent: one repeatable screenshot sweep of the two task modals (detail and Create/Edit) and the full task page in
+// User intent: one repeatable screenshot sweep of the two task modals (detail and Create/Edit), the full task page and the
+// shared components (menus, suggestion lists, the conflict banner, the Ideas form, chips, sortable headers, Filters) in
 // every state the user meets, in both themes and both widths — from the static viewer with every API call mocked, never a
 // live backlog. Unmocked writes, page errors and native dialogs are listed at the end and fail the run.
 //
@@ -41,6 +42,12 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = path.resolve(OUT_ARG);
 fs.mkdirSync(OUT, { recursive: true });
 
+// Twelve more epics, so the Table's Epic chips overflow behind More; the last four have no task and show disabled.
+const EPICS = [
+  ['linear', 'Linear sync'], ['handovers', 'Handover quotes'], ['mcp', 'MCP tools'], ['hooks', 'Guard hooks'],
+  ['statusline', 'Status line'], ['inbox', 'Feedback inbox'], ['evals', 'Agent evals'], ['release', 'Release 7.2'],
+  ['docs', 'Docs site'], ['ideas', 'Ideas board'], ['perf', 'Suite speed'], ['tui', 'Terminal UI'],
+].map(([id, name]) => ({ id, name, status: 'active', phase: 'P1' }));
 // The fixture board plus enough cards that every column has company behind the modal.
 const EXTRA = [
   ['T-108', 'Archive view: restore the filter chips', 'todo', 'low', 'viewer'],
@@ -48,12 +55,32 @@ const EXTRA = [
   ['T-110', 'Writer mutex: bound the wait and report it', 'blocked', 'high', 'store'],
   ['T-111', 'Drop the legacy JSON mirror', 'done', 'medium', 'store'],
   ['T-112', 'Handover quotes render as markdown', 'in-review', 'low', 'viewer'],
+  ['T-113', 'Retry failed Linear pushes', 'todo', 'medium', 'linear'],
+  ['T-114', 'Quote blocks keep their headings', 'done', 'low', 'handovers'],
+  ['T-115', 'Name every MCP tool error', 'todo', 'high', 'mcp'],
+  ['T-116', 'Block worktree removal with --force', 'done', 'critical', 'hooks'],
+  ['T-117', 'Show the rate-limit bars', 'in-review', 'low', 'statusline'],
+  ['T-118', 'Archive processed inbox messages', 'todo', 'medium', 'inbox'],
+  ['T-119', 'Seed the eval stores at midnight', 'blocked', 'medium', 'evals'],
+  ['T-120', 'Release notes for 7.2', 'todo', 'high', 'release'],
 ].map(([id, title, status, priority, epic]) => ({ id, title, status, priority, epic, phase: 'P1', depends_on: [] }));
-const BOARD = { ...F.BOARD, tasks: [...F.BOARD.tasks, ...EXTRA], context: { active_epic: 'viewer' } };
+const BOARD = { ...F.BOARD, epics: [...F.BOARD.epics, ...EPICS], tasks: [...F.BOARD.tasks, ...EXTRA], context: { active_epic: 'viewer' } };
+
+const IDEAS = [
+  { id: 'IDEA-1', title: 'Board swimlanes by epic', status: 'exploring', tags: ['ux', 'board'], created: '2026-10-01T09:00:00Z' },
+  { id: 'IDEA-2', title: 'Faster store writes', status: 'candidate', tags: ['perf'], created: '2026-10-02T09:00:00Z' },
+  { id: 'IDEA-3', title: 'Phone layout for the table', status: 'parking-lot', tags: ['ux', 'mobile'], created: '2026-10-03T09:00:00Z' },
+];
+
+// A lost race on T-102: someone else saved first, and the 409 names the revision it lost to.
+const THEIRS = { ...F.DETAIL_TASK, title: 'Re-skin the Kanban board', priority: 'high', last_referenced: '2026-10-01T08:00:00Z' };
+const STALE = { status: 409, json: { ok: false, error: 'stale', current: THEIRS, current_etag: 't1:fresh' } };
 
 const TABLE = {
   '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/ideas': { ideas: IDEAS },
   '/api/task/T-102/detail': F.taskDetail(F.DETAIL_TASK, 't1', F.RICH_RELATED),
+  'PATCH /api/tasks/T-102': STALE,
   '/api/task/T-104/detail': F.taskDetail(F.EMPTY_TASK),
   '/api/task/T-105/detail': F.taskDetail(F.LONG_TASK, 't1', F.LONG_RELATED),
   // The error state: the store answers with a raw message the modal must not print.
@@ -73,9 +100,23 @@ const openCard = (id) => async (page) => {
   await page.locator(`.card-task[data-task-id="${id}"]`).click();
   await page.locator('.modal--detail .td-doc--embedded, .modal--detail .tm-empty[data-state="error"], .modal--detail .tm-empty').first().waitFor();
 };
+// Once the fonts have settled topbar row 2, a control is in it or parked behind Filters (row 2 too narrow for it).
+const filters = (page) => page.locator('#topbar-actions > .overflow-more');
+const settleRow = async (page) => {
+  await page.locator('#topbar-actions [data-global-search]').waitFor();
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
+};
+const topbarControl = async (page, selector) => {
+  await settleRow(page);
+  if (await filters(page).isVisible()) {
+    await filters(page).click();
+    await page.getByRole('dialog', { name: 'Filters' }).waitFor();
+  }
+  return page.locator(`#topbar-actions ${selector}`);
+};
 const openCreate = async (page) => {
   await page.goto(`${BASE}/#/kanban`);
-  await page.locator('#topbar-actions [aria-label="Add task"]').click();
+  await (await topbarControl(page, '[aria-label="Add task"]')).click();
   await page.locator('.modal--form').waitFor();
 };
 const openPage = (id) => async (page) => {
@@ -85,6 +126,23 @@ const openPage = (id) => async (page) => {
 const ctl = (dialog, key) => dialog.locator(`[data-key="${key}"]`).locator('input, select, textarea').first();
 // A create POST left unanswered: the form stays in its saving state for the shot.
 const holdCreate = (page) => page.route('**/api/tasks', (route) => (route.request().method() === 'POST' ? undefined : route.fallback()));
+// Edit opened over the detail modal, as a user reaches it from the board.
+const editOver = (id) => async (page) => {
+  await openCard(id)(page);
+  await page.locator('.modal--detail [data-action="edit"]').click();
+  await page.locator('.modal--form').waitFor();
+};
+const openIdeas = async (page) => {
+  await page.goto(`${BASE}/#/ideas`);
+  await page.locator('.ideas__list').getByText('Board swimlanes by epic').waitFor();
+  await (await topbarControl(page, '[aria-label="Create a new idea"]')).click();
+  await page.getByRole('dialog', { name: 'Create idea' }).waitFor();
+};
+const openTable = async (page) => {
+  await page.goto(`${BASE}/#/table`);
+  await page.locator('table.tbl .tbl-row').first().waitFor();
+  await settleRow(page);
+};
 
 // [name, { open, drive?, routes?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default).
 const ALL_SCENES = [
@@ -120,6 +178,53 @@ const ALL_SCENES = [
   } }],
   ['page-rich', { open: openPage('T-102'), fullPage: true, scope: '#screen-mount' }],
   ['page-empty', { open: openPage('T-104'), fullPage: true, scope: '#screen-mount' }],
+  // Plan 2b's shared components. A popover, and the banner, sit outside the topmost dialog, so axe looks at the page.
+  ['handover-menu', { open: openCard('T-102'), scope: 'body', drive: async (p) => {
+    await p.locator('.modal--detail .ho-status-pill').click();
+    await p.locator('.ho-status-menu').waitFor();
+  } }],
+  ['relation-suggestions', { open: editOver('T-102'), scope: 'body', drive: async (p) => {
+    const input = ctl(p.locator('.modal--form'), 'depends_on');
+    // Mid-dialog, so the list has room on either side and the field is not half under the footer.
+    await input.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    // A scroll still running when the list opens would close it (as any scroll of the dialog does).
+    await p.waitForTimeout(300);
+    await input.fill('T-1');
+    await p.getByRole('listbox', { name: 'Depends on suggestions' }).waitFor();
+  } }],
+  ['conflict-banner', { open: editOver('T-102'), scope: 'body', drive: async (p) => {
+    const dialog = p.locator('.modal--form');
+    await ctl(dialog, 'title').fill('Re-skin the Kanban cards, columns and headers');
+    await dialog.locator('[data-save]').click();
+    await p.locator('#conflict-banner-host .cb-banner').waitFor();
+  } }],
+  ['ideas-create', { open: openIdeas }],
+  ['ideas-create-error', { open: openIdeas,
+    routes: (p) => p.route('**/api/ideas', (route) => (route.request().method() === 'POST'
+      ? route.fulfill({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } }) : route.fallback())),
+    drive: async (p) => {
+      const dialog = p.getByRole('dialog', { name: 'Create idea' });
+      await p.keyboard.type('Swimlanes that fold away');
+      await dialog.locator('[data-save]').click();
+      await dialog.locator('.modal-footer [role="alert"]').waitFor();
+    } }],
+  ['table-chips', { open: openTable, scope: 'body', drive: async (p) => {
+    await p.getByRole('group', { name: 'Epic' }).locator('.overflow-more').click();
+    await p.getByRole('dialog', { name: 'More Epic' }).waitFor();
+  } }],
+  ['table-sorted', { open: openTable, scope: '#screen-mount', drive: async (p) => {
+    const title = p.locator('th[data-key="title"] button.sort-header');
+    await title.click();
+    await p.locator('th[aria-sort="ascending"][data-key="title"]').waitFor();
+    await title.click();
+    await p.locator('th[aria-sort="descending"][data-key="title"]').waitFor();
+  } }],
+  // At the desktop width nothing is parked: the shot is the row itself, with Filters hidden.
+  ['topbar-filters', { open: openTable, scope: 'body', drive: async (p) => {
+    if (!(await filters(p).isVisible())) return;
+    await filters(p).click();
+    await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+  } }],
 ];
 const ONLY = flag('only');
 const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));
