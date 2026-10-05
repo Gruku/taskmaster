@@ -108,4 +108,6 @@ body.modal-open { overflow: hidden; }
   .modal-header { padding-top: max(var(--space-md), env(safe-area-inset-top)); }
   .modal-footer { padding-bottom: max(var(--space-md), env(safe-area-inset-bottom)); }
   .modal-close { width: 44px; height: 44px; }
+  /* As tall as the close button, so a one-line title without an eyebrow sits level with it. */
+  .modal-heading { min-height: 44px; justify-content: center; }
 }

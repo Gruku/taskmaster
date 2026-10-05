@@ -228,6 +228,18 @@ test('at 390x844 the dialog fills the viewport and never widens past it', async 
   expect(close.x + close.width).toBeLessThanOrEqual(390);
 });
 
+// The Create form and the discard confirm have no eyebrow: their one-line title sat at the top of the header while the
+// taller close button hung below it.
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+  test(`at ${viewport.width}×${viewport.height} a one-line title without an eyebrow lines up with the close button`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await boot(page);
+    await open(page, 'a', { size: 'md' });
+    const middle = async (selector) => { const b = await page.locator(selector).boundingBox(); return b.y + b.height / 2; };
+    await expect.poll(async () => Math.abs(await middle('.modal-title') - await middle('.modal-close'))).toBeLessThanOrEqual(1);
+  });
+}
+
 for (const theme of ['dark', 'light']) {
   test(`no shadow on overlay or dialog; modal surfaces come from tokens (${theme})`, async ({ page }) => {
     await boot(page, { theme });
