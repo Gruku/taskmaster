@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--check", action="store_true")
     ns = parser.parse_args(argv)
-    raw = Path(ns.src).read_bytes()
+    raw = Path(ns.src).read_bytes().replace(b"\r\n", b"\n")  # digest must not depend on autocrlf checkout
     text = render_ts(build_table(json.loads(raw.decode("utf-8"))), hashlib.sha256(raw).hexdigest())
     out = Path(ns.out)
     if ns.check:

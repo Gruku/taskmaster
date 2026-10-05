@@ -1,5 +1,7 @@
 # User intent: pin how RR tokens become terminal colours — references, polarity fallback, alpha compositing, tints and
 # keycap ink — so a regenerated table can't silently change what rr-tui draws.
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -107,7 +109,25 @@ class CliTest(unittest.TestCase):
             self.assertIn("'tone.success': '#3a9a5b',", text)
             self.assertEqual(g.main(["--in", str(src), "--out", str(out), "--check"]), 0)
             out.write_text(text.replace("#3a9a5b", "#000000"), encoding="utf-8")
-            self.assertEqual(g.main(["--in", str(src), "--out", str(out), "--check"]), 1)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(g.main(["--in", str(src), "--out", str(out), "--check"]), 1)
+            self.assertIn("is stale", err.getvalue())
+
+    def test_lf_and_crlf_sources_render_identically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lf_text = json.dumps(MINI, indent=2)
+            lf, crlf = Path(tmp) / "lf.json", Path(tmp) / "crlf.json"
+            lf.write_bytes(lf_text.encode("utf-8"))
+            crlf.write_bytes(lf_text.replace(chr(10), chr(13) + chr(10)).encode("utf-8"))
+            self.assertNotEqual(lf.read_bytes(), crlf.read_bytes())
+            out_lf, out_crlf = Path(tmp) / "lf.ts", Path(tmp) / "crlf.ts"
+            self.assertEqual(g.main(["--in", str(lf), "--out", str(out_lf)]), 0)
+            self.assertEqual(g.main(["--in", str(crlf), "--out", str(out_crlf)]), 0)
+            self.assertEqual(out_lf.read_bytes(), out_crlf.read_bytes())
+
+    def test_committed_table_matches_vendored_tokens(self):
+        self.assertEqual(g.main(["--check"]), 0)
 
 
 if __name__ == "__main__":
