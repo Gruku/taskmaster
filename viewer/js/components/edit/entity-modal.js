@@ -6,6 +6,7 @@ import { icon } from '../icon.js';
 import { openModal, confirmDialog } from '../modal.js';
 import { runValidation } from './schema.js';
 import { normal, sameValue } from './same-value.js';
+import { describeWriteError } from './write-errors.js';
 
 const GROUPS = [['basics', 'Basics'], ['tracking', 'Tracking'], ['relations', 'Relations'], ['content', 'Content']];
 let seq = 0;
@@ -26,7 +27,7 @@ function contentHint(value) {
 // with; `draft` is the stored entity with those changes applied, so untouched fields keep exactly what was stored.
 // It answers nothing on success (the form closes) or an object to stay open: `error` is shown in the footer, and
 // `wait` (a promise of the next answer) holds the form disabled until something outside it — the conflict banner —
-// has been dealt with.
+// has been dealt with. A throw, or a `wait` that rejects, is worded by describeWriteError.
 export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel, onClose }) {
   const initial = initialEntity || {};
   const create = mode === 'create';
@@ -152,14 +153,14 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   const changes = () => Object.fromEntries(fields.filter(changed).map((f) => [f.key, f.value]));
   const draft = () => ({ ...initial, ...changes() });
 
-  // A stored task may hold values this form would refuse today (a renamed status, a free-text estimate). A field the
-  // user did not change is not sent, so it is not judged — except that a required field left empty is still an
-  // error. A field the user changed is validated in full.
+  // A stored task may hold values this form would refuse today (a renamed status, a free-text estimate). In edit, a
+  // field the user did not change is not sent, so it is not judged — except that a required field left empty is
+  // still an error. A field the user changed is validated in full. A new item is sent whole, so every field of it is.
   function errors() {
     const all = runValidation({ ...initial, ...Object.fromEntries(fields.map((f) => [f.key, f.value])) }, schema).errors;
     const out = {};
     for (const f of fields) {
-      if (changed(f)) { if (all[f.key]) out[f.key] = all[f.key]; }
+      if (create || changed(f)) { if (all[f.key]) out[f.key] = all[f.key]; }
       else if (f.spec.required && normal(f.value) == null) out[f.key] = 'required';
       // Text the field cannot keep would be dropped by the save without a word.
       if (pending(f) && f.el.pendingError) out[f.key] = f.el.pendingError;
@@ -174,7 +175,9 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       const message = (attempted || f.touched) && errs[f.key] ? sentence(f.spec, errs[f.key]) : '';
       f.errEl.textContent = message;
       for (const el of f.wrap.querySelectorAll('[aria-invalid]')) el.removeAttribute('aria-invalid');
-      if (message) controlOf(f).setAttribute('aria-invalid', 'true');
+      // A field made of several inputs (docs rows) marks the ones at fault itself.
+      if (f.el.markInvalid) f.el.markInvalid(!!message);
+      else if (message) controlOf(f).setAttribute('aria-invalid', 'true');
       if (f.hint && f.panel.hidden) f.hint.textContent = contentHint(f.value);
     }
     const count = Object.keys(errs).length;
@@ -182,13 +185,15 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
     saveBtn.disabled = busy || !isDirty();
   }
 
-  // A field is judged once the user has moved on from it to another part of the form. Leaving for a footer button
-  // is not that: the button's own action (save, cancel) says what happens next.
+  // A field is judged once the user has moved on from it to anywhere else in the dialog — another field, or blank
+  // space (a click there puts focus on the dialog itself). Leaving for a header or footer button is not that: the
+  // button's own action (save, cancel, close) says what happens next. Nor is leaving the window.
   // When the move is a click, the message waits for the release: appearing mid-press it would push the control
   // being clicked out from under the pointer, and the click would land on nothing.
+  const movedOn = (to) => !!to && modal.dialog.contains(to) && !modal.header.contains(to) && !modal.footer.contains(to);
   for (const f of fields) {
     f.wrap.addEventListener('focusout', (e) => {
-      if (busy || f.touched || f.wrap.contains(e.relatedTarget) || !form.contains(e.relatedTarget)) return;
+      if (busy || f.touched || f.wrap.contains(e.relatedTarget) || !movedOn(e.relatedTarget)) return;
       f.touched = true;
       modal.afterPress(paint);
     });
@@ -245,12 +250,12 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
     setBusy(true);
     saveBtn.textContent = 'Saving…';
     let answer;
-    try { answer = await onSave(...payload); } catch (err) { answer = { error: err?.message || String(err) }; }
+    try { answer = await onSave(...payload); } catch (err) { answer = { error: describeWriteError(err, { noun }) }; }
     saveBtn.textContent = 'Save';
     while (answer && typeof answer === 'object') {
       alert.textContent = answer.error || '';
       if (!answer.wait) { setBusy(false); return; }
-      try { answer = await answer.wait; } catch (err) { answer = { error: err?.message || String(err) }; }
+      try { answer = await answer.wait; } catch (err) { answer = { error: describeWriteError(err, { noun }) }; }
     }
     modal.close();
   }

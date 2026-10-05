@@ -47,3 +47,19 @@ test('patchTask sends the If-Match it is given', async () => {
     assert.equal(seen[0].init.headers['If-Match'], 't1:fresh');
   });
 });
+
+test('a 409 whose error is not a non-empty string carries "stale", never an object turned into text', async () => {
+  for (const error of [{ nested: 1 }, '', '   ', 7, null, undefined]) {
+    await withFetch(() => json(409, { ok: false, error }), async () => {
+      const e = await api.patchTask('T-1', { title: 'x' }).catch((err) => err);
+      assert.equal(e.code, 409);
+      assert.equal(e.message, 'stale', JSON.stringify(error));
+    });
+  }
+  // A body of JSON null is not an object to read a reason from.
+  await withFetch(() => json(409, null), async () => {
+    const e = await api.patchTask('T-1', { title: 'x' }).catch((err) => err);
+    assert.equal(e.code, 409);
+    assert.equal(e.message, 'stale');
+  });
+});

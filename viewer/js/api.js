@@ -35,9 +35,10 @@ async function http(method, path, body, options = {}) {
   }
   if (resp.status === 409) {
     // A lost race names the revision it lost to (`current_etag`). Any other 409 is the server refusing the write
-    // (gates still open, a legacy layout), and its reason is the message.
-    const j = await resp.json().catch(() => ({}));
-    const err = new Error(j.error || 'stale');
+    // (gates still open, a legacy layout), and its reason is the message — when it is text: anything else would reach
+    // the page as "[object Object]".
+    const j = (await resp.json().catch(() => null)) ?? {};
+    const err = new Error(typeof j.error === 'string' && j.error.trim() ? j.error : 'stale');
     err.code = 409;
     err.current = j.current;
     err.current_etag = j.current_etag;

@@ -24,7 +24,47 @@ function mount(args = {}) {
 
 test('coerce: a map stays a map, with trimmed keys and text values', () => {
   assert.deepEqual(KeyValueField.coerce({ spec: 'docs/spec.md', ' plan ': ' docs/plan.md ' }), { spec: 'docs/spec.md', plan: 'docs/plan.md' });
-  assert.deepEqual(KeyValueField.coerce({ n: 3 }), { n: '3' });
+  assert.deepEqual(KeyValueField.coerce({ n: 3 }), { n: 3 }, 'a stored value that is not text is kept as it is');
+});
+
+test('a stored value that is not text is edited as its JSON text and kept as it was unless that text is edited', () => {
+  const stored = { spec: ['a.md', 'b.md'], plan: 'p.md' };
+  assert.deepEqual(KeyValueField.coerce(stored), stored);
+  const { rows, type, kept, changes } = mount({ value: stored });
+  assert.deepEqual(rows().map((r) => r.querySelector('.ef-kv-value').value), ['["a.md","b.md"]', 'p.md']);
+  type(rows()[1].querySelector('.ef-kv-value'), 'p2.md');
+  assert.deepEqual(kept(), { spec: ['a.md', 'b.md'], plan: 'p2.md' });
+  type(rows()[0].querySelector('.ef-kv-key'), 'specs');
+  assert.deepEqual(kept(), { specs: ['a.md', 'b.md'], plan: 'p2.md' }, 'a renamed type keeps its value');
+  type(rows()[0].querySelector('.ef-kv-value'), '["a.md"]');
+  assert.deepEqual(kept(), { specs: '["a.md"]', plan: 'p2.md' }, 'edited text is what was typed');
+  assert.ok(changes.length);
+});
+
+test('validate names every faulted row, in row order, joined with " · "; a long quoted value is cut to 40 characters', () => {
+  assert.equal(KeyValueField.validate([{ key: '', value: 'x' }, { key: 'spec', value: '' }]), '"x" needs a type · "spec" needs a path or URL');
+  const url = `https://example.com/${'a'.repeat(21)}`;
+  assert.equal(url.length, 41);
+  assert.equal(KeyValueField.validate([{ key: '', value: url }]), `"${url.slice(0, 40)}…" needs a type`);
+  assert.equal(KeyValueField.validate([{ key: '', value: url.slice(0, 40) }]), `"${url.slice(0, 40)}" needs a type`, '40 is not cut');
+  assert.equal(KeyValueField.validate([{ key: 'spec', value: 'a' }, { key: 'plan', value: 'b' }, { key: 'spec', value: 'c' }]), '"spec" is used twice');
+});
+
+test('markInvalid flags every input at fault and only those; off clears them all', () => {
+  const { el, rows, type } = mount({ value: [{ key: '', value: 'x' }, { key: 'spec', value: '' }] });
+  const flagged = () => [...el.querySelectorAll('[aria-invalid="true"]')];
+  assert.equal(typeof el.markInvalid, 'function');
+  el.markInvalid(true);
+  assert.deepEqual(flagged(), [rows()[0].querySelector('.ef-kv-key'), rows()[1].querySelector('.ef-kv-value')]);
+  el.markInvalid(false);
+  assert.deepEqual(flagged(), []);
+  el.markInvalid(true);
+  type(rows()[0].querySelector('.ef-kv-key'), 'design');
+  assert.deepEqual(flagged(), [rows()[1].querySelector('.ef-kv-value')], 'a fixed row stops being flagged');
+  type(rows()[0].querySelector('.ef-kv-key'), 'spec');
+  assert.deepEqual(flagged(), [rows()[1].querySelector('.ef-kv-key'), rows()[1].querySelector('.ef-kv-value')], 'a repeated type is flagged on the row that repeats it');
+  rows()[0].querySelector('.ef-kv-remove').click();
+  assert.deepEqual(flagged(), [rows()[0].querySelector('.ef-kv-value')], 'flags follow the rows as they go');
 });
 
 test('coerce: null, missing, an empty map and an empty list are all the empty map', () => {

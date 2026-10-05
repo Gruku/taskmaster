@@ -309,7 +309,8 @@ test('at 390x844 a confirm stays a compact dialog with its answers right under t
   expect(box.x).toBeGreaterThan(0);
   expect(box.x + box.width).toBeLessThan(390);
   const discard = await confirm.getByRole('button', { name: 'Discard' }).boundingBox();
-  expect(Math.min(discard.width, discard.height)).toBeGreaterThanOrEqual(44);
+  // Layout lands on sub-pixel sizes (43.99998 for a 44px box): half a pixel of tolerance, never a smaller target.
+  expect(Math.min(discard.width, discard.height)).toBeGreaterThanOrEqual(43.5);
   expect(discard.y + discard.height).toBeLessThanOrEqual(box.y + box.height);
 });
 

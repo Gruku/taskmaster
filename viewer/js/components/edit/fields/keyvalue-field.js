@@ -8,39 +8,49 @@ const isRow = (x) => x != null && typeof x === 'object' && !Array.isArray(x) && 
 // "Path or URL" → "path or URL": a placeholder reads as a hint, not a heading.
 const hint = (label) => label.charAt(0).toLowerCase() + label.slice(1);
 const text = (v) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)).trim();
+// A quoted value is cut so one long URL cannot crowd out the rest of the message.
+const quote = (s) => `"${s.length > 40 ? `${s.slice(0, 40)}…` : s}"`;
 
 // Rows from whatever is stored or being edited: the map itself, the editor's own rows, or a legacy list of
 // "type: path" strings. Blank rows are not rows. A list entry without a type keeps its text and an empty type.
+// A map entry keeps its stored value as `raw` beside the text shown for it, so a value that is not text (a list of
+// paths) survives an edit to another row.
 function toRows(raw) {
   if (typeof raw === 'string') return toRows([raw]);
   if (raw == null || typeof raw !== 'object') return [];
   const rows = Array.isArray(raw)
     ? raw.map((item) => {
-      if (isRow(item)) return { key: text(item.key), value: text(item.value) };
+      if (isRow(item)) return { key: text(item.key), value: text(item.value), raw: item.raw };
       const s = text(item);
       const m = /^([\w.-]+):(?!\/\/)\s*(.+)$/.exec(s);
       return m ? { key: m[1], value: m[2] } : { key: '', value: s };
     })
-    : Object.entries(raw).map(([k, v]) => ({ key: text(k), value: text(v) }));
+    : Object.entries(raw).map(([k, v]) => ({ key: text(k), value: text(v), raw: v }));
   return rows.filter((r) => r.key || r.value);
 }
 
-// The first row that keeps these rows from being a map — its index, the part at fault ('key' or 'value') and why —
-// or null when they are one. Blank rows are not rows and are skipped. A row is named by what it holds, not by a
-// number: the editor's blank rows would make any count disagree with the row labels.
-function fault(rows) {
+// What a row saves: the stored value while its text is still the one shown for it, else the text. A stored string
+// is saved as its text, which differs at most by the surrounding space.
+const kept = (r) => (r.raw != null && typeof r.raw !== 'string' && r.value === text(r.raw) ? r.raw : r.value);
+
+// Everything that keeps these rows from being a map, in row order: each fault's row index, the part at fault ('key'
+// or 'value') and why. Blank rows are not rows and are skipped. A row is named by what it holds, not by a number:
+// the editor's blank rows would make any count disagree with the row labels.
+function faults(rows) {
+  const out = [];
   const seen = new Set();
-  for (const [i, raw] of rows.entries()) {
-    const r = { key: text(raw.key), value: text(raw.value) };
+  for (const [i, row] of rows.entries()) {
+    const r = { key: text(row.key), value: text(row.value) };
     if (!r.key && !r.value) continue;
-    if (!r.key) return { i, part: 'key', message: `"${r.value}" needs a type` };
-    if (!r.value) return { i, part: 'value', message: `"${r.key}" needs a path or URL` };
-    if (seen.has(r.key)) return { i, part: 'key', message: `"${r.key}" is used twice` };
+    if (!r.key) { out.push({ i, part: 'key', message: `${quote(r.value)} needs a type` }); continue; }
+    if (!r.value) out.push({ i, part: 'value', message: `${quote(r.key)} needs a path or URL` });
+    if (seen.has(r.key)) out.push({ i, part: 'key', message: `${quote(r.key)} is used twice` });
     seen.add(r.key);
   }
-  return null;
+  return out;
 }
-const problem = (rows) => fault(rows)?.message ?? null;
+// A type used three times is said once.
+const problem = (rows) => [...new Set(faults(rows).map((f) => f.message))].join(' · ') || null;
 
 export const KeyValueField = {
   read({ value, readOnly = false, placeholder = '' }) {
@@ -53,7 +63,8 @@ export const KeyValueField = {
 
   // There is always a row to type in (a blank one is not an entry), so the label always has an input to reach:
   // the id goes on the first row's type input and `wrapper.control` follows it as rows come and go. The message is
-  // about the rows as a whole and names the row at fault, so every row input is described by it.
+  // about the rows as a whole and names every row at fault, so every row input is described by it; `markInvalid(on)`
+  // marks exactly the inputs at fault.
   edit({ value, onChange, onCommit, onCancel, id, describedBy, autoFocus = true,
     label = 'Entries', keyLabel = 'Type', valueLabel = 'Path or URL', addLabel = 'Add row' }) {
     const rows = [];
@@ -63,8 +74,16 @@ export const KeyValueField = {
     let bound = null;
     Object.defineProperty(wrap, 'control', { get: () => bound });
 
-    const current = () => rows.map(({ key, value: v }) => ({ key, value: v }));
-    const emit = () => onChange?.(current());
+    const current = () => rows.map(({ key, value: v, raw }) => ({ key, value: v, raw }));
+    // null until a form takes over the marks; from then on they follow the rows as they are typed, added and removed.
+    let marked = null;
+    function flag() {
+      for (const r of rows) for (const input of [r.keyInput, r.valueInput]) input.removeAttribute('aria-invalid');
+      if (!marked) return;
+      for (const f of faults(rows)) rows[f.i][f.part === 'key' ? 'keyInput' : 'valueInput'].setAttribute('aria-invalid', 'true');
+    }
+    wrap.markInvalid = (on) => { marked = !!on; flag(); };
+    const emit = () => { if (marked != null) flag(); onChange?.(current()); };
 
     // Row numbers, the remove buttons' names and the labelled control all follow the rows as they come and go.
     function sync() {
@@ -74,22 +93,24 @@ export const KeyValueField = {
         r.remove.setAttribute('aria-label', `Remove ${r.key.trim() || `row ${i + 1}`}`);
       });
       const target = rows[0].keyInput;
-      if (target === bound) return;
-      for (const attr of ['id', 'aria-invalid']) {
-        const had = bound?.getAttribute(attr);
-        bound?.removeAttribute(attr);
-        if (attr === 'aria-invalid' && had != null) target.setAttribute(attr, had);
+      if (target !== bound) {
+        for (const attr of ['id', 'aria-invalid']) {
+          const had = bound?.getAttribute(attr);
+          bound?.removeAttribute(attr);
+          if (attr === 'aria-invalid' && had != null) target.setAttribute(attr, had);
+        }
+        bound = bindControl(target, { id });
       }
-      bound = bindControl(target, { id });
+      if (marked != null) flag();
     }
 
-    function addRow({ key = '', value: v = '' } = {}) {
+    function addRow({ key = '', value: v = '', raw } = {}) {
       const keyInput = h('input', { type: 'text', class: 'ef-text-input ef-kv-key', placeholder: hint(keyLabel), autocomplete: 'off', value: key });
       const valueInput = h('input', { type: 'text', class: 'ef-text-input ef-kv-value', placeholder: hint(valueLabel), autocomplete: 'off', value: v });
       const remove = h('button', { type: 'button', class: 'btn btn--ghost btn--icon ef-kv-remove' }, icon('dismiss', { size: 14 }));
       bindControl(keyInput, { describedBy });
       bindControl(valueInput, { describedBy });
-      const row = { key, value: v, keyInput, valueInput, remove, el: h('div', { class: 'ef-kv-row' }, [keyInput, valueInput, remove]) };
+      const row = { key, value: v, raw, keyInput, valueInput, remove, el: h('div', { class: 'ef-kv-row' }, [keyInput, valueInput, remove]) };
       keyInput.addEventListener('input', () => { row.key = keyInput.value; sync(); emit(); });
       valueInput.addEventListener('input', () => { row.value = valueInput.value; emit(); });
       remove.addEventListener('click', () => {
@@ -97,6 +118,7 @@ export const KeyValueField = {
         if (rows.length === 1) {
           // The last row is emptied, not taken away.
           row.key = row.value = keyInput.value = valueInput.value = '';
+          row.raw = undefined;
         } else {
           rows.splice(i, 1);
           row.el.remove();
@@ -116,7 +138,7 @@ export const KeyValueField = {
 
     // A form that refused the rows puts focus on the input at fault rather than on the first row.
     wrap.focusInvalid = () => {
-      const at = fault(rows);
+      const [at] = faults(rows);
       if (!at) return false;
       rows[at.i][at.part === 'key' ? 'keyInput' : 'valueInput'].focus();
       return true;
@@ -142,7 +164,7 @@ export const KeyValueField = {
   // A map when the rows make one; otherwise the rows themselves, so validate can say what is wrong with them.
   coerce(raw) {
     const rows = toRows(raw);
-    return problem(rows) ? rows : Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    return problem(rows) ? rows : Object.fromEntries(rows.map((r) => [r.key, kept(r)]));
   },
 
   validate(value, { required = false } = {}) {

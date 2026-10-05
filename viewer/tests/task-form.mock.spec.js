@@ -259,6 +259,36 @@ test('a message that appears when a field is left does not eat the click that le
   await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
 });
 
+test('Create refuses an epic that no longer exists in the form and sends nothing', async ({ page }) => {
+  const posts = writes(page, 'POST', '/api/tasks');
+  // The store derives the active epic from the tasks in flight (a mocked `context` is replaced), so the epic those
+  // tasks belong to is one the board no longer lists.
+  const gone = { ...BOARD, tasks: BOARD.tasks.map((t) => (t.status === 'in-progress' ? { ...t, epic: 'gone' } : t)) };
+  const dialog = await openCreate(page, { table: { '/api/board': gone, '/api/backlog': gone } });
+  await expect(ctl(dialog, 'epic')).toHaveValue('gone');
+  await page.keyboard.type('Has a title');
+  await save(dialog).click();
+  await expect(field(dialog, 'epic').locator('.ef-error')).toHaveText('Unknown epic');
+  await expect(ctl(dialog, 'epic')).toHaveAttribute('aria-invalid', 'true');
+  await expect(ctl(dialog, 'epic')).toBeFocused();
+  await expect(dialog.locator('[role="status"]')).toHaveText('1 field needs attention');
+  expect(posts).toEqual([]);
+  await cancel(dialog).click();
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
+  expect(posts).toEqual([]);
+});
+
+test('clicking blank space in the dialog after leaving a field shows its message', async ({ page }) => {
+  const dialog = await openCreate(page);
+  await ctl(dialog, 'title').fill('');
+  await expect(field(dialog, 'title').locator('.ef-error')).toHaveText('');
+  // The body's own padding: no control there, so focus lands on the dialog itself.
+  await dialog.locator('.modal-body').click({ position: { x: 4, y: 4 } });
+  await expect(ctl(dialog, 'title')).not.toBeFocused();
+  await expect(field(dialog, 'title').locator('.ef-error')).toHaveText('Title is required');
+  await expect(ctl(dialog, 'title')).toHaveAttribute('aria-invalid', 'true');
+});
+
 test('while saving the form says so, is disabled and cannot be closed; a server error leaves it open and editable', async ({ page }) => {
   let release;
   const gate = new Promise((ok) => { release = ok; });
@@ -615,6 +645,34 @@ test('a held form can still be scrolled from the keyboard: saving, and held by t
   await page.keyboard.press('Escape');
   await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
   await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+async function unscrollable(page) {
+  await page.evaluate(axeSource);
+  const result = await page.evaluate(() => window.axe.run(document.querySelector('.modal--form'), {
+    runOnly: ['scrollable-region-focusable'], resultTypes: ['violations'],
+  }));
+  return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+}
+
+test('axe: no scroll region in a saving Create form is out of the keyboard\'s reach', async ({ page }) => {
+  const dialog = await openCreate(page);
+  // Held like capture-modals' holdCreate: the POST never answers while the form is looked at.
+  await page.route('**/api/tasks', (route) => (route.request().method() === 'POST' ? undefined : route.fallback()));
+  await page.keyboard.type('Write the release notes for 7.1');
+  await ctl(dialog, 'description').fill(Array.from({ length: 40 }, (_, i) => `Line ${i + 1}`).join('\n'));
+  await save(dialog).click();
+  await expect(dialog.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  expect(await unscrollable(page)).toEqual([]);
+});
+
+test('axe: no scroll region in a form held by the conflict banner is out of the keyboard\'s reach', async ({ page }) => {
+  const { dialog, banner } = await conflict(page);
+  await expect(ctl(dialog, 'title')).toBeDisabled();
+  expect(await unscrollable(page)).toEqual([]);
+  await banner.getByRole('button', { name: 'Dismiss' }).click();
+  await page.keyboard.press('Escape');
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
 });
 
 for (const theme of ['dark', 'light']) {
