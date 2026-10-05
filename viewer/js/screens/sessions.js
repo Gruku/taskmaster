@@ -1,7 +1,7 @@
 import { renderTimeline } from '../components/timeline.js';
 import { RightRail } from '../components/right-rail.js';
 import { listSessions, getSessionDetail, listThreads } from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmSubcount, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
@@ -50,14 +50,8 @@ export async function mount(root, { params, store, prefs }) {
       render(root, state, rail);
     },
   });
-  const newNoteBtn = tmAction({
-    icon: '+', label: 'New note', variant: 'primary',
-    title: 'New note — coming soon',
-    disabled: true,
-  });
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(newNoteBtn);
 
   const rail = new RightRail({ width: 480 });
   const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['open', 'closed'];
@@ -376,8 +370,6 @@ function renderHandoverRail(h, owner) {
     +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
     + `<span class="ts">${escapeHtml(formatRelative(h.created || h.date))}</span>`
     + `<span class="actions">`
-    + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`
-    + `<button class="ic-btn" title="Open file — coming soon" disabled>↗</button>`
     + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
     + `</span></div>`
     + `<div class="rr-title">${escapeHtml(h.tldr || h.id)}</div>`

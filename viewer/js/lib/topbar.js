@@ -53,9 +53,9 @@ export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd, 
   // Clear button — visible only when the field has content.
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
-  clearBtn.className = 'tm-search__clear';
+  clearBtn.className = 'tm-search__clear btn btn--ghost btn--icon btn--sm';
   clearBtn.setAttribute('aria-label', 'Clear search');
-  clearBtn.textContent = '×';
+  clearBtn.appendChild(icon('dismiss', { size: 14 }));
 
   function syncClearVisibility() {
     wrap.classList.toggle('tm-search--has-value', input.value.length > 0);
@@ -137,21 +137,18 @@ export function tmSegmented(options, { value, onChange, icon = false } = {}) {
   return wrap;
 }
 
-// variant: 'primary' | 'ghost' | 'icon' | undefined
-export function tmAction({ icon, label, variant, title, onClick, href, disabled = false } = {}) {
+const ACTION_CLASS = { primary: 'btn btn--primary', ghost: 'btn btn--ghost', icon: 'btn btn--ghost btn--icon' };
+
+// icon: an ICONS name (an unknown name throws). variant: 'primary' | 'ghost' | 'icon' | undefined (secondary).
+export function tmAction({ icon: glyph, label, variant, title, onClick, href, disabled = false } = {}) {
   const el = href ? document.createElement('a') : document.createElement('button');
-  el.className = 'tm-action' + (variant ? ` tm-action--${variant}` : '');
+  el.className = ACTION_CLASS[variant] || 'btn btn--secondary';
   if (!href) el.type = 'button';
   if (href) el.href = href;
   const ariaLabel = title || label || '';
   if (title) el.title = title;
   if (ariaLabel) el.setAttribute('aria-label', ariaLabel);
-  if (icon) {
-    const i = document.createElement('span');
-    i.className = 'tm-action__icon';
-    i.textContent = icon;
-    el.appendChild(i);
-  }
+  if (glyph) el.appendChild(icon(glyph, { size: 14 }));
   if (label) {
     const t = document.createElement('span');
     t.textContent = label;

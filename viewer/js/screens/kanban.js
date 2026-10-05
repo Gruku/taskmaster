@@ -148,9 +148,9 @@ export async function mount(root, { store, api, prefs }) {
   });
   right.appendChild(sort);
 
-  // + Task button — uses shared .tm-action--primary (Layer 3 unifies primary actions).
+  // + Task button — the shared primary button.
   const addBtn = tmAction({
-    icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
+    icon: 'plus', label: 'Task', variant: 'primary', title: 'Add task',
     onClick: () => openTaskCreateModal({ store, api }),
   });
   right.appendChild(addBtn);

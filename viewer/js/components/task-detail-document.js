@@ -89,7 +89,7 @@ export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
     { value: view === 'B' ? 'B' : 'A', onChange: (v) => onToggleVariant?.(v) },
   );
   const editBtn = tmAction({
-    icon: '✎', label: 'Edit', title: 'Edit task',
+    icon: 'edit', label: 'Edit', title: 'Edit task',
     onClick: () => onEdit?.(),
   });
   topbar.append(seg, editBtn);

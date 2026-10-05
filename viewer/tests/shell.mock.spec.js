@@ -1,6 +1,11 @@
 // User intent: the shell must be keyboard-usable, free of the banned visual patterns, and its theme toggle must work.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
+import { BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+
+const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -238,6 +243,92 @@ test('search shortcut hint names the platform shortcut', async ({ page }) => {
   await page.goto('/#/issues');
   await expect(page.locator('.tm-search .cmp-kbd')).toHaveText('Ctrl K');
   await expect(page.locator('[data-global-search]')).toHaveAttribute('aria-label', /\S/);
+});
+
+// Every screen that builds its topbar from the shared controls, with content so its counts and chips are drawn.
+const TOPBAR_ROUTES = ['#/kanban', '#/table', '#/issues', '#/sessions', '#/ideas', '#/bugs', '#/archived', '#/task/T-102'];
+const withContent = (theme = 'dark') => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [], '/api/sessions': [], '/api/threads': [],
+  '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
+});
+
+for (const width of [1440, 390]) {
+  test(`at ${width}px the Add task button is the shared primary button`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, withContent());
+    await page.goto('/#/kanban');
+    const add = page.locator('#topbar-actions [aria-label="Add task"]');
+    await expect(add).toBeVisible();
+    await expect(add).toHaveClass(/(^|\s)btn(\s|$)/);
+    await expect(add).toHaveClass(/(^|\s)btn--primary(\s|$)/);
+    await expect(add.locator('svg.icon')).toHaveCount(1);
+  });
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`${theme}: the topbar's controls pass axe colour contrast on every screen`, async ({ page }) => {
+    await mockApi(page, withContent(theme));
+    for (const route of TOPBAR_ROUTES) {
+      await page.goto('/' + route);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await expect(page.locator('#topbar-actions > *').first(), route).toBeVisible();
+      await page.evaluate(axeSource);
+      const result = await page.evaluate(() => window.axe.run(document.getElementById('topbar'), { runOnly: ['color-contrast'] }));
+      expect(result.violations.map((v) => `${route} ${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+    }
+  });
+}
+
+test('a focused segment shows its whole ring and the pressed one is the solid signature fill', async ({ page }) => {
+  await mockApi(page, withContent());
+  await page.goto('/#/issues');
+  const seg = page.locator('#topbar-actions .tm-segmented');
+  const pressed = seg.locator('button[aria-pressed="true"]');
+  await expect(pressed).toHaveCount(1);
+  await pressed.focus();
+  const look = await pressed.evaluate((el) => {
+    const probe = (v) => { const i = document.createElement('i'); i.style.color = v; document.body.appendChild(i); const c = getComputedStyle(i).color; i.remove(); return c; };
+    const cs = getComputedStyle(el);
+    return {
+      outline: `${cs.outlineStyle} ${cs.outlineWidth}`, clip: getComputedStyle(el.parentElement).overflow,
+      bg: cs.backgroundColor, fill: probe('var(--signature-fill)'), ink: cs.color, onFill: probe('var(--on-accent-fill)'),
+    };
+  });
+  expect(look.outline).toBe('solid 2px');
+  // A clipping group would cut the 2px-offset ring off at its edge.
+  expect(look.clip).toBe('visible');
+  expect(look.bg).toBe(look.fill);
+  expect(look.ink).toBe(look.onFill);
+});
+
+test('no topbar control is a disabled placeholder', async ({ page }) => {
+  await mockApi(page, withContent());
+  for (const route of ['#/issues', '#/sessions']) {
+    await page.goto('/' + route);
+    await expect(page.locator('#topbar-actions .tm-search')).toBeVisible();
+    await expect(page.locator('#topbar :is(button, a)[disabled], #topbar [aria-disabled="true"]')).toHaveCount(0);
+    await expect(page.locator('#topbar [title*="coming soon" i], #topbar [aria-label*="coming soon" i]')).toHaveCount(0);
+  }
+});
+
+test.describe('topbar controls at phone width', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('search, segments, actions and the clear button are 44px touch targets', async ({ page }) => {
+    await mockApi(page, withContent());
+    for (const route of ['#/kanban', '#/issues', '#/task/T-102']) {
+      await page.goto('/' + route);
+      await expect(page.locator('#topbar-actions > *').first()).toBeVisible();
+      const input = page.locator('#topbar-actions .tm-search input');
+      if (await input.count()) await input.fill('abc');
+      const short = await page.locator('#topbar-actions').evaluate((root) => [...root.querySelectorAll('.tm-search, .tm-search__clear, .tm-segmented > button, .btn')]
+        .filter((el) => el.getClientRects().length)
+        .map((el) => ({ el: el.className || el.tagName, h: el.getBoundingClientRect().height }))
+        .filter(({ h }) => h < 44));
+      expect(short, route).toEqual([]);
+    }
+  });
 });
 
 test('topbar row 1 keeps the same height and the title the same position on every route', async ({ page }) => {
