@@ -382,22 +382,82 @@ test('a lone "-" or "e" in the days input does not clear the estimate: nothing c
 
 // ── A write that lost a race ──
 const THEIRS = { ...RICH_TASK, title: 'Their title', priority: 'high', last_referenced: '2026-10-01T08:00:00Z' };
-async function conflict(page) {
+// The server's two kinds of 409: a lost race names the revision it lost to; a refusal only says why.
+const STALE = { status: 409, json: { ok: false, error: 'stale', current: THEIRS, current_etag: 't1:fresh' } };
+const REFUSED = { status: 409, json: { ok: false, error: 'T-102: blocking gate "review" is not cleared' } };
+// Each PATCH takes the next answer (a fulfil object, or an async function of the route); past the list, success.
+async function answerPatches(page, answers) {
   const patches = writes(page, 'PATCH', '/api/tasks/T-102');
-  const dialog = await openEdit(page);
   let n = 0;
-  await page.route('**/api/tasks/T-102', (route) => {
+  await page.route('**/api/tasks/T-102', async (route) => {
     if (route.request().method() !== 'PATCH') return route.fallback();
-    return n++ === 0
-      ? route.fulfill({ status: 409, json: { ok: false, current: THEIRS, current_etag: 't1:fresh' } })
-      : route.fulfill({ json: { ...THEIRS, ...route.request().postDataJSON() } });
+    const next = answers[n++];
+    if (typeof next === 'function') return next(route);
+    return route.fulfill(next ?? { json: { ...THEIRS, ...route.request().postDataJSON() } });
   });
+  return patches;
+}
+async function conflict(page, later = []) {
+  const dialog = await openEdit(page);
+  const patches = await answerPatches(page, [STALE, ...later]);
   await ctl(dialog, 'title').fill('My title');
   await save(dialog).click();
   const banner = page.locator('#conflict-banner-host .cb-banner');
   await expect(banner).toBeVisible();
   return { dialog, banner, patches };
 }
+
+test('409 that refuses the write (no revision named): its reason shows in the form, no banner, and the next save still names the stored revision', async ({ page }) => {
+  const dialog = await openEdit(page);
+  const patches = await answerPatches(page, [REFUSED]);
+  await ctl(dialog, 'title').fill('My title');
+  await save(dialog).click();
+  await expect(dialog.locator('[role="alert"]')).toHaveText('T-102: blocking gate "review" is not cleared');
+  await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);
+  await expect(ctl(dialog, 'title')).toBeEnabled();
+  await expect(ctl(dialog, 'title')).toHaveValue('My title');
+  await save(dialog).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+  expect(patches).toEqual([
+    { body: { title: 'My title' }, ifMatch: 't1:fixture' },
+    { body: { title: 'My title' }, ifMatch: 't1:fixture' },
+  ]);
+});
+
+test('409: "Apply choices" is held while it writes; a merged save that fails returns the form with the reason, and the next save is compared again', async ({ page }) => {
+  let land;
+  const held = new Promise((ok) => { land = ok; });
+  const { dialog, banner, patches } = await conflict(page, [
+    async (route) => { await held; return route.fulfill({ status: 500, body: 'store is busy' }); },
+    STALE,
+  ]);
+  const apply = banner.getByRole('button', { name: 'Apply choices' });
+  await apply.click();
+  await expect(apply).toBeDisabled();
+  await expect(banner.getByRole('button', { name: 'Dismiss' })).toBeDisabled();
+  land();
+  await expect(banner).toHaveCount(0);
+  await expect(dialog.locator('[role="alert"]')).toContainText('500');
+  await expect(ctl(dialog, 'title')).toBeEnabled();
+  await save(dialog).click();
+  await expect(page.locator('#conflict-banner-host .cb-banner')).toBeVisible();
+  expect(patches.map((p) => p.ifMatch)).toEqual(['t1:fixture', 't1:fresh', 't1:fixture']);
+  await page.locator('#conflict-banner-host').getByRole('button', { name: 'Dismiss' }).click();
+  await page.keyboard.press('Escape');
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+test('409: a refusal while applying the banner\'s choices shows the server\'s reason, not "changed again"', async ({ page }) => {
+  const { dialog, banner } = await conflict(page, [REFUSED]);
+  await banner.getByRole('button', { name: 'Apply choices' }).click();
+  await expect(banner).toHaveCount(0);
+  await expect(dialog.locator('[role="alert"]')).toHaveText('T-102: blocking gate "review" is not cleared');
+  await expect(ctl(dialog, 'title')).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
 
 test('409: the banner sits above the held form, lists only my change, and is worked from the keyboard', async ({ page }) => {
   const { dialog, banner, patches } = await conflict(page);

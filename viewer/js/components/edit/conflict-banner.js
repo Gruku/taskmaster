@@ -92,8 +92,10 @@ export function showFullConflict({
                       for (const [k, choice] of Object.entries(decisions)) {
                         merged[k] = choice === 'mine' ? localDraft[k] : currentValue[k];
                       }
-                      await onResolve(merged);
-                      dismiss(banner);
+                      // Held while the choices are written: a second press would write them twice, and a dismiss
+                      // would hand the form back mid-write.
+                      for (const el of banner.querySelectorAll('button, input')) el.disabled = true;
+                      try { await onResolve(merged); } finally { dismiss(banner); }
                     } } }, 'Apply choices'),
     ]),
   ]);

@@ -227,6 +227,23 @@ test('an entry the browser cannot read as a number ("-", "e") changes nothing an
   assert.equal(el.querySelector('.ef-estimate-unreadable').textContent, '');
 });
 
+test('the "unreadable" message is tied to the days input with aria-describedby while it shows (M7)', () => {
+  for (const describedBy of ['est-err', undefined]) {
+    const { el, days } = mount({ value: 'M', describedBy });
+    let bad = true;
+    Object.defineProperty(days, 'validity', { get: () => ({ badInput: bad }) });
+    days.value = '';
+    days.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const message = el.querySelector('.ef-estimate-unreadable');
+    assert.ok(message.id, 'the message has an id to be named by');
+    assert.deepEqual(days.getAttribute('aria-describedby').split(' '), [describedBy, message.id].filter(Boolean));
+    bad = false;
+    days.value = '4';
+    days.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    assert.equal(days.getAttribute('aria-describedby'), describedBy ?? null, 'gone with the message');
+  }
+});
+
 test('the stored value the picker cannot express is named in words beside the controls', () => {
   const { el } = mount({ value: '2 weeks' });
   assert.match(el.querySelector('.ef-estimate-note').textContent, /^Current: 2 weeks/);

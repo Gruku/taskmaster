@@ -15,7 +15,7 @@ async function http(method, path, body, options = {}) {
     if (m) {
       const { store } = await import('./store.js');
       const et = store.getEtag(`task:${decodeURIComponent(m[1])}`);
-      if (et) init.headers['If-Match'] = et;
+      if (et && !init.headers['If-Match']) init.headers['If-Match'] = et;
     }
   }
   const fetchStart = beginMeasure();
@@ -34,8 +34,10 @@ async function http(method, path, body, options = {}) {
     if (path === '/api/backlog') store.setEtag('backlog', et.replace(/^"|"$/g, ''));
   }
   if (resp.status === 409) {
-    const j = await resp.json();
-    const err = new Error('stale');
+    // A lost race names the revision it lost to (`current_etag`). Any other 409 is the server refusing the write
+    // (gates still open, a legacy layout), and its reason is the message.
+    const j = await resp.json().catch(() => ({}));
+    const err = new Error(j.error || 'stale');
     err.code = 409;
     err.current = j.current;
     err.current_etag = j.current_etag;
@@ -98,7 +100,9 @@ export const api = {
   getEpic,
   getTaskRelated,
   getTaskDetail,
-  patchTask:    (id, patch) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch),
+  // `ifMatch` names the revision to write against instead of the stored one (a write settled from the conflict banner).
+  patchTask:    (id, patch, { ifMatch } = {}) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch,
+    ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
   putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
   createTask:   (payload)   => http('POST',  '/api/tasks', payload),
   archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),

@@ -48,6 +48,32 @@ test('clicking ✕ on a chip removes it from draft', async () => {
   assert.equal(el.querySelectorAll('.ef-chip').length, 1);
 });
 
+test('removing a chip keeps focus in the field: on the chip that took its place, else the one before, else the text input', () => {
+  const el = ChipInput.edit({ value: ['a', 'b', 'c'], source: async () => [], onChange: () => {}, onCommit: () => {}, autoFocus: false });
+  document.body.replaceChildren(el);
+  const remove = (label) => { const x = el.querySelector(`[aria-label="Remove ${label}"]`); x.focus(); x.click(); };
+  const focused = () => document.activeElement.getAttribute('aria-label') ?? document.activeElement.className;
+  remove('a');
+  assert.equal(focused(), 'Remove b', 'the next chip');
+  remove('c');
+  assert.equal(focused(), 'Remove b', 'the last chip went: the one before it');
+  remove('b');
+  assert.equal(document.activeElement, el.control, 'no chip left: the text input');
+});
+
+test('text typed but not yet a chip is reported as pending; a list-only input also says it cannot keep it (M1)', () => {
+  const free = ChipInput.edit({ value: [], source: async () => [], allowFree: true, autoFocus: false });
+  const listed = ChipInput.edit({ value: [], source: async () => [], autoFocus: false });
+  document.body.replaceChildren(free, listed);
+  assert.equal(free.pending, '');
+  free.control.value = '  notes.md ';
+  assert.equal(free.pending, 'notes.md');
+  assert.equal(free.pendingError, null, 'free text becomes a chip when the field is left');
+  listed.control.value = 'T-9';
+  assert.equal(listed.pending, 'T-9');
+  assert.match(listed.pendingError, /list/);
+});
+
 test('typing + Enter with allowFree commits a free-text chip', async () => {
   let drafts = [];
   const el = ChipInput.edit({

@@ -468,7 +468,73 @@ test('docs: a duplicate or unnamed row blocks the save with a message instead of
   assert.equal(calls.saved.length, 0);
   assert.match(errorOf('docs'), /spec.*twice/);
   assert.equal(status(), '1 field needs attention');
-  assert.equal(document.activeElement, control('docs'));
+  assert.equal(document.activeElement, key, 'focus lands on the row at fault, not the first row (M7)');
+  close();
+});
+
+test('docs: the failed save focuses the input at fault in its row, and every row input is described by the message (M7)', async () => {
+  const { calls, close } = openEdit(RICH);
+  await tick();
+  const rows = () => [...field('docs').querySelectorAll('.ef-kv-row')];
+  const errId = field('docs').querySelector('.ef-error').id;
+  rows()[1].querySelector('.ef-kv-value').value = '';
+  fire(rows()[1].querySelector('.ef-kv-value'), 'input');
+  saveBtn().click();
+  await tick();
+  assert.equal(calls.saved.length, 0);
+  assert.match(errorOf('docs'), /"plan" needs a path or URL/);
+  assert.equal(document.activeElement, rows()[1].querySelector('.ef-kv-value'), 'the empty path of the second row');
+  for (const input of field('docs').querySelectorAll('.ef-kv-row input')) {
+    assert.equal(input.getAttribute('aria-describedby'), errId, `${input.getAttribute('aria-label')} is described by the message`);
+  }
+  // A blank row in between is not at fault; the next real row without a type is.
+  field('docs').querySelector('.ef-kv-add').click();
+  rows()[1].querySelector('.ef-kv-value').value = 'docs/plan.md';
+  fire(rows()[1].querySelector('.ef-kv-value'), 'input');
+  field('docs').querySelector('.ef-kv-add').click();
+  rows()[3].querySelector('.ef-kv-value').value = 'docs/untyped.md';
+  fire(rows()[3].querySelector('.ef-kv-value'), 'input');
+  saveBtn().click();
+  await tick();
+  assert.match(errorOf('docs'), /"docs\/untyped\.md" needs a type/);
+  assert.equal(document.activeElement, rows()[3].querySelector('.ef-kv-key'));
+  close();
+});
+
+// ── Text typed into a chip input that is not a chip yet ──
+test('text left in a chip input is an edit: Save is enabled and closing asks first (M1)', async () => {
+  const { calls } = open();
+  await tick();
+  assert.equal(saveBtn().disabled, true);
+  const anchors = control('anchors');
+  anchors.focus();
+  anchors.value = 'CHANGELOG.md';
+  fire(anchors, 'input');
+  assert.equal(saveBtn().disabled, false, 'something was typed');
+  cancelBtn().click();
+  await tick();
+  assert.ok(confirmBox(), 'closing asks before the text is lost');
+  confirmBox().querySelector('[data-confirm]').click();
+  await tick();
+  assert.equal(dialogs().length, 0);
+  assert.equal(calls.cancelled, 1);
+});
+
+test('text left in a relation input that was never picked from its list blocks the save and says so (M1)', async () => {
+  const { calls, close } = openEdit(RICH);
+  await tick();
+  const deps = control('depends_on');
+  deps.value = 'T-99';
+  fire(deps, 'input');
+  assert.equal(saveBtn().disabled, false);
+  saveBtn().click();
+  await tick();
+  assert.equal(calls.saved.length, 0, 'nothing is sent while the text would be dropped');
+  assert.match(errorOf('depends_on'), /list/);
+  assert.equal(document.activeElement, deps);
+  deps.value = '';
+  fire(deps, 'input');
+  assert.equal(saveBtn().disabled, true, 'cleared: clean again');
   close();
 });
 

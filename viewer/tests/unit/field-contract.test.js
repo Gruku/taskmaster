@@ -50,7 +50,9 @@ for (const [name, [, , tag, type]] of Object.entries(RENDERERS)) {
     assert.equal(control.getAttribute('aria-describedby'), `f-${name}-err`);
     assert.equal(document.querySelectorAll(`#f-${name}`).length, 1, 'the id is used once');
     assert.equal(document.getElementById(`f-${name}`), control);
-    assert.equal(document.querySelectorAll('[aria-describedby]').length, 1);
+    // Docs rows are judged as a whole and the message names the row at fault, so each row input is described by it.
+    const described = name === 'KeyValueField' ? el.querySelectorAll('.ef-kv-row input').length : 1;
+    assert.equal(document.querySelectorAll('[aria-describedby]').length, described);
   });
 
   test(`${name}: without an id or a description the control carries neither attribute`, () => {

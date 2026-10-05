@@ -25,17 +25,22 @@ function toRows(raw) {
   return rows.filter((r) => r.key || r.value);
 }
 
-// Why these rows are not a map yet, or null when they are.
-function problem(rows) {
+// The first row that keeps these rows from being a map — its index, the part at fault ('key' or 'value') and why —
+// or null when they are one. Blank rows are not rows and are skipped. A row is named by what it holds, not by a
+// number: the editor's blank rows would make any count disagree with the row labels.
+function fault(rows) {
   const seen = new Set();
-  for (const [i, r] of rows.entries()) {
-    if (!r.key) return `row ${i + 1} needs a type`;
-    if (!r.value) return `"${r.key}" needs a path or URL`;
-    if (seen.has(r.key)) return `"${r.key}" is used twice`;
+  for (const [i, raw] of rows.entries()) {
+    const r = { key: text(raw.key), value: text(raw.value) };
+    if (!r.key && !r.value) continue;
+    if (!r.key) return { i, part: 'key', message: `"${r.value}" needs a type` };
+    if (!r.value) return { i, part: 'value', message: `"${r.key}" needs a path or URL` };
+    if (seen.has(r.key)) return { i, part: 'key', message: `"${r.key}" is used twice` };
     seen.add(r.key);
   }
   return null;
 }
+const problem = (rows) => fault(rows)?.message ?? null;
 
 export const KeyValueField = {
   read({ value, readOnly = false, placeholder = '' }) {
@@ -47,7 +52,8 @@ export const KeyValueField = {
   },
 
   // There is always a row to type in (a blank one is not an entry), so the label always has an input to reach:
-  // the id goes on the first row's type input and `wrapper.control` follows it as rows come and go.
+  // the id goes on the first row's type input and `wrapper.control` follows it as rows come and go. The message is
+  // about the rows as a whole and names the row at fault, so every row input is described by it.
   edit({ value, onChange, onCommit, onCancel, id, describedBy, autoFocus = true,
     label = 'Entries', keyLabel = 'Type', valueLabel = 'Path or URL', addLabel = 'Add row' }) {
     const rows = [];
@@ -69,18 +75,20 @@ export const KeyValueField = {
       });
       const target = rows[0].keyInput;
       if (target === bound) return;
-      for (const attr of ['id', 'aria-describedby', 'aria-invalid']) {
+      for (const attr of ['id', 'aria-invalid']) {
         const had = bound?.getAttribute(attr);
         bound?.removeAttribute(attr);
         if (attr === 'aria-invalid' && had != null) target.setAttribute(attr, had);
       }
-      bound = bindControl(target, { id, describedBy });
+      bound = bindControl(target, { id });
     }
 
     function addRow({ key = '', value: v = '' } = {}) {
       const keyInput = h('input', { type: 'text', class: 'ef-text-input ef-kv-key', placeholder: hint(keyLabel), autocomplete: 'off', value: key });
       const valueInput = h('input', { type: 'text', class: 'ef-text-input ef-kv-value', placeholder: hint(valueLabel), autocomplete: 'off', value: v });
       const remove = h('button', { type: 'button', class: 'btn btn--ghost btn--icon ef-kv-remove' }, icon('dismiss', { size: 14 }));
+      bindControl(keyInput, { describedBy });
+      bindControl(valueInput, { describedBy });
       const row = { key, value: v, keyInput, valueInput, remove, el: h('div', { class: 'ef-kv-row' }, [keyInput, valueInput, remove]) };
       keyInput.addEventListener('input', () => { row.key = keyInput.value; sync(); emit(); });
       valueInput.addEventListener('input', () => { row.value = valueInput.value; emit(); });
@@ -105,6 +113,14 @@ export const KeyValueField = {
     for (const r of toRows(value)) addRow(r);
     if (!rows.length) addRow();
     sync();
+
+    // A form that refused the rows puts focus on the input at fault rather than on the first row.
+    wrap.focusInvalid = () => {
+      const at = fault(rows);
+      if (!at) return false;
+      rows[at.i][at.part === 'key' ? 'keyInput' : 'valueInput'].focus();
+      return true;
+    };
 
     add.addEventListener('click', () => {
       const row = addRow();

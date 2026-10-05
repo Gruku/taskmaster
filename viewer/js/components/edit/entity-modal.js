@@ -78,7 +78,9 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   });
   const controlOf = (f) => f?.el.control ?? f?.el;
   const changed = (f) => !sameValue(f.value, f.snapshot);
-  const isDirty = () => fields.some(changed);
+  // Text still being typed into a field (a chip input's entry) is an edit too, though it is not a value yet.
+  const pending = (f) => !!f.el.pending;
+  const isDirty = () => fields.some((f) => changed(f) || pending(f));
 
   function mountControl(f, id) {
     f.errEl = h('div', { class: 'ef-error', id: `${id}-error` });
@@ -149,6 +151,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   modal.footer.append(h('div', { class: 'eform-messages' }, [summary, alert]), h('div', { class: 'eform-actions' }, [cancelBtn, saveBtn]));
   cancelBtn.addEventListener('click', () => { modal.requestClose(); });
   saveBtn.addEventListener('click', () => { save(); });
+  // Typing that is not a value yet (see `pending`) still changes whether there is anything to save.
+  form.addEventListener('input', () => { if (!busy) paint(); });
 
   // ── State ──
   function set(f, raw) {
@@ -172,6 +176,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
     for (const f of fields) {
       if (changed(f)) { if (all[f.key]) out[f.key] = all[f.key]; }
       else if (f.spec.required && normal(f.value) == null) out[f.key] = 'required';
+      // Text the field cannot keep would be dropped by the save without a word.
+      if (pending(f) && f.el.pendingError) out[f.key] = f.el.pendingError;
     }
     return out;
   }
@@ -234,7 +240,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
     const f = fields.find((x) => errs[x.key]);
     if (!f) return;
     if (f.panel?.hidden) expand(f, true);
-    controlOf(f).focus();
+    // A field made of several inputs (docs rows) can point at the one at fault.
+    if (!f.el.focusInvalid?.()) controlOf(f).focus();
   }
 
   // Some fields hold an entry until they are left (text typed into a chip input). A save from the keyboard never

@@ -13,6 +13,14 @@ function describe(e) {
   return e?.message || String(e);
 }
 
+// A 409 that names the revision the write lost to is a race to settle field by field. Any other 409 is the server
+// refusing the write (gates still open, a legacy layout): its reason is the answer, and there is nothing to merge.
+const lostRace = (e) => e?.code === 409 && !!e.current_etag;
+
+// The write has landed; a board that fails to refresh now catches up on its next poll. The form must not stay open
+// over it, or a second Save would make the same write again.
+const refresh = (store, api) => Promise.resolve(store.refreshBoard(api)).catch(() => {});
+
 export function openTaskCreateModal({ store, api, prefillEpic }) {
   const schema = taskSchema({ getBacklog: () => store.getBacklog() });
   openEntityModal({
@@ -26,10 +34,10 @@ export function openTaskCreateModal({ store, api, prefillEpic }) {
     onSave: async (draft) => {
       try {
         await api.createTask(draft);
-        await store.refreshBoard(api);
       } catch (e) {
         return { error: describe(e) };
       }
+      await refresh(store, api);
     },
     onCancel: () => {},
   });
@@ -52,16 +60,20 @@ export function openTaskEditModal({ store, api, task }) {
         localDraft: { ...current, ...changes }, currentValue: current,
         currentEtag: e.current_etag,
         onResolve: async (merged) => {
+          const patch = Object.fromEntries(Object.keys(changes)
+            .filter((k) => !sameValue(merged[k], current[k])).map((k) => [k, merged[k]]));
           try {
-            store.setEtag?.(`task:${task.id}`, e.current_etag);
-            const patch = Object.fromEntries(Object.keys(changes)
-              .filter((k) => !sameValue(merged[k], current[k])).map((k) => [k, merged[k]]));
-            if (Object.keys(patch).length) await api.patchTask(task.id, patch);
-            await store.refreshBoard(api);
-            done();
+            // Written against the revision the banner showed, which is stored only once the write lands (the write
+            // stores the revision it made). A failed write leaves the old one, so the next Save is compared again
+            // instead of overwriting the fields the user chose to take from the server.
+            if (Object.keys(patch).length) await api.patchTask(task.id, patch, { ifMatch: e.current_etag });
+            else store.setEtag?.(`task:${task.id}`, e.current_etag);
           } catch (err) {
-            done({ error: err && err.code === 409 ? 'The task changed again — save to compare once more' : describe(err) });
+            done({ error: lostRace(err) ? 'The task changed again — save to compare once more' : describe(err) });
+            return;
           }
+          await refresh(store, api);
+          done();
         },
         onDismiss: () => done({}),
       });
@@ -77,11 +89,11 @@ export function openTaskEditModal({ store, api, task }) {
       try {
         // Only the fields the form reports as changed are sent (never systemManaged ones: they have no field).
         if (Object.keys(changes).length) await api.patchTask(task.id, changes);
-        await store.refreshBoard(api);
       } catch (e) {
-        if (e && e.code === 409) return { error: 'Conflict — see banner', wait: resolveConflict(e, changes) };
+        if (lostRace(e)) return { error: 'Conflict — see banner', wait: resolveConflict(e, changes) };
         return { error: describe(e) };
       }
+      await refresh(store, api);
     },
     onCancel: () => {},
   });

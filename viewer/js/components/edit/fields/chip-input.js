@@ -30,6 +30,10 @@ export const ChipInput = {
     const input = h('input', { type: 'text', class: 'ef-chip-input-text', placeholder, autocomplete: 'off' });
     bindControl(input, { id, describedBy });
     wrap.control = input;
+    // Text typed but not yet a chip. A form counts it as an edit; where entries must come from the list it cannot be
+    // kept as it stands, and `pendingError` says so.
+    Object.defineProperty(wrap, 'pending', { get: () => input.value.trim() });
+    wrap.pendingError = allowFree ? null : 'pick an entry from the list, or clear the text';
     const dropdown = h('div', { class: 'ef-chip-dropdown', hidden: '' });
     inputBox.appendChild(input);
     inputBox.appendChild(dropdown);
@@ -50,6 +54,10 @@ export const ChipInput = {
           if (i >= 0) {
             draft.splice(i, 1);
             paintChips();
+            // The pressed button is gone: focus stays in the field, on the chip that took its place, else the one
+            // before it, else the text input.
+            const xs = chipsBox.querySelectorAll('.ef-chip-x');
+            (xs[i] ?? xs[i - 1] ?? input).focus();
             onChange?.([...draft]);
           }
         });

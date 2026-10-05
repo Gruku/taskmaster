@@ -39,7 +39,7 @@ test('coerce: valid editor rows become a map; blank rows are dropped', () => {
 test('coerce never turns rows it cannot represent into a map: they stay rows, and validate refuses them', () => {
   const cases = [
     [[{ key: 'spec', value: 'a.md' }, { key: 'spec', value: 'b.md' }], /spec.*twice/],
-    [[{ key: '', value: 'a.md' }], /row 1 needs a type/i],
+    [[{ key: '', value: 'a.md' }], /"a\.md" needs a type/i],
     [[{ key: 'spec', value: '' }], /spec.*needs a path or URL/],
   ];
   for (const [rows, message] of cases) {
