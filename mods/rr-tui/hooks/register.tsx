@@ -4,7 +4,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode } from 'claude-code'
 
 import type { Rr, RrNode, RrPolarity, RrTokens } from '../types'
-import { galleryTree } from './gallery'
+import { galleryTree, keyed } from './gallery'
 import type { Demo } from './gallery'
 import * as kit from './kit'
 import { isPolarity, resolvePolarity, tokensFor } from './polarity'
@@ -56,6 +56,7 @@ export const register: Register = (on, options) => {
       row: refuse,
       rule: refuse,
       button: refuse,
+      keyedButton: refuse,
       keycap: refuse,
       chip: refuse,
     }
@@ -71,6 +72,10 @@ export const register: Register = (on, options) => {
   on('rr.row', async ($, a) => ({ value: out(kit.row(await tokensOf($), { ...a, cells: back(a.cells) })) }))
   on('rr.rule', async ($, a) => ({ value: out(kit.rule(await tokensOf($), a)) }))
   on('rr.button', async ($, a) => ({ value: kit.button(await tokensOf($), a) }))
+  on('rr.keyedButton', async ($, a) => {
+    const parts = kit.keyedButton(await tokensOf($), a)
+    return { value: { ...parts, label: out(parts.label) } }
+  })
   on('rr.keycap', async ($, a) => ({ value: out(kit.keycap(await tokensOf($), a)) }))
   on('rr.chip', async ($, a) => ({ value: out(kit.chip(await tokensOf($), a)) }))
 
@@ -113,22 +118,19 @@ export const register: Register = (on, options) => {
       await update($, OVERRIDE, () => to)
       await publish($)
     }
-    const demo: Demo = (key, label, variant) => {
-      const press = () => $.ui.toast(`rr-gallery: pressed ${key}`)
-      return variant ? (
-        <Button key={key} variant={variant} label={label} onPress={press} />
-      ) : (
-        <Button key={key} plain label={label} onPress={press} />
-      )
-    }
+    const demo: Demo = (id, key, live) => (
+      <Button key={id} label={key} hotkey={live ? key : undefined} onPress={() => $.ui.toast(`rr-gallery: pressed ${id}`)} />
+    )
+    const polarityButton = (id: string, key: string, label: string, to: RrPolarity | 'none') =>
+      keyed(t, { id, treatment: 'chip', tone: 'signature', label }, <Button key={id} label={key} hotkey={key} onPress={flip(to)} />)
     return (
       <Box {...kit.surfaceProps(t, { level: 'page' })} flexGrow={1} rowGap={1}>
-        <Box flexDirection="row" columnGap={2}>
+        <Box flexDirection="row" columnGap={1} alignItems="flex-start">
           {kit.label(t, { text: `polarity ${shown}` })}
-          <Button key="pol-dark" hotkey="1" plain label="dark" onPress={flip('dark')} />
-          <Button key="pol-light" hotkey="2" plain label="light" onPress={flip('light')} />
-          <Button key="pol-survivalist" hotkey="3" plain label="survivalist" onPress={flip('survivalist')} />
-          <Button key="pol-auto" hotkey="0" plain label="auto" onPress={flip('none')} />
+          {polarityButton('pol-dark', '1', 'dark', 'dark')}
+          {polarityButton('pol-light', '2', 'light', 'light')}
+          {polarityButton('pol-survivalist', '3', 'survivalist', 'survivalist')}
+          {polarityButton('pol-auto', '0', 'auto', 'none')}
         </Box>
         {galleryTree(t, e.props.bodyColumns, demo)}
       </Box>

@@ -78,8 +78,9 @@ describe('$.rr', () => {
     rrWorldOf(on, 'dark')
     stateWorldOf(on, { 'rr-tui.override': 'survivalist' })
     const answers = JSON.parse((await $.command.run(command('rr-probe-all'))).text ?? '{}') as Record<string, unknown>
-    expect(Object.keys(answers).sort()).toEqual(['button', 'chip', 'keycap', 'label', 'row', 'rule', 'signal', 'surface', 'surfaceProps'])
+    expect(Object.keys(answers).sort()).toEqual(['button', 'chip', 'keycap', 'keyedButton', 'label', 'row', 'rule', 'signal', 'surface', 'surfaceProps'])
     expect(answers.button).toMatchObject({ borderStyle: 'bold' })
+    expect(answers.keyedButton).toMatchObject({ box: { paddingX: 1 }, label: { props: { bold: true } } })
     expect(JSON.stringify(answers.chip)).toContain('[◆ refused]')
   })
 
@@ -119,19 +120,22 @@ describe('$.rr', () => {
       for (const [key, polarity] of [['pol-dark', 'dark'], ['pol-light', 'light'], ['pol-survivalist', 'survivalist']] as const) {
         await ui.press({ key })
         expect((await ui.find({ type: 'Box' }))?.props.backgroundColor).toBe(tokensFor(polarity).surface.page)
-        expect(await ui.find({ type: 'Button', key: 'outline-page' })).toBeDefined()
-        expect(await ui.find({ type: 'Button', key: 'open-overlay' })).toBeDefined()
-        for (const variant of ['a', 'b', 'c']) {
-          for (const label of ['done', 'back-to-agent', 'skip', 'open']) {
-            expect(await ui.find({ type: 'Button', key: `labels-${variant}-${label}` })).toBeDefined()
+        for (const [key, letter] of [['outline-page', 'd'], ['back-to-agent-page', 'a'], ['skip-page', 's'], ['open-page', 'o']]) {
+          expect(await ui.find({ type: 'Button', key })).toMatchObject({ props: { label: letter, hotkey: letter } })
+        }
+        for (const on of ['page', 'raised', 'overlay']) {
+          for (const tone of ['success', 'warning', 'critical', 'info', 'signature']) {
+            expect(await ui.find({ type: 'Button', key: `tones-${tone}-${on}` })).toBeDefined()
           }
         }
+        expect(await ui.find({ type: 'Button', key: 'pol-survivalist' })).toMatchObject({ props: { label: '3', hotkey: '3' } })
+        expect(await ui.find({ type: 'Text', text: ' survivalist' })).toMatchObject({ props: { bold: true } })
       }
-      await ui.press({ key: 'labels-c-open' })
-      await ui.press({ key: 'labels-b-done' })
+      await ui.press({ key: 'skip-page' })
+      await ui.press({ key: 'tones-info-overlay' })
       await ui.unmount()
     }
-    const perSurface = ['rr-gallery: pressed labels-c-open', 'rr-gallery: pressed labels-b-done']
+    const perSurface = ['rr-gallery: pressed skip-page', 'rr-gallery: pressed tones-info-overlay']
     expect(world.toasts).toEqual([...perSurface, ...perSurface])
   })
 })

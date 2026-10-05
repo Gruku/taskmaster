@@ -2,43 +2,60 @@
 // and tuned on one screen against screenshots.
 import type { RenderNode } from 'claude-code'
 
-import type { RrGround, RrLevel, RrSignalKind, RrTokens, RrTone } from '../types'
+import type { RrGround, RrLevel, RrSignalKind, RrTokens, RrTone, RrTreatment } from '../types'
 import * as kit from './kit'
 import { RR_SOURCE } from './tokens'
 
 const LEVELS: readonly RrLevel[] = ['raised', 'overlay', 'recessed']
 const KINDS: readonly RrSignalKind[] = ['success', 'warning', 'critical', 'info']
 const TONES: readonly RrTone[] = ['success', 'warning', 'critical', 'info', 'signature']
-const CHIP_GROUNDS: readonly Exclude<RrGround, 'page'>[] = ['raised', 'overlay']
-// Tuning round 1: a Button's label has no colour of its own, so three ways of drawing one are compared by eye.
-const LABEL_SETS: readonly { tone: RrTone; labels: readonly string[] }[] = [
-  { tone: 'success', labels: ['done'] },
-  { tone: 'warning', labels: ['back to agent'] },
-  { tone: 'signature', labels: ['skip', 'open'] },
+const GROUNDS: readonly RrGround[] = ['page', 'raised', 'overlay']
+// The buttons taskmaster-tui draws (d done is the one primary), then one chip per tone; only the page row arms hotkeys, since
+// two Buttons on one hotkey clash.
+const PRIMARY_ROW: readonly { id: string; key: string; label: string; tone: RrTone }[] = [
+  { id: 'back-to-agent', key: 'a', label: 'back to agent', tone: 'warning' },
+  { id: 'skip', key: 's', label: 'skip', tone: 'signature' },
+  { id: 'open', key: 'o', label: 'open', tone: 'signature' },
 ]
-const VARIANT_CAPTIONS = ['a  chip, engine label', 'b  variant=primary', 'c  plain › + own text'] as const
-const VARIANT_NOTES = [
-  'a: chip treatment; the engine draws the label in the terminal default foreground',
-  'b: Button variant=primary; the engine draws [ label ] in its accent colour, no tint',
-  'c: plain Button holding the glyph ›, then our Text in foreground-bold on the chip tint',
-] as const
-const VARIANT_WIDTH = 22
-
-const slug = (text: string) => text.replace(/\s+/g, '-')
+const TONE_SAMPLES: Readonly<Record<RrTone, { key: string; label: string }>> = {
+  success: { key: 'r', label: 'resume' },
+  warning: { key: 'a', label: 'back' },
+  critical: { key: 'x', label: 'discard' },
+  info: { key: 'c', label: 'copy' },
+  signature: { key: 'o', label: 'open' },
+}
 
 const box = (props: Record<string, unknown>, ...children: unknown[]): RenderNode => h('Box', props, ...children) as RenderNode
 
-export type Demo = (key: string, label: string, variant?: 'primary') => RenderNode
+/**
+ * The consumer's Button for a keyed button: `[ key ]`, armed with `hotkey` when `live`. Drawn by register.tsx, which owns the
+ * press handlers.
+ */
+export type Demo = (id: string, key: string, live: boolean) => RenderNode
+
+/** A keyed button assembled from kit.keyedButton's parts around the consumer's own Button (the recipe in types/index.d.ts). */
+export function keyed(
+  t: RrTokens,
+  a: { id: string; treatment: RrTreatment; tone: RrTone; on?: RrGround; label: string },
+  pressable: RenderNode,
+): RenderNode {
+  const parts = kit.keyedButton(t, a)
+  return box({ key: `${a.id}-box`, ...parts.box }, box(parts.keycap, pressable), parts.label)
+}
 
 export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode {
   const section = (name: string, ...rows: RenderNode[]) => box({ flexDirection: 'column' }, kit.label(t, { text: name }), ...rows)
-  const buttons = (on: RrGround) =>
+  const primaryRow = box(
+    { flexDirection: 'row', columnGap: 1, alignItems: 'flex-start' },
+    keyed(t, { id: 'outline-page', treatment: 'outline', tone: 'success', label: 'done' }, demo('outline-page', 'd', true)),
+    ...PRIMARY_ROW.map(b => keyed(t, { id: `${b.id}-page`, treatment: 'chip', tone: b.tone, label: b.label }, demo(`${b.id}-page`, b.key, true))),
+  )
+  const toneRow = (on: RrGround) =>
     box(
-      { flexDirection: 'row', columnGap: 1, alignItems: 'flex-start' },
-      ...(on === 'page' ? [box(kit.button(t, { treatment: 'outline', tone: 'success' }), demo('outline-page', 'done'))] : []),
-      box(kit.button(t, { treatment: 'chip', tone: 'warning', on }), demo(`back-${on}`, 'back to agent')),
-      box(kit.button(t, { treatment: 'chip', tone: 'signature', on }), demo(`skip-${on}`, 'skip')),
-      box(kit.button(t, { treatment: 'chip', tone: 'signature', on }), demo(`open-${on}`, 'open')),
+      { flexDirection: 'row', columnGap: 1 },
+      ...TONES.map(tone =>
+        keyed(t, { id: `tones-${tone}-${on}`, treatment: 'chip', tone, on, label: TONE_SAMPLES[tone].label }, demo(`tones-${tone}-${on}`, TONE_SAMPLES[tone].key, false)),
+      ),
     )
   return box(
     { flexDirection: 'column', rowGap: 1 },
@@ -55,34 +72,12 @@ export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode 
     section('signals', ...KINDS.map(kind => kit.signal(t, { kind, word: kind, detail: `${kind} detail` }))),
     section(
       'buttons',
-      buttons('page'),
-      ...CHIP_GROUNDS.map(on => kit.surface(t, { level: on, children: [kit.row(t, { cells: [`on ${on}`], emphasis: 'quiet' }), buttons(on)] })),
-    ),
-    section(
-      'button labels',
-      box(
-        { flexDirection: 'row', columnGap: 1 },
-        ...VARIANT_CAPTIONS.map(caption => box({ width: VARIANT_WIDTH }, kit.row(t, { cells: [caption], emphasis: 'quiet' }))),
+      primaryRow,
+      ...GROUNDS.map(on =>
+        on === 'page'
+          ? box({ flexDirection: 'column' }, kit.row(t, { cells: ['on page'], emphasis: 'quiet' }), toneRow(on))
+          : kit.surface(t, { level: on, children: [kit.row(t, { cells: [`on ${on}`], emphasis: 'quiet' }), toneRow(on)] }),
       ),
-      ...LABEL_SETS.map(({ tone, labels }) => {
-        const chip = kit.button(t, { treatment: 'chip', tone })
-        const cell = (...children: RenderNode[]) => box({ flexDirection: 'row', columnGap: 1, width: VARIANT_WIDTH }, ...children)
-        return box(
-          { flexDirection: 'row', columnGap: 1 },
-          cell(...labels.map(text => box(chip, demo(`labels-a-${slug(text)}`, text)))),
-          cell(...labels.map(text => demo(`labels-b-${slug(text)}`, text, 'primary'))),
-          cell(
-            ...labels.map(text =>
-              box(
-                { key: `labels-c-${slug(text)}-box`, flexDirection: 'row', ...chip },
-                demo(`labels-c-${slug(text)}`, '›'),
-                h('Text', { color: t.fg.bold }, ` ${text}`),
-              ),
-            ),
-          ),
-        )
-      }),
-      ...VARIANT_NOTES.map(note => kit.row(t, { cells: [note], emphasis: 'quiet' })),
     ),
     section(
       'states',

@@ -23,6 +23,19 @@ function textOf(node: unknown): string {
   return ((node as { children?: unknown[] }).children ?? []).map(textOf).join('')
 }
 
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map(i => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }) as [number, number, number]
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+  return (hi + 0.05) / (lo + 0.05)
+}
+
 function everyElement(p: RrPolarity): unknown[] {
   const t = tokensFor(p)
   return [
@@ -41,6 +54,12 @@ function everyElement(p: RrPolarity): unknown[] {
       kit.chip(t, { text: tone, tone, strength: 24 }),
       { props: kit.button(t, { treatment: 'outline', tone }) },
       ...(['page', 'raised', 'overlay'] as const).map(on => ({ props: kit.button(t, { treatment: 'chip', tone, on }) })),
+      ...(['page', 'raised', 'overlay'] as const).flatMap(on =>
+        (['chip', 'outline'] as const).flatMap(treatment => {
+          const parts = kit.keyedButton(t, { treatment, tone, on, label: tone })
+          return [{ props: parts.box }, { props: parts.keycap }, parts.label]
+        }),
+      ),
     ]),
   ]
 }
@@ -100,6 +119,57 @@ describe('elements', () => {
     const rule = kit.rule(t, { width: 7 }) as unknown as { props: { color: string } }
     expect(textOf(rule)).toBe('───────')
     expect(rule.props.color).toBe(t.border.default)
+  })
+
+  test('a keyed chip is the 12% tint row holding a 24% tint keycap, then a bold foreground-bold label', () => {
+    const t = tokensFor('dark')
+    const parts = kit.keyedButton(t, { treatment: 'chip', tone: 'warning', on: 'raised', label: 'back to agent' })
+    expect(parts.box).toEqual({ backgroundColor: t.tint12.raised.warning, paddingX: 1, flexDirection: 'row' })
+    expect(parts.keycap).toEqual({ backgroundColor: t.tint24.raised.warning })
+    const label = parts.label as unknown as { type: string; props: { color: string; bold: boolean } }
+    expect(label.type).toBe('Text')
+    expect(label.props).toMatchObject({ color: t.fg.bold, bold: true })
+    expect(textOf(label)).toBe(' back to agent')
+  })
+
+  test('the keyed primary keeps the round tone outline, padded, with the same keycap and bold label', () => {
+    const t = tokensFor('light')
+    const parts = kit.keyedButton(t, { treatment: 'outline', tone: 'success', label: 'done' })
+    expect(parts.box).toEqual({ borderStyle: 'round', borderColor: t.tone.success, paddingX: 1, flexDirection: 'row' })
+    expect(parts.keycap).toEqual({ backgroundColor: t.tint24.page.success })
+    expect((parts.label as unknown as { props: { bold: boolean } }).props.bold).toBe(true)
+  })
+
+  test('the engine-drawn key stays legible on its keycap under auto, and the keycap stands off its chip', () => {
+    // Assumed colours the engine draws a Button label in: Windows Terminal default (#cccccc) under a dark theme, near-black
+    // under the Claude Code light theme (live round 1: labels read correctly there).
+    const DEFAULT_FG: Readonly<Record<'dark' | 'light', string>> = { dark: '#cccccc', light: '#000000' }
+    for (const p of ['dark', 'light'] as const) {
+      const t = tokensFor(p)
+      for (const tone of TONES) {
+        for (const on of ['page', 'raised', 'overlay'] as const) {
+          const parts = kit.keyedButton(t, { treatment: 'chip', tone, on, label: 'x' })
+          expect(contrast(parts.keycap.backgroundColor ?? '', DEFAULT_FG[p])).toBeGreaterThanOrEqual(4.5)
+          expect(parts.keycap.backgroundColor).not.toBe(parts.box.backgroundColor)
+        }
+      }
+    }
+  })
+
+  test('a survivalist keyed button is value only: grey-step chip, a keycap a step above it, bold label', () => {
+    const surv = tokensFor('survivalist')
+    const grounds = new Set(Object.entries(RR_TABLE.survivalist).filter(([k]) => /^ground-\d+$/.test(k)).map(([, v]) => v))
+    for (const on of ['page', 'raised', 'overlay'] as const) {
+      const parts = kit.keyedButton(surv, { treatment: 'chip', tone: 'critical', on, label: 'discard' })
+      expect(parts.box.backgroundColor).toBe(kit.button(surv, { treatment: 'chip', tone: 'critical', on }).backgroundColor)
+      const keycapBg = parts.keycap.backgroundColor ?? ''
+      expect(grounds.has(keycapBg)).toBe(true)
+      expect(keycapBg).not.toBe(parts.box.backgroundColor)
+      // Hue-free = a value on the survivalist ground ramp (as the no-hue sweep below defines it); the ramp warms slightly up
+      // its steps (#4d4c48), so no channel-spread bound applies here.
+      expect(contrast(keycapBg, '#cccccc')).toBeGreaterThanOrEqual(4.5)
+      expect((parts.label as unknown as { props: { bold: boolean; color: string } }).props).toMatchObject({ bold: true, color: surv.fg.bold })
+    }
   })
 
   test('a page surface paints bg-page, for pane roots', () => {

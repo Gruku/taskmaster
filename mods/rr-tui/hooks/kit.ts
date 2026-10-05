@@ -65,6 +65,20 @@ export function button(t: RrTokens, a: { treatment: RrTreatment; tone: RrTone; o
     : { backgroundColor: t.tint12[a.on ?? 'page'][a.tone], paddingX: 1 }
 }
 
+export function keyedButton(
+  t: RrTokens,
+  a: { treatment: RrTreatment; tone: RrTone; on?: RrGround; label: string },
+): { box: RrBoxProps; keycap: RrBoxProps; label: RenderNode } {
+  // The key letter inside the keycap is the engine's, drawn in the terminal's default foreground, which follows the theme
+  // under auto (light text on dark, dark on light): the 24% tint keeps it legible where the solid tone would not.
+  const ground = t.polarity === 'survivalist' ? t.border.strong : t.tint24[a.on ?? 'page'][a.tone]
+  return {
+    box: { ...button(t, a), flexDirection: 'row', ...(a.treatment === 'outline' ? { paddingX: 1 } : {}) },
+    keycap: { backgroundColor: ground },
+    label: el('Text', { color: t.fg.bold, bold: true }, ` ${a.label}`),
+  }
+}
+
 export function keycap(t: RrTokens, a: { key: string; tone: RrTone }): RenderNode {
   return el('Text', { backgroundColor: t.keycap[a.tone].bg, color: t.keycap[a.tone].ink, bold: true }, ` ${a.key} `)
 }
