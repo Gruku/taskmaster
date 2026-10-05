@@ -76,7 +76,7 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       onChange: (v) => set(f, v),
       onCommit: (v) => set(f, v),
       // No onCancel: Escape in a field with nothing of its own to close belongs to the modal.
-      id, describedBy: f.errEl.id, autoFocus: false,
+      id, describedBy: f.errEl.id, autoFocus: false, entityId: initial.id,
     });
   }
 

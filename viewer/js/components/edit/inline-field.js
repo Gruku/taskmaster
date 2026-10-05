@@ -97,6 +97,7 @@ export function mountInlineField(parent, {
         },
         onCancel: cancel,
         getBacklog,
+        entityId: currentEntity.id,
         ...fieldSpec,
       });
       editor = el;

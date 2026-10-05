@@ -59,14 +59,14 @@ test('RelationPicker: Escape with the suggestion list open closes the list only;
   let cancelled = 0;
   for (const args of [{}, { onCancel: () => { cancelled++; } }]) {
     const { el, control } = mount('RelationPicker', args);
-    const list = el.querySelector('.ef-chip-dropdown');
+    control.focus();   // typed into, as a user does
     control.value = 'T-10';
     control.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     await tick();
-    assert.equal(list.hidden, false);
+    const list = el.querySelector('.ef-chip-dropdown');
     assert.equal(list.querySelectorAll('.ef-chip-dd-row').length, 2);
     assert.equal(press(control, 'Escape'), false, 'the list used the key');
-    assert.equal(list.hidden, true);
+    assert.equal(list.isConnected, false);
     assert.equal(cancelled, 0, 'closing the list is not cancelling the edit');
     press(control, 'Enter');
     assert.equal(el.querySelectorAll('.ef-chip').length, 0, 'a closed list offers nothing to Enter');
@@ -84,20 +84,21 @@ test('ChipInput: Escape with typed text clears the text first; a list a slow sou
   assert.equal(control.value, '');
   answer(['viewer']);
   await tick();
-  assert.equal(el.querySelector('.ef-chip-dropdown').hidden, true);
+  assert.equal(el.querySelector('.ef-chip-dropdown'), null);
   assert.equal(press(control, 'Escape'), true);
 });
 
 test('ChipInput: leaving the input closes the list; free text that was typed becomes a chip instead of being lost', async () => {
   const changes = [];
   const { el, control } = mount('ChipInput', { value: ['a'], source: async () => ['alpha', 'alps'], onChange: (v) => changes.push(v) });
+  control.focus();
   control.value = 'al';
   control.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   await tick();
-  assert.equal(el.querySelector('.ef-chip-dropdown').hidden, false);
+  assert.notEqual(el.querySelector('.ef-chip-dropdown'), null);
   control.dispatchEvent(new dom.window.Event('blur'));
   await tick(120);
-  assert.equal(el.querySelector('.ef-chip-dropdown').hidden, true);
+  assert.equal(el.querySelector('.ef-chip-dropdown'), null);
   assert.deepEqual(changes.at(-1), ['a', 'al']);
   assert.equal(control.value, '');
 });

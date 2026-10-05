@@ -363,3 +363,39 @@ test('11. close is idempotent: onClose runs once', () => {
   p.close('escape');
   assert.deepEqual(p.reasons, ['api']);
 });
+
+test('8. the item focused on open is scrolled into view within the list, so a checked item far down is seen', () => {
+  const seen = [];
+  const proto = dom.window.HTMLElement.prototype;
+  const had = Object.getOwnPropertyDescriptor(proto, 'scrollIntoView');
+  proto.scrollIntoView = function scrollIntoView(opts) { seen.push([this, opts]); };
+  try {
+    const items = menuItems(20, (i) => ({ 'aria-checked': String(i === 17) }));
+    open({ content: items, focus: 'checked' });
+    assert.equal(document.activeElement, items[17]);
+    assert.deepEqual(seen, [[items[17], { block: 'nearest' }]]);
+  } finally {
+    if (had) Object.defineProperty(proto, 'scrollIntoView', had); else delete proto.scrollIntoView;
+  }
+});
+
+test('9. an arrow with Alt, Ctrl or Meta, or one already used by someone else, is left alone', () => {
+  const items = menuItems(3);
+  const p = open({ content: items });
+  for (const mod of ['altKey', 'ctrlKey', 'metaKey']) {
+    for (const k of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+      const e = new dom.window.KeyboardEvent('keydown', { key: k, [mod]: true, bubbles: true, cancelable: true });
+      items[1].focus();
+      items[1].dispatchEvent(e);
+      assert.equal(document.activeElement, items[1], `${mod}+${k}`);
+      assert.equal(e.defaultPrevented, false, `${mod}+${k} is not used up`);
+    }
+  }
+  items[1].focus();
+  const taken = (e) => e.preventDefault();
+  items[1].addEventListener('keydown', taken);
+  key(items[1], 'ArrowDown');
+  assert.equal(document.activeElement, items[1], 'a key already used is not used again');
+  items[1].removeEventListener('keydown', taken);
+  p.close();
+});
