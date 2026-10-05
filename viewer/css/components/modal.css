@@ -110,4 +110,10 @@ body.modal-open { overflow: hidden; }
   .modal-footer { padding-bottom: max(var(--space-md), env(safe-area-inset-bottom)); }
   .modal-close { width: 44px; height: 44px; }
   .modal-heading { min-height: 44px; }
+  /* A question is not a page: the confirm keeps its frame, its answers right under it. */
+  .modal-overlay:has(> .modal--confirm) { padding: var(--space-2xl) var(--space-md); }
+  .modal.modal--confirm { height: auto; max-height: 100%; border: 1px solid var(--border-default); border-radius: var(--radius-xl); }
+  .modal--confirm .modal-header { padding-top: var(--space-md); }
+  .modal--confirm .modal-footer { padding-bottom: var(--space-md); }
+  .modal--confirm .modal-footer .btn { min-height: 44px; }
 }

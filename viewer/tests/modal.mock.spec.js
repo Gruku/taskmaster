@@ -240,6 +240,22 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
   });
 }
 
+// A two-line question is not a page: as a full-height sheet the answers sat ~700px below it on an empty screen.
+test('at 390x844 a confirm stays a compact dialog with its answers right under the question', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  await page.evaluate(() => { window.__answer = window.__m.confirmDialog({ title: 'Discard changes?', message: 'Your edits to this task will be lost.', confirmLabel: 'Discard', tone: 'critical' }); });
+  const confirm = page.getByRole('dialog', { name: 'Discard changes?' });
+  await expect(confirm).toBeVisible();
+  await expect.poll(async () => (await confirm.boundingBox()).height).toBeLessThan(844 / 2);
+  const box = await confirm.boundingBox();
+  expect(box.x).toBeGreaterThan(0);
+  expect(box.x + box.width).toBeLessThan(390);
+  const discard = await confirm.getByRole('button', { name: 'Discard' }).boundingBox();
+  expect(Math.min(discard.width, discard.height)).toBeGreaterThanOrEqual(44);
+  expect(discard.y + discard.height).toBeLessThanOrEqual(box.y + box.height);
+});
+
 for (const theme of ['dark', 'light']) {
   test(`no shadow on overlay or dialog; modal surfaces come from tokens (${theme})`, async ({ page }) => {
     await boot(page, { theme });
