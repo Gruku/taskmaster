@@ -3,7 +3,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode } from 'claude-code'
 
-import type { Rr, RrNode, RrPolarity } from '../types'
+import type { Rr, RrNode, RrPolarity, RrTokens } from '../types'
 import { galleryTree } from './gallery'
 import * as kit from './kit'
 import { resolvePolarity, tokensFor } from './polarity'
@@ -15,41 +15,65 @@ const GALLERY = 'rr-gallery'
 const out = (node: RenderNode): RrNode => node as unknown as RrNode
 const back = (nodes: readonly RrNode[]): RenderNode[] => nodes as unknown as RenderNode[]
 
-// Module state: a hot reload re-imports the module, so this starts fresh with it. A function that takes `$` must be declared
-// at the top of the file (validator rule), so publish() reads this object instead of closure variables.
-const mod = { setting: 'auto', theme: undefined as unknown, override: 'none' as RrPolarity | 'none', active: 'dark' as RrPolarity }
-const tokens = () => tokensFor(mod.active)
+// `$.state` is the single source of truth for the polarity: every $.rr call and every gallery draw resolves it afresh from the
+// persisted override, the theme row and the setting, so a hot reload or a /clear can never leave $.rr and the gallery apart.
+// Only the setting lives here: every load (a hot reload or a config change included) hands register() its options anew.
+const mod = { setting: 'auto' }
+
+async function effective($: EngineInterface): Promise<RrPolarity> {
+  const override = await read($, OVERRIDE)
+  if (override !== 'none') return override
+  return resolvePolarity(mod.setting, (await $.config.list()).find(row => row.key === 'theme')?.value)
+}
+
+async function tokensOf($: EngineInterface): Promise<RrTokens> {
+  return tokensFor(await effective($))
+}
 
 async function publish($: EngineInterface): Promise<void> {
-  mod.active = mod.override === 'none' ? resolvePolarity(mod.setting, mod.theme) : mod.override
-  await update($, POLARITY, () => mod.active)
+  const active = await effective($)
+  await update($, POLARITY, () => active)
 }
 
 export const register: Register = (on, options) => {
   mod.setting = typeof options.polarity === 'string' ? options.polarity : 'auto'
-  mod.active = resolvePolarity(mod.setting, mod.theme)
 
+  // The noun's own bodies get no `$`, so they cannot read $.state. rr-tui's rr.* hooks below sit above them and answer every
+  // call from $.state; a body runs only if such a hook failed, and then refuses rather than draw a polarity the gallery doesn't.
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
+    const refuse = async (): Promise<never> => {
+      throw new Error('rr-tui: $.rr could not read the polarity from $.state (its rr.* hook failed; see the debug log)')
+    }
     const rr: Rr = {
-      tokens: async () => tokens(),
-      polarity: async () => mod.active,
-      surface: async a => out(kit.surface(tokens(), { ...a, children: back(a.children) })),
-      surfaceProps: async a => kit.surfaceProps(tokens(), a),
-      label: async a => out(kit.label(tokens(), a)),
-      signal: async a => out(kit.signal(tokens(), a)),
-      row: async a => out(kit.row(tokens(), { ...a, cells: back(a.cells) })),
-      rule: async a => out(kit.rule(tokens(), a)),
-      button: async a => kit.button(tokens(), a),
-      keycap: async a => out(kit.keycap(tokens(), a)),
-      chip: async a => out(kit.chip(tokens(), a)),
+      tokens: refuse,
+      polarity: refuse,
+      surface: refuse,
+      surfaceProps: refuse,
+      label: refuse,
+      signal: refuse,
+      row: refuse,
+      rule: refuse,
+      button: refuse,
+      keycap: refuse,
+      chip: refuse,
     }
     return { ...built, rr }
   })
 
+  on('rr.tokens', async $ => ({ value: await tokensOf($) }))
+  on('rr.polarity', async $ => ({ value: await effective($) }))
+  on('rr.surface', async ($, a) => ({ value: out(kit.surface(await tokensOf($), { ...a, children: back(a.children) })) }))
+  on('rr.surfaceProps', async ($, a) => ({ value: kit.surfaceProps(await tokensOf($), a) }))
+  on('rr.label', async ($, a) => ({ value: out(kit.label(await tokensOf($), a)) }))
+  on('rr.signal', async ($, a) => ({ value: out(kit.signal(await tokensOf($), a)) }))
+  on('rr.row', async ($, a) => ({ value: out(kit.row(await tokensOf($), { ...a, cells: back(a.cells) })) }))
+  on('rr.rule', async ($, a) => ({ value: out(kit.rule(await tokensOf($), a)) }))
+  on('rr.button', async ($, a) => ({ value: kit.button(await tokensOf($), a) }))
+  on('rr.keycap', async ($, a) => ({ value: out(kit.keycap(await tokensOf($), a)) }))
+  on('rr.chip', async ($, a) => ({ value: out(kit.chip(await tokensOf($), a)) }))
+
   on('session.start', async ($, e, next) => {
-    mod.theme = (await $.config.list()).find(row => row.key === 'theme')?.value
-    mod.override = await read($, OVERRIDE)
     await publish($)
     await $.command.register({ name: GALLERY, description: 'Open the Reality Reprojection gallery: every $.rr element in every state' })
     return next(e)
@@ -57,11 +81,14 @@ export const register: Register = (on, options) => {
 
   on('config.set', { key: 'theme' }, async ($, e, next) => {
     const done = await next(e)
-    if (done.deny === undefined) {
-      mod.theme = done.value
-      await publish($)
-    }
+    if (done.deny === undefined) await publish($)
     return done
+  })
+
+  // /clear, /resume and /branch reset $.state without a new session.start; republish so the atom matches $.rr again.
+  on('classic.SessionStart', async ($, e, next) => {
+    await publish($)
+    return next(e)
   })
 
   on('command.run', { command: GALLERY }, async $ => {
@@ -72,10 +99,10 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: GALLERY }, async ($, e) => {
     const { Box, Button } = $.ui.resolve(e)
-    const shown = await read($, POLARITY)
+    await read($, POLARITY) // subscribes the pane, so a theme change redraws it
+    const shown = await effective($)
     const t = tokensFor(shown)
     const flip = (to: RrPolarity | 'none') => async () => {
-      mod.override = to
       await update($, OVERRIDE, () => to)
       await publish($)
     }

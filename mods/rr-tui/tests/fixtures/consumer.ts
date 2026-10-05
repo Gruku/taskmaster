@@ -9,5 +9,19 @@ export const CONSUMER: Plugin = {
       const t = await $.rr.tokens()
       return { text: JSON.stringify({ polarity: await $.rr.polarity(), signatureText: t.signatureText }) }
     })
+    on('command.run', { command: 'rr-probe-all' }, async $ => {
+      const answers = {
+        surface: await $.rr.surface({ level: 'raised', children: ['x'] }),
+        surfaceProps: await $.rr.surfaceProps({ level: 'overlay' }),
+        label: await $.rr.label({ text: 'review' }),
+        signal: await $.rr.signal({ kind: 'info', word: 'note' }),
+        row: await $.rr.row({ cells: ['a', 'b'] }),
+        rule: await $.rr.rule({ width: 3 }),
+        button: await $.rr.button({ treatment: 'outline', tone: 'success' }),
+        keycap: await $.rr.keycap({ key: 'd', tone: 'success' }),
+        chip: await $.rr.chip({ text: 'refused', tone: 'critical', strength: 24 }),
+      }
+      return { text: JSON.stringify(answers) }
+    })
   },
 }
