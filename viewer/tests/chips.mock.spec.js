@@ -54,6 +54,11 @@ const addAhead = (page) => page.evaluate(() => {
   window.__extra = [{ value: 'new', label: 'Brand new' }];
   window.__row.update(window.__chips());
 });
+// Everything the row shows ends inside it: nothing, More least of all, is clipped by its overflow.
+const fitsInRow = (page) => page.locator('.chip-row__chips').evaluate((row) => {
+  const edge = row.getBoundingClientRect().right;
+  return [...row.children].filter((c) => !c.hidden && !c.classList.contains('popover')).every((c) => c.getBoundingClientRect().right <= edge + 0.5);
+});
 const setWidth = (page, w) => page.evaluate((w) => { document.getElementById('chip-box').style.width = `${w}px`; }, w);
 
 test('at 600px the chips stay on one line and the rest list behind More, in order', async ({ page }) => {
@@ -65,12 +70,7 @@ test('at 600px the chips stay on one line and the rest list behind More, in orde
   expect(new Set(visible.map((v) => v.top)).size).toBe(1);
   expect(visible.map((v) => v.text)).toEqual(LABELS.slice(0, visible.length));
   await expect(more(page).locator('.overflow-more__count')).toHaveText(String(20 - visible.length));
-  // Everything the row shows fits inside it: nothing is clipped by its overflow.
-  const fits = await page.locator('.chip-row__chips').evaluate((row) => {
-    const edge = row.getBoundingClientRect().right;
-    return [...row.children].filter((c) => !c.hidden && !c.classList.contains('popover')).every((c) => c.getBoundingClientRect().right <= edge + 0.5);
-  });
-  expect(fits).toBe(true);
+  expect(await fitsInRow(page)).toBe(true);
 
   await more(page).click();
   await expect(pop(page)).toBeVisible();
@@ -100,6 +100,8 @@ test('a pressed chip parked behind More is announced on the More button', async 
   await expect(more(page).locator('.overflow-more__on')).toHaveText('· 1 on');
   const hidden = await more(page).locator('.overflow-more__count').textContent();
   await expect(more(page)).toHaveAccessibleName(`More Epic, ${hidden} hidden, 1 selected`);
+  // "· 1 on" widened More after it was measured; the row made room for it.
+  expect(await fitsInRow(page)).toBe(true);
   // Released, the announcement goes.
   await more(page).click();
   await pop(page).locator('.chip[data-value="e20"]').click();
@@ -108,6 +110,63 @@ test('a pressed chip parked behind More is announced on the More button', async 
 });
 
 // The brief said 1400px, but twenty chips with swatch and count measure about 2230px with their gaps.
+test('More never ends up clipped by the "· n on" it gains after it was measured, whatever the slack', async ({ page }) => {
+  await mount(page);
+  // A fresh row at each width across one chip's width, so the room left beside More takes every value, including too
+  // little for "· 1 on". Then a parked chip is pressed from outside (say a filter restored from the address): More
+  // is measured before "· 1 on" is added to it.
+  const clipped = await page.evaluate(async (labels) => {
+    const { chipRow } = await import('/js/components/chips.js');
+    const chips = (on) => labels.map((label, i) => ({ value: `e${i + 1}`, label, count: i + 1, pressed: on && i === 19 }));
+    const out = [];
+    for (let w = 540; w <= 660; w += 2) {
+      const r = chipRow({ label: 'Epic', chips: chips(false) });
+      const box = document.createElement('div');
+      box.style.width = `${w}px`;
+      box.append(r.el);
+      document.getElementById('screen-mount').append(box);
+      const row = r.el.querySelector('.chip-row__chips');
+      // A new observer's first report comes in the same delivery as the row's own, which was created first and so
+      // has laid the row out by then (frames alone are not enough: a delivery can lag them).
+      await new Promise((done) => { const ro = new ResizeObserver(() => { ro.disconnect(); done(); }); ro.observe(row); });
+      r.update(chips(true));
+      const more = row.querySelector('.overflow-more');
+      if (!more.querySelector('.overflow-more__on')) out.push(`${w}: nothing parked is announced`);
+      if (more.getBoundingClientRect().right > row.getBoundingClientRect().right + 0.5) out.push(`${w}: More clipped`);
+      r.destroy();
+      box.remove();
+    }
+    return out;
+  }, LABELS);
+  expect(clipped).toEqual([]);
+});
+
+test('a count that widens a visible chip in place makes room for itself', async ({ page }) => {
+  await mount(page);
+  // Every count grows by five digits, so the chips that were shown no longer all fit beside More.
+  const before = await rowChips(page).count();
+  await page.evaluate(() => {
+    const chips = window.__chips().map((c) => ({ ...c, count: c.count * 100000 }));
+    window.__row.update(chips);
+  });
+  expect(await fitsInRow(page)).toBe(true);
+  expect(await rowChips(page).count()).toBeLessThan(before);
+  const shown = await rowChips(page).count();
+  await expect(more(page).locator('.overflow-more__count')).toHaveText(String(20 - shown));
+});
+
+test('a focused chip that a narrower row parks hands focus to More, not to the page', async ({ page }) => {
+  await mount(page, { width: 900 });
+  const last = rowChips(page).last();
+  await last.focus();
+  const value = await last.getAttribute('data-value');
+  await setWidth(page, 400);
+  await expect(page.locator(`.chip[data-value="${value}"]`)).toHaveCount(0);
+  await expect(more(page)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(pop(page).locator(`.chip[data-value="${value}"]`)).toBeVisible();
+});
+
 test('widening to 2400px brings every chip back in order and hides More', async ({ page }) => {
   await mount(page);
   await expect(more(page)).toBeVisible();
@@ -147,6 +206,19 @@ test('a row change waiting on More does not move the visible chip that a press c
   await expect(first).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => window.__toggles)).toEqual(['e1']);
   await expect(rowChips(page).first()).toHaveAttribute('data-value', 'new');
+});
+
+test('a press that closes More and is dragged off without a click still lets the waiting change in', async ({ page }) => {
+  await mount(page);
+  await more(page).click();
+  await addAhead(page);
+  const box = await page.locator('.chip[data-value="e1"]').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + 200, { steps: 4 });
+  await page.mouse.up();
+  await expect(rowChips(page).first()).toHaveAttribute('data-value', 'new');
+  expect(await page.evaluate(() => window.__toggles)).toEqual([]);
 });
 
 test('a chip added while More is open waits for it to close, then the row lays out afresh', async ({ page }) => {

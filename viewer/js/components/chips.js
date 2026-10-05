@@ -92,12 +92,11 @@ export function chipRow({ label, chips, onToggle, hint }) {
     const shown = [...buttons.keys()];
     const same = list.length === shown.length && list.every((c, i) => shown[i] === c.value);
     deferred = null;
-    if (!same) {
-      if (ov.more.getAttribute('aria-expanded') === 'true') {
-        deferred = list;
-        ov.relayout();   // waits for More to close; its onLayout then applies the new set
-      } else arrange(list);
-    }
+    if (same) ov.relayout();   // a new count or label changes a chip's width in place
+    else if (ov.isOpen()) {
+      deferred = list;
+      ov.relayout();   // waits for More to close; its onLayout then applies the new set
+    } else arrange(list);
     announce();
   }
 

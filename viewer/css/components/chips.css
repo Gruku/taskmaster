@@ -3,6 +3,8 @@
 
 .chip-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .chip-row__label {
+  flex: none;
+  white-space: nowrap;
   font-family: var(--font-technical);
   font-weight: 800;
   font-size: var(--size-technical-label);
@@ -46,13 +48,9 @@
 .chip__swatch--cat-5 { background: var(--cat-5); }
 .chip__swatch--cat-6 { background: var(--cat-6); }
 
-/* .btn sets display, which would otherwise outrank the hidden attribute: More shows only while something is parked. */
-.overflow-more[hidden] { display: none; }
-
-/* The parked chips, listed in More's popover. */
-.overflow-list { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-micro); }
+/* The parked chips, listed in More's popover (overflow-row.css). */
 .overflow-list .chip { justify-content: space-between; }
 
 @media (max-width: 768px) {
-  .chip, .overflow-more { min-height: 44px; }
+  .chip { min-height: 44px; }
 }

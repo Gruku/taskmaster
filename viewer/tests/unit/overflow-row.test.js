@@ -41,6 +41,7 @@ test('6. without ResizeObserver nothing moves and More stays hidden', () => {
   assert.ok(ov.more.querySelector('.overflow-more__count'));
   assert.match(ov.more.textContent, /More/);
   assert.equal(ov.more.hidden, true);
+  assert.equal(ov.isOpen(), false);
   ov.relayout();
   row.append(Object.assign(document.createElement('button'), { textContent: 'late' }));
   assert.deepEqual([...row.children].slice(0, 5), kids);
