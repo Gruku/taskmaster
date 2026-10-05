@@ -8,7 +8,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>');
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 
-const { TASK_STATUS, PRIORITY, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
+const { TASK_STATUS, PRIORITY, BUG_STATUS, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
 
 const TASK = {
   todo: ['Todo', '○', 'neutral'],
@@ -24,9 +24,20 @@ const PRIO = {
   medium: ['Medium', '●', 'warning'],
   low: ['Low', '○', 'neutral'],
 };
+// Spec §5.1, by meaning: not started ○ subtle, complete ● success, moved on → subtle, dropped ✕ subtle. An open bug
+// is not started; it does not borrow the blocked tone — the "N open bugs blocking close" line carries the alarm.
+// "adopted" (taken into a task) has moved on into that task, as "promoted" has into an issue.
+const BUG = {
+  open: ['Open', '○', 'neutral'],
+  fixed: ['Fixed', '●', 'success'],
+  adopted: ['Adopted', '→', 'neutral'],
+  promoted: ['Promoted', '→', 'neutral'],
+  shelved: ['Shelved', '✕', 'neutral'],
+  archived: ['Archived', '✕', 'neutral'],
+};
 const TONES = ['neutral', 'accent', 'warning', 'critical', 'success', 'orange'];
 // None of the viewer's local fonts carries these glyphs, so each one is also named for the stylesheet to draw.
-const DRAWN = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '✕': 'cross' };
+const DRAWN = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '→': 'arrow', '✕': 'cross' };
 const HOSTILE = '<img src=x onerror=x>';
 
 test('every task status has the label, shape and tone of the spec table', () => {
@@ -34,6 +45,14 @@ test('every task status has the label, shape and tone of the spec table', () => 
   for (const [value, [label, shape, tone]] of Object.entries(TASK)) {
     assert.deepEqual(statusMeta('task', value), { label, shape, tone }, value);
     assert.deepEqual(TASK_STATUS[value], { label, shape, tone }, value);
+  }
+});
+
+test('every bug status has the shape and tone of its meaning in the spec table (§5.1)', () => {
+  assert.deepEqual(Object.keys(BUG_STATUS).sort(), Object.keys(BUG).sort());
+  for (const [value, [label, shape, tone]] of Object.entries(BUG)) {
+    assert.deepEqual(statusMeta('bug', value), { label, shape, tone }, value);
+    assertMarker(statusMarker('bug', value), { label, shape, tone });
   }
 });
 
@@ -111,7 +130,7 @@ test('priorityMarker builds the same structure', () => {
 });
 
 test('every shape in the tables has a drawn form', () => {
-  for (const m of [...Object.values(TASK_STATUS), ...Object.values(PRIORITY)]) assert.ok(DRAWN[m.shape], m.shape);
+  for (const m of [...Object.values(TASK_STATUS), ...Object.values(PRIORITY), ...Object.values(BUG_STATUS)]) assert.ok(DRAWN[m.shape], m.shape);
 });
 
 test('a status that carries markup is shown as text, never parsed', () => {
@@ -120,5 +139,13 @@ test('a status that carries markup is shown as text, never parsed', () => {
     assert.equal(el.querySelector('img'), null);
     assert.equal(el.querySelectorAll('*').length, 2, 'only the shape and the word');
     assert.equal(el.className, 'marker marker--neutral', 'the value never reaches a class name');
+  }
+});
+
+test('the stylesheet draws every named shape, the arrow included', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../../css/components/status.css', import.meta.url), 'utf8');
+  for (const name of Object.values(DRAWN)) {
+    assert.ok(css.includes(`[data-shape="${name}"]`), name);
   }
 });

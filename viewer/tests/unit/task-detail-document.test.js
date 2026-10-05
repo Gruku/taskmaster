@@ -538,7 +538,9 @@ test('linked bugs come from api.listBugs, after the sections and before the date
   // Each bug's status is a shape plus a word, from the shared bug status table.
   const statuses = [...section.querySelectorAll('.td-linked-bugs__status .marker')];
   assert.deepEqual(statuses.map((m) => m.querySelector('.marker__word').textContent), ['Open', 'Fixed']);
-  assert.deepEqual(statuses.map((m) => m.className), ['marker marker--critical', 'marker marker--success']);
+  // An open bug is not started (§5.1); the blocking line above carries the alarm, not each row.
+  assert.deepEqual(statuses.map((m) => m.className), ['marker marker--neutral', 'marker marker--success']);
+  assert.deepEqual(statuses.map((m) => m.querySelector('.marker__shape').dataset.shape), ['ring', 'dot']);
   const order = [...m.root.querySelector('.td-body').children].map((el) => el.dataset.test).filter(Boolean);
   assert.ok(order.indexOf('linked-bugs') < order.indexOf('dates'), order.join(','));
   m.done();

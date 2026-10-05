@@ -20,12 +20,15 @@ export const PRIORITY = freeze({
   low: ['Low', '○', 'neutral'],
 });
 
-// A bug that is open blocks its task from closing; one that is fixed no longer does.
+// By meaning, as the spec's status table has it: an open bug is not started, a fixed one complete, one adopted into a
+// task or promoted to an issue has moved on, a shelved or archived one is dropped. An open bug blocks its task from
+// closing, but the alarm is the task's "open bugs blocking close" line, not every bug row.
 export const BUG_STATUS = freeze({
-  open: ['Open', '◆', 'critical'],
-  shelved: ['Shelved', '○', 'neutral'],
+  open: ['Open', '○', 'neutral'],
   fixed: ['Fixed', '●', 'success'],
-  adopted: ['Adopted', '◐', 'accent'],
+  adopted: ['Adopted', '→', 'neutral'],
+  promoted: ['Promoted', '→', 'neutral'],
+  shelved: ['Shelved', '✕', 'neutral'],
   archived: ['Archived', '✕', 'neutral'],
 });
 
@@ -33,7 +36,7 @@ const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS };
 
 // None of the viewer's local fonts carries these glyphs, so the stylesheet draws each shape by name;
 // the glyph stays in the DOM as the fallback.
-const DRAWN = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '✕': 'cross' };
+const DRAWN = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '→': 'arrow', '✕': 'cross' };
 
 // Values arrive from task data and may be anything; one the table does not know is shown as it is, neutral.
 function lookup(table, value) {

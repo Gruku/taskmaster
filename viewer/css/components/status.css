@@ -37,6 +37,7 @@
 .marker__shape[data-shape="half"] { background: linear-gradient(to right, currentColor 50%, transparent 50%); }
 .marker__shape[data-shape="triangle"] { clip-path: polygon(50% 5%, 100% 95%, 0 95%); }
 .marker__shape[data-shape="diamond"] { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.marker__shape[data-shape="arrow"] { clip-path: polygon(0 40%, 50% 40%, 50% 10%, 100% 50%, 50% 90%, 50% 60%, 0 60%); }
 .marker__shape[data-shape="cross"] {
   background:
     linear-gradient(45deg, transparent calc(50% - 1px), currentColor calc(50% - 1px), currentColor calc(50% + 1px), transparent calc(50% + 1px)),
