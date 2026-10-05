@@ -138,6 +138,42 @@ test('Escape reverts without calling onSave', async () => {
   ctrl.destroy();
 });
 
+// Chrome blurs a focused input as it is removed, and a text field commits on blur. The editor that closes is taken
+// away while focused: that blur must neither write a cancelled draft nor end the edit a second time.
+test('the blur of an editor taken away as it closes writes nothing and ends the edit once', async () => {
+  const { store } = await import('../../js/store.js');
+  const saved = [];
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'gone-1', title: 'old' },
+    onSave: async (v) => { saved.push(v); },
+  });
+  try {
+    root.querySelector('.ef-text').click();
+    let input = root.querySelector('input');
+    input.value = 'cancelled draft';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+    input.dispatchEvent(new dom.window.FocusEvent('blur'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(saved, [], 'Escape wrote nothing');
+    assert.equal(root.querySelector('.ef-text').textContent, 'old');
+
+    store.beginEdit('gone-1');   // another editor of the same task holds a lease too
+    root.querySelector('.ef-text').click();
+    input = root.querySelector('input');
+    input.value = 'kept';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    for (let i = 0; i < 100 && root.querySelector('input'); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    input.dispatchEvent(new dom.window.FocusEvent('blur'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(saved, ['kept']);
+    assert.equal(store.isEditing('gone-1'), true, 'the other lease is still held: this edit ended once');
+    store.endEdit('gone-1');
+    assert.equal(store.isEditing('gone-1'), false);
+  } finally { ctrl.destroy(); root.remove(); }
+});
+
 test('readOnly skips edit mode entirely', () => {
   const root = document.createElement('div');
   document.body.appendChild(root);
@@ -272,7 +308,7 @@ test('a refusing 409 shows the server\'s reason as an error, raises no banner an
   } finally { ctrl.destroy(); host.remove(); root.remove(); }
 });
 
-test('a save error is shown as text beside the field, announced, and tied to the control; cancelling clears it', async () => {
+test('a save error is shown as text beside the field, announced, and tied to the control; cancelling keeps it in view', async () => {
   const root = document.createElement('div');
   document.body.append(root);
   const reason = 'Completion blocked: review-gate is still open';
@@ -294,8 +330,11 @@ test('a save error is shown as text beside the field, announced, and tied to the
     assert.equal(root.querySelector('.if-status-error').getAttribute('aria-hidden'), 'true', 'the glyph is not read twice');
 
     input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
-    assert.equal(message()?.textContent ?? '', '', 'cancelling clears the message');
+    // The field is back on the stored value, and the reason it is still that value stays said beside it.
     assert.equal(root.querySelector('.ef-text')?.textContent, 'old');
+    assert.equal(message().textContent, reason, 'cancelling keeps the reason in view');
+    root.querySelector('.ef-text').click();
+    assert.equal(message().textContent, '', 'opening the field again clears it');
   } finally { ctrl.destroy(); root.remove(); }
 });
 
@@ -316,9 +355,12 @@ test('a lost race (409 naming the current revision) still raises the banner, and
     input.value = 'mine';
     input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
     for (let i = 0; i < 400 && !host.querySelector('.cb-use-server'); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(root.querySelector('.if-error').textContent, 'Conflict — see banner');
     host.querySelector('.cb-use-server').click();
     assert.equal(store.getEtag('task:race-2'), 'rev-2');
     assert.equal(root.querySelector('.ef-text')?.textContent, 'peer');
+    assert.equal(root.querySelector('.if-error').textContent, '', 'settled: the banner it pointed to is gone, and so is the message');
+    assert.equal(root.querySelector('.if-status-error'), null);
   } finally { ctrl.destroy(); host.remove(); root.remove(); }
 });
 
@@ -405,6 +447,7 @@ test('a refused status choice puts the picker back on the stored value, keeps th
     t.outside.focus();
     assert.equal(t.select(), null);
     assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    assert.equal(t.root.querySelector('.if-error').textContent, reason, 'left with Tab, the reason is still said');
     assert.equal(store.isEditing('blur-2'), false);
   } finally { t.done(); }
 });
@@ -425,8 +468,81 @@ test('a refusal that arrives after the picker was left closes it then', async ()
     await until(() => !t.select());
     assert.equal(t.select(), null);
     assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    assert.equal(t.root.querySelector('.if-error').textContent, 'refused', 'closed by the refusal, it still says why');
     assert.equal(store.isEditing('blur-3'), false);
   } finally { t.done(); }
+});
+
+// ── A refusal stays said after the picker is left (plan 2b Task 4) ──
+test('a refused status choice keeps its reason in read mode and through a repaint, until the field is opened again', async () => {
+  const t = mountStatus('stay-1', async () => ({ error: 'Gates are still open' }));
+  const message = () => t.root.querySelector('.if-error');
+  try {
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const select = t.select();
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await until(() => message()?.textContent);
+    select.blur();
+    assert.equal(t.select(), null, 'read mode');
+    assert.equal(message().textContent, 'Gates are still open');
+    assert.ok(t.root.querySelector('.if-status-error'), 'the cross stays beside it');
+
+    t.ctrl.update({ id: 'stay-1', status: 'todo', title: 'changed elsewhere' });
+    assert.equal(t.select(), null);
+    assert.equal(message().textContent, 'Gates are still open', 'a repaint in read mode keeps it');
+
+    t.root.querySelector('.ef-enum').click();
+    assert.ok(t.select(), 'open again');
+    assert.equal(message().textContent, '', 'opening the field clears it');
+    assert.equal(t.root.querySelector('.if-status-error'), null);
+    assert.equal(t.select().hasAttribute('aria-describedby'), false, 'nothing describes the control any more');
+  } finally { t.done(); }
+});
+
+test('a status that saves after a refusal clears the reason', async () => {
+  let refuse = true;
+  const t = mountStatus('stay-2', async () => {
+    if (refuse) { refuse = false; return { error: 'Gates are still open' }; }
+  });
+  const message = () => t.root.querySelector('.if-error');
+  try {
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let select = t.select();
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await until(() => message()?.textContent);
+    select.blur();
+    assert.equal(message().textContent, 'Gates are still open');
+
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    select = t.select();
+    select.value = 'in-review';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await until(() => !t.select());
+    assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'In review');
+    assert.equal(message().textContent, '');
+  } finally { t.done(); }
+});
+
+test('the status glyph and the message go to messageHost when one is given, and leave with the field', () => {
+  const root = document.createElement('h2');
+  const messageHost = document.createElement('div');
+  document.body.append(root, messageHost);
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'host-1', title: 'Named' }, onSave: async () => {}, messageHost,
+  });
+  try {
+    assert.equal(root.querySelector('.if-status, .if-error'), null, 'nothing but the field in the heading');
+    assert.ok(messageHost.querySelector(':scope > .if-status'));
+    assert.ok(messageHost.querySelector(':scope > .if-error'));
+    assert.equal(root.textContent, 'Named');
+    ctrl.destroy();
+    assert.equal(messageHost.children.length, 0);
+  } finally { root.remove(); messageHost.remove(); }
 });
 
 // ── Errors in words (I-2) and a timer that outlives its save (M-5) ──

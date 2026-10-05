@@ -1,7 +1,7 @@
 // viewer/tests/unit/task-detail-document.test.js
 // Unit tests for the task document template (page and embedded chrome) and its inline editing.
 // Uses JSDOM + node:test — no Playwright needed.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 
@@ -74,25 +74,40 @@ const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
 // --- Tests ---
 
-test('a live claim banner disappears at expiry without a board refresh', async () => {
+test('a live claim banner disappears at expiry without a board refresh', () => {
+  // The clock is the test's: on a real one, a first mount slower than the claim's remaining life (a cold module under
+  // a loaded suite) found the claim already expired and the banner gone before it could be looked at.
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-10-05T12:00:00Z') });
   const ctx = makeCtx();
   ctx.claim = {state: 'held', expired: false, holder: 'peer', expires_at: new Date(Date.now() + 100).toISOString()};
   const root = document.createElement('div');
   document.body.appendChild(root);
-  const dispose = mountTaskDetailDocument(root, ctx);
+  let dispose;
   try {
+    dispose = mountTaskDetailDocument(root, ctx);
     const banner = root.querySelector('.td-lock-banner');
     assert.ok(banner);
     assert.match(banner.textContent, /Locked by peer/);
     assert.ok(!ISO.test(banner.textContent), 'the expiry is not printed as a raw ISO string');
-    // Timers run late on a loaded machine: wait for the expiry, bounded, rather than a fixed 140 ms.
-    for (let i = 0; i < 100 && root.querySelector('.td-lock-banner'); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    mock.timers.tick(99);
+    assert.ok(root.querySelector('.td-lock-banner'), 'still held a millisecond before expiry');
+    mock.timers.tick(1);
     assert.equal(root.querySelector('.td-lock-banner'), null);
   } finally {
-    // A failure here must not leave a mounted document behind for the tests that follow.
-    dispose();
+    // A failure here must not leave a mounted document, or a mocked clock, behind for the tests that follow.
+    dispose?.();
     root.remove();
+    mock.timers.reset();
   }
+});
+
+test('a claim that is already past its expiry when the document mounts shows no banner', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-10-05T12:00:00Z') });
+  try {
+    const t = mount(FAKE_TASK, { claim: { state: 'held', expired: false, holder: 'peer', expires_at: '2026-10-05T11:59:59Z' } });
+    assert.equal(t.root.querySelector('.td-lock-banner'), null);
+    t.done();
+  } finally { mock.timers.reset(); }
 });
 
 // ── Template line 1: meta line ──
@@ -147,6 +162,10 @@ test('page chrome: the title is an h1 holding the inline field', () => {
   assert.equal(titleEl.tagName, 'H1');
   assert.ok(titleEl.querySelector('.if-wrap[data-key="title"]'), 'title contains inline-field wrap (.if-wrap)');
   assert.equal(titleEl.querySelector('.ef-text').textContent, 'Test task');
+  const message = titleEl.nextElementSibling;
+  assert.ok(message?.matches('div.td-title-message'), 'the title says what went wrong right after the h1, not inside it');
+  assert.equal(message.parentElement.className, 'td-head');
+  assert.equal(titleEl.querySelector('.if-status, .if-error'), null);
   t.done();
 });
 
@@ -159,8 +178,11 @@ test('embedded chrome: no meta line and no title in the document; the title fiel
   assert.equal(t.root.querySelector('h1, h2'), null, 'the dialog owns the h2; the document starts below it');
   assert.ok(!t.root.textContent.includes('Test task'), 'the title text is not repeated in the body');
   assert.equal(titleHost.querySelector('.if-wrap[data-key="title"] .ef-text').textContent, 'Test task');
-  // The body starts at the marker row.
-  assert.equal(t.root.querySelector('.td-body').firstElementChild.dataset.test, 'chips');
+  // The body starts with the title's message host (empty, so not shown), then the marker row.
+  const [first, second] = t.root.querySelector('.td-body').children;
+  assert.ok(first.matches('div.td-title-message'));
+  assert.equal(second.dataset.test, 'chips');
+  assert.equal(titleHost.querySelector('.if-status, .if-error'), null, 'the host holds the field alone');
   // The phase has no meta line to sit in, so it joins the tags.
   assert.match(t.root.querySelector('[data-tag="phase"]').textContent, /p1/);
   t.dispose();
@@ -453,6 +475,43 @@ test('rememberView: an open disclosure is re-opened even when focus was elsewher
   last.done();
 });
 
+test('rememberView: a refusal still said beside a field is said again after a re-mount, without a second announcement', async () => {
+  const reason = 'Completion blocked: review-gate is still open';
+  const api = { ...makeCtx().api, patchTask: async () => { throw Object.assign(new Error(reason), { code: 409 }); } };
+  const t = mount(FAKE_TASK, { api });
+  const message = (root) => root.querySelector('[data-field="status"] .if-error');
+  t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+  const select = t.root.querySelector('[data-field="status"] select');
+  select.value = 'done';
+  select.dispatchEvent(new dom.window.Event('change'));
+  for (let i = 0; i < 100 && !message(t.root).textContent; i++) await tick(5);
+  select.blur();
+  assert.equal(t.root.querySelector('[data-field="status"] select'), null, 'left: read mode');
+  assert.equal(message(t.root).textContent, reason);
+  const restore = rememberView(t.root);
+  t.done();
+
+  const next = mount(FAKE_TASK, { api });
+  try {
+    restore(next.root);
+    assert.equal(message(next.root).textContent, reason);
+    assert.ok(next.root.querySelector('[data-field="status"] .if-status-error'));
+    assert.equal(message(next.root).getAttribute('aria-live'), 'off', 'already announced once; not again for the re-mount');
+    assert.equal(message(next.root).getAttribute('role'), 'alert');
+    next.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    assert.equal(message(next.root).textContent, '', 'opening the field clears it');
+    assert.equal(message(next.root).hasAttribute('aria-live'), false, 'the next refusal is announced again');
+  } finally { next.done(); }
+});
+
+test('rememberView with no scope gives back a restore that restores nothing, called with or without a target', () => {
+  const restore = rememberView(null);
+  assert.equal(restore(), false);
+  const t = mount();
+  assert.equal(restore(t.root), false);
+  t.done();
+});
+
 test('rememberView: a menu button reading expanded is never clicked open again', () => {
   const menu = (expanded) => {
     const root = document.createElement('div');
@@ -622,6 +681,31 @@ test('an inline save the server refuses with a 409 is an error with its reason, 
     assert.equal(t.root.querySelector('[data-field="status"] .if-status-error')?.title, reason);
     assert.equal(host.children.length, 0, 'no conflict banner');
   } finally { t.done(); host.remove(); }
+});
+
+test('a refused title save in the dialog says why under the heading and leaves the heading exactly the title', async () => {
+  const reason = 'Titles are frozen during review';
+  const h2 = document.createElement('h2');
+  const titleHost = document.createElement('span');
+  h2.appendChild(titleHost);
+  document.body.appendChild(h2);
+  const api = { ...makeCtx().api, patchTask: async () => { throw Object.assign(new Error(reason), { code: 409 }); } };
+  const t = mount(FAKE_TASK, { chrome: 'embedded', titleHost, api });
+  const message = () => t.root.querySelector('.td-title-message');
+  try {
+    titleHost.querySelector('.ef-text').click();
+    const input = titleHost.querySelector('input');
+    input.value = 'Renamed';
+    press(input, 'Enter');
+    for (let i = 0; i < 100 && !message().querySelector('.if-error').textContent; i++) await tick(5);
+    assert.equal(message().querySelector('.if-error').textContent, reason);
+    assert.ok(input.getAttribute('aria-describedby').split(' ').includes(message().querySelector('.if-error').id),
+      'the open editor is described by the message under the heading');
+    assert.equal(h2.querySelector('.if-error, .if-status'), null, 'nothing but the field in the heading');
+    press(input, 'Escape');
+    assert.equal(h2.textContent, 'Test task');
+    assert.equal(message().querySelector('.if-error').textContent, reason, 'and it is still said after the editor closes');
+  } finally { t.done(); h2.remove(); }
 });
 
 // A save that landed is never reported as failed because the board refresh after it did not (M-3).

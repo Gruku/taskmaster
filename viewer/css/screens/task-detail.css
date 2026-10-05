@@ -55,6 +55,23 @@
 .td-title { margin: 0; max-width: 80ch; }
 .td-title-host { display: block; }
 
+/* A refused title save is said on its own line under the heading, never inside it: the heading names the dialog.
+   It always holds the field's glyph and message elements, so "empty" means both of them are. */
+.td-title-message {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs);
+  max-width: 80ch;
+}
+.td-title-message:empty,
+.td-title-message:not(:has(> :not(:empty))) { display: none; }
+.td-title-message > .if-status { margin-left: 0; }
+.td-title-message > .ef-error { flex: 1 1 0; min-width: 0; margin: 0; }
+/* In the dialog it opens the body; hidden, it must not push the marker row down. */
+.td-body > .td-title-message { margin-bottom: var(--space-sm); }
+.td-body > .td-title-message + * { margin-top: 0; }
+
 /* ---------- Copy buttons: the id, the branch, the worktree ---------- */
 .td-copy {
   display: inline-flex;

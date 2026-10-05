@@ -5,6 +5,7 @@
 //   chrome 'page'     — the meta line and an h1 title head the document.
 //   chrome 'embedded' — the dialog shows the id and the title; the title's inline field mounts in `titleHost`
 //                       and the document starts at the marker row.
+// Either way a refused title save is said under the heading, never inside it: the heading names the dialog.
 
 import { renderMarkdown } from './markdown.js';
 import { railPanels } from './right-rail.js';
@@ -109,21 +110,25 @@ export function openEditForm(ctx) {
 const OPEN_TOGGLE = 'button[aria-expanded="true"][data-focus]:not([aria-haspopup])';
 const SHUT_TOGGLE = 'button[aria-expanded="false"][data-focus]:not([aria-haspopup])';
 
-// What the user had open and where focus sat inside `scope`, as something a re-mounted document can find again.
-// Returns a function that re-opens the same disclosures under `next`, puts focus on the same thing, and says
-// whether focus could be restored.
+// What the user had open, what a field was still saying about a refused save, and where focus sat inside `scope`, as
+// something a re-mounted document can find again. Returns a function that re-opens the same disclosures under `next`,
+// says the same refusals beside the same fields, puts focus on the same thing, and says whether focus could be restored.
 export function rememberView(scope) {
   const open = scope ? [...scope.querySelectorAll(OPEN_TOGGLE)].map((b) => b.dataset.focus) : [];
+  const said = scope ? [...scope.querySelectorAll('.if-wrap[data-key]')]
+    .map((w) => [w.dataset.key, w.refusal?.()]).filter(([, text]) => text) : [];
   const active = scope?.ownerDocument.activeElement;
   const focused = !!active && scope.contains(active) && active !== scope;
   const key = focused ? active.closest('.if-wrap')?.dataset.key : null;
   const mark = focused ? active.dataset?.focus : null;
   const href = focused && active.matches('a[href]') ? active.getAttribute('href') : null;
   return (next = scope) => {
+    if (!next) return false;
     const find = (sel, test) => [...next.querySelectorAll(sel)].find(test);
     for (const toggle of next.querySelectorAll(SHUT_TOGGLE)) {
       if (open.includes(toggle.dataset.focus)) toggle.click();
     }
+    for (const [field, text] of said) find('.if-wrap', (w) => w.dataset.key === field)?.sayRefusal?.(text);
     if (!focused) return false;
     const target = (key && find('.if-wrap', (w) => w.dataset.key === key)?.querySelector('[tabindex="0"]'))
       || (key && find('[data-focus]', (e) => e.dataset.focus === `edit:${key}`))
@@ -164,8 +169,8 @@ export function mountTaskDetailDocument(root, ctx) {
   // One inline-editable field. What the renderer paints in read mode is a click target only, so here it also becomes
   // a keyboard stop (`asButton`) — or, for a document whose links must stay links, a separate Edit button opens it —
   // and focus lost with the closing editor is put back. `onRead` hears every return to read mode.
-  function inlineField(host, fieldKey, { asButton = true, name, hint, onRead } = {}) {
-    const handle = mountInlineField(host, { schema, fieldKey, entity: task, onSave: inlineSave(task.id, fieldKey, ctx) });
+  function inlineField(host, fieldKey, { asButton = true, name, hint, onRead, messageHost } = {}) {
+    const handle = mountInlineField(host, { schema, fieldKey, entity: task, onSave: inlineSave(task.id, fieldKey, ctx), messageHost });
     fields.push(handle);
     const wrap = [...host.children].find((el) => el.classList.contains('if-wrap') && el.dataset.key === fieldKey);
     let editing = false;
@@ -244,8 +249,11 @@ export function mountTaskDetailDocument(root, ctx) {
     return line;
   }
 
+  // The title's save glyph and message go to their own line under the heading.
   function mountTitle(host) {
-    inlineField(host, 'title', { hint: 'Edit title' });
+    const messageHost = h('div', { class: 'td-title-message' });
+    inlineField(host, 'title', { hint: 'Edit title', messageHost });
+    return messageHost;
   }
 
   // ── Marker row ──
@@ -448,15 +456,17 @@ export function mountTaskDetailDocument(root, ctx) {
   }
 
   // ── Assemble ──
+  let titleMessage = null;
   if (chrome === 'page') {
     const title = h('h1', { class: 'td-title', 'data-test': 'title' });
-    mountTitle(title);
-    root.appendChild(h('header', { class: 'td-head' }, [renderMeta(), title]));
+    titleMessage = mountTitle(title);
+    root.appendChild(h('header', { class: 'td-head' }, [renderMeta(), title, titleMessage]));
   } else if (ctx.titleHost) {
-    mountTitle(ctx.titleHost);
+    titleMessage = mountTitle(ctx.titleHost);
   }
 
   const body = h('div', { class: 'td-body' }, [
+    chrome === 'embedded' ? titleMessage : null,
     renderMarkers(),
     renderLock(),
     renderSpecReview(),
