@@ -12,6 +12,8 @@ const { fitCount, overflowRow } = await import('../../js/components/overflow-row
 
 test('fitCount: everything stays when the items and the gaps between them fit', () => {
   assert.equal(fitCount([50, 50, 50], 160, { gap: 5 }), 3);
+  // No room is reserved for More when nothing needs it: 160 holds all three, though only two would fit beside a 40px More.
+  assert.equal(fitCount([50, 50, 50], 160, { gap: 5, moreWidth: 40 }), 3);
 });
 
 test('fitCount: otherwise the leading items that fit beside More, each followed by a gap', () => {
