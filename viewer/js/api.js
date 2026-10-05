@@ -107,6 +107,7 @@ export const api = {
   createTask:   (payload)   => http('POST',  '/api/tasks', payload),
   archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),
   validateTask: (taskId, patch) => http('POST', '/api/tasks/validate', { task_id: taskId, patch }),
+  listBugs,
 
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);
