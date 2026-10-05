@@ -8,6 +8,11 @@ import { formatAbsolute } from '../lib/time.js';
 import { emptyState } from '../components/empty-state.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
+import { chipRow } from '../components/chips.js';
+import { sortHeader } from '../components/sort-header.js';
+import { icon } from '../components/icon.js';
+import { TASK_STATUS, PRIORITY } from '../components/status.js';
+import { epicSwatch } from '../lib/epics.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -34,7 +39,6 @@ const COLUMNS = [
     get: t => t.started || '', render: t => t.started ? (formatAbsolute(t.started, { time: false, year: true }) || esc(t.started)) : '—' },
 ];
 
-const STATUS_LABELS = { todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done', blocked: 'Blocked' };
 const STATUS_ORDER = { 'in-progress': 0, 'in-review': 1, blocked: 2, todo: 3, done: 4 };
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const SIZE_ORDER = { XS: 0, S: 1, M: 2, L: 3, XL: 4 };
@@ -42,7 +46,8 @@ const SIZE_ORDER = { XS: 0, S: 1, M: 2, L: 3, XL: 4 };
 function statusOrder(s)  { return STATUS_ORDER[s] ?? 99; }
 function priorityOrder(p){ return PRIORITY_ORDER[(p||'').toLowerCase()] ?? 99; }
 function sizeOrder(s)    { return SIZE_ORDER[s] ?? 99; }
-function prettyStatus(s) { return STATUS_LABELS[s] || s || ''; }
+function prettyStatus(s) { return TASK_STATUS[s]?.label || s || ''; }
+function prettyPriority(p) { return PRIORITY[p]?.label || p || ''; }
 function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 const DEFAULT_STATE = {
@@ -73,9 +78,32 @@ export async function mount(root, { store, api, prefs }) {
   topbar?.appendChild(newTaskBtn);
 
   // ── Filter chip rail ──────────────────────────────────────────
+  // One chipRow per group, made the first time the group has options and updated in place on every paint, so focus
+  // and an open "More" survive a redraw.
   const chipRail = document.createElement('div');
   chipRail.className = 'tbl-chips';
   screen.appendChild(chipRail);
+  const chipRows = new Map();   // kind → { row, chips }
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn--ghost btn--sm tbl-clear';
+  clearBtn.append(icon('dismiss', { size: 14 }), 'Clear filters');
+  clearBtn.addEventListener('click', () => {
+    // The button goes with the filters; the keyboard carries on from the search rather than from <body>.
+    const had = document.activeElement === clearBtn;
+    clearFilters();
+    if (had) search.focus();
+  });
+  // A row sized by its chips (Status, Priority) does not grow back by itself once chips are parked; a new rail width
+  // lays every row out again from its full set. (overflowRow's JSDoc: a row's width must come from its container.)
+  let railWidth = null;
+  const railObserver = window.ResizeObserver ? new ResizeObserver((entries) => {
+    const w = entries.at(-1).contentRect.width;
+    if (w === railWidth) return;
+    railWidth = w;
+    for (const { row, chips } of chipRows.values()) row.update(chips);
+  }) : null;
+  railObserver?.observe(chipRail);
 
   // ── Table mount ───────────────────────────────────────────────
   const tableHost = document.createElement('div');
@@ -138,61 +166,65 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   function renderChipRail(backlog) {
-    chipRail.innerHTML = '';
+    const tasks = backlog.tasks || [];
+    const epics = backlog.epics || [];
+    const epicName = new Map(epics.filter(e => e && e.id).map(e => [e.id, e.name || e.id]));
     const groups = [
-      { kind: 'status',   label: 'Status',   options: ['todo','in-progress','in-review','blocked','done'], pretty: prettyStatus },
-      { kind: 'priority', label: 'Priority', options: ['critical','high','medium','low'], pretty: s => s[0].toUpperCase() + s.slice(1) },
-      { kind: 'epic',     label: 'Epic',     options: (backlog.epics || []).map(e => e.id), pretty: s => s },
-      { kind: 'area',     label: 'Area',     options: [...new Set((backlog.tasks || []).map(t => t.area).filter(Boolean))].sort(), pretty: s => s },
+      { kind: 'status',   label: 'Status',   options: Object.keys(TASK_STATUS).filter(k => k !== 'archived'), pretty: prettyStatus, of: t => t.status },
+      { kind: 'priority', label: 'Priority', options: Object.keys(PRIORITY), pretty: prettyPriority, of: t => (t.priority || '').toLowerCase() },
+      { kind: 'epic',     label: 'Epic',     options: [...epicName.keys()], pretty: s => epicName.get(s) || s, of: t => t.epic },
+      { kind: 'area',     label: 'Area',     options: [...new Set(tasks.map(t => t.area).filter(Boolean))].sort(), pretty: s => s, of: t => t.area },
     ];
-    for (const g of groups) {
-      if (!g.options.length) continue;
-      const wrap = document.createElement('div');
-      wrap.className = 'tbl-chip-group';
-      const lab = document.createElement('span');
-      lab.className = 'tbl-chip-label';
-      lab.textContent = g.label;
-      wrap.appendChild(lab);
-      for (const opt of g.options) {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'tbl-chip';
-        chip.dataset.kind = g.kind;
-        chip.dataset.value = opt;
-        const active = state.filters[g.kind].includes(opt);
-        chip.classList.toggle('is-active', active);
-        chip.title = CHIP_CLICK_HINT;
-        chip.textContent = g.pretty(opt);
-        chip.addEventListener('click', (ev) => {
-          state.filters[g.kind] = chipClickNext(ev, state.filters[g.kind], opt);
-          paint(); persist();
-        });
-        wrap.appendChild(chip);
+    for (const [i, g] of groups.entries()) {
+      const active = state.filters[g.kind];
+      // A pressed value stays offered after its last task or its epic is gone, so it can still be turned off.
+      const options = [...g.options, ...active.filter(v => !g.options.includes(v))];
+      const entry = chipRows.get(g.kind);
+      if (!options.length) {
+        if (entry) entry.row.el.hidden = true;
+        continue;
       }
-      chipRail.appendChild(wrap);
-    }
-    // Clear button
-    const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.filters.area.length || state.search;
-    if (hasFilters) {
-      const clear = document.createElement('button');
-      clear.type = 'button';
-      clear.className = 'tbl-chip tbl-chip--clear';
-      clear.textContent = '× Clear';
-      clear.addEventListener('click', () => {
-        state.filters = { status: [], priority: [], epic: [], area: [] };
-        state.search = '';
-        search.value = '';
-        paint(); persist();
+      const chips = options.map(value => ({
+        value,
+        label: g.pretty(value),
+        pressed: active.includes(value),
+        count: tasks.filter(t => g.of(t) === value).length,
+        swatch: g.kind === 'epic' ? epicSwatch(value, epics) : undefined,
+      }));
+      if (entry) {
+        entry.chips = chips;
+        entry.row.el.hidden = false;
+        entry.row.update(chips);
+        continue;
+      }
+      const row = chipRow({
+        label: g.label,
+        chips,
+        hint: CHIP_CLICK_HINT,
+        onToggle: (value, ev) => {
+          state.filters[g.kind] = chipClickNext(ev, state.filters[g.kind], value);
+          paint(); persist();
+        },
       });
-      chipRail.appendChild(clear);
+      row.el.dataset.kind = g.kind;
+      // Groups keep their order whichever gets options first.
+      const next = groups.slice(i + 1).map(x => chipRows.get(x.kind)?.row.el).find(Boolean);
+      chipRail.insertBefore(row.el, next ?? null);
+      chipRows.set(g.kind, { row, chips });
     }
+    if (!hasFilters()) clearBtn.remove();
+    else if (!clearBtn.isConnected) chipRail.appendChild(clearBtn);
+  }
+
+  function hasFilters() {
+    return !!(state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.filters.area.length || state.search);
   }
 
   function buildFilterHint(totalCount) {
     const parts = [];
     if (state.search) parts.push(`search "${state.search}"`);
     if (state.filters.status.length)   parts.push(`status: ${state.filters.status.map(prettyStatus).join(', ')}`);
-    if (state.filters.priority.length) parts.push(`priority: ${state.filters.priority.map(s => s[0].toUpperCase() + s.slice(1)).join(', ')}`);
+    if (state.filters.priority.length) parts.push(`priority: ${state.filters.priority.map(prettyPriority).join(', ')}`);
     if (state.filters.epic.length)     parts.push(`epic: ${state.filters.epic.join(', ')}`);
     if (state.filters.area.length)     parts.push(`area: ${state.filters.area.join(', ')}`);
     const hidden = totalCount;
@@ -208,6 +240,8 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   function renderTable(tasks, totalCount) {
+    // The table is rebuilt on every paint, so the header the keyboard was on gets the focus back.
+    const focusedKey = tableHost.contains(document.activeElement) ? document.activeElement.closest('th')?.dataset.key : null;
     tableHost.innerHTML = '';
     const tbl = document.createElement('table');
     tbl.className = 'tbl';
@@ -217,25 +251,12 @@ export async function mount(root, { store, api, prefs }) {
     const thead = document.createElement('thead');
     const trh = document.createElement('tr');
     for (const col of COLUMNS) {
-      const th = document.createElement('th');
+      const th = sortHeader({
+        key: col.key, label: col.label, sortable: col.sortable, sort: state.sort,
+        onSort: (next) => { state.sort = next; paint(); persist(); },
+      });
       th.dataset.key = col.key;
-      th.className = 'tbl-th';
-      const isActive = state.sort.by === col.key;
-      const arrow = isActive ? (state.sort.dir === 'desc' ? '↓' : '↑') : '';
-      th.innerHTML = `<span class="tbl-th-label">${esc(col.label)}</span>${arrow ? `<span class="tbl-th-arrow">${arrow}</span>` : ''}`;
-      if (col.sortable) {
-        th.classList.add('is-sortable');
-        if (isActive) th.classList.add('is-active');
-        th.addEventListener('click', () => {
-          if (state.sort.by === col.key) {
-            state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
-          } else {
-            state.sort.by = col.key;
-            state.sort.dir = 'asc';
-          }
-          paint(); persist();
-        });
-      }
+      th.classList.add('tbl-th');
       trh.appendChild(th);
     }
     thead.appendChild(trh);
@@ -244,15 +265,15 @@ export async function mount(root, { store, api, prefs }) {
     // Body
     const tbody = document.createElement('tbody');
     if (!tasks.length) {
-      const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.filters.area.length || state.search;
+      const filtered = hasFilters();
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.colSpan = COLUMNS.length;
       td.className = 'tbl-empty';
       td.appendChild(emptyState({
-        headline: hasFilters ? `0 of ${totalCount} ${pluralize(totalCount, 'task', 'tasks')} match` : 'No tasks yet',
-        hint: hasFilters ? buildFilterHint(totalCount) : null,
-        action: hasFilters ? { label: 'Clear filters', onClick: clearFilters } : null,
+        headline: filtered ? `0 of ${totalCount} ${pluralize(totalCount, 'task', 'tasks')} match` : 'No tasks yet',
+        hint: filtered ? buildFilterHint(totalCount) : null,
+        action: filtered ? { label: 'Clear filters', onClick: clearFilters } : null,
       }));
       tr.appendChild(td);
       tbody.appendChild(tr);
@@ -277,6 +298,7 @@ export async function mount(root, { store, api, prefs }) {
     }
     tbl.appendChild(tbody);
     tableHost.appendChild(tbl);
+    if (focusedKey) tbl.querySelector(`th[data-key="${focusedKey}"] .sort-header`)?.focus({ preventScroll: true });
   }
 
   function paint() {
@@ -295,5 +317,10 @@ export async function mount(root, { store, api, prefs }) {
   paint();
   const unsubBacklog = store.subscribe('backlog', paint);
 
-  return () => { unsubBacklog?.(); };
+  return () => {
+    unsubBacklog?.();
+    railObserver?.disconnect();
+    for (const { row } of chipRows.values()) row.destroy();
+    chipRows.clear();
+  };
 }
