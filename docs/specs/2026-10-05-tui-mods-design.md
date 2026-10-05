@@ -3,7 +3,7 @@
 # Taskmaster TUI mods — Design Spec
 
 **Date:** 2026-10-05
-**Status:** Draft — awaiting user review
+**Status:** Approved 2026-10-05 (prototype decisions folded in; RR token gaps fixed upstream first, §5.2)
 **Scope:** two Claude Code mods: `rr-tui` (Reality Reprojection for the terminal) and `taskmaster-tui` (Taskmaster surfaces). No Taskmaster server or lifecycle change.
 **Platform:** Claude Code mods, v2.1.289 (early access; the build's `claude-code.d.ts` is authoritative).
 
@@ -102,6 +102,7 @@ Source of truth: the RR Design System artifact's `project/tokens.json`. A genera
 - **Borders:** `border-default` full perimeter, `single` style; `round` reserved for the active surface. Never a coloured side rail (the platform has no per-side borders anyway).
 - **Translucent tokens** (`signature-dim`, `-subtle` with alpha) are pre-composited onto their ground in the generated table, since the terminal has no alpha.
 - **Voices:** one monospace face, so Declaration = uppercase + bold, Narrator = plain, Technical = dim/subtle. No italic.
+- **Token gaps** (references §6: `signature-text` contrast in light and on dark overlay, `border-subtle` invisible on dark overlay, `surface-recessed` vs README) are fixed **upstream in the RR artifact's `tokens.json` before `rr-tui` is built**; the generated table then carries no local overrides. The `⚠` status-line yellow is the engine's and stays out of scope.
 
 ### 5.3 Polarity
 
@@ -146,7 +147,8 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
           [d done] [a back to agent]
   ```
   `d`/`a` work when the band has focus; same actions as the queue (§6.2).
-- Needs-you line: shown when the review count > 0 or open decisions exist. `1` (digit hotkey, works from an empty prompt) opens the review queue; `2` opens handovers.
+- Needs-you line: shown when the review count > 0 or open decisions exist; open decisions count in "waiting on you". `1` (digit hotkey, works from an empty prompt without focus) opens the review queue; `2` opens handovers. How the band gets keyboard focus for letter keys is engine-defined (Ctrl+X Tab or click).
+- `[-]` collapses the band to one summary line; `[+]` restores it.
 - Hidden entirely when there is no bound task and nothing waiting.
 
 **Review queue pane — `/review` or band `1`.** Opened with `focus: true, closeOnEscape: true`. One card at a time:
@@ -163,16 +165,16 @@ first unified message stays on intent/brief and does not build; …
 d done   a back to agent   s skip   o open in prompt   Esc close
 ```
 
-- Order: priority (Critical → Low), then oldest first. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
+- Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
 - `human_action` is the body, shown in full (scrolls if long).
-- `d` → inline confirm row `confirm done? y / n` → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
+- `d` → inline confirm row `confirm done? y / n` (focus starts on `n`, so Enter cancels) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
 - `a` → an `Input` "note for the agent" → `backlog_update_task(id, status, in-progress)`, clear `human_action`, record the note with `backlog_note` → close the pane and `$.prompt.fill` "Back to <id>: <note>" (not submitted).
-- `s` → next card; `o` → `$.prompt.fill("Look at <id>")`.
+- `s` → next card; `o` → `$.prompt.fill("Look at <id>")` and the pane stays open. Only "back to agent" closes the pane.
 - After the last card: "Queue clear" with the pass tally.
 
 **Handovers pane — `/handovers` or band `2`.** On demand. Last 5 open handovers, newest first (`superseded` hidden), one Button per row (Up/Down to move). Footer `5 of 23 · superseded hidden`.
 - `c` copy → `$.ui.copy` the Telegram-ready text: tldr + next action + absolute file path; toast on success, toast with the path on `no-clipboard`.
-- `r` resume → `$.prompt.fill("Resume from handover <id> (<path>)")`.
+- `r` resume → `$.prompt.fill("Resume from handover <id> (<path>)")`; the pane stays open.
 
 ### 6.2 Actions and their safety
 
@@ -233,6 +235,7 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 
 ## 9. Build order
 
+0. Fix the RR token gaps upstream in the RR Design System artifact's `tokens.json` (§5.2).
 1. `rr-tui` tokens + elements + `/rr-gallery`; visual tuning loop with the user.
 2. `taskmaster-tui` surfaces against fixture data (no `tm`).
 3. Data layer + parsers against real backlogs; binding.

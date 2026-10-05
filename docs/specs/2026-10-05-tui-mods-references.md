@@ -59,7 +59,7 @@ Most replies are markdown text; only these are JSON: `backlog_continuity_items`,
 - **Decisions:** `backlog_decision(action: "resolve", decision_id, resolved_with, rationale?)`; v1 of the mod doesn't call it (routes to the decision skill via the prompt).
 - Code pointers: `taskmaster/backlog_server.py` (handlers), `taskmaster/native/domain.py` (statuses, transitions, gate check), `taskmaster/taskmaster_v3.py` (lanes, continuity items), `taskmaster/native_routing/` (native-store variants).
 
-## 5. Decisions surfaced by the prototype (confirm, then fold into the spec)
+## 5. Decisions surfaced by the prototype (confirmed and folded into the spec 2026-10-05)
 
 - Decisions count in "waiting on you" and come after tasks in the queue.
 - `confirm done?` focuses `n`, so Enter cancels.
@@ -69,7 +69,7 @@ Most replies are markdown text; only these are JSON: `backlog_continuity_items`,
 - Button colour (decided 2026-10-05 from the probe's five variants): outline = primary card action, chip 12% = secondary actions, chip 24% = states, keycap = key legends. See spec §5.4. The prototype predates this and still uses bracket buttons.
 - How the band gets keyboard focus is engine-defined (Ctrl+X Tab or click); digit hotkeys `1`/`2` work from an empty prompt without focus.
 
-## 6. RR-in-terminal findings (token gaps to resolve in rr-tui or upstream in RR)
+## 6. RR-in-terminal findings (token gaps — decided 2026-10-05: fix upstream in RR before rr-tui)
 
 - `signature-text` in light: 4.0:1 on raised, 3.2:1 on overlay. Dark `#5e79e6` is 3.8:1 on overlay. Prototype uses `foreground-bold` for labels in light and `signature-vivid` (`#8a9eeb`, 5.8:1) in dark.
 - `border-subtle` in dark (`#272725`) equals the overlay surface: invisible. Prototype uses `border-default` for rules.
