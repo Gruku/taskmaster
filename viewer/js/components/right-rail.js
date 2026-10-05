@@ -8,6 +8,7 @@ import { linkPillsEl, legacyLinksToTyped } from './link-pills.js';
 import { renderMarkdown } from './markdown.js';
 import { statusMarker, priorityMarker } from './status.js';
 import { icon } from './icon.js';
+import { openPopover } from './popover.js';
 import { formatStamp } from '../lib/time.js';
 
 export function mountRightRail(root, ctx = {}) {
@@ -182,51 +183,33 @@ function paintPill(pill, status) {
   else pill.textContent = status;
 }
 
-let openMenu = null;   // { anchor, close } — one menu at a time
+let openMenu = null;   // { anchor, popover } — one menu at a time
 
 // Opens the menu under `anchor`; called again for the same anchor while it is open, it closes it.
-// The menu sits right after its button, so Tab order follows what is seen and a modal around it keeps it inside.
 export function openStatusMenu(anchor, handoverId, currentStatus) {
-  if (openMenu) {
+  if (openMenu?.popover.isOpen()) {
     const same = openMenu.anchor === anchor;
-    openMenu.close(false);
+    openMenu.popover.close();
     if (same) return;
   }
   const doc = anchor.ownerDocument;
   const view = doc.defaultView;
-  const menu = doc.createElement('div');
-  menu.className = 'ho-status-menu';
-  menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', 'Handover status');
   const items = HO_STATUSES.map((opt) => {
     const current = opt === currentStatus;
     const item = h('button', {
       type: 'button', role: 'menuitemradio', 'aria-checked': String(current),
-      class: `ho-status-menu-item${current ? ' is-current' : ''}`,
+      class: `popover-item ho-status-menu-item${current ? ' is-current' : ''}`,
     }, [h('span', { class: 'ho-status-menu-check' }, current ? icon('check', { size: 14 }) : null), opt]);
     item.addEventListener('click', () => choose(opt));
-    menu.appendChild(item);
     return item;
   });
-
-  let closed = false;
-  function close(returnFocus) {
-    if (closed) return;
-    closed = true;
-    if (openMenu?.anchor === anchor) openMenu = null;
-    doc.removeEventListener('pointerdown', onPress, true);
-    doc.removeEventListener('scroll', onScroll, true);
-    const hadFocus = menu.contains(doc.activeElement);
-    menu.remove();
-    anchor.setAttribute('aria-expanded', 'false');
-    if (returnFocus || hadFocus) anchor.focus?.();
-  }
-  // A press on the button itself is left to its click, which closes.
-  function onPress(e) { if (!menu.contains(e.target) && !anchor.contains(e.target)) close(false); }
-  function onScroll() { close(false); }
+  const popover = openPopover({
+    anchor, content: items, role: 'menu', label: 'Handover status', focus: 'checked', className: 'ho-status-menu',
+  });
+  openMenu = { anchor, popover };
 
   async function choose(opt) {
-    close(true);
+    popover.close('api', { returnFocus: true });
     try {
       const resp = await fetch(`/api/handover/${encodeURIComponent(handoverId)}/status`, {
         method: 'POST',
@@ -244,54 +227,6 @@ export function openStatusMenu(anchor, handoverId, currentStatus) {
       console.error('handover status change failed', e);
     }
   }
-
-  menu.addEventListener('keydown', (e) => {
-    const at = items.indexOf(doc.activeElement);
-    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
-    if (e.key === 'Escape') {
-      // The key is used up here: a modal around the menu must not also close.
-      e.preventDefault();
-      e.stopPropagation();
-      close(true);
-    } else if (step) {
-      e.preventDefault();
-      items[(at + step + items.length) % items.length].focus();
-    } else if (e.key === 'Home' || e.key === 'End') {
-      e.preventDefault();
-      items.at(e.key === 'Home' ? 0 : -1).focus();
-    }
-  });
-  menu.addEventListener('focusout', (e) => {
-    if (!closed && e.relatedTarget && !menu.contains(e.relatedTarget) && e.relatedTarget !== anchor) close(false);
-  });
-
-  anchor.after(menu);
-  anchor.setAttribute('aria-haspopup', 'menu');
-  anchor.setAttribute('aria-expanded', 'true');
-  place(menu, anchor, view);
-  openMenu = { anchor, close };
-  doc.addEventListener('pointerdown', onPress, true);
-  doc.addEventListener('scroll', onScroll, true);
-  (items.find((i) => i.getAttribute('aria-checked') === 'true') ?? items[0]).focus();
-}
-
-// Fixed, so no scrolling panel clips it; measured against wherever its containing block puts the origin
-// (a frosted overlay or a transformed panel is one), and flipped above the button when there is no room below.
-function place(menu, anchor, view) {
-  menu.style.position = 'fixed';
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-  const origin = menu.getBoundingClientRect();
-  const at = anchor.getBoundingClientRect();
-  const gap = 4;
-  const height = menu.offsetHeight || 0;
-  const width = menu.offsetWidth || 0;
-  const below = at.bottom + gap;
-  const fits = !view || below + height <= view.innerHeight;
-  const top = fits ? below : Math.max(gap, at.top - gap - height);
-  const left = view ? Math.max(gap, Math.min(at.left, view.innerWidth - width - gap)) : at.left;
-  menu.style.left = `${left - origin.left}px`;
-  menu.style.top = `${top - origin.top}px`;
 }
 
 // ---------------------------------------------------------------------------

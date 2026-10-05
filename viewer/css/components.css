@@ -447,32 +447,3 @@
   border-color: rgba(148, 130, 196, 0.30);
   color: var(--ink-3, #7c8290);
 }
-
-/* Status override dropdown menu */
-.ho-status-menu {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-card, #1f2025);
-  border: 1px solid var(--border-strong, #3a3b42);
-  border-radius: var(--r-sm, 6px);
-  z-index: 1000;
-  min-width: 140px;
-  padding: 4px 0;
-}
-.ho-status-menu-item {
-  padding: 6px 12px;
-  text-align: left;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--text-xs, 12px);
-  color: var(--ink, #e6e7eb);
-}
-.ho-status-menu-item:hover {
-  background: var(--bg-card-hover, #25262c);
-}
-.ho-status-menu-item.is-current {
-  font-weight: 600;
-  color: var(--accent, #4a9eff);
-}

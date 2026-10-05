@@ -10,7 +10,8 @@ const CSS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'css')
 // Files that must satisfy every rule. Append as files are converted; plan 4 replaces this with "all".
 export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css', 'components/button.css', 'components/status.css',
   'components/edit-fields.css', 'components/markdown.css', 'components/entity-modal.css',
-  'screens/task-detail.css', 'components/state.css', 'components/handover-status.css'];
+  'screens/task-detail.css', 'components/state.css', 'components/handover-status.css',
+  'components/popover.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
