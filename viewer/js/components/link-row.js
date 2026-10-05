@@ -22,7 +22,28 @@ function refuseInteractive(node, where) {
 
 const asNode = (c) => (typeof c === 'string' ? document.createTextNode(c) : c);
 
-export function linkRow({ href, name, content = [], controls = [], tag = 'div', className = '' }) {
+// The titles truncate() put on the name and the content, in order. The link's ::after covers them, so a hover never
+// reaches their own title; the link has to carry it.
+function cutTitles(nodes) {
+  const out = [];
+  for (const n of nodes) {
+    if (!n || n.nodeType !== 1) continue;
+    for (const t of [n, ...n.querySelectorAll('[title]')]) if (t.title) out.push(t.title);
+  }
+  return out;
+}
+
+/**
+ * A row (or card) that opens `href`: a real link holding `name`, then `content`, then `controls` beside the link.
+ * The whole row is the link's hit area; controls are siblings stacked above it, so they keep their own clicks.
+ * `name` is required (string or Node with text): the link's text is its accessible name.
+ * `title` goes on the link. Left out, the link takes the titles of anything cut inside the name and content (each
+ * `[title]`, in order, one per line), since the hit area hides their own: cut text keeps its words on hover.
+ * `name` or `content` that is or holds a control throws; controls go in `controls`.
+ */
+export function linkRow({ href, name, content = [], controls = [], tag = 'div', className = '', title }) {
+  const text = typeof name === 'string' ? name : name?.nodeType ? name.textContent : '';
+  if (!text.trim()) throw new TypeError('linkRow: name is required — the link\'s text is its accessible name');
   refuseInteractive(name, 'name');
   for (const c of content) refuseInteractive(c, 'content');
 
@@ -32,7 +53,9 @@ export function linkRow({ href, name, content = [], controls = [], tag = 'div', 
   const link = document.createElement('a');
   link.className = 'link-row__link';
   link.setAttribute('href', href);
-  link.append(asNode(name ?? ''));
+  link.append(asNode(name));
+  const full = title ?? cutTitles([name, ...content]).join('\n');
+  if (full) link.title = full;
   row.append(link);
 
   const body = document.createElement('div');

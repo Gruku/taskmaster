@@ -64,10 +64,10 @@ async function boot(page, { theme = 'dark' } = {}) {
 
 // The link's ::after covers the row, so the pointer lands on the link wherever the row is pressed. A locator click on
 // the content would refuse (another element receives the pointer), so the press goes to the content's centre instead.
-async function pressContent(page, row, modifiers = []) {
+async function pressContent(page, row, modifiers = [], button = 'left') {
   const box = await row.locator('.link-row__content').boundingBox();
   for (const m of modifiers) await page.keyboard.down(m);
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button });
   for (const m of modifiers) await page.keyboard.up(m);
 }
 
@@ -85,19 +85,74 @@ test('a click on the row\'s content opens the task\'s dialog; Escape closes it a
 
 test('modified clicks are the browser\'s and a row\'s own control never opens the row', async ({ page }) => {
   const row = await boot(page);
-  const opened = page.context().waitForEvent('page');
-  await pressContent(page, row, ['Control']);
-  const tab = await opened;
-  await expect(tab).toHaveURL(/#\/task\/T-102$/);
-  await tab.close();
-  await expect(page.locator('.modal')).toHaveCount(0);
-  await expect(page).toHaveURL(/#\/kanban$/);
+  // Ctrl+click and middle-click open a new tab, Shift+click a new window: each is a new page and no dialog here.
+  for (const [modifiers, button] of [[['Control'], 'left'], [[], 'middle'], [['Shift'], 'left']]) {
+    const how = `${modifiers.join('+') || 'no modifier'} ${button}`;
+    const opened = page.context().waitForEvent('page');
+    await pressContent(page, row, modifiers, button);
+    const tab = await opened;
+    await expect(tab, how).toHaveURL(/#\/task\/T-102$/);
+    await tab.close();
+    await expect(page.locator('.modal'), how).toHaveCount(0);
+    await expect(page, how).toHaveURL(/#\/kanban$/);
+  }
 
   await row.getByRole('button', { name: 'Copy id' }).click();
   expect(await page.evaluate(() => window.__copied)).toBe(true);
   // Give a wrongly opened dialog the time it takes a real one to load before saying there is none.
   await page.waitForTimeout(300);
   await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+test('a cut name keeps its words on hover: what the pointer is over carries the full text as its title', async ({ page }) => {
+  await boot(page);
+  const full = 'T-105 · A task title long enough that no row on any screen could ever show it on a single line without cutting it';
+  await page.evaluate(async (text) => {
+    const { linkRow } = await import('/js/components/link-row.js');
+    const { truncate } = await import('/js/lib/text.js');
+    const row = linkRow({ href: '#/task/T-105', name: truncate(text), content: ['Todo'], className: 'cut-row' });
+    row.style.width = '240px';
+    document.getElementById('rows-host').append(row);
+  }, full);
+  const name = page.locator('.cut-row .truncate');
+  expect(await name.evaluate((el) => el.scrollWidth > el.clientWidth), 'the name is cut').toBe(true);
+  const box = await name.boundingBox();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  const hit = await page.evaluate(([px, py]) => {
+    const el = document.elementFromPoint(px, py);
+    return { tag: el.localName, title: el.closest('[title]')?.title ?? null };
+  }, [x, y]);
+  expect(hit).toEqual({ tag: 'a', title: full });
+});
+
+test('390×844: the sort headers and the row\'s own buttons and links are at least 44px; icon-only ones 44 wide', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const row = await boot(page);
+  await page.evaluate(async () => {
+    const { icon } = await import('/js/components/icon.js');
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'btn btn--ghost btn--icon btn--sm';
+    more.setAttribute('aria-label', 'More actions');
+    more.append(icon('more', { size: 16 }));
+    const epic = document.createElement('a');
+    epic.href = '#/epics';
+    epic.className = 'row-epic';
+    epic.textContent = 'E';
+    document.querySelector('#rows-host .link-row__controls').append(more, epic);
+  });
+  const sizes = async (loc) => loc.evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { name: el.textContent || el.getAttribute('aria-label'), w: Math.round(r.width), h: Math.round(r.height) };
+  }));
+  const controls = await sizes(row.locator('.link-row__controls > *'));
+  const headers = await sizes(page.locator('#rows-host .sort-header'));
+  expect(controls).toHaveLength(3);
+  expect(headers).toHaveLength(2);
+  for (const s of [...controls, ...headers]) expect(s.h, `${s.name} height`).toBeGreaterThanOrEqual(44);
+  for (const s of controls) expect(s.w, `${s.name} width`).toBeGreaterThanOrEqual(44);
 });
 
 test('Tab reaches the link, then the copy button; a keyboard-focused link rings the row', async ({ page }) => {

@@ -36,6 +36,13 @@
 .sort-header__dir--desc .icon { transform: rotate(90deg); }
 .sort-header__dir--none { color: var(--foreground-subtle); }
 
+/* Touch targets: a row's own controls and a sort header are at least 44px; icon-only controls are 44 wide too. */
+@media (max-width: 768px) {
+  .sort-header { min-height: 44px; }
+  .link-row__controls > :is(button, a[href]) { min-height: 44px; min-width: 44px; }
+  .link-row__controls > a[href] { display: inline-flex; align-items: center; justify-content: center; }
+}
+
 /* ── Cut text ── truncate() puts the full text in title. */
 .truncate { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .truncate--2, .truncate--3 { display: -webkit-box; -webkit-box-orient: vertical; white-space: normal; }

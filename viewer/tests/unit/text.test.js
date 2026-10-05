@@ -10,7 +10,8 @@ globalThis.document = dom.window.document;
 
 const { truncate } = await import('../../js/lib/text.js');
 
-const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');   // top level only: media rules are checked in the browser
 function declsOf(selector) {
   const out = {};
   for (const m of CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {

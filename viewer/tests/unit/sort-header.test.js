@@ -12,7 +12,8 @@ globalThis.document = dom.window.document;
 const { nextSort, sortHeader } = await import('../../js/components/sort-header.js');
 const { icon } = await import('../../js/components/icon.js');
 
-const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');   // top level only: media rules are checked in the browser
 function declsOf(selector) {
   const out = {};
   for (const m of CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -88,6 +89,13 @@ test('a click calls onSort with the next sort', () => {
   sortHeader({ key: 'title', label: 'Title', sort: { by: 'id', dir: 'asc' }, onSort }).querySelector('button').click();
   sortHeader({ key: 'id', label: 'ID', sort: { by: 'id', dir: 'asc' }, onSort }).querySelector('button').click();
   assert.deepEqual(got, [{ by: 'title', dir: 'asc' }, { by: 'id', dir: 'desc' }]);
+});
+
+test('a sortable header without onSort is refused when built, not when clicked', () => {
+  for (const onSort of [undefined, null, 'sort']) {
+    assert.throws(() => sortHeader({ key: 'id', label: 'ID', sort: null, onSort }), TypeError, String(onSort));
+  }
+  assert.doesNotThrow(() => sortHeader({ key: 'notes', label: 'Notes', sortable: false }));
 });
 
 test('not sortable: the th holds the label span only, and no aria-sort', () => {

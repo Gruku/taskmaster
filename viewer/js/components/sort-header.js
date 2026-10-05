@@ -8,6 +8,8 @@ export function nextSort(sort, key) {
 }
 
 export function sortHeader({ key, label, sortable = true, sort, onSort }) {
+  // Refused when built: a header that only fails when clicked would ship looking like it sorts.
+  if (sortable && typeof onSort !== 'function') throw new TypeError(`sortHeader: "${key}" is sortable but has no onSort`);
   const th = document.createElement('th');
   th.setAttribute('scope', 'col');
   th.className = 'sort-th';

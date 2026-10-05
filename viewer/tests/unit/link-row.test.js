@@ -14,7 +14,8 @@ const { linkRow, isInteractive } = await import('../../js/components/link-row.js
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 
 // Declarations of every top-level rule in rows.css whose selector list names `selector` exactly, merged in order.
-const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const CSS = readFileSync(new URL('../../css/components/rows.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');   // top level only: media rules are checked in the browser
 function declsOf(selector) {
   const out = {};
   for (const m of CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -102,6 +103,27 @@ test('the focus ring is drawn on the row, the link\'s own is unpainted; hover is
   assert.equal(ring['outline-offset'], '2px');
   assert.equal(declsOf('.link-row__link:focus-visible')['outline-color'], 'transparent');
   assert.deepEqual(declsOf('.link-row:hover'), { background: 'var(--card-bg-hover)' });
+});
+
+test('a row without a name is refused: the link\'s text is its accessible name', () => {
+  for (const name of [undefined, null, '', '   ', el('<span>  </span>')]) {
+    assert.throws(() => linkRow({ href: '#/task/T-1', name, content: ['T-1 · Re-skin'] }),
+      (e) => e instanceof TypeError && /name/.test(e.message), String(name));
+  }
+});
+
+// The link's ::after covers the row, so the pointer never reaches a cut element's own title: the link carries it.
+test('the link carries the full text of what is cut inside it: the titles of name and content, in order', () => {
+  const name = el('<span class="truncate" title="T-102 · Re-skin the Kanban cards and columns">T-102 · Re-skin the Kanban cards and columns</span>');
+  const meta = el('<span><span class="truncate" title="Epic: Viewer re-skin">Epic: Viewer re-skin</span></span>');
+  const row = linkRow({ href: '#/task/T-102', name, content: [meta, el('<span>In progress</span>')] });
+  assert.equal(row.querySelector('a').title, 'T-102 · Re-skin the Kanban cards and columns\nEpic: Viewer re-skin');
+});
+
+test('an explicit title wins; with nothing cut and no title the link has none', () => {
+  const name = el('<span title="cut">cut</span>');
+  assert.equal(linkRow({ href: '#/task/T-1', name, title: 'Full words' }).querySelector('a').title, 'Full words');
+  assert.equal(linkRow({ href: '#/task/T-1', name: 'Plain' }).querySelector('a').hasAttribute('title'), false);
 });
 
 test('href is used verbatim', () => {
