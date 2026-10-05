@@ -28,12 +28,14 @@ export function mountInlineField(parent, {
   let disposed = false;
   let conflicted = false;
   let dismissConflict;
+  let tickTimer = null;   // clears the success tick; any newer status cancels it
 
   const wrap = h('span', { class: 'if-wrap', 'data-key': fieldKey });
   wrap.disposeInline = () => {
     disposed = true;
     dismissConflict?.();
     if (saveTimer) clearTimeout(saveTimer);
+    clearTimeout(tickTimer);
     if (mode === 'edit') { mode = 'read'; store.endEdit(currentEntity.id); }
   };
   parent.appendChild(wrap);
@@ -44,13 +46,14 @@ export function mountInlineField(parent, {
   // alert so it is announced, and it describes the control while the editor is open.
   const message = h('span', { class: 'ef-error if-error', id: `if-error-${++seq}`, role: 'alert' });
   parent.appendChild(message);
+  let editor = null;    // the open editor, as the renderer returned it
   let control = null;   // the focusable control of the open editor
 
   paint();
 
   function paint() {
     showMessage('');
-    control = null;
+    editor = control = null;
     wrap.replaceChildren();
     if (mode === 'read') {
       const el = renderer.read({
@@ -79,18 +82,11 @@ export function mountInlineField(parent, {
             store.endEdit(currentEntity.id);
           });
         },
-        onCancel: () => {
-          if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-          conflicted = false;
-          dismissConflict?.();
-          pendingValue = currentEntity[fieldKey];
-          mode = 'read';
-          paint();
-          store.endEdit(currentEntity.id);
-        },
+        onCancel: cancel,
         getBacklog,
         ...fieldSpec,
       });
+      editor = el;
       control = el.control ?? el;
       wrap.appendChild(el);
     }
@@ -103,6 +99,28 @@ export function mountInlineField(parent, {
     if (!control) return;
     if (ids.length) control.setAttribute('aria-describedby', ids.join(' '));
     else control.removeAttribute('aria-describedby');
+  }
+
+  function cancel() {
+    if (mode !== 'edit') return;   // a control that blurs as it is taken away cancels nothing a second time
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    conflicted = false;
+    dismissConflict?.();
+    pendingValue = currentEntity[fieldKey];
+    mode = 'read';
+    paint();
+    store.endEdit(currentEntity.id);
+  }
+
+  // A refused save is said beside the field. An editor that shows the value it asked for (a select commits as it
+  // changes) goes back to the stored one, so it never looks as if the change took; text being typed stays the user's.
+  function refuse(msg) {
+    setStatus('error', msg);
+    if (mode !== 'edit' || !editor?.reset) return;
+    editor.reset();
+    pendingValue = currentEntity[fieldKey];
+    // Left already: nothing will blur it again, and an open editor holds back live updates to the task.
+    if (!editor.contains(document.activeElement)) cancel();
   }
 
   function enterEdit() {
@@ -143,12 +161,12 @@ export function mountInlineField(parent, {
     try {
       const result = await onSave(v);
       if (result && result.error) {
-        setStatus('error', result.error);
+        refuse(result.error);
         return false;
       }
       currentEntity[fieldKey] = v;
       setStatus('ok');
-      setTimeout(() => setStatus(''), 800);
+      tickTimer = setTimeout(() => setStatus(''), 800);
       return true;
     } catch (e) {
       // Only a 409 that names the revision it lost to is a conflict; any other is the server refusing the write,
@@ -192,12 +210,13 @@ export function mountInlineField(parent, {
         setStatus('error', 'Conflict — see banner');
         return false;
       }
-      setStatus('error', describeWriteError(e));
+      refuse(describeWriteError(e));
       return false;
     }
   }
 
   function setStatus(kind, msg) {
+    clearTimeout(tickTimer);
     status.replaceChildren();
     status.className = 'if-status';
     showMessage(kind === 'error' ? (msg || 'Save failed') : '');

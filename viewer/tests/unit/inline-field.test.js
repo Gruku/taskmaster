@@ -354,9 +354,82 @@ test('a save error\'s message clears when the next save succeeds', async () => {
   } finally { ctrl.destroy(); root.remove(); }
 });
 
+// ── A picker that is left without a choice, or whose choice is refused (I-1) ──
+// An open inline editor holds the task's edit lease, and the detail views skip live updates while it is held.
+const STATUS_SCHEMA = {
+  entity: 'task',
+  fields: [{ key: 'status', label: 'Status', renderer: EnumSelect, marker: 'status',
+    options: [{ value: 'todo', label: 'Todo' }, { value: 'in-review', label: 'In review' }, { value: 'done', label: 'Done' }] }],
+};
 const until = async (ok) => { for (let i = 0; i < 200 && !ok(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); };
 
-// ── Errors in words (I-2) ──
+function mountStatus(id, onSave) {
+  const root = document.createElement('div');
+  const outside = document.createElement('button');
+  document.body.append(root, outside);
+  const ctrl = mountInlineField(root, { schema: STATUS_SCHEMA, fieldKey: 'status', entity: { id, status: 'todo' }, onSave });
+  return { root, outside, ctrl, select: () => root.querySelector('select'), done() { ctrl.destroy(); root.remove(); outside.remove(); } };
+}
+
+test('a status picker left without a choice closes and releases the task for live updates', async () => {
+  const { store } = await import('../../js/store.js');
+  const saved = [];
+  const t = mountStatus('blur-1', async (v) => { saved.push(v); });
+  try {
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(document.activeElement, t.select());
+    assert.equal(store.isEditing('blur-1'), true, 'open: the lease is held');
+    t.outside.focus();   // Tab or a click elsewhere
+    assert.equal(t.select(), null, 'the picker closed');
+    assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    assert.equal(store.isEditing('blur-1'), false, 'the lease is released');
+    assert.deepEqual(saved, []);
+  } finally { t.done(); }
+});
+
+test('a refused status choice puts the picker back on the stored value, keeps the reason, and closes when left', async () => {
+  const { store } = await import('../../js/store.js');
+  const reason = 'Completion blocked: review-gate is still open';
+  const t = mountStatus('blur-2', async () => ({ error: reason }));
+  try {
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const select = t.select();
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await until(() => t.root.querySelector('.if-error')?.textContent);
+    assert.equal(t.root.querySelector('.if-error').textContent, reason);
+    assert.equal(t.select(), select, 'still open, beside its reason');
+    assert.equal(select.value, 'todo', 'it no longer shows "Done" as if the change took');
+    t.outside.focus();
+    assert.equal(t.select(), null);
+    assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    assert.equal(store.isEditing('blur-2'), false);
+  } finally { t.done(); }
+});
+
+test('a refusal that arrives after the picker was left closes it then', async () => {
+  const { store } = await import('../../js/store.js');
+  let answer;
+  const t = mountStatus('blur-3', () => new Promise((resolve) => { answer = resolve; }));
+  try {
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const select = t.select();
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    t.outside.focus();
+    assert.equal(t.select(), select, 'a choice in flight is not cancelled by leaving');
+    answer({ error: 'refused' });
+    await until(() => !t.select());
+    assert.equal(t.select(), null);
+    assert.equal(t.root.querySelector('.ef-enum .marker__word').textContent, 'Todo');
+    assert.equal(store.isEditing('blur-3'), false);
+  } finally { t.done(); }
+});
+
+// ── Errors in words (I-2) and a timer that outlives its save (M-5) ──
 const httpError = (code, message) => Object.assign(new Error(message), { code });
 
 test('a server failure is described in a sentence beside the field, never as the raw request', async () => {
@@ -383,6 +456,31 @@ test('a server failure is described in a sentence beside the field, never as the
       assert.equal(root.querySelector('.if-status-error').title, text);
     } finally { ctrl.destroy(); root.remove(); }
   }
+});
+
+test('a refusal right after a successful save keeps its message: the success tick does not wipe it', async () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  let n = 0;
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'tick-1', title: 'old' },
+    onSave: async () => (n++ ? { error: 'Title is locked while in review' } : undefined),
+  });
+  const commit = (text) => {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = text;
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+  };
+  try {
+    commit('first');
+    await until(() => root.querySelector('.ef-text')?.textContent === 'first');
+    commit('second');
+    await until(() => root.querySelector('.if-error')?.textContent);
+    await new Promise((resolve) => setTimeout(resolve, 900));   // past the success tick of the first save
+    assert.equal(root.querySelector('.if-error').textContent, 'Title is locked while in review');
+    assert.ok(root.querySelector('.if-status-error'), 'the cross is still there too');
+  } finally { ctrl.destroy(); root.remove(); }
 });
 
 test('an emptied field that was never set writes nothing: null, "" and [] are one emptiness (M-4)', async () => {

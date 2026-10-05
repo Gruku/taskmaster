@@ -49,9 +49,15 @@ export const EnumSelect = {
     });
     // With its list open the browser keeps Escape for the list; this only sees the key when the list is closed.
     sel.addEventListener('keydown', (e) => cancelOnEscape(e, onCancel));
+    // Leaving without a choice (Tab, a click elsewhere) is a cancel too: an inline picker left open would hold the
+    // task's edit lease, and with it every live update. A form passes no onCancel, and its select simply stays.
+    const opened = sel.value;
+    sel.addEventListener('blur', () => { if (sel.value === opened) onCancel?.(); });
     focusOnMount(sel, autoFocus);
     const wrap = h('span', { class: 'ef-select' }, [sel, icon('chevron', { size: 16 })]);
     wrap.control = sel;
+    // Back to the value it opened with: a choice the server refused is not left showing as if it took.
+    wrap.reset = () => { sel.value = opened; };
     return wrap;
   },
 

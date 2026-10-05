@@ -265,6 +265,63 @@ test('an inline save the server refuses (409 with no revision) shows its reason,
   expect(sent.every((s) => s.path === '/api/tasks/T-102' && s.ifMatch), JSON.stringify(sent)).toBe(true);
 });
 
+// An open inline picker holds the task's edit lease, and the dialog takes no live update while it is held (I-1).
+const editing = (page, id) => page.evaluate((i) => import('/js/store.js').then(({ store }) => store.isEditing(i)), id);
+// Another writer renames the task: the next detail read has the new title, and a poll brings a new board revision.
+async function renamedElsewhere(page, title) {
+  await page.route('**/api/task/T-102/detail', (route) => route.fulfill({ json: taskDetail({ ...DETAIL_TASK, title }, 't1:other', RICH_RELATED) }));
+  await page.evaluate(() => import('/js/store.js').then(({ store }) => {
+    const next = structuredClone(store.getBacklog());
+    next.revision = `r-${Date.now()}`;
+    store.setBoard(next);
+  }));
+}
+
+test('a status picker left with Tab or a click elsewhere closes, and another writer\'s change then shows', async ({ page }) => {
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  const status = dialog.locator('[data-field="status"]');
+  const select = status.locator('select');
+
+  await status.locator('.ef-editable').click();
+  await expect(select).toBeFocused();
+  expect(await editing(page, 'T-102')).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect(select).toHaveCount(0);
+  await expect(status.locator('.marker__word')).toHaveText('In progress');
+  expect(await editing(page, 'T-102')).toBe(false);
+
+  await status.locator('.ef-editable').click();
+  await expect(select).toBeFocused();
+  await dialog.locator('[data-test="dates"]').click();   // plain text: a click away, not onto another control
+  await expect(select).toHaveCount(0);
+  expect(await editing(page, 'T-102')).toBe(false);
+
+  await renamedElsewhere(page, 'Renamed by another writer');
+  await expect(titleOf(dialog)).toHaveText('Renamed by another writer');
+  expect(unmockedWrites(page)).toEqual([]);
+});
+
+test('a refused status choice goes back to the stored status, keeps its reason, and Tab away lets live updates through', async ({ page }) => {
+  const reason = 'Completion blocked: review-gate is still open';
+  await board(page, { table: { 'PATCH /api/tasks/T-102': { status: 409, json: { ok: false, error: reason } } } });
+  const dialog = await openCard(page, 'T-102');
+  const status = dialog.locator('[data-field="status"]');
+  const select = status.locator('select');
+  await status.locator('.ef-editable').click();
+  await expect(select).toBeFocused();
+  await select.selectOption('done');
+  await expect(status.locator('.if-error')).toHaveText(reason);
+  await expect(select, 'no longer shows "Done" as if it took').toHaveValue('in-progress');
+  await expect(select).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(select).toHaveCount(0);
+  await expect(status.locator('.marker__word')).toHaveText('In progress');
+  expect(await editing(page, 'T-102')).toBe(false);
+  await renamedElsewhere(page, 'Renamed after the refusal');
+  await expect(titleOf(dialog)).toHaveText('Renamed after the refusal');
+});
+
 test('a task that fails to load says so in a sentence, offers Open full, and prints no raw API error', async ({ page }) => {
   await board(page, { table: { '/api/task/T-102/detail': { status: 500, json: { error: 'Traceback: KeyError depends_on' } } } });
   await card(page, 'T-102').click();
