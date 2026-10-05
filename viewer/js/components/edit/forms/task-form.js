@@ -13,22 +13,12 @@ import { ChipInput }     from '../fields/chip-input.js';
 import { RelationPicker } from '../fields/relation-picker.js';
 import { EstimateField } from '../fields/estimate-field.js';
 import { KeyValueField } from '../fields/keyvalue-field.js';
+import { TASK_STATUS, PRIORITY } from '../../status.js';
 
-const STATUS_OPTIONS = [
-  { value: 'todo',        label: 'Todo' },
-  { value: 'in-progress', label: 'In Progress' },
-  { value: 'in-review',   label: 'In Review' },
-  { value: 'done',        label: 'Done' },
-  { value: 'blocked',     label: 'Blocked' },
-  { value: 'archived',    label: 'Archived' },
-];
-
-const PRIORITY_OPTIONS = [
-  { value: 'critical', label: 'Critical' },
-  { value: 'high',     label: 'High' },
-  { value: 'medium',   label: 'Medium' },
-  { value: 'low',      label: 'Low' },
-];
+// The select offers the marker's own words in the marker table's order, so "In progress" is never "In Progress".
+const optionsOf = (table) => Object.entries(table).map(([value, { label }]) => ({ value, label }));
+const STATUS_OPTIONS = optionsOf(TASK_STATUS);
+const PRIORITY_OPTIONS = optionsOf(PRIORITY);
 
 export function taskSchema({ getBacklog }) {
   const epicOptions = () => (getBacklog()?.epics || []).map(e => ({ value: e.id, label: e.id }));

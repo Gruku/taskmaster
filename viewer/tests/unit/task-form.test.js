@@ -139,3 +139,13 @@ test('docs is edited as a map of type to path, never as a list', async () => {
   assert.equal(runValidation({ ...base, docs: { spec: 'docs/spec.md' } }, s).valid, true);
   assert.ok(runValidation({ ...base, docs: [{ key: 'a', value: '1' }, { key: 'a', value: '2' }] }, s).errors.docs);
 });
+
+// One vocabulary: the form's select offers the same words, in the same order, as the marker beside it (M-1).
+test('status and priority options are the status tables: same values, words and order', async () => {
+  const { TASK_STATUS, PRIORITY } = await import('../../js/components/status.js');
+  const s = taskSchema({ getBacklog: FAKE });
+  const options = (key) => s.fields.find((f) => f.key === key).options;
+  assert.deepEqual(options('status'), Object.entries(TASK_STATUS).map(([value, m]) => ({ value, label: m.label })));
+  assert.deepEqual(options('priority'), Object.entries(PRIORITY).map(([value, m]) => ({ value, label: m.label })));
+  assert.equal(options('status').find((o) => o.value === 'in-progress').label, 'In progress');
+});
