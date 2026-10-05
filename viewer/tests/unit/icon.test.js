@@ -36,9 +36,9 @@ test('unknown icon throws', () => { assert.throws(() => icon('nope')); });
 test('inherited object keys are not icons', () => {
   for (const n of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) assert.throws(() => icon(n), /unknown icon/, n);
 });
-test('the 16 design-system glyphs and the 7 viewer glyphs exist', () => {
-  for (const n of ['arrow','check','chevron','copy','dismiss','document','edit','external','folder','grid','minus','more','plus','polarity','search','sliders','kanban','table','alert','bug','idea','archive','menu']) assert.ok(ICONS[n], n);
-  assert.equal(Object.keys(ICONS).length, 23);
+test('the 16 design-system glyphs and the 8 viewer glyphs exist', () => {
+  for (const n of ['arrow','check','chevron','copy','dismiss','document','edit','external','folder','grid','minus','more','plus','polarity','search','sliders','kanban','table','alert','bug','idea','archive','menu','sort']) assert.ok(ICONS[n], n);
+  assert.equal(Object.keys(ICONS).length, 24);
 });
 test('no glyph carries a color literal', () => {
   for (const [name, inner] of Object.entries(ICONS)) assert.ok(!/#[0-9a-f]{3,8}\b|rgb|hsl/i.test(inner), name);

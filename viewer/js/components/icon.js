@@ -29,6 +29,7 @@ export const ICONS = {
   idea: '<path d="M8.5 14a5.5 5.5 0 1 1 7 0c-.7.6-1 1.3-1 3h-5c0-1.7-.3-2.4-1-3Z"></path><path d="M10 20h4"></path>',
   archive: '<rect x="3.5" y="5" width="17" height="4" rx="1"></rect><path d="M5 9v9.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"></path>',
+  sort: '<path d="M8 9.5 12 5.5 16 9.5M8 14.5 12 18.5 16 14.5"></path>',
 };
 
 export function icon(name, { size = 20, label } = {}) {
