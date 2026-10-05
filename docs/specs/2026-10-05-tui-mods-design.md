@@ -68,7 +68,7 @@ plugin:taskmaster:tm   (unchanged MCP server)
 - **`rr-tui`** owns everything visual that isn't interaction: colour tokens per polarity, and finished trees for surfaces, labels and signals. Reusable by any future mod.
 - **`taskmaster-tui`** owns data, session binding, interaction and Taskmaster semantics. It draws Buttons itself (press handlers must stay in its own environment) and asks `$.rr` for everything else.
 - **Development home:** both mods live in this repo under `mods/rr-tui/` and `mods/taskmaster-tui/` and load through `CLAUDE_CODE_PLUGIN_DIRS` (watched, hot-reloaded).
-- **Shipping:** `taskmaster-tui` folds into the Taskmaster plugin — its `hooks/hooks.json` gains `"modules"` beside the existing classic `hooks`, and `plugin.json` lists `rr-tui` under `dependencies`. `rr-tui` ships as its own plugin (home decided at ship time; see §10).
+- **Shipping (decided 2026-10-05):** Taskmaster must work properly as the sole installed plugin. `rr-tui` and `taskmaster-tui` ship as separate, optional plugins from the claude-tools marketplace; `taskmaster-tui` depends on `rr-tui` and `taskmaster`, and Taskmaster depends on neither. Folding was dropped: on 2.1.289 a plugin with an unmet `dependencies` entry is disabled entirely, so a fold would switch Taskmaster off for anyone without `rr-tui`. A pytest guard keeps Taskmaster's manifest free of `dependencies` and its `hooks.json` free of `modules`.
 
 ## 5. `rr-tui`
 
@@ -240,7 +240,7 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 2. `taskmaster-tui` surfaces against fixture data (no `tm`).
 3. Data layer + parsers against real backlogs; binding.
 4. Write actions (done, back to agent) behind confirmation.
-5. Fold `taskmaster-tui` into the Taskmaster plugin; decide `rr-tui`'s shipping home.
+5. Ship `rr-tui` and `taskmaster-tui` as optional marketplace plugins; verify Taskmaster still works as the sole plugin.
 
 Tracked as one Taskmaster epic, one task per step, each through the review-gate.
 
