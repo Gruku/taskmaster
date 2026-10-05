@@ -17,7 +17,7 @@ import { taskSchema } from './edit/forms/task-form.js';
 import { EstimateField } from './edit/fields/estimate-field.js';
 import { renderGatePipeline } from './gate-pipeline.js';
 import { renderMergeLadder } from './merge-status.js';
-import { marker } from './status.js';
+import { marker, statusMarker } from './status.js';
 import { icon } from './icon.js';
 
 const COPIED_MS = 1500;
@@ -481,12 +481,10 @@ export function mountTaskDetailDocument(root, ctx) {
   }
   if (root.querySelector('.td-lock-banner')) expireBanner();
 
-  // Fire-and-forget: fetch linked bugs and inject section into the body asynchronously. The shared `api` object has
-  // no bug methods, so the caller hands over `listBugs` from api.js.
+  // Fire-and-forget: fetch linked bugs and inject section into the body asynchronously.
   let disposed = false;
-  const listBugs = ctx.listBugs ?? ctx.api?.listBugs;
-  if (typeof listBugs === 'function' && task.id) {
-    mountLinkedBugs(tail, { listBugs, taskId: task.id, level, alive: () => !disposed });
+  if (typeof ctx.api?.listBugs === 'function' && task.id) {
+    mountLinkedBugs(tail, { listBugs: ctx.api.listBugs, taskId: task.id, level, alive: () => !disposed });
   }
 
   if (chrome === 'page') mountTaskTopbar({ view: 'A', onToggleVariant: ctx.onToggleVariant, onEdit: () => openEditForm(ctx) });
@@ -526,7 +524,7 @@ async function mountLinkedBugs(anchor, { listBugs, taskId, level, alive }) {
       ul.appendChild(h('li', { class: 'td-linked-bugs__item' }, [
         h('a', { class: 'td-linked-bugs__link', href: `#/bug/${encodeURIComponent(b.id)}` },
           [h('span', { class: 'td-linked-bugs__id' }, b.id), ' — ', text(b.title)]),
-        text(b.status) ? h('span', { class: `td-tag td-linked-bugs__status td-linked-bugs__status--${text(b.status).replace(/[^a-z0-9-]/gi, '')}` }, text(b.status)) : null,
+        text(b.status) ? h('span', { class: 'td-linked-bugs__status' }, statusMarker('bug', text(b.status))) : null,
       ]));
     }
     section.appendChild(ul);

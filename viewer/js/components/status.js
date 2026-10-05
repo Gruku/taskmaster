@@ -20,7 +20,16 @@ export const PRIORITY = freeze({
   low: ['Low', '○', 'neutral'],
 });
 
-const STATUS_KINDS = { task: TASK_STATUS };
+// A bug that is open blocks its task from closing; one that is fixed no longer does.
+export const BUG_STATUS = freeze({
+  open: ['Open', '◆', 'critical'],
+  shelved: ['Shelved', '○', 'neutral'],
+  fixed: ['Fixed', '●', 'success'],
+  adopted: ['Adopted', '◐', 'accent'],
+  archived: ['Archived', '✕', 'neutral'],
+});
+
+const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS };
 
 // None of the viewer's local fonts carries these glyphs, so the stylesheet draws each shape by name;
 // the glyph stays in the DOM as the fallback.

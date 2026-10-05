@@ -517,16 +517,21 @@ test('unmount cleanup does not throw', () => {
   root.remove();
 });
 
-test('linked bugs come from the listBugs the caller hands over, after the sections and before the dates', async () => {
+test('linked bugs come from api.listBugs, after the sections and before the dates', async () => {
   const asked = [];
   const listBugs = async (q) => { asked.push(q); return [{ id: 'B-031', title: 'Card edge vanishes', status: 'open' }, { id: 'B-032', title: 'Fixed one', status: 'fixed' }, null]; };
-  const m = mount(FAKE_TASK, { listBugs });
+  const api = { ...makeCtx().api, listBugs };
+  const m = mount(FAKE_TASK, { api });
   await tick();
   assert.deepEqual(asked, [{ found_in: 'T-001' }]);
   const section = m.root.querySelector('[data-test="linked-bugs"]');
   assert.ok(section, 'the linked bugs section is shown');
   assert.deepEqual([...section.querySelectorAll('a')].map((a) => a.getAttribute('href')), ['#/bug/B-031', '#/bug/B-032']);
   assert.match(section.querySelector('.marker__word').textContent, /1 open bug blocking close/);
+  // Each bug's status is a shape plus a word, from the shared bug status table.
+  const statuses = [...section.querySelectorAll('.td-linked-bugs__status .marker')];
+  assert.deepEqual(statuses.map((m) => m.querySelector('.marker__word').textContent), ['Open', 'Fixed']);
+  assert.deepEqual(statuses.map((m) => m.className), ['marker marker--critical', 'marker marker--success']);
   const order = [...m.root.querySelector('.td-body').children].map((el) => el.dataset.test).filter(Boolean);
   assert.ok(order.indexOf('linked-bugs') < order.indexOf('dates'), order.join(','));
   m.done();

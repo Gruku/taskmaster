@@ -113,6 +113,69 @@ test('Edit opens the form on top; Escape closes only the form, then the dialog, 
   expect(await modalEntry(page)).toBe(false);
 });
 
+test('Back with the Edit form on top closes the whole stack in one step', async ({ page }) => {
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/kanban$/);
+  expect(await modalEntry(page)).toBe(false);
+  await expect(card(page, 'T-102')).toBeFocused();
+});
+
+test('Back with unsaved edits asks first: "Keep editing" keeps everything and the entry, "Discard" closes the stack', async ({ page }) => {
+  await board(page);
+  const before = await page.evaluate(() => history.length);
+  const dialog = await openCard(page, 'T-102');
+  await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'Edit task' });
+  await expect(form).toBeVisible();
+  await page.keyboard.type(' (draft)');
+  const confirm = page.getByRole('dialog', { name: 'Discard changes?' });
+
+  await page.goBack();
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(form).toBeVisible();
+  await expect(dialog).toBeVisible();
+  expect(await modalEntry(page), 'the refused Back leaves the dialog its entry').toBe(true);
+  await expect(form.locator('[data-key="title"] input')).toHaveValue(/\(draft\)/);
+
+  await page.goBack();
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Discard' }).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/kanban$/);
+  expect(await modalEntry(page)).toBe(false);
+  await expect(card(page, 'T-102')).toBeFocused();
+  // Every entry the dialog put back was consumed again: Back from here leaves the board's own history alone.
+  expect(await page.evaluate(() => history.state?.detailModal ?? null)).toBe(null);
+  expect(await page.evaluate(() => history.length)).toBeGreaterThanOrEqual(before);
+});
+
+test('a card the board redrew while the dialog was open still gets focus back', async ({ page }) => {
+  await board(page);
+  await card(page, 'T-102').evaluate((el) => { el.dataset.before = 'redraw'; });
+  await openCard(page, 'T-102');
+  // A poll brings a new revision and the board repaints every card; the one that opened the dialog is gone.
+  await page.evaluate(() => import('/js/store.js').then(({ store }) => {
+    const next = structuredClone(store.getBacklog());
+    next.revision = 'r2';
+    next.tasks.find((t) => t.id === 'T-104').title = 'Sessions timeline: renamed by another writer';
+    store.setBoard(next);
+  }));
+  await expect(page.locator('.card-task[data-before]')).toHaveCount(0);
+  await expect(card(page, 'T-102')).toHaveCount(1);
+
+  await page.keyboard.press('Escape');
+  await expect(detail(page)).toHaveCount(0);
+  await expect(card(page, 'T-102')).toBeFocused();
+});
+
 test('the close button and the browser Back both close the dialog, each through the one history entry', async ({ page }) => {
   await board(page);
   const before = await page.evaluate(() => history.length);
@@ -262,5 +325,19 @@ for (const theme of ['dark', 'light']) {
     await expect(dialog.locator('[data-test="sec-review-instructions"]')).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await expect(page.locator('main')).toHaveCount(1);
+  });
+
+  test(`axe (${theme}): every hovered row in the dialog's rail keeps its text readable`, async ({ page }) => {
+    await board(page, { theme });
+    const dialog = await openCard(page, 'T-102');
+    const rows = ['[data-sub="depends"] a.td-dep', '[data-sub="unblocks"] a.td-dep', '[data-panel="issues"] a.td-issue', '[data-panel="docs"] a.td-doc-link'];
+    for (const row of rows) {
+      const el = dialog.locator(row).first();
+      await el.scrollIntoViewIfNeeded();
+      await el.hover();
+      await expect.poll(() => el.evaluate((a) => getComputedStyle(a).backgroundColor), { message: `${row} shows its hover fill` })
+        .not.toBe('rgba(0, 0, 0, 0)');
+      expect(await axe(page), row).toEqual([]);
+    }
   });
 }

@@ -44,6 +44,11 @@ export function openModalCount() {
 
 const top = () => stack.at(-1);
 
+// The handle of the topmost open modal, or null — for a modal that must ask the ones above it to close.
+export function topModal() {
+  return top() ?? null;
+}
+
 // The page behind is inert while any modal is open; a covered modal is inert until it is on top again.
 function syncLayers() {
   const shell = document.querySelector('.shell');

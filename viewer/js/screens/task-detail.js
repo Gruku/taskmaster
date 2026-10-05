@@ -1,5 +1,4 @@
 import { getTaskDetailFull } from '../store.js';
-import { listBugs } from '../api.js';
 import { mountTaskDetailDocument, rememberFocus } from '../components/task-detail-document.js';
 import { stateBlock as busyBlock } from '../components/empty-state.js';
 import { claimTopbar } from '../lib/topbar.js';
@@ -75,7 +74,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     const refocus = rememberFocus(root);
     cleanup?.();
     cleanup = null;
-    const ctx = {...value, prefs: prefsData, store, api, listBugs, onNavigate, onToggleVariant, view};
+    const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view};
     if (view === 'B') {
       const mod = await import('../components/task-detail-graph.js');
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);

@@ -77,8 +77,8 @@
 .td-copy__status { flex: 0 0 auto; color: var(--foreground-bold); }
 .td-copy__status:empty { display: none; }
 .td-id { padding: 0 var(--space-micro); margin-left: calc(-1 * var(--space-micro)); }
-.td-id:hover { background: var(--ground-15); }
-.td-id:hover .td-id-text { color: var(--foreground-bold); }
+/* The id sits on the page ground, which has no hover role of its own: the hover is told by ink and an underline. */
+.td-id:hover .td-id-text { color: var(--foreground-bold); text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- Layout: body, and the rail beside it or — when the document is narrow — below it ---------- */
 .td-grid {
@@ -188,7 +188,7 @@
   padding: var(--space-sm);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  background: var(--bg-recessed);
+  background: var(--surface-recessed);
   color: var(--foreground-default);
   font-size: var(--size-narrator-small);
   line-height: var(--leading-body);
@@ -275,7 +275,8 @@
 .td-linked-bugs__link { flex: 1 1 0; min-width: 0; color: var(--foreground-default); text-decoration: none; overflow-wrap: anywhere; }
 .td-linked-bugs__link:hover { color: var(--foreground-bold); text-decoration: underline; }
 .td-linked-bugs__id { font-family: var(--font-technical); font-weight: var(--font-technical-weight); color: var(--foreground-bold); }
-.td-linked-bugs__status { flex: 0 0 auto; text-transform: capitalize; }
+.td-linked-bugs__status { flex: 0 0 auto; }
+.td-linked-bugs__status .marker { font-size: var(--size-technical-small); }
 
 /* dates */
 .td-dates { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-xl); margin-bottom: 0; }
@@ -329,6 +330,8 @@
 }
 .td-doc--page :is(.td-dep, .td-issue, .td-doc-link):hover { background: var(--card-bg-hover); }
 .td-doc--embedded :is(.td-dep, .td-issue, .td-doc-link):hover { background: var(--overlay-surface-hover); }
+/* The dialog's hover fill is too dark in light for the accent to stay AA (3.15:1): on it, an id reads in bold ink. */
+.td-doc--embedded :is(.td-dep, .td-issue, .td-doc-link):hover :is(.td-dep__id, .td-issue-id, .td-doc-type) { color: var(--foreground-bold); }
 :is(.td-dep, .td-issue):hover :is(.td-dep__title, .td-issue-title) { color: var(--foreground-bold); }
 :is(.td-dep__id, .td-issue-id) {
   min-width: 0;
@@ -419,7 +422,6 @@
 /* ---------- Detail modal: the document inside the shared shell ---------- */
 .modal--detail .modal-actions { align-self: flex-start; }
 .modal--detail .modal-actions [hidden] { display: none; }
-.modal--detail .modal-title:focus-visible { outline-offset: var(--space-micro); }
 /* The epic peek keeps its own layout; only the frame is the dialog's. */
 .modal--detail .ed-root { max-width: none; padding: 0; }
 
@@ -560,7 +562,7 @@
   overflow-x: auto;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  background: var(--bg-recessed);
+  background: var(--surface-recessed);
   color: var(--foreground-default);
   font-family: var(--font-technical);
   font-weight: var(--font-technical-weight);

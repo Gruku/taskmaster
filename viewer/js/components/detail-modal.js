@@ -3,9 +3,9 @@
 // dismissed, costs exactly one Back, and hands focus back to the card it came from.
 // One modal at a time; peeking a linked task or epic swaps the content in place.
 import { store, getTaskDetailFull } from '../store.js';
-import { api, getEpic, listBugs } from '../api.js';
+import { api, getEpic } from '../api.js';
 import { h } from '../util/h.js';
-import { openModal } from './modal.js';
+import { openModal, topModal } from './modal.js';
 import { icon } from './icon.js';
 import { stateBlock } from './empty-state.js';
 import { parseDetailHref } from '../lib/view-mode.js';
@@ -127,7 +127,7 @@ export function openDetailModal({ kind, id, opener }) {
         modal.setTitle(titleHost);
         mountEl.replaceChildren();
         disposeComponent = mountTaskDetailDocument(mountEl, {
-          ...detail, prefs: store.getPrefs(), store, api, listBugs,
+          ...detail, prefs: store.getPrefs(), store, api,
           chrome: 'embedded', titleHost,
         });
         task = detail.task;
@@ -158,7 +158,22 @@ export function openDetailModal({ kind, id, opener }) {
     }
   }
 
-  function onPop() { modal.close(); }
+  // Back leaves the whole stack, but a modal on top guarding unsaved work (the Edit form) still gets its say: the entry
+  // Back took is put back, the modals above are asked to close from the top down, and only when every one of them
+  // did does the detail leave through that entry. One that stays open keeps the entry; Back is refused.
+  let unwinding = false;
+  async function onPop() {
+    if (modal.isTop()) { modal.close(); return; }
+    history.pushState({ detailModal: cur }, '');
+    if (unwinding) return;            // a second Back while a guard is still asking is refused the same way
+    unwinding = true;
+    try {
+      for (let above = topModal(); above && above !== modal; above = topModal()) {
+        if (!(await above.requestClose())) return;
+      }
+    } finally { unwinding = false; }
+    if (!closed) modal.requestClose();
+  }
   function onHash() { modal.close(); }   // sidebar nav while open → close, don't linger
 
   // Leaving for another screen takes over the modal's own history entry: Back from there returns to

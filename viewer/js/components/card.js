@@ -16,6 +16,8 @@ import { bindCopy } from '../lib/copy.js';
 import { laneBadge } from './gate-pipeline.js';
 import { renderMergeLadderCompact } from './merge-status.js';
 
+let nameSeq = 0;   // ids that let a card be named by its own id and title
+
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'Waiting on human', done: 'Done' };
 
@@ -43,6 +45,11 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
   // detail modal can be opened without a pointer and can hand focus back here when it closes.
   const open = () => import('../lib/open-detail.js').then(({ openDetail }) => openDetail('task', task.id, { opener: card }));
   card.tabIndex = 0;
+  // A keyboard stop needs a name: the card's own id and title, read in that order. A generic element may not be
+  // named, and the card holds controls of its own, so it is an article rather than a button.
+  const nameId = `card-name-${++nameSeq}`;
+  card.setAttribute('role', 'article');
+  card.setAttribute('aria-labelledby', `${nameId}-id ${nameId}-title`);
   card.addEventListener('click', (ev) => {
     if (ev.target.closest('.card-id') || ev.target.closest('.card-branch') || ev.target.closest('.cmp-icon-btn')) return;
     open();
@@ -59,7 +66,7 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
 
   const id = document.createElement('span');
   id.className = 'card-id';
-  id.innerHTML = `<span class="label-text">${escapeHtml(task.id)}</span><span class="copy-glyph">⧉</span>`;
+  id.innerHTML = `<span class="label-text" id="${nameId}-id">${escapeHtml(task.id)}</span><span class="copy-glyph">⧉</span>`;
   bindCopy(id, task.id);
   meta.appendChild(id);
 
@@ -95,6 +102,7 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
   // ── Title ──
   const title = document.createElement('div');
   title.className = 'card-title';
+  title.id = `${nameId}-title`;
   title.textContent = task.title || '(untitled)';
   body.appendChild(title);
 
