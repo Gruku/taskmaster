@@ -476,7 +476,6 @@ export async function mount(root, { store, api, prefs }) {
 
   // Cleanup
   return () => {
-    if (searchTimer) clearTimeout(searchTimer);
     unsubBacklog();
     resizeObs.disconnect();
   };

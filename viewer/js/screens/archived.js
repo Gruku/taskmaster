@@ -90,7 +90,6 @@ export async function mount(root, { store }) {
   paint();
 
   return () => {
-    if (timer) clearTimeout(timer);
     unsub();
   };
 }

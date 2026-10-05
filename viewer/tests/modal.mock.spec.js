@@ -178,6 +178,28 @@ test('focus returns to the opener; when the opener is gone it lands in the scree
     && document.getElementById('screen-mount').contains(document.activeElement))).toBe(true);
 });
 
+test('a modal opened from a popover item that went with the popover hands focus back to the button that opened the popover', async ({ page }) => {
+  await boot(page);
+  // Like a control parked behind Filters: the item exists only while its popover is open.
+  await page.evaluate(() => import('/js/components/popover.js').then(({ openPopover }) => {
+    const anchor = document.createElement('button');
+    anchor.id = 'menu-button';
+    anchor.textContent = 'Filters';
+    document.getElementById('topbar-primary').appendChild(anchor);
+    const item = document.createElement('button');
+    item.id = 'menu-item';
+    item.textContent = 'Add task';
+    openPopover({ anchor, content: item, label: 'Filters' });
+  }));
+  await expect(page.locator('#menu-item')).toBeFocused();
+  await open(page, 'a');
+  // Focus moved into the dialog, so the popover closed and took its item with it.
+  await expect(page.locator('#menu-item')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  expect(await count(page)).toBe(0);
+  await expect(page.locator('#menu-button')).toBeFocused();
+});
+
 test('a click on the overlay closes; a drag from inside the dialog to the overlay does not', async ({ page }) => {
   await boot(page);
   await open(page, 'a');

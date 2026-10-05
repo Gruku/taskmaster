@@ -9,6 +9,24 @@ const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// Row 2 lays out again when the web fonts arrive; after that, and a frame, what is parked behind Filters has settled.
+async function rowSettled(page) {
+  await expect(page.locator('#topbar-actions > *:not([hidden])').first()).toBeVisible();
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
+}
+
+// A row-2 control: in the row, or behind Filters when the row is too narrow for it (Filters is opened to reach it).
+async function topbarControl(page, selector) {
+  await rowSettled(page);
+  if (!(await page.locator(`#topbar-actions > ${selector}, #topbar-actions > :not(.popover) ${selector}`).count())) {
+    // From the keyboard, so a control focused in the popover afterwards still shows its focus ring.
+    await page.locator('#topbar-actions > .overflow-more').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'Filters' })).toBeVisible();
+  }
+  return page.locator(`#topbar-actions ${selector}`);
+}
+
 test.beforeEach(async ({ page }) => { await mockApi(page); });
 // A write the mock did not expect means the page talked to an endpoint this spec never set up.
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
@@ -212,7 +230,7 @@ test('the search ring belongs to the input; the clear button shows its own', asy
 
 test('Ctrl+K leaves focus alone while a modal is open', async ({ page }) => {
   await page.goto('/#/kanban');
-  await page.locator('#topbar-actions [aria-label="Add task"]').click();
+  await (await topbarControl(page, '[aria-label="Add task"]')).click();
   const modal = page.locator('[aria-modal="true"]');
   const field = modal.locator('input, textarea').first();
   await field.focus();
@@ -258,7 +276,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page, withContent());
     await page.goto('/#/kanban');
-    const add = page.locator('#topbar-actions [aria-label="Add task"]');
+    const add = await topbarControl(page, '[aria-label="Add task"]');
     await expect(add).toBeVisible();
     await expect(add).toHaveClass(/(^|\s)btn(\s|$)/);
     await expect(add).toHaveClass(/(^|\s)btn--primary(\s|$)/);
@@ -274,8 +292,21 @@ for (const theme of ['dark', 'light']) {
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       await expect(page.locator('#topbar-actions > *').first(), route).toBeVisible();
       await page.evaluate(axeSource);
-      const result = await page.evaluate(() => window.axe.run(document.getElementById('topbar'), { runOnly: ['color-contrast'] }));
-      expect(result.violations.map((v) => `${route} ${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+      const contrast = async (where) => {
+        const result = await page.evaluate(() => window.axe.run(document.getElementById('topbar'), { runOnly: ['color-contrast'] }));
+        expect(result.violations.map((v) => `${where} ${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+      };
+      await contrast(route);
+      // What did not fit is checked where it is shown: in the Filters popover.
+      const more = page.locator('#topbar-actions > .overflow-more');
+      await rowSettled(page);
+      if (await more.isVisible()) {
+        await more.click();
+        await expect(page.getByRole('dialog', { name: 'Filters' })).toBeVisible();
+        // Measured once the popover has faded in.
+        await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+        await contrast(`${route} (Filters)`);
+      }
     }
   });
 }
@@ -283,7 +314,7 @@ for (const theme of ['dark', 'light']) {
 test('a focused segment shows its whole ring and the pressed one is the solid signature fill', async ({ page }) => {
   await mockApi(page, withContent());
   await page.goto('/#/issues');
-  const seg = page.locator('#topbar-actions .tm-segmented');
+  const seg = await topbarControl(page, '.tm-segmented');
   const pressed = seg.locator('button[aria-pressed="true"]');
   await expect(pressed).toHaveCount(1);
   await pressed.focus();
@@ -322,11 +353,19 @@ test.describe('topbar controls at phone width', () => {
       await expect(page.locator('#topbar-actions > *').first()).toBeVisible();
       const input = page.locator('#topbar-actions .tm-search input');
       if (await input.count()) await input.fill('abc');
-      const short = await page.locator('#topbar-actions').evaluate((root) => [...root.querySelectorAll('.tm-search, .tm-search__clear, .tm-segmented > button, .btn')]
+      const short = () => page.locator('#topbar-actions').evaluate((root) => [...root.querySelectorAll('.tm-search, .tm-search__clear, .tm-segmented > button, .btn')]
         .filter((el) => el.getClientRects().length)
         .map((el) => ({ el: el.className || el.tagName, h: el.getBoundingClientRect().height }))
         .filter(({ h }) => h < 44));
-      expect(short, route).toEqual([]);
+      expect(await short(), route).toEqual([]);
+      // The controls parked behind Filters are touch targets there too.
+      const more = page.locator('#topbar-actions > .overflow-more');
+      await rowSettled(page);
+      if (await more.isVisible()) {
+        await more.click();
+        await expect(page.getByRole('dialog', { name: 'Filters' })).toBeVisible();
+        expect(await short(), `${route} (Filters)`).toEqual([]);
+      }
     }
   });
 });
@@ -460,3 +499,140 @@ test('the tab icon is the pixel-fitted ICO, a real file the server can deliver',
     expect(res.status(), href).toBe(200);
   }
 });
+
+// Topbar row 2 stays on one line: what does not fit waits behind "Filters".
+const filters = (page) => page.locator('#topbar-actions > .overflow-more');
+const filtersPopover = (page) => page.getByRole('dialog', { name: 'Filters' });
+// Every control left in the row ends inside it; none is cut off at its edge.
+const rowFits = (page) => page.locator('#topbar-actions').evaluate((row) => {
+  const edge = row.getBoundingClientRect().right;
+  const cut = [...row.children].filter((c) => !c.hidden && !c.classList.contains('popover'))
+    .filter((c) => c.getBoundingClientRect().right > edge + 0.5).map((c) => c.className);
+  return { overflow: row.scrollWidth - row.clientWidth, cut };
+});
+
+test('row 2 never scrolls sideways or wraps, and a row holding only the hidden Filters button is hidden', async ({ page }) => {
+  await mockApi(page, withContent());
+  await page.goto('/#/table');
+  await expect(page.locator('#topbar-actions .tm-search')).toBeVisible();
+  const look = await page.locator('#topbar-actions').evaluate((row) => {
+    const cs = getComputedStyle(row);
+    return { x: cs.overflowX, y: cs.overflowY, wrap: cs.flexWrap };
+  });
+  expect(look).toEqual({ x: 'hidden', y: 'hidden', wrap: 'nowrap' });
+  await page.goto('/#/settings');
+  await expect(page.locator('#page-title')).toHaveText('Settings');
+  await expect(filters(page)).toHaveCount(1);
+  await expect(filters(page)).toBeHidden();
+  await expect(page.locator('#topbar-actions')).toBeHidden();
+});
+
+test.describe('topbar row 2 at phone width', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('on the Table the search and Filters stay; the rest is in the Filters popover and works there', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/table');
+    const search = page.locator('#topbar-actions > .tm-search');
+    await expect(search).toBeVisible();
+    await expect(filters(page)).toBeVisible();
+    await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
+    // What did not fit is out of the row until Filters opens.
+    await expect(page.locator('#topbar-actions > [aria-label="Add task"]')).toHaveCount(0);
+    await filters(page).click();
+    const pop = filtersPopover(page);
+    await expect(pop).toBeVisible();
+    await expect(pop.locator('.tm-subcount')).toBeVisible();
+    const add = pop.locator('[aria-label="Add task"]');
+    await expect(add).toBeVisible();
+    await add.click();
+    await expect(page.locator('[aria-modal="true"]')).toBeVisible();
+  });
+
+  test('parked controls are a column in the Filters popover and a parked chip row wraps', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/kanban');
+    await expect(filters(page)).toBeVisible();
+    await filters(page).click();
+    const pop = filtersPopover(page);
+    await expect(pop).toBeVisible();
+    const look = await pop.evaluate((el) => {
+      const list = el.querySelector('.overflow-list');
+      const items = [...list.children];
+      const boxes = items.map((c) => c.getBoundingClientRect());
+      return {
+        direction: getComputedStyle(list).flexDirection,
+        stacked: boxes.every((b, i) => i === 0 || b.top >= boxes[i - 1].bottom - 0.5),
+        chipWrap: [...list.querySelectorAll('.tm-chip-row')].map((r) => getComputedStyle(r).flexWrap),
+        sideways: el.scrollWidth - el.clientWidth,
+        // Over the board's sticky column headers, not under them: each parked control takes a press at its centre.
+        covered: [...list.querySelectorAll('button, select')].filter((c) => {
+          const b = c.getBoundingClientRect();
+          return !c.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2));
+        }).map((c) => c.getAttribute('aria-label') || c.className),
+      };
+    });
+    expect(look.direction).toBe('column');
+    expect(look.stacked).toBe(true);
+    expect(look.chipWrap.length).toBeGreaterThan(0);
+    expect(look.chipWrap.every((w) => w === 'wrap')).toBe(true);
+    expect(look.sideways).toBe(0);
+    expect(look.covered).toEqual([]);
+  });
+
+  test('leaving a screen with its controls parked behind Filters leaves nothing behind', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await mockApi(page, withContent());
+    await page.goto('/#/table');
+    await filters(page).click();
+    await expect(filtersPopover(page)).toBeVisible();
+    await page.evaluate(() => { location.hash = '#/kanban'; });
+    await expect(page.locator('#page-title')).toHaveText('Kanban');
+    await expect(page.locator('[placeholder="Filter… (prefix ! to exclude)"]')).toHaveCount(0);
+    await expect(page.locator('.popover')).toHaveCount(0);
+    await expect(page.locator('#topbar-actions > .tm-search input')).toBeVisible();
+    await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
+    // Kanban's own controls were laid out afresh: what is parked is Kanban's, and Filters lists them.
+    await filters(page).click();
+    await expect(filtersPopover(page).locator('[aria-label="Add task"]')).toHaveCount(1);
+    await expect(filtersPopover(page).locator('.tm-subcount')).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+});
+
+test('at desktop width the Table parks nothing and Filters is hidden', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page, withContent());
+  await page.goto('/#/table');
+  await expect(page.locator('#topbar-actions [aria-label="Add task"]')).toBeVisible();
+  await expect(filters(page)).toHaveCount(1);
+  await expect(filters(page)).toBeHidden();
+  await expect(page.locator('#topbar-actions [data-popover-item]')).toHaveCount(0);
+  expect(await rowFits(page)).toEqual({ overflow: 0, cut: [] });
+});
+
+test('a topbar control that grows in place is laid out again', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page, withContent());
+  await page.goto('/#/table');
+  await expect(filters(page)).toBeHidden();
+  // A count's new text changes its width without adding or removing anything from the row.
+  await page.locator('#topbar-actions > .tm-subcount').evaluate((el) => { el.textContent = 'a very long count '.repeat(12); });
+  await expect(filters(page)).toBeVisible();
+  await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
+});
+
+for (const route of ['#/kanban', '#/archived']) {
+  test(`leaving ${route} raises no error`, async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await mockApi(page, withContent());
+    await page.goto('/' + route);
+    await expect(page.locator('#topbar-actions .tm-search')).toBeVisible();
+    await page.evaluate(() => { location.hash = '#/settings'; });
+    await expect(page.locator('#page-title')).toHaveText('Settings');
+    expect(errors).toEqual([]);
+  });
+}

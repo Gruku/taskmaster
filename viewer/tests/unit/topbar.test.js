@@ -12,7 +12,7 @@ globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 globalThis.Event = dom.window.Event;
 
-const { tmAction, tmSearch, tmSegmented } = await import('../../js/lib/topbar.js');
+const { tmAction, tmSearch, tmSegmented, claimTopbar } = await import('../../js/lib/topbar.js');
 
 const JS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'js');
 
@@ -82,4 +82,21 @@ test('no screen offers a "coming soon" control', () => {
   for (const f of ['screens/issues.js', 'screens/sessions.js']) {
     assert.doesNotMatch(readFileSync(join(JS_DIR, f), 'utf8'), /coming soon/i, f);
   }
+});
+
+test('claimTopbar: empties both rows and keeps one Filters button in row 2 for the life of the page', () => {
+  document.body.innerHTML = '<span id="topbar-count">3</span><div id="topbar-primary"><button>Go</button></div><div id="topbar-actions"><span>old</span></div>';
+  const row = claimTopbar();
+  assert.equal(row, document.getElementById('topbar-actions'));
+  assert.equal(document.getElementById('topbar-count').childNodes.length, 0);
+  assert.equal(document.getElementById('topbar-primary').childNodes.length, 0);
+  const [filters] = row.children;
+  assert.equal(row.children.length, 1);
+  assert.ok(filters.classList.contains('overflow-more'));
+  assert.equal(filters.hidden, true);
+  assert.match(filters.textContent, /^Filters/);
+  assert.ok(filters.querySelector('svg.icon'));
+  row.append(tmSearch().el, tmAction({ label: 'A' }));
+  assert.equal(claimTopbar(), row);
+  assert.deepEqual([...row.children], [filters]);
 });

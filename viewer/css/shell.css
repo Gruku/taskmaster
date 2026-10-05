@@ -200,32 +200,33 @@ body, .shell, .sidebar, .topbar, .main {
   background: var(--bg-page);
   padding: 0 var(--page-gutter);
 }
+/* A popover opened from the topbar (Filters) floats at the page-popover level: inside the topbar's stacking context
+   it would otherwise sit under a screen's sticky chrome. */
+.topbar:has(.popover) { z-index: 70; }
 .topbar-row1 { display: flex; align-items: center; gap: var(--space-md); height: 56px; }
-/* Row 2 scrolls sideways instead of wrapping. The padding leaves room for focus rings
-   inside the scroll clip; the negative margin keeps the controls on the gutter line. */
+/* Row 2 is one line that neither wraps nor scrolls: what does not fit waits behind its "Filters" button
+   (overflowRow, installed by claimTopbar). The padding leaves room for focus rings inside the clip;
+   the negative margin keeps the controls on the gutter line. */
 .topbar-row2 {
   display: flex; align-items: center; gap: var(--space-xs);
   height: 48px;
   margin: 0 calc(-1 * var(--space-micro));
   padding: 0 var(--space-micro);
-  overflow-x: auto; overflow-y: hidden;
+  overflow: hidden;
   white-space: nowrap;
-  scrollbar-width: none;
 }
-.topbar-row2:empty { display: none; }
+/* A screen with no controls leaves only the hidden Filters button behind. */
+.topbar-row2:empty,
+.topbar-row2:not(:has(> :not([hidden]))) { display: none; }
+/* Every control keeps its natural width so the row can measure what fits; only the search gives way. */
 .topbar-row2 > * { flex-shrink: 0; }
 .topbar-row2 > .tm-search { flex-shrink: 1; min-width: 240px; }
-/* Chip groups give way first: each stays on one line and scrolls inside itself,
-   so the actions after it stay in view. The row itself scrolls only when even that is not enough. */
-.topbar-row2 > .tm-chip-row {
-  flex: 0 1 auto; flex-wrap: nowrap;
-  align-self: stretch; align-items: center;
-  min-width: 120px;
-  padding: 0 var(--space-micro);
-  overflow-x: auto; overflow-y: hidden;
-  scrollbar-width: none;
-}
+.topbar-row2 > .tm-chip-row { flex-wrap: nowrap; align-self: stretch; align-items: center; }
 .topbar-row2 > .tm-chip-row > * { flex-shrink: 0; }
+/* In the Filters popover parked controls are a column, and a parked chip group wraps to the popover's width.
+   A parked group of controls starts at the popover's edge and wraps too, rather than scrolling the popover sideways. */
+.overflow-list .tm-chip-row { flex-wrap: wrap; }
+.topbar-row2 .overflow-list > * { margin-left: 0; flex-wrap: wrap; }
 /* League Spartan's capitals sit above the middle of its line box; the top padding puts them on the row's centre line. */
 #page-title {
   margin: 0;

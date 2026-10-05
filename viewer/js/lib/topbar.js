@@ -3,15 +3,42 @@
 // Then it appends primitives built with tmSubcount/tmSearch/tmSegmented/tmAction.
 // The topbar has two rows: row 1 (title, count, primary action, theme toggle) and row 2
 // (#topbar-actions: search, view switcher, filters). claimTopbar() clears both and returns row 2.
+// Row 2 stays on one line: what does not fit waits behind its "Filters" button, and goes with the screen.
 
 import { icon } from '../components/icon.js';
+import { overflowRow } from '../components/overflow-row.js';
+
+const rows = new WeakMap();   // #topbar-actions → its overflowRow, installed once for the page's life
+
+function topbarRow(root) {
+  let row = rows.get(root);
+  if (row) return row;
+  row = overflowRow(root, { moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search') });
+  rows.set(root, row);
+  // A count or label rewritten in place changes its control's width, which the row does not watch. Its own moves
+  // (children of the row itself), Filters' count and the open popover are left out, or a layout would retrigger itself.
+  const view = root.ownerDocument.defaultView;
+  if (view.MutationObserver && view.requestAnimationFrame) {
+    let frame = 0;
+    const grown = (r) => r.target !== root && !row.more.contains(r.target)
+      && !(r.target.nodeType === 1 ? r.target : r.target.parentElement)?.closest('.popover');
+    new view.MutationObserver((records) => {
+      if (frame || !records.some(grown)) return;
+      frame = view.requestAnimationFrame(() => { frame = 0; row.relayout(); });
+    }).observe(root, { childList: true, characterData: true, subtree: true });
+  }
+  return row;
+}
 
 export function claimTopbar() {
   document.getElementById('topbar-count')?.replaceChildren();
   document.getElementById('topbar-primary')?.replaceChildren();
   const root = document.getElementById('topbar-actions');
   if (!root) return null;
-  root.replaceChildren();
+  const row = topbarRow(root);
+  // The leaving screen's controls come back from the closed popover first, so they go with the rest.
+  row.reset();
+  for (const el of [...root.children]) if (el !== row.more) el.remove();
   return root;
 }
 
