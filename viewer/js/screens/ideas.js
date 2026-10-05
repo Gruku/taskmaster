@@ -12,6 +12,7 @@ import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { formatRelative } from '../lib/time.js';
+import { openIdeaCreateModal } from '../components/edit/idea-actions.js';
 
 export const meta = { title: 'Ideas', icon: '💡', sidebarKey: 'ideas' };
 
@@ -63,214 +64,6 @@ function statusPill(status) {
   return el;
 }
 
-// ─── Create Idea modal ────────────────────────────────────────────────────────
-function openCreateIdeaModal({ onSave }) {
-  const host = document.getElementById('entity-modal-host');
-  if (!host) {
-    // Fallback: append a host if missing (shouldn't happen in normal flow)
-    const h = document.createElement('div');
-    h.id = 'entity-modal-host';
-    document.body.appendChild(h);
-  }
-
-  const overlay = document.createElement('div');
-  overlay.className = 'em-overlay';
-  overlay.tabIndex = -1;
-
-  const modal = document.createElement('div');
-  modal.className = 'em-modal';
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-  modal.setAttribute('aria-label', 'Create Idea');
-
-  // Header
-  const header = document.createElement('div');
-  header.className = 'em-header';
-  const titleEl = document.createElement('span');
-  titleEl.className = 'em-title';
-  titleEl.textContent = 'Create Idea';
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'em-close';
-  closeBtn.setAttribute('aria-label', 'close');
-  closeBtn.textContent = '✕';
-  header.appendChild(titleEl);
-  header.appendChild(closeBtn);
-
-  // Body
-  const body = document.createElement('div');
-  body.className = 'em-body';
-
-  // Title field (required)
-  const titleField = document.createElement('div');
-  titleField.className = 'em-field';
-  const titleLabel = document.createElement('label');
-  titleLabel.className = 'em-label';
-  titleLabel.textContent = 'Title *';
-  const titleInput = document.createElement('input');
-  titleInput.type = 'text';
-  titleInput.className = 'em-input';
-  titleInput.placeholder = 'Short descriptive title…';
-  titleInput.required = true;
-  const titleErr = document.createElement('div');
-  titleErr.className = 'em-field-error';
-  titleField.appendChild(titleLabel);
-  titleField.appendChild(titleInput);
-  titleField.appendChild(titleErr);
-
-  // Status field (freeform)
-  const statusField = document.createElement('div');
-  statusField.className = 'em-field';
-  const statusLabel = document.createElement('label');
-  statusLabel.className = 'em-label';
-  statusLabel.textContent = 'Status';
-  const statusSelect = document.createElement('select');
-  statusSelect.className = 'em-input';
-  const statusOptions = ['exploring', 'candidate', 'parking-lot', 'promoted', 'dropped'];
-  const blankOpt = document.createElement('option');
-  blankOpt.value = '';
-  blankOpt.textContent = '— pick a status —';
-  statusSelect.appendChild(blankOpt);
-  for (const s of statusOptions) {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = s;
-    statusSelect.appendChild(opt);
-  }
-  statusField.appendChild(statusLabel);
-  statusField.appendChild(statusSelect);
-
-  // Tags field
-  const tagsField = document.createElement('div');
-  tagsField.className = 'em-field';
-  const tagsLabel = document.createElement('label');
-  tagsLabel.className = 'em-label';
-  tagsLabel.textContent = 'Tags';
-  const tagsHint = document.createElement('span');
-  tagsHint.className = 'em-label-hint';
-  tagsHint.textContent = ' (comma-separated)';
-  tagsLabel.appendChild(tagsHint);
-  const tagsInput = document.createElement('input');
-  tagsInput.type = 'text';
-  tagsInput.className = 'em-input';
-  tagsInput.placeholder = 'ux, perf, ai…';
-  tagsField.appendChild(tagsLabel);
-  tagsField.appendChild(tagsInput);
-
-  // Body field
-  const bodyField = document.createElement('div');
-  bodyField.className = 'em-field';
-  const bodyLabel = document.createElement('label');
-  bodyLabel.className = 'em-label';
-  bodyLabel.textContent = 'Body';
-  const bodyTextarea = document.createElement('textarea');
-  bodyTextarea.className = 'em-input em-textarea';
-  bodyTextarea.placeholder = 'Describe the idea in detail…';
-  bodyTextarea.rows = 5;
-  bodyField.appendChild(bodyLabel);
-  bodyField.appendChild(bodyTextarea);
-
-  body.appendChild(titleField);
-  body.appendChild(statusField);
-  body.appendChild(tagsField);
-  body.appendChild(bodyField);
-
-  // Footer
-  const errSummary = document.createElement('div');
-  errSummary.className = 'em-error-summary';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.type = 'button';
-  cancelBtn.className = 'em-cancel';
-  cancelBtn.textContent = 'Cancel';
-  const saveBtn = document.createElement('button');
-  saveBtn.type = 'button';
-  saveBtn.className = 'em-save';
-  saveBtn.textContent = 'Create';
-  saveBtn.disabled = true;
-
-  const footerActions = document.createElement('div');
-  footerActions.className = 'em-footer-actions';
-  footerActions.appendChild(cancelBtn);
-  footerActions.appendChild(saveBtn);
-
-  const footer = document.createElement('div');
-  footer.className = 'em-footer';
-  footer.appendChild(errSummary);
-  footer.appendChild(footerActions);
-
-  modal.appendChild(header);
-  modal.appendChild(body);
-  modal.appendChild(footer);
-  overlay.appendChild(modal);
-  document.getElementById('entity-modal-host').appendChild(overlay);
-  document.body.classList.add('em-open');
-
-  function validate() {
-    const valid = titleInput.value.trim().length > 0;
-    saveBtn.disabled = !valid;
-    titleErr.textContent = '';
-    return valid;
-  }
-
-  titleInput.addEventListener('input', validate);
-
-  function doClose() {
-    overlay.remove();
-    document.body.classList.remove('em-open');
-    document.removeEventListener('keydown', onKeyDown);
-  }
-
-  function doCancel() {
-    const dirty = titleInput.value.trim() || bodyTextarea.value.trim() || tagsInput.value.trim();
-    if (dirty && !window.confirm('Discard new idea?')) return;
-    doClose();
-  }
-
-  cancelBtn.addEventListener('click', doCancel);
-  closeBtn.addEventListener('click', doCancel);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) doCancel(); });
-
-  async function doSave() {
-    if (!validate()) {
-      titleErr.textContent = 'Title is required.';
-      titleInput.focus();
-      return;
-    }
-    const payload = {
-      title: titleInput.value.trim(),
-      status: statusSelect.value || 'exploring',
-      tags: tagsInput.value.trim()
-        ? tagsInput.value.split(',').map(t => t.trim()).filter(Boolean)
-        : [],
-      body: bodyTextarea.value.trim() || '',
-    };
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Creating…';
-    errSummary.textContent = '';
-    try {
-      await onSave(payload);
-      doClose();
-    } catch (e) {
-      errSummary.textContent = e.message || 'Failed to create idea.';
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Create';
-    }
-  }
-
-  saveBtn.addEventListener('click', doSave);
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') { e.preventDefault(); doCancel(); }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doSave(); }
-  }
-  document.addEventListener('keydown', onKeyDown);
-
-  // Focus title after mount
-  queueMicrotask(() => titleInput.focus());
-
-  return doClose;
-}
-
 // ─── main mount function ──────────────────────────────────────────────────────
 
 export async function mount(root, { store, prefs }) {
@@ -315,14 +108,13 @@ export async function mount(root, { store, prefs }) {
     variant: 'primary',
     title: 'Create a new idea',
     onClick: () => {
-      openCreateIdeaModal({
-        onSave: async (payload) => {
-          const result = await createIdea(payload);
+      openIdeaCreateModal({
+        store,
+        onCreated: async () => {
           // Refetch list to show the new idea
           const data = await getIdeas();
           store.setIdeas(data.ideas || data);
           render();
-          return result;
         },
       });
     },
@@ -718,19 +510,6 @@ export async function mount(root, { store, prefs }) {
     if (!r.ok) {
       if (r.status === 404) return { ideas: [] };
       throw new Error(`getIdeas failed: ${r.status}`);
-    }
-    return r.json();
-  }
-
-  async function createIdea(payload) {
-    const r = await fetch('/api/ideas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      throw new Error(body.error || `createIdea failed: ${r.status}`);
     }
     return r.json();
   }
