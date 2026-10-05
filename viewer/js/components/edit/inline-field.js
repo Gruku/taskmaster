@@ -40,13 +40,14 @@ export function mountInlineField(parent, {
   };
   parent.appendChild(wrap);
 
-  // The glyph and the message go to `messageHost` when the field sits somewhere they must not, such as a heading
-  // whose text names a dialog.
-  const status = h('span', { class: 'if-status' });
-  (messageHost ?? parent).appendChild(status);
+  // The glyph sits beside the field, where saving and saved take no line of their own. It is never read: the message
+  // says a failure in words, and it would otherwise join the name of a heading the field sits in.
+  const status = h('span', { class: 'if-status', 'aria-hidden': 'true' });
+  parent.appendChild(status);
   // Why a save failed, as words beside the field: a tooltip never reaches the keyboard or a touch screen. It is an
   // alert so it is announced, and it describes the control while the editor is open. It stays said once the editor
   // closes, until the field is opened again or a save goes through.
+  // `messageHost` takes it when the field sits somewhere words must not, such as a heading whose text names a dialog.
   const message = h('span', { class: 'ef-error if-error', id: `if-error-${++seq}`, role: 'alert' });
   (messageHost ?? parent).appendChild(message);
   // A document drawn again (another writer's change, or the reload after an editor closes) asks what the field was
@@ -54,8 +55,7 @@ export function mountInlineField(parent, {
   wrap.refusal = () => (mode === 'read' ? message.textContent : '');
   wrap.sayRefusal = (text) => {
     if (mode !== 'read' || !text) return;
-    setStatus('error', text);
-    message.setAttribute('aria-live', 'off');
+    setStatus('error', text, { quiet: true });
   };
   let editor = null;    // the open editor, as the renderer returned it
   let control = null;   // the focusable control of the open editor
@@ -231,9 +231,11 @@ export function mountInlineField(parent, {
     }
   }
 
-  function setStatus(kind, msg) {
+  // `quiet` says it without announcing it: the live region is off before the words land.
+  function setStatus(kind, msg, { quiet = false } = {}) {
     clearTimeout(tickTimer);
-    message.removeAttribute('aria-live');
+    if (quiet) message.setAttribute('aria-live', 'off');
+    else message.removeAttribute('aria-live');
     status.replaceChildren();
     status.className = 'if-status';
     showMessage(kind === 'error' ? (msg || 'Save failed') : '');

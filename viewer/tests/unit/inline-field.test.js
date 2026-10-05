@@ -528,7 +528,7 @@ test('a status that saves after a refusal clears the reason', async () => {
   } finally { t.done(); }
 });
 
-test('the status glyph and the message go to messageHost when one is given, and leave with the field', () => {
+test('the message goes to messageHost when one is given; the glyph stays beside the field, unread; both leave with it', () => {
   const root = document.createElement('h2');
   const messageHost = document.createElement('div');
   document.body.append(root, messageHost);
@@ -536,13 +536,48 @@ test('the status glyph and the message go to messageHost when one is given, and 
     schema: SCHEMA, fieldKey: 'title', entity: { id: 'host-1', title: 'Named' }, onSave: async () => {}, messageHost,
   });
   try {
-    assert.equal(root.querySelector('.if-status, .if-error'), null, 'nothing but the field in the heading');
-    assert.ok(messageHost.querySelector(':scope > .if-status'));
-    assert.ok(messageHost.querySelector(':scope > .if-error'));
-    assert.equal(root.textContent, 'Named');
+    assert.equal(root.querySelector('.if-error'), null, 'no message in the heading');
+    assert.equal(root.querySelector(':scope > .if-status')?.getAttribute('aria-hidden'), 'true',
+      'the saving and saved glyphs sit beside the field, where they take no line of their own, and are never read');
+    assert.deepEqual([...messageHost.children].map((el) => el.className), ['ef-error if-error'], 'the host holds the words alone');
     ctrl.destroy();
     assert.equal(messageHost.children.length, 0);
+    assert.equal(root.children.length, 0);
   } finally { root.remove(); messageHost.remove(); }
+});
+
+// The message's aria-live at the moment its words were written, replayed from the observer's ordered records: the
+// value an assistive technology would see when it picked up the change.
+async function liveWhenSaid(message, act) {
+  const records = [];
+  const observer = new dom.window.MutationObserver((batch) => records.push(...batch));
+  observer.observe(message, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['aria-live'], attributeOldValue: true });
+  await act();
+  records.push(...observer.takeRecords());
+  observer.disconnect();
+  const at = records.findLastIndex((r) => r.type !== 'attributes' && (r.type === 'characterData' || r.addedNodes.length));
+  assert.ok(at >= 0, 'words were written');
+  const later = records.slice(at + 1).find((r) => r.type === 'attributes');
+  return later ? later.oldValue : message.getAttribute('aria-live');
+}
+
+test('a refusal said again after a re-mount is already quiet when its words land; a fresh refusal is announced', async () => {
+  const t = mountStatus('quiet-1', async () => ({ error: 'Gates are still open' }));
+  try {
+    const message = t.root.querySelector('.if-error');
+    const wrap = t.root.querySelector('.if-wrap');
+    assert.equal(await liveWhenSaid(message, () => wrap.sayRefusal('Gates are still open')), 'off');
+    assert.equal(message.textContent, 'Gates are still open');
+
+    t.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const select = t.select();
+    assert.equal(await liveWhenSaid(message, async () => {
+      select.value = 'done';
+      select.dispatchEvent(new dom.window.Event('change'));
+      await until(() => message.textContent);
+    }), null, 'a new refusal is an alert like any other');
+  } finally { t.done(); }
 });
 
 // ── Errors in words (I-2) and a timer that outlives its save (M-5) ──

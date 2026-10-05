@@ -249,7 +249,7 @@ export function mountTaskDetailDocument(root, ctx) {
     return line;
   }
 
-  // The title's save glyph and message go to their own line under the heading.
+  // A refused title is said on its own line under the heading; the save glyph stays beside the title.
   function mountTitle(host) {
     const messageHost = h('div', { class: 'td-title-message' });
     inlineField(host, 'title', { hint: 'Edit title', messageHost });

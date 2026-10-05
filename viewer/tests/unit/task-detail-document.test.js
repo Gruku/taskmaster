@@ -71,6 +71,8 @@ function mount(task, extra) {
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 const press = (el, key) => el.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+// What a screen reader reads of an element: its text without the parts hidden from it.
+const spoken = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove()); return c.textContent; };
 
 // --- Tests ---
 
@@ -165,7 +167,8 @@ test('page chrome: the title is an h1 holding the inline field', () => {
   const message = titleEl.nextElementSibling;
   assert.ok(message?.matches('div.td-title-message'), 'the title says what went wrong right after the h1, not inside it');
   assert.equal(message.parentElement.className, 'td-head');
-  assert.equal(titleEl.querySelector('.if-status, .if-error'), null);
+  assert.equal(titleEl.querySelector('.if-error'), null, 'no message inside the h1');
+  assert.equal(titleEl.querySelector('.if-status')?.getAttribute('aria-hidden'), 'true', 'the glyph stays beside the title, unread');
   t.done();
 });
 
@@ -182,7 +185,7 @@ test('embedded chrome: no meta line and no title in the document; the title fiel
   const [first, second] = t.root.querySelector('.td-body').children;
   assert.ok(first.matches('div.td-title-message'));
   assert.equal(second.dataset.test, 'chips');
-  assert.equal(titleHost.querySelector('.if-status, .if-error'), null, 'the host holds the field alone');
+  assert.equal(titleHost.querySelector('.if-error'), null, 'no message in the heading');
   // The phase has no meta line to sit in, so it joins the tags.
   assert.match(t.root.querySelector('[data-tag="phase"]').textContent, /p1/);
   t.dispose();
@@ -701,9 +704,9 @@ test('a refused title save in the dialog says why under the heading and leaves t
     assert.equal(message().querySelector('.if-error').textContent, reason);
     assert.ok(input.getAttribute('aria-describedby').split(' ').includes(message().querySelector('.if-error').id),
       'the open editor is described by the message under the heading');
-    assert.equal(h2.querySelector('.if-error, .if-status'), null, 'nothing but the field in the heading');
+    assert.equal(h2.querySelector('.if-error'), null, 'no message in the heading');
     press(input, 'Escape');
-    assert.equal(h2.textContent, 'Test task');
+    assert.equal(spoken(h2), 'Test task', 'the heading reads exactly the title');
     assert.equal(message().querySelector('.if-error').textContent, reason, 'and it is still said after the editor closes');
   } finally { t.done(); h2.remove(); }
 });

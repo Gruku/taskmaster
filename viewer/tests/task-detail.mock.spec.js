@@ -284,7 +284,7 @@ test('a refused title says why under the heading, and the dialog keeps the title
   await expect(message.locator('.if-error')).toHaveText(reason);
   // First in the body, under the header; nothing of it inside the heading that names the dialog.
   expect(await message.evaluate((el) => el.parentElement.classList.contains('td-body') && !el.previousElementSibling)).toBe(true);
-  await expect(heading.locator('.if-error, .if-status')).toHaveCount(0);
+  await expect(heading.locator('.if-error')).toHaveCount(0);
   expect(await heading.evaluate((el) => el.textContent)).not.toContain(reason);
 
   // Closing the editor ends the edit lease, and the dialog reads the task again and draws it anew.
@@ -296,6 +296,54 @@ test('a refused title says why under the heading, and the dialog keeps the title
   await expect(message.locator('.if-error'), 'the reason stays said after the editor closes').toHaveText(reason);
   await expect(message).toBeVisible();
   await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);
+});
+
+// The title's saving and saved glyphs sit beside the title: a save that goes through opens no line under it.
+test('a title save that goes through moves nothing below the heading', async ({ page }) => {
+  await board(page);
+  // Slow enough to see the saving glyph.
+  await page.route('**/api/tasks/T-102', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.fulfill({ json: { ok: true } });
+  });
+  const dialog = await openCard(page, 'T-102');
+  // Settle first: the document as first opened draws its marker row a little shorter than every redraw after it
+  // (a style that only lands on a redraw; seen on the base too). One redraw — an untouched picker left — gets past it.
+  const settled = page.waitForResponse('**/api/task/T-102/detail');
+  await dialog.locator('[data-field="status"] .ef-editable').click();
+  await dialog.locator('[data-field="status"] select').press('Escape');
+  await settled;
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
+  const heading = titleOf(dialog);
+  // Every frame, the first section's top, keyed by whether the title is being read or edited: an input is a different
+  // height from text, but within each mode the section must never move — not while saving, not once saved.
+  await page.evaluate(() => {
+    window.__tops = { read: new Set(), edit: new Set() };
+    const sample = () => {
+      const section = document.querySelector('.modal--detail [data-test="sec-description"]');
+      const editing = !!document.querySelector('.modal--detail .modal-title input');
+      if (section) window.__tops[editing ? 'edit' : 'read'].add(section.getBoundingClientRect().top);
+      window.__sampling = requestAnimationFrame(sample);
+    };
+    sample();
+  });
+  await heading.locator('.ef-editable').click();
+  await heading.locator('input').fill('Re-skin the Kanban cards and column');
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+  // The save, then the re-read that follows the closed editor and draws the document anew.
+  const reread = page.waitForResponse('**/api/task/T-102/detail');
+  await heading.locator('input').press('Enter');
+  await expect(heading.locator('.if-status-saving'), 'saving is shown beside the title').toHaveCount(1);
+  await reread;
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)));
+  const tops = await page.evaluate(() => {
+    cancelAnimationFrame(window.__sampling);
+    return { read: [...window.__tops.read], edit: [...window.__tops.edit] };
+  });
+  expect(tops.read, 'reading: the first section never moved').toHaveLength(1);
+  expect(tops.edit, 'editing and saving: the first section never moved').toHaveLength(1);
+  await expect(dialog.locator('.td-title-message')).toBeHidden();
 });
 
 // The browser blurs the title's input as Escape takes it away, and a text field commits on blur.
