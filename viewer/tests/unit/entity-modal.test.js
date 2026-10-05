@@ -322,6 +322,35 @@ test('6. a field left while a press is held is judged only once the press is rel
   close();
 });
 
+test('6. a field is judged once focus leaves it for anywhere in the dialog but its header and footer controls, or the window', async () => {
+  const { close } = open();
+  await tick();
+  type('description', 'Dirty, so Save can take focus');
+  const leave = (to) => { control('title').focus(); if (to) to.focus(); else control('title').blur(); };
+  leave(saveBtn());
+  assert.equal(errorOf('title'), '', 'left for Save');
+  leave(cancelBtn());
+  assert.equal(errorOf('title'), '', 'left for Cancel');
+  leave(form().querySelector('.modal-close'));
+  assert.equal(errorOf('title'), '', 'left for the close button');
+  leave(null);
+  assert.equal(errorOf('title'), '', 'left the window (no element took focus)');
+  leave(form());
+  assert.equal(errorOf('title'), 'Title is required', 'a click on blank dialog space puts focus on the dialog itself');
+  close();
+});
+
+test('6. the same rule read from the event: relatedTarget is the dialog → judged; Save or nothing → not', async () => {
+  for (const [to, judged] of [[() => saveBtn(), false], [() => null, false], [() => form(), true]]) {
+    const { close } = open();
+    await tick();
+    const title = control('title');
+    title.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: to() }));
+    assert.equal(errorOf('title'), judged ? 'Title is required' : '', String(to()?.className ?? null));
+    close();
+  }
+});
+
 test('18. the form reaches the shell only through its hooks: no walk up to the overlay, no listener of its own on the dialog', () => {
   const source = readFileSync(new URL('../../js/components/edit/entity-modal.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /parentElement/);
@@ -522,6 +551,69 @@ test('docs: the failed save focuses the input at fault in its row, and every row
   close();
 });
 
+test('docs: a stored value that is not text is edited as its JSON text and keeps what nobody edited', async () => {
+  const docs = { spec: ['a.md', 'b.md'], plan: 'p.md' };
+  const a = openEdit({ ...RICH, docs });
+  await tick();
+  const values = () => [...field('docs').querySelectorAll('.ef-kv-value')];
+  assert.deepEqual(values().map((v) => v.value), ['["a.md","b.md"]', 'p.md']);
+  for (const c of field('docs').querySelectorAll('input, button')) c.focus();
+  cancelBtn().focus();
+  assert.equal(saveBtn().disabled, true, 'opened and left untouched: not dirty');
+  escape();
+  await tick();
+  assert.equal(dialogs().length, 0, 'closed without asking');
+
+  const b = openEdit({ ...RICH, docs });
+  await tick();
+  values()[1].value = 'p2.md';
+  fire(values()[1], 'input');
+  saveBtn().click();
+  await tick();
+  assert.deepEqual(b.calls.saved[0].changes, { docs: { spec: ['a.md', 'b.md'], plan: 'p2.md' } });
+});
+
+test('docs: every faulted row is named and flagged — the type of a row without one, the path of a row without one', async () => {
+  const { calls, close } = openEdit(RICH);
+  await tick();
+  const rows = () => [...field('docs').querySelectorAll('.ef-kv-row')];
+  const set = (input, text) => { input.value = text; fire(input, 'input'); };
+  set(rows()[0].querySelector('.ef-kv-key'), '');
+  set(rows()[1].querySelector('.ef-kv-value'), '');
+  saveBtn().click();
+  await tick();
+  assert.equal(calls.saved.length, 0);
+  assert.equal(errorOf('docs'), '"docs/spec.md" needs a type · "plan" needs a path or URL');
+  assert.deepEqual([...form().querySelectorAll('[aria-invalid="true"]')],
+    [rows()[0].querySelector('.ef-kv-key'), rows()[1].querySelector('.ef-kv-value')]);
+  assert.equal(document.activeElement, rows()[0].querySelector('.ef-kv-key'), 'focus goes to the first fault');
+  set(rows()[0].querySelector('.ef-kv-key'), 'spec');
+  assert.deepEqual([...form().querySelectorAll('[aria-invalid="true"]')], [rows()[1].querySelector('.ef-kv-value')]);
+  set(rows()[1].querySelector('.ef-kv-value'), 'docs/plan.md');
+  assert.deepEqual([...form().querySelectorAll('[aria-invalid="true"]')], []);
+  assert.equal(errorOf('docs'), '');
+  close();
+});
+
+test('a stored stage that is not a number is shown, kept, not dirty and not sent', async () => {
+  const { calls } = openEdit({ ...RICH, stage: 'beta' });
+  await tick();
+  const input = control('stage');
+  assert.equal(input.value, '');
+  const note = field('stage').querySelector('.ef-num-note');
+  assert.equal(note.textContent, 'Current: beta — not a number. It is kept unless you type one.');
+  assert.ok(input.getAttribute('aria-describedby').split(' ').includes(note.id));
+  assert.ok(input.getAttribute('aria-describedby').split(' ').includes(field('stage').querySelector('.ef-error').id));
+  input.focus();
+  cancelBtn().focus();
+  assert.equal(saveBtn().disabled, true);
+  type('title', 'Unrelated');
+  saveBtn().click();
+  await tick();
+  assert.deepEqual(calls.saved[0].changes, { title: 'Unrelated' });
+  assert.equal(calls.saved[0].draft.stage, 'beta');
+});
+
 // ── Text typed into a chip input that is not a chip yet ──
 test('text left in a chip input is an edit: Save is enabled and closing asks first (M1)', async () => {
   const { calls } = open();
@@ -608,16 +700,26 @@ test('legacy: changing such a field is allowed, validated, and can be put back',
   assert.deepEqual(calls.saved[0].changes, { status: 'done', estimate: '5d' });
 });
 
-test('validation rule: an untouched value is not judged, in create as in edit — only a required field left empty is', async () => {
-  // A prefilled epic that no longer exists is shown and left to the server; the form does not block on it.
+test('validation rule: create judges every field — a prefilled epic that no longer exists is refused in the form', async () => {
+  // Everything a new item carries is sent, so nothing in it is "as stored".
   const a = open({ initialEntity: { ...CREATE, epic: 'gone' } });
   await tick();
   assert.equal(control('epic').selectedOptions[0].textContent, 'gone');
   type('title', 'x');
   saveBtn().click();
   await tick();
-  assert.deepEqual(a.calls.saved[0].changes, { title: 'x' });
+  assert.equal(a.calls.saved.length, 0, 'nothing is sent');
+  assert.equal(errorOf('epic'), 'Unknown epic');
+  assert.equal(control('epic').getAttribute('aria-invalid'), 'true');
+  assert.equal(status(), '1 field needs attention');
+  assert.equal(document.activeElement, control('epic'));
+  pick('epic', 'store');
+  saveBtn().click();
+  await tick();
+  assert.deepEqual(a.calls.saved[0].changes, { title: 'x', epic: 'store' });
+});
 
+test('validation rule: in edit an untouched value is not judged — only a required field left empty is', async () => {
   // An existing task whose required title is empty: editing something else still says so.
   const b = openEdit({ ...RICH, title: '', estimate: '2h', phase: 'gone' });
   await tick();
@@ -713,16 +815,50 @@ test('8. a server error is announced in the footer and the form stays open and e
   close();
 });
 
-test('8. a save that throws is reported the same way', async () => {
-  const { close } = open({ onSave: async () => { throw new Error('Server down'); } });
+// The raw error goes to the console; what the page says is worded by describeWriteError.
+async function quietly(run) {
+  const warn = console.warn;
+  console.warn = () => {};
+  try { return await run(); } finally { console.warn = warn; }
+}
+
+test('8. a save that throws is said in words — never the raw message, a URL or a JSON body', () => quietly(async () => {
+  const raw = Object.assign(new Error('POST /api/tasks → 500: {"error":"x"}'), { code: 500 });
+  const { close } = open({ onSave: async () => { throw raw; } });
   await tick();
   type('title', 'x');
   saveBtn().click();
   await tick();
-  assert.equal(alertText(), 'Server down');
+  assert.equal(alertText(), 'The server could not save this change. Try again in a moment.');
+  for (const leak of ['→', '/api', '{']) assert.equal(alertText().includes(leak), false, leak);
   assert.equal(saveBtn().disabled, false);
   close();
-});
+  const b = open({ onSave: async () => { throw new Error('Failed to fetch'); } });
+  await tick();
+  type('title', 'x');
+  saveBtn().click();
+  await tick();
+  assert.equal(alertText(), 'Could not reach the server, so nothing was saved. Check that the viewer is still running.');
+  b.close();
+}));
+
+test('8. a wait that rejects is said in words too, with the form\'s own noun, and frees the form', () => quietly(async () => {
+  let fail;
+  const s = schema();
+  const { close } = openEdit(RICH, {
+    schema: { ...s, label: 'Idea' },
+    onSave: async () => ({ error: 'Conflict — see banner', wait: new Promise((_, no) => { fail = no; }) }),
+  });
+  await tick();
+  type('title', 'Mine');
+  saveBtn().click();
+  await tick();
+  fail(Object.assign(new Error('PATCH /api/tasks/T-102 → 404: {"error":"gone"}'), { code: 404 }));
+  await tick();
+  assert.equal(alertText(), 'This idea no longer exists — it may have been archived or removed.');
+  assert.equal(control('title').disabled, false);
+  close();
+}));
 
 test('8. a save that is waiting on the user elsewhere holds the form until it is answered', async () => {
   for (const [answer, open_, message] of [[undefined, 0, ''], [{}, 1, ''], [{ error: 'Still stale' }, 1, 'Still stale']]) {

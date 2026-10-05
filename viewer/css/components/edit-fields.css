@@ -263,6 +263,14 @@
   font-size: var(--size-narrator-whisper);
   line-height: var(--leading-heading);
 }
+/* A stored stage the number input cannot show: the input, and the note saying what is kept, under it. */
+.ef-num-edit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); max-width: 100%; }
+.ef-num-note {
+  flex: 1 0 100%;
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+}
 .ef-num-input { max-width: 160px; }
 .ef-date-input { max-width: 200px; }
 
