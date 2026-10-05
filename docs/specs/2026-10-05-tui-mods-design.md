@@ -84,7 +84,10 @@ Methods only, all async. Declared in `mods/rr-tui/types/index.d.ts` (`Rr`, `RrTo
 | `label({ text })` | Technical-voice section label (uppercase, `signature-text`) |
 | `signal({ kind, word, detail? })` | Shape + word + optional detail: ● success, ▲ warning, ◆ critical, ⓘ info |
 | `row({ cells, emphasis? })` | One-line row of text cells with RR spacing |
-| `rule()` | A thin divider using `border-subtle` |
+| `rule()` | A thin divider (`border-default`; `border-subtle` is invisible on overlay in dark) |
+| `button({ treatment, tone })` | Wrapper `Box` props (`backgroundColor` / `borderStyle` + `borderColor`, `paddingX`) for a consumer-drawn `Button` (§5.4) |
+| `keycap({ key, tone })` | Key letter on a solid tone block, as a finished Text tree |
+| `chip({ text, tone, strength })` | Non-interactive state chip (`strength` 12 or 24) |
 
 `children` and `cells` are plain-data trees or strings, so a consumer can nest its own Buttons inside an `rr` surface.
 
@@ -104,7 +107,20 @@ Source of truth: the RR Design System artifact's `project/tokens.json`. A genera
 
 `userConfig.polarity`: `auto` (default) | `dark` | `light` | `survivalist`. `auto` reads the `theme` row: names containing `light` map to light, everything else to dark. `survivalist` uses RR's survivalist values (value only, no hue) and must stay fully legible: hierarchy by bold/dim and shapes alone.
 
-### 5.4 `/rr-gallery`
+### 5.4 Button treatments
+
+`Button` takes no colour, so colour comes from a wrapper `Box` around a `plain` Button (verified live 2026-10-05: tinted and bordered wrappers render, the button stays pressable). Rows of wrappers set `alignItems="flex-start"` so a bordered sibling doesn't stretch tinted ones to three rows. Each treatment has one job (user's choice from the probe, tunable in `/rr-gallery`):
+
+| Treatment | Job | Where |
+|---|---|---|
+| Outline (`round` border in the tone colour) | The single primary action of a card (`done`) | Panes only — 3 rows tall |
+| Chip 12% (tone `-subtle` composited on the ground) | Secondary actions (`back to agent`, `skip`, `open`) | Panes and band |
+| Chip 24% (double-strength tint) | States, not actions: `refused` critical, `confirm done?` warning, `signed off` success | Card status line |
+| Keycap (key letter, dark ink on solid tone) | Key legends (`d done  a back  s skip  o open`) | Pane footer, band hints |
+
+Tones: `success` done, `warning` back to agent / pending, `critical` refused, `signature` neutral navigation. Tone always travels with a word; survivalist renders all four by weight and border only.
+
+### 5.5 `/rr-gallery`
 
 A pane (opened by command) drawing every `$.rr` element in every relevant state with sample data, plus buttons `1` dark, `2` light, `3` survivalist to flip polarity live. This is the design surface: the look is tuned here against screenshots, and decisions are recorded back into this spec.
 

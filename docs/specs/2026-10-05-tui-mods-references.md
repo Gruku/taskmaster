@@ -66,6 +66,7 @@ Most replies are markdown text; only these are JSON: `backlog_continuity_items`,
 - `o` (open) and `r` (resume) fill the prompt and leave the pane open; only "back to agent" closes it.
 - `[-]` collapses the band to one summary line (`[+]` restores).
 - Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low.
+- Button colour (decided 2026-10-05 from the probe's five variants): outline = primary card action, chip 12% = secondary actions, chip 24% = states, keycap = key legends. See spec §5.4. The prototype predates this and still uses bracket buttons.
 - How the band gets keyboard focus is engine-defined (Ctrl+X Tab or click); digit hotkeys `1`/`2` work from an empty prompt without focus.
 
 ## 6. RR-in-terminal findings (token gaps to resolve in rr-tui or upstream in RR)
