@@ -29,5 +29,6 @@
 .ho-status-pill > .icon { color: var(--foreground-subtle); transform: rotate(90deg); }
 .ho-status-pill[aria-expanded="true"] > .icon { transform: rotate(-90deg); }
 
-/* The menu itself is a popover (popover.css); only the check column is the status menu's own. */
+/* The menu itself is a popover (popover.css); only the status words' casing and the check column are its own. */
+.ho-status-menu-item { text-transform: capitalize; }
 .ho-status-menu-check { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; }

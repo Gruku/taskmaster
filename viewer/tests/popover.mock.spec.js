@@ -124,6 +124,16 @@ for (const theme of ['dark', 'light']) {
     await page.locator('.ho-status-pill').click();
     await expect(menu(page)).toBeVisible();
     expect(await page.locator('.popover').evaluate((el) => getComputedStyle(el).boxShadow)).toBe('none');
+    // Status words are capitalised by the status menu; a generic popover item renders its text as written.
+    expect(await page.locator('.ho-status-menu-item').first().evaluate((el) => getComputedStyle(el).textTransform)).toBe('capitalize');
+    expect(await page.evaluate(() => {
+      const probe = document.createElement('button');
+      probe.className = 'popover-item';
+      document.querySelector('.popover').appendChild(probe);
+      const t = getComputedStyle(probe).textTransform;
+      probe.remove();
+      return t;
+    })).toBe('none');
     await page.evaluate(axeSource);
     const result = await page.evaluate(() => window.axe.run(document.querySelector('.popover'), { resultTypes: ['violations'] }));
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
