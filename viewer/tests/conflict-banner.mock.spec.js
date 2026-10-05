@@ -101,24 +101,88 @@ test('each choice is a radiogroup named by its field label, and Tab goes from th
   await leave(page);
 });
 
-test('390×844 with 8 changed fields: the banner is at most half the screen, scrolls, and the dialog header stays visible', async ({ page }) => {
-  const long = (s) => `${s} — ${'a long value that wraps over several lines on a phone '.repeat(3)}`;
-  const { dialog, banner } = await conflict(page, {
-    title: 'My title', sub_repo: 'mine', release: '9.9.9', branch: long('feat/mine'), worktree: long('.worktrees/mine'),
-    description: long('My description'), notes: long('My notes'), plan: long('My plan'),
-  }, { viewport: PHONE });
+// Fields enough that the list outgrows half a phone screen.
+const long = (s) => `${s} — ${'a long value that wraps over several lines on a phone '.repeat(3)}`;
+const EIGHT = {
+  title: 'My title', sub_repo: 'mine', release: '9.9.9', branch: long('feat/mine'), worktree: long('.worktrees/mine'),
+  description: long('My description'), notes: long('My notes'), plan: long('My plan'),
+};
+
+test('390×844 with 8 changed fields: the banner is at most half the screen, its field list scrolls, and the dialog header stays visible', async ({ page }) => {
+  const { dialog, banner } = await conflict(page, EIGHT, { viewport: PHONE });
   await expect(banner.locator('.cb-multi-row')).toHaveCount(8);
   const box = await banner.boundingBox();
   expect(box.height).toBeLessThanOrEqual(PHONE.height / 2 + 1);
-  expect(await banner.evaluate((b) => b.scrollHeight > b.clientHeight), 'the rows overflow and scroll').toBe(true);
   await expectHeaderClear(dialog, banner);
   await expect(dialog.locator('.modal-header')).toBeInViewport();
-  // Its buttons are reachable by scrolling the banner itself, and are touch-sized.
-  const apply = banner.getByRole('button', { name: 'Apply choices' });
-  await apply.scrollIntoViewIfNeeded();
-  expect((await apply.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  // The list is what scrolls; the banner itself does not.
+  const rows = banner.locator('.cb-rows');
+  expect(await rows.evaluate((r) => r.scrollHeight > r.clientHeight), 'the field list overflows').toBe(true);
+  expect(await banner.evaluate((b) => b.scrollHeight <= b.clientHeight), 'the banner does not scroll').toBe(true);
+  expect(await rows.evaluate((r) => { r.scrollTop = 200; return r.scrollTop; })).toBeGreaterThan(0);
+  await rows.evaluate((r) => { r.scrollTop = 0; });
+});
+
+test('390×844 with 8 changed fields: the actions stay pinned in view without scrolling, touch-sized', async ({ page }) => {
+  const { banner } = await conflict(page, EIGHT, { viewport: PHONE });
+  expect(await banner.evaluate((b) => [b.scrollTop, b.querySelector('.cb-rows').scrollTop])).toEqual([0, 0]);
+  const b = await banner.boundingBox();
+  for (const name of ['Dismiss', 'Apply choices']) {
+    const button = banner.getByRole('button', { name });
+    await expect(button).toBeInViewport({ ratio: 1 });
+    const box = await button.boundingBox();
+    expect(box.height, `${name} height`).toBeGreaterThanOrEqual(44);
+    // Inside the banner's own box, so its overflow does not clip it either.
+    expect(box.y).toBeGreaterThanOrEqual(b.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(b.y + b.height + 1);
+  }
+  // The headline stays at the top while the list is scrolled.
+  await banner.locator('.cb-rows').evaluate((r) => { r.scrollTop = r.scrollHeight; });
+  await expect(banner.locator('.cb-headline')).toBeInViewport({ ratio: 1 });
+  await expect(banner.getByRole('button', { name: 'Apply choices' })).toBeInViewport({ ratio: 1 });
   await leave(page);
 });
+
+// ── The inline banner, raised by a field on the task page with no dialog open ──
+async function inlineConflict(page, { theme = 'dark', viewport = DESKTOP } = {}) {
+  await page.setViewportSize(viewport);
+  await mockApi(page, {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+    '/api/board': BOARD_ACTIVE, '/api/backlog': BOARD_ACTIVE,
+    [`/api/task/${RICH_TASK.id}/detail`]: taskDetail(RICH_TASK),
+    'PATCH /api/tasks/T-102': STALE,
+  });
+  await page.goto(`/#/task/${RICH_TASK.id}`);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+  const topbar = page.locator('#topbar');
+  await expect(topbar).toBeVisible();
+  expect((await topbar.boundingBox()).y).toBe(0);
+  const status = page.locator('[data-field="status"]').first();
+  await status.locator('.ef-editable').click();
+  await status.locator('select').evaluate((el) => { el.value = 'done'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const banner = page.locator('#conflict-banner-host .cb-banner.cb-field');
+  await expect(banner).toBeVisible();
+  return { banner, topbar };
+}
+
+for (const [name, viewport] of [['1440×900', DESKTOP], ['390×844', PHONE]]) {
+  test(`${name}: the inline banner pushes the page down instead of covering the topbar, and gives the room back`, async ({ page }) => {
+    const { banner, topbar } = await inlineConflict(page, { viewport });
+    await expect(page.locator('.modal')).toHaveCount(0);
+    // Right under the banner: not covered by it, and not pushed further than its height.
+    await expect.poll(async () => {
+      const b = await banner.boundingBox();
+      return Math.abs((await topbar.boundingBox()).y - (b.y + b.height));
+    }).toBeLessThanOrEqual(1);
+    // The screen still starts below the topbar, not under it.
+    const t = await topbar.boundingBox();
+    expect((await page.locator('#screen-mount').boundingBox()).y).toBeGreaterThanOrEqual(t.y + t.height - 1);
+    await expect(page.locator('#page-title')).toBeInViewport();
+    await banner.getByRole('button', { name: 'Use server' }).click();
+    await expect(banner).toHaveCount(0);
+    await expect.poll(async () => (await topbar.boundingBox()).y).toBe(0);
+  });
+}
 
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the banner has no violation`, async ({ page }) => {

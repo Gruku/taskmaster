@@ -124,7 +124,7 @@ export function showFullConflict({
     const keyId = `${id}-key-${k}`;
     const name = `${id}-${k}`;
     const row = h('div', { class: 'cb-multi-row' }, [
-      h('div', { class: 'cb-key', id: keyId }, labels[k] || sentenceCase(k)),
+      h('div', { class: 'cb-key', id: keyId }, Object.hasOwn(labels, k) ? labels[k] : sentenceCase(k)),
       side('Yours', localDraft[k], 'mine'),
       side('Saved', currentValue[k], 'server'),
       h('div', { class: 'cb-multi-actions', role: 'radiogroup', 'aria-labelledby': keyId }, [

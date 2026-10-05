@@ -1,8 +1,11 @@
 /* User intent: the conflict banner reads in both themes — its hue lives in the Conflict marker's shape, never in its
    text — and sits above any open dialog, which the modal overlay pushes down by the banner's height. */
 
-/* Above the modal overlay (85) at every width. */
+/* Above the modal overlay (85) at every width. Only the field list scrolls: the headline and the actions stay in
+   view however many fields differ. */
 .cb-banner {
+  display: flex;
+  flex-direction: column;
   position: fixed;
   top: 0;
   left: 0;
@@ -20,11 +23,15 @@
   line-height: var(--leading-body);
 }
 
+.cb-headline, .cb-actions { flex: 0 0 auto; }
+.cb-diff, .cb-rows { flex: 0 1 auto; min-height: 0; overflow: auto; }
 .cb-headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs) var(--space-sm); margin-bottom: var(--space-sm); }
 .cb-sentence { color: var(--foreground-bold); font-weight: 600; overflow-wrap: anywhere; }
 
 .cb-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); margin-bottom: var(--space-md); }
-.cb-rows { display: flex; flex-direction: column; margin-bottom: var(--space-md); }
+/* The inline padding keeps a focused radio's ring inside the scroll clip; the negative margin keeps the rows on the
+   banner's edge. */
+.cb-rows { display: flex; flex-direction: column; margin: 0 calc(-1 * var(--space-micro)) var(--space-md); padding: 0 var(--space-micro); }
 
 /* Field, Yours, Saved, then the choice. */
 .cb-multi-row {

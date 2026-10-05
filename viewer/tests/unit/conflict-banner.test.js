@@ -104,6 +104,12 @@ test('the full banner names each field by its form label; a field without one is
   close();
 });
 
+test('a field named like an Object built-in is sentence-cased, never looked up on the prototype', async () => {
+  const close = await full({ labels: {}, localDraft: { constructor: 'a', toString: 'x' }, currentValue: { constructor: 'b', toString: 'y' } });
+  assert.deepEqual(keys(), ['Constructor', 'ToString']);
+  close();
+});
+
 test('the banner is a region named by its headline; the headline is an alert with a Conflict marker and a plain sentence', async () => {
   const close = await full();
   const banner = document.querySelector('.cb-banner');
