@@ -199,7 +199,14 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - After the last card: "Queue clear" with the pass tally.
 
 **Handovers pane — `/handovers` or band `2`.** On demand. Last 5 open handovers, newest first (`superseded` hidden), one Button per row (Up/Down to move). Footer `5 of 23 · superseded hidden`.
-- `c` copy → `$.ui.copy` the Telegram-ready text: tldr + next action + absolute file path; toast on success, toast with the path on `no-clipboard`.
+- `c` copy → `$.ui.copy` the Telegram-ready handover block (one shape everywhere, decided 2026-10-06), toast on success, toast with the path on `no-clipboard`:
+  ```
+  <tldr>
+  <absolute handover file path>
+  Resume: <thread> — <next action>
+  ```
+
+**Handover-written notice (band).** When this session's main agent writes a handover — its own `tool.call` hook sees `backlog_handover_create` succeed after `await next(e)` (`e.agentId` unset) — the band shows one row: `HANDOVER  <tldr, truncated>   3: copy   2: handovers`. `3` (digit hotkey, works from an empty prompt) copies the same three-line block and toasts; the row clears on copy, when a newer handover replaces it, or on `/clear`. Nothing is copied without a keypress. The handover id and path come from the call's result (the reply names the created id); tldr, thread and next action from its input. Stored in `$.state` (`taskmaster-tui.handoverNotice`).
 - `r` resume → `$.prompt.fill("Resume from handover <id> (<path>)")`; the pane stays open.
 
 ### 6.2 Actions and their safety
