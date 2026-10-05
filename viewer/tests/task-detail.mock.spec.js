@@ -318,12 +318,12 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
-async function axe(page) {
+async function axe(page, scope = '.modal--detail') {
   await page.evaluate(axeSource);
-  const result = await page.evaluate(() => window.axe.run(document.querySelector('.modal--detail'), {
+  const result = await page.evaluate((sel) => window.axe.run(document.querySelector(sel), {
     runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive'] },
     resultTypes: ['violations'],
-  }));
+  }), scope);
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
 }
 
@@ -349,17 +349,28 @@ for (const theme of ['dark', 'light']) {
     await expect(page.locator('main')).toHaveCount(1);
   });
 
-  test(`axe (${theme}): every hovered row in the dialog's rail keeps its text readable`, async ({ page }) => {
-    await board(page, { theme });
-    const dialog = await openCard(page, 'T-102');
-    const rows = ['[data-sub="depends"] a.td-dep', '[data-sub="unblocks"] a.td-dep', '[data-panel="issues"] a.td-issue', '[data-panel="docs"] a.td-doc-link'];
-    for (const row of rows) {
-      const el = dialog.locator(row).first();
+  const RAIL_ROWS = ['[data-sub="depends"] a.td-dep', '[data-sub="unblocks"] a.td-dep', '[data-panel="issues"] a.td-issue', '[data-panel="docs"] a.td-doc-link'];
+  async function hoverEach(page, scope, selector) {
+    for (const row of RAIL_ROWS) {
+      const el = scope.locator(row).first();
       await el.scrollIntoViewIfNeeded();
       await el.hover();
       await expect.poll(() => el.evaluate((a) => getComputedStyle(a).backgroundColor), { message: `${row} shows its hover fill` })
         .not.toBe('rgba(0, 0, 0, 0)');
-      expect(await axe(page), row).toEqual([]);
+      expect(await axe(page, selector), row).toEqual([]);
     }
+  }
+
+  test(`axe (${theme}): every hovered row in the dialog's rail keeps its text readable`, async ({ page }) => {
+    await board(page, { theme });
+    await hoverEach(page, await openCard(page, 'T-102'), '.modal--detail');
+  });
+
+  test(`axe (${theme}): every hovered row in the full page's rail keeps its text readable`, async ({ page }) => {
+    await board(page, { theme });
+    await page.goto('/#/task/T-102');
+    const rail = page.locator('.td-doc--page [data-test="rail"]');
+    await expect(rail).toBeVisible();
+    await hoverEach(page, rail, '.td-doc--page [data-test="rail"]');
   });
 }
