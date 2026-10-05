@@ -259,3 +259,13 @@ test('selftest: tokens.css is checked for literals outside generated and @font-f
   caught(t('  --scrim: rgba(0, 0, 0, 0.5);'), 'color literal', 'tokens.css');
   caught(t('  --ink: white;'), 'color literal', 'tokens.css');
 });
+
+// handover-status.css owns the pill; the legacy block left behind must not still brighten it on hover or push its
+// neighbour away (M-8).
+test('no legacy rule outside handover-status.css filters the handover pill or gives it a margin', () => {
+  const stray = files.filter((f) => f.rel !== 'components/handover-status.css').flatMap((f) => rules(f.css)
+    .filter(({ selector }) => /\.ho-status-pill(?![\w-])/.test(selector))
+    .filter(({ body }) => /(^|;)\s*(filter|margin(-right|-left)?)\s*:/.test(body))
+    .map(({ selector }) => `${f.rel}: ${selector}`));
+  assert.deepEqual(stray, []);
+});

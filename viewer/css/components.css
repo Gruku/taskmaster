@@ -421,7 +421,6 @@
 .ho-status-pill {
   display: inline-block;
   padding: 1px 8px;
-  margin-right: 8px;
   border-radius: 999px;
   border: 1px solid transparent;
   font-family: var(--font-mono, monospace);
@@ -447,9 +446,6 @@
   background: rgba(148, 130, 196, 0.10);  /* muted violet tint */
   border-color: rgba(148, 130, 196, 0.30);
   color: var(--ink-3, #7c8290);
-}
-.ho-status-pill:hover {
-  filter: brightness(1.15);
 }
 
 /* Status override dropdown menu */
