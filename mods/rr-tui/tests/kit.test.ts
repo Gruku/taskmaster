@@ -146,11 +146,32 @@ describe('elements', () => {
       const hover = kit.buttonProps(t, { key: 'd' }).hover.color
       for (const tone of TONES) {
         for (const on of ['page', 'raised', 'overlay'] as const) {
-          const chip = kit.button(t, { treatment: 'chip', tone, on }).backgroundColor ?? ''
-          expect(contrast(chip, AT_REST[p])).toBeGreaterThanOrEqual(4.5)
-          expect(contrast(chip, hover)).toBeGreaterThanOrEqual(4.5)
+          for (const strength of [12, 24] as const) {
+            const chip = kit.button(t, { treatment: 'chip', tone, on, strength }).backgroundColor ?? ''
+            expect(contrast(chip, AT_REST[p]), `${p} ${tone} ${on} ${strength}`).toBeGreaterThanOrEqual(4.5)
+            expect(contrast(chip, hover), `${p} ${tone} ${on} ${strength}`).toBeGreaterThanOrEqual(4.5)
+          }
         }
       }
+    }
+  })
+
+  test('strength 24 is the strong chip: the 24% tint on its ground (default stays 12%); survivalist takes border-strong', () => {
+    for (const p of ['dark', 'light'] as const) {
+      const t = tokensFor(p)
+      for (const tone of TONES) {
+        for (const on of ['page', 'raised', 'overlay'] as const) {
+          expect(kit.button(t, { treatment: 'chip', tone, on, strength: 24 })).toEqual({ backgroundColor: t.tint24[on][tone], paddingX: 1 })
+          expect(kit.button(t, { treatment: 'chip', tone, on, strength: 12 })).toEqual(kit.button(t, { treatment: 'chip', tone, on }))
+        }
+      }
+      expect(kit.button(t, { treatment: 'outline', tone: 'success', strength: 24 })).toEqual(kit.button(t, { treatment: 'outline', tone: 'success' }))
+    }
+    const surv = tokensFor('survivalist')
+    for (const on of ['page', 'raised', 'overlay'] as const) {
+      const strong = kit.button(surv, { treatment: 'chip', tone: 'success', on, strength: 24 }).backgroundColor
+      expect(strong).toBe(surv.border.strong)
+      expect(strong).not.toBe(kit.button(surv, { treatment: 'chip', tone: 'success', on }).backgroundColor)
     }
   })
 

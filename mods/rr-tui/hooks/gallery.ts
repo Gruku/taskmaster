@@ -2,7 +2,7 @@
 // and tuned on one screen against screenshots.
 import type { RenderNode } from 'claude-code'
 
-import type { RrButtonProps, RrGround, RrLevel, RrSignalKind, RrTokens, RrTone, RrTreatment } from '../types'
+import type { RrButtonProps, RrGround, RrLevel, RrSignalKind, RrStrength, RrTokens, RrTone, RrTreatment } from '../types'
 import * as kit from './kit'
 import { RR_SOURCE } from './tokens'
 
@@ -33,7 +33,7 @@ export type Demo = (id: string, label: string, press: RrButtonProps) => RenderNo
 /** The recipe's wrapper: the treatment's keyed Box (the key scopes the Button's hover) around the consumer's Button. */
 export function treated(
   t: RrTokens,
-  a: { id: string; treatment: RrTreatment; tone: RrTone; on?: RrGround },
+  a: { id: string; treatment: RrTreatment; tone: RrTone; on?: RrGround; strength?: RrStrength },
   pressable: RenderNode,
 ): RenderNode {
   return box({ key: `${a.id}-box`, ...kit.button(t, a) }, pressable)
@@ -44,6 +44,8 @@ export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode 
   const primaryRow = box(
     { flexDirection: 'row', columnGap: 1, alignItems: 'flex-start' },
     treated(t, { id: 'outline-page', treatment: 'outline', tone: 'success' }, demo('outline-page', 'done', kit.buttonProps(t, { key: 'd' }))),
+    // The card's primary since 2026-10-06: the strong (24%) chip, one row tall on the secondaries' baseline.
+    treated(t, { id: 'strong-page', treatment: 'chip', tone: 'success', strength: 24 }, demo('strong-page', 'done', kit.buttonProps(t, {}))),
     ...PRIMARY_ROW.map(b =>
       treated(t, { id: `${b.id}-page`, treatment: 'chip', tone: b.tone }, demo(`${b.id}-page`, b.label, kit.buttonProps(t, { key: b.key }))),
     ),

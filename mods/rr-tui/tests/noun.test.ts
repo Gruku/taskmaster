@@ -129,6 +129,10 @@ describe('$.rr', () => {
           })
         expect(await ui.find({ type: 'Box', key: 'outline-page-box' })).toMatchObject({ props: { borderStyle: polarity === 'survivalist' ? 'bold' : 'round', paddingX: 1 } })
         await wrapped('outline-page', 'done', 'd')
+        await wrapped('strong-page', 'done')
+        expect((await ui.find({ type: 'Box', key: 'strong-page-box' }))?.props.backgroundColor).toBe(
+          polarity === 'survivalist' ? t.border.strong : t.tint24.page.success,
+        )
         await wrapped('back-to-agent-page', 'back to agent', 'a')
         await wrapped('skip-page', 'skip', 's')
         await wrapped('open-page', 'open', 'o')

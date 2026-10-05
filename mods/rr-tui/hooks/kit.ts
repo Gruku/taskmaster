@@ -54,15 +54,16 @@ export function rule(t: RrTokens, a: { width: number }): RenderNode {
   return el('Text', { color: t.border.default }, '─'.repeat(Math.max(0, Math.floor(a.width))))
 }
 
-export function button(t: RrTokens, a: { treatment: RrTreatment; tone: RrTone; on?: RrGround }): RrBoxProps {
+export function button(t: RrTokens, a: { treatment: RrTreatment; tone: RrTone; on?: RrGround; strength?: RrStrength }): RrBoxProps {
+  const strong = a.strength === 24
   if (t.polarity === 'survivalist') {
-    return a.treatment === 'outline'
-      ? { borderStyle: 'bold', borderColor: t.fg.bold, paddingX: 1 }
-      : { backgroundColor: t.surface[NEXT_STEP[a.on ?? 'page']], paddingX: 1 }
+    if (a.treatment === 'outline') return { borderStyle: 'bold', borderColor: t.fg.bold, paddingX: 1 }
+    // The strong chip has no hue to deepen, so it takes a bolder grey than any surface step: border-strong.
+    return { backgroundColor: strong ? t.border.strong : t.surface[NEXT_STEP[a.on ?? 'page']], paddingX: 1 }
   }
   return a.treatment === 'outline'
     ? { borderStyle: 'round', borderColor: t.tone[a.tone], paddingX: 1 }
-    : { backgroundColor: t.tint12[a.on ?? 'page'][a.tone], paddingX: 1 }
+    : { backgroundColor: (strong ? t.tint24 : t.tint12)[a.on ?? 'page'][a.tone], paddingX: 1 }
 }
 
 export function buttonProps(t: RrTokens, a: { key?: string }): RrButtonProps {

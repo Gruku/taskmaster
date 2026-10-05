@@ -64,7 +64,11 @@ export type Rr = {
   signal: (args: { kind: RrSignalKind; word: string; detail?: string }) => Promise<RrNode>
   row: (args: { cells: readonly RrNode[]; emphasis?: 'strong' | 'quiet' }) => Promise<RrNode>
   rule: (args: { width: number }) => Promise<RrNode>
-  button: (args: { treatment: RrTreatment; tone: RrTone; on?: RrGround }) => Promise<RrBoxProps>
+  /**
+   * `strength` (chip only; default 12): 24 is the strong chip, the one primary action of a card (`done`), drawn in the
+   * double-strength tint so it reads above the 12% secondaries on one baseline. Survivalist: a bolder grey step.
+   */
+  button: (args: { treatment: RrTreatment; tone: RrTone; on?: RrGround; strength?: RrStrength }) => Promise<RrBoxProps>
   buttonProps: (args: { key?: string }) => Promise<RrButtonProps>
   keycap: (args: { key: string; tone: RrTone }) => Promise<RrNode>
   chip: (args: { text: string; tone: RrTone; strength: RrStrength; on?: RrGround }) => Promise<RrNode>
