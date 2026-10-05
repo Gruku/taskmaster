@@ -256,3 +256,40 @@ test('4. the list closes on pick, blur, Escape, an outside press and when the fi
   closed('field removed');
   await cleared();
 });
+
+test('a source that answers after focus has left opens no list', async () => {
+  for (const leave of ['blur', 'outside press']) {
+    let answer;
+    const { el, input, outside } = combo({ source: () => new Promise((ok) => { answer = ok; }) });
+    input.value = 'al';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    if (leave === 'blur') input.blur();
+    else { outside.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true, cancelable: true })); outside.focus(); }
+    answer([{ value: 'a1', label: 'alpha one' }]);
+    await tick();
+    assert.equal(openPopoverCount(), 0, leave);
+    assert.equal(listbox(), null, leave);
+    assert.equal(input.getAttribute('aria-expanded'), 'false', leave);
+    assert.equal(el.querySelectorAll('.ef-chip').length, 0, leave);
+  }
+  await cleared();
+});
+
+test('the highlighted option is scrolled into view within the list as the arrows move it', async () => {
+  const seen = [];
+  const proto = dom.window.HTMLElement.prototype;
+  const had = Object.getOwnPropertyDescriptor(proto, 'scrollIntoView');
+  proto.scrollIntoView = function scrollIntoView(opts) { seen.push([this, opts]); };
+  try {
+    const { input } = combo();
+    await type(input, 'al');
+    press(input, 'ArrowDown');
+    press(input, 'ArrowDown');
+    const opts = options();
+    assert.deepEqual(seen.at(-2), [opts[1], { block: 'nearest' }]);
+    assert.deepEqual(seen.at(-1), [opts[2], { block: 'nearest' }]);
+  } finally {
+    if (had) Object.defineProperty(proto, 'scrollIntoView', had); else delete proto.scrollIntoView;
+  }
+  await cleared();
+});

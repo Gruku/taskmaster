@@ -59,6 +59,7 @@ test('RelationPicker: Escape with the suggestion list open closes the list only;
   let cancelled = 0;
   for (const args of [{}, { onCancel: () => { cancelled++; } }]) {
     const { el, control } = mount('RelationPicker', args);
+    control.focus();   // typed into, as a user does
     control.value = 'T-10';
     control.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     await tick();
@@ -90,6 +91,7 @@ test('ChipInput: Escape with typed text clears the text first; a list a slow sou
 test('ChipInput: leaving the input closes the list; free text that was typed becomes a chip instead of being lost', async () => {
   const changes = [];
   const { el, control } = mount('ChipInput', { value: ['a'], source: async () => ['alpha', 'alps'], onChange: (v) => changes.push(v) });
+  control.focus();
   control.value = 'al';
   control.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   await tick();

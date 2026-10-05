@@ -94,6 +94,8 @@ export const ChipInput = {
         r.setAttribute('aria-selected', String(idx === i));
       });
       input.setAttribute('aria-activedescendant', rows[i].id);
+      // A list taller than the popover allows scrolls inside itself; the highlighted row stays in sight.
+      rows[i].scrollIntoView?.({ block: 'nearest' });
     }
 
     async function refreshDropdown() {
@@ -101,9 +103,9 @@ export const ChipInput = {
       if (!q) { closeList(); return; }
       let raw = [];
       try { raw = (await source?.(q)) || []; } catch (e) { raw = []; }
-      // An answer to a query that has since been changed or abandoned, or to a field since taken away, must not reopen
-      // the list.
-      if (q !== input.value.trim() || !input.isConnected) return;
+      // An answer to a query that has since been changed or abandoned, or that arrives after focus left the field (or
+      // the field was taken away), must not reopen the list.
+      if (q !== input.value.trim() || input.ownerDocument.activeElement !== input) return;
       // Filter out already-chosen items.
       const next = raw.filter(s => !draft.some(d => _val(d) === _val(s))).slice(0, MAX_DROPDOWN);
       if (!next.length) { closeList(); return; }
