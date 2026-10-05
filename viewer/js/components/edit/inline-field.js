@@ -12,7 +12,7 @@ let seq = 0;
 
 export function mountInlineField(parent, {
   schema, fieldKey, entity, onSave,
-  readOnly = false, getBacklog,
+  readOnly = false, getBacklog, messageHost,
 }) {
   const fieldSpec = fieldByKey(schema, fieldKey);
   if (!fieldSpec) throw new Error(`field ${fieldKey} not in schema`);
@@ -40,19 +40,29 @@ export function mountInlineField(parent, {
   };
   parent.appendChild(wrap);
 
-  const status = h('span', { class: 'if-status' });
+  // The glyph sits beside the field, where saving and saved take no line of their own. It is never read: the message
+  // says a failure in words, and it would otherwise join the name of a heading the field sits in.
+  const status = h('span', { class: 'if-status', 'aria-hidden': 'true' });
   parent.appendChild(status);
   // Why a save failed, as words beside the field: a tooltip never reaches the keyboard or a touch screen. It is an
-  // alert so it is announced, and it describes the control while the editor is open.
+  // alert so it is announced, and it describes the control while the editor is open. It stays said once the editor
+  // closes, until the field is opened again or a save goes through.
+  // `messageHost` takes it when the field sits somewhere words must not, such as a heading whose text names a dialog.
   const message = h('span', { class: 'ef-error if-error', id: `if-error-${++seq}`, role: 'alert' });
-  parent.appendChild(message);
+  (messageHost ?? parent).appendChild(message);
+  // A document drawn again (another writer's change, or the reload after an editor closes) asks what the field was
+  // still saying and says it again in the new one: shown, not announced a second time.
+  wrap.refusal = () => (mode === 'read' ? message.textContent : '');
+  wrap.sayRefusal = (text) => {
+    if (mode !== 'read' || !text) return;
+    setStatus('error', text, { quiet: true });
+  };
   let editor = null;    // the open editor, as the renderer returned it
   let control = null;   // the focusable control of the open editor
 
   paint();
 
   function paint() {
-    showMessage('');
     editor = control = null;
     wrap.replaceChildren();
     if (mode === 'read') {
@@ -73,6 +83,9 @@ export function mountInlineField(parent, {
           scheduleSave();
         },
         onCommit: (v) => {
+          // The browser blurs a focused control as it is taken away, and a text control commits on blur: a closed
+          // editor commits nothing — not the draft Escape cancelled, and not a second end to the edit.
+          if (mode !== 'edit') return;
           pendingValue = renderer.coerce ? renderer.coerce(v) : v;
           flushSave().then((saved) => {
             if (!saved || disposed) return;
@@ -104,6 +117,7 @@ export function mountInlineField(parent, {
   function cancel() {
     if (mode !== 'edit') return;   // a control that blurs as it is taken away cancels nothing a second time
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (conflicted) setStatus('');  // the banner it points to goes with it
     conflicted = false;
     dismissConflict?.();
     pendingValue = currentEntity[fieldKey];
@@ -125,6 +139,7 @@ export function mountInlineField(parent, {
 
   function enterEdit() {
     if (ro) return;
+    setStatus('');
     pendingValue = currentEntity[fieldKey];
     mode = 'edit';
     store.beginEdit(currentEntity.id);
@@ -199,6 +214,7 @@ export function mountInlineField(parent, {
             if (disposed) return;
             conflicted = false;
             if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+            setStatus('');
             currentEntity[fieldKey] = e.current?.[fieldKey];
             store.setEtag(`task:${currentEntity.id}`, e.current_etag);
             pendingValue = currentEntity[fieldKey];
@@ -215,8 +231,11 @@ export function mountInlineField(parent, {
     }
   }
 
-  function setStatus(kind, msg) {
+  // `quiet` says it without announcing it: the live region is off before the words land.
+  function setStatus(kind, msg, { quiet = false } = {}) {
     clearTimeout(tickTimer);
+    if (quiet) message.setAttribute('aria-live', 'off');
+    else message.removeAttribute('aria-live');
     status.replaceChildren();
     status.className = 'if-status';
     showMessage(kind === 'error' ? (msg || 'Save failed') : '');

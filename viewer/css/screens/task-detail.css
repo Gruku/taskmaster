@@ -53,7 +53,23 @@
   overflow-wrap: anywhere;
 }
 .td-title { margin: 0; max-width: 80ch; }
-.td-title-host { display: block; }
+/* The title and its save glyph share one row. The glyph's slot is always kept, so saving and saved never re-wrap the
+   title or open a line of their own, and nothing below moves. */
+.td-title,
+.td-title-host { display: flex; align-items: baseline; }
+:is(.td-title, .td-title-host) > .if-wrap { flex: 1 1 auto; min-width: 0; }
+:is(.td-title, .td-title-host) > .if-status,
+:is(.td-title, .td-title-host) > .if-status:empty { display: inline-block; flex: 0 0 auto; width: 1em; text-align: center; }
+
+/* A refused title save is said on its own line under the heading, never inside it: the heading names the dialog.
+   It always holds the field's message element, so "empty" means that element is. */
+.td-title-message { max-width: 80ch; }
+.td-title-message:empty,
+.td-title-message:not(:has(> :not(:empty))) { display: none; }
+.td-title-message > .ef-error { margin: 0; }
+/* In the dialog it opens the body; hidden, it must not push the marker row down. */
+.td-body > .td-title-message { margin-bottom: var(--space-sm); }
+.td-body > .td-title-message + * { margin-top: 0; }
 
 /* ---------- Copy buttons: the id, the branch, the worktree ---------- */
 .td-copy {
