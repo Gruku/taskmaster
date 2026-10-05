@@ -186,6 +186,7 @@ def test_viewer_icon_svg_is_served(running_server):
 def test_index_icon_links_are_rewritten_under_static(running_server):
     base, _ = running_server
     html = urllib.request.urlopen(f"{base}/").read().decode()
-    assert 'href="/static/v3/vendor/icon.svg"' in html
     assert 'href="/static/v3/vendor/favicon.ico"' in html
+    # The tab icon is the ICO's pixel-fitted 16/32 drawings; an SVG link would win in Chrome/Firefox and blur them.
+    assert 'icon.svg' not in html
     assert 'href="vendor/' not in html
