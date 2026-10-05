@@ -22,8 +22,9 @@ export function fitCount(widths, available, { gap = 0, moreWidth = 0 } = {}) {
 
 /**
  * Lays out `row` on one line: children that do not fit are parked, in order, in the list of a popover opened by the
- * `more` button appended to the row, and return in their original order when room comes back. Parked children carry
- * `data-popover-item`. `keep(el)` marks children that never move; their room is taken first.
+ * `more` button appended to the row, and return to their places when room comes back. Parked children carry
+ * `data-popover-item`; More's count is how many there are. `keep(el)` marks children that never move; their room is
+ * taken first. A child with no width (empty, or `hidden`) needs no room: it stays in the row and is never counted.
  * Layout follows the row's width and children added to or removed from it; while the popover is open it waits until
  * the popover closes. Without ResizeObserver (jsdom) nothing moves and `more` stays hidden.
  *
@@ -56,17 +57,21 @@ export function overflowRow(row, {
   let destroyed = false;
   let width = null;
   let waiting = null;   // AbortController of a wait for the press that closed the popover to finish
+  const places = new Map();   // parked child → the comment holding its place in the row
 
   // The row's own children: not More, and not a popover one of them opened (it is inserted right after its anchor).
   const isChild = (n) => n.nodeType === 1 && n !== more && !n.classList.contains('popover');
   const children = () => [...row.children].filter(isChild);
 
-  // Parked children go back before More; a child added after More joins them there, so More stays last.
+  // Parked children go back to their places; a child added after More moves before it, so More stays last.
   function restore() {
     for (const el of [...list.children]) {
       el.removeAttribute('data-popover-item');
-      row.insertBefore(el, more);
+      const place = places.get(el);
+      if (place?.parentNode === row) place.replaceWith(el);
+      else { place?.remove(); row.insertBefore(el, more); }
     }
+    places.clear();
     for (const el of children()) if (more.compareDocumentPosition(el) & view.Node.DOCUMENT_POSITION_FOLLOWING) row.insertBefore(el, more);
   }
 
@@ -83,19 +88,26 @@ export function overflowRow(row, {
     const style = view.getComputedStyle(row);
     const gap = parseFloat(style.columnGap) || 0;
     const size = (el) => el.getBoundingClientRect().width;
-    more.hidden = false;
-    count.textContent = String(moving.length);
     // Measured at their natural width: in an overflowing row a shrinkable child would read as already squeezed.
     const shrink = moving.map((el) => el.style.flexShrink);
     for (const el of moving) el.style.flexShrink = '0';
     const widths = moving.map(size);
+    // Only a child with a width is parked: an empty one would be counted on More and leave a gap in its list.
+    const sized = moving.filter((el, i) => widths[i] > 0);
+    // An empty child still laid out (not display: none) takes a gap in the row.
+    const empty = moving.filter((el, i) => !(widths[i] > 0) && el.getClientRects().length).length;
+    more.hidden = false;
+    count.textContent = String(sized.length);
     const moreWidth = size(more);
     const available = row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
-      - items.filter(keep).reduce((s, el) => s + size(el) + gap, 0);
+      - items.filter(keep).reduce((s, el) => s + size(el) + gap, 0) - gap * empty;
     moving.forEach((el, i) => { el.style.flexShrink = shrink[i]; });
-    const hidden = moving.slice(fitCount(widths, available, { gap, moreWidth }));
+    const hidden = sized.slice(fitCount(widths.filter((w) => w > 0), available, { gap, moreWidth }));
     const focused = hidden.find((el) => el.contains(doc.activeElement));
     for (const el of hidden) {
+      const place = doc.createComment('');
+      el.replaceWith(place);
+      places.set(el, place);
       el.setAttribute('data-popover-item', '');
       list.append(el);
     }
