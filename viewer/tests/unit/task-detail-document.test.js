@@ -59,7 +59,7 @@ function makeCtx(task = FAKE_TASK, extra = {}) {
 }
 
 // --- Import the module under test ---
-const { mountTaskDetailDocument } = await import('../../js/components/task-detail-document.js');
+const { mountTaskDetailDocument, rememberView } = await import('../../js/components/task-detail-document.js');
 
 function mount(task, extra) {
   const ctx = makeCtx(task, extra);
@@ -415,6 +415,65 @@ test('spec review: the verdict is a shape and a word; a note opens from a real b
   const plain = mount({ ...FAKE_TASK, spec_review: { verdict: 'pass' } });
   assert.equal(plain.root.querySelector('[data-test="spec-review"] button'), null, 'no note, nothing to open');
   plain.done();
+});
+
+// ── A re-mount (another writer's change) keeps what the user had open and where they were ──
+const REVIEWED = { ...FAKE_TASK, spec_review: { verdict: 'warn', codex_note: 'Two requirements are untestable.' } };
+
+test('rememberView: an open reviewer note is open again after a re-mount, and focus is back on its toggle', () => {
+  const t = mount(REVIEWED);
+  const toggle = t.root.querySelector('[data-focus="spec-note"]');
+  toggle.click();
+  toggle.focus();
+  const restore = rememberView(t.root);
+  t.done();
+  const next = mount(REVIEWED);
+  assert.equal(restore(next.root), true, 'focus was restored');
+  const again = next.root.querySelector('[data-focus="spec-note"]');
+  assert.equal(again.getAttribute('aria-expanded'), 'true');
+  assert.equal(next.root.querySelector('.td-codex-note').hidden, false);
+  assert.equal(document.activeElement, again);
+  next.done();
+});
+
+test('rememberView: an open disclosure is re-opened even when focus was elsewhere; a closed one stays closed', () => {
+  const t = mount(REVIEWED);
+  t.root.querySelector('[data-focus="spec-note"]').click();
+  document.activeElement?.blur?.();
+  const restore = rememberView(t.root);
+  t.done();
+  const next = mount(REVIEWED);
+  assert.equal(restore(next.root), false, 'there was no focus to restore');
+  assert.equal(next.root.querySelector('[data-focus="spec-note"]').getAttribute('aria-expanded'), 'true');
+  const closed = rememberView(next.root.querySelector('[data-test="dates"]') ?? document.createElement('div'));
+  next.done();
+  const last = mount(REVIEWED);
+  closed(last.root);
+  assert.equal(last.root.querySelector('[data-focus="spec-note"]').getAttribute('aria-expanded'), 'false');
+  last.done();
+});
+
+test('rememberView: a menu button reading expanded is never clicked open again', () => {
+  const menu = (expanded) => {
+    const root = document.createElement('div');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.focus = 'status-menu';
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', expanded);
+    root.appendChild(button);
+    document.body.appendChild(root);
+    return { root, button };
+  };
+  const before = menu('true');
+  const restore = rememberView(before.root);
+  before.root.remove();
+  const after = menu('false');
+  let clicks = 0;
+  after.button.addEventListener('click', () => { clicks++; });
+  restore(after.root);
+  assert.equal(clicks, 0);
+  after.root.remove();
 });
 
 // ── Template line 6: dates ──

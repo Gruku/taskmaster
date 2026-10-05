@@ -104,16 +104,27 @@ export function openEditForm(ctx) {
   return editOpening;
 }
 
-// Where focus sits inside `scope`, as something a re-mounted document can find again. Returns a function that
-// puts focus on the same thing under `next` and says whether it could.
-export function rememberFocus(scope) {
+// A disclosure the user opened (the reviewer note). A menu button also reads expanded, but its menu is not part of
+// the document and a click would only open it again.
+const OPEN_TOGGLE = 'button[aria-expanded="true"][data-focus]:not([aria-haspopup])';
+const SHUT_TOGGLE = 'button[aria-expanded="false"][data-focus]:not([aria-haspopup])';
+
+// What the user had open and where focus sat inside `scope`, as something a re-mounted document can find again.
+// Returns a function that re-opens the same disclosures under `next`, puts focus on the same thing, and says
+// whether focus could be restored.
+export function rememberView(scope) {
+  const open = scope ? [...scope.querySelectorAll(OPEN_TOGGLE)].map((b) => b.dataset.focus) : [];
   const active = scope?.ownerDocument.activeElement;
-  if (!active || !scope.contains(active) || active === scope) return () => false;
-  const key = active.closest('.if-wrap')?.dataset.key;
-  const mark = active.dataset?.focus;
-  const href = active.matches('a[href]') ? active.getAttribute('href') : null;
+  const focused = !!active && scope.contains(active) && active !== scope;
+  const key = focused ? active.closest('.if-wrap')?.dataset.key : null;
+  const mark = focused ? active.dataset?.focus : null;
+  const href = focused && active.matches('a[href]') ? active.getAttribute('href') : null;
   return (next = scope) => {
     const find = (sel, test) => [...next.querySelectorAll(sel)].find(test);
+    for (const toggle of next.querySelectorAll(SHUT_TOGGLE)) {
+      if (open.includes(toggle.dataset.focus)) toggle.click();
+    }
+    if (!focused) return false;
     const target = (key && find('.if-wrap', (w) => w.dataset.key === key)?.querySelector('[tabindex="0"]'))
       || (key && find('[data-focus]', (e) => e.dataset.focus === `edit:${key}`))
       || (mark && find('[data-focus]', (e) => e.dataset.focus === mark))

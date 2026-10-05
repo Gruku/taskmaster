@@ -79,6 +79,63 @@ test('a dialog with nothing but its close button keeps Tab on it', async ({ page
   expect(await activeId(page)).toBe('modal-close');
 });
 
+// The shell's own Tab wrap must agree with the browser's sequence at the edges, or Tab skips or sticks there.
+test('a control of no size is still in the Tab cycle, as the browser has it', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => {
+    const modal = window.__m.openModal({ title: 'Modal z' });
+    const input = document.createElement('input');
+    input.id = 'z-in';
+    const zero = document.createElement('button');
+    zero.type = 'button';
+    zero.id = 'z';
+    zero.setAttribute('aria-label', 'Zero');
+    zero.style.cssText = 'width:0;height:0;padding:0;border:0';
+    modal.body.append(input, zero);
+    window.__h.z = modal;
+  });
+  await expect.poll(() => activeId(page)).toBe('z-in');
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('z');
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('modal-close');           // wrapped to the first control
+  await page.keyboard.press('Shift+Tab');
+  expect(await activeId(page)).toBe('z');
+});
+
+test('what a closed details holds is out of the Tab cycle until it is opened', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => {
+    const modal = window.__m.openModal({ title: 'Modal d' });
+    const input = document.createElement('input');
+    input.id = 'd-in';
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.id = 'd-sum';
+    summary.textContent = 'More';
+    const inner = document.createElement('input');
+    inner.id = 'd-inner';
+    details.append(summary, inner);
+    modal.body.append(input, details);
+    window.__h.d = modal;
+  });
+  await expect.poll(() => activeId(page)).toBe('d-in');
+  const seen = [];
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('Tab');
+    seen.push(await activeId(page));
+  }
+  expect(seen).toEqual(['d-sum', 'modal-close', 'd-in', 'd-sum', 'modal-close', 'd-in']);
+  await page.evaluate(() => { document.querySelector('details').open = true; });
+  await page.locator('#d-sum').focus();
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('d-inner');
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('modal-close');
+  await page.keyboard.press('Shift+Tab');
+  expect(await activeId(page)).toBe('d-inner');
+});
+
 test('with two modals open, Tab stays in the top one and Escape closes only the top one', async ({ page }) => {
   await boot(page);
   await open(page, 'a');

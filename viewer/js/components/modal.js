@@ -6,24 +6,39 @@ import { icon } from './icon.js';
 
 const SIZES = ['sm', 'md', 'lg'];
 const stack = [];          // open modals, bottom → top
+const returns = new WeakMap(); // modal → { from, ancestors }: where focus goes when it closes
 let seq = 0;
 let shellWasInert = false; // .shell's own inert state before the first modal opened
 
 const BANNER_HOST = 'conflict-banner-host';   // filled by edit/conflict-banner.js; painted above every modal
 
-const CAN_FOCUS = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable=""], [contenteditable="true"]';
+const CAN_FOCUS = 'a[href], area[href], button, input, select, textarea, iframe, audio[controls], video[controls], '
+  + 'details > summary:first-of-type, [tabindex], [contenteditable]:not([contenteditable="false"])';
+
+// A closed <details> shows only its first summary; the rest of it is not rendered.
+function inClosedDetails(el) {
+  for (let d = el.parentElement?.closest('details:not([open])'); d; d = d.parentElement?.closest('details:not([open])')) {
+    if (!d.querySelector(':scope > summary')?.contains(el)) return true;
+  }
+  return false;
+}
 
 function canTakeFocus(el) {
   if (!el || el.nodeType !== 1 || !el.isConnected || !el.matches(CAN_FOCUS)) return false;
-  if (el.disabled || el.type === 'hidden' || el.closest('[inert], [hidden]')) return false;
-  // jsdom has no layout; a browser also rules out display:none and visibility:hidden.
+  if (el.disabled || el.type === 'hidden' || el.closest('[inert], [hidden]') || inClosedDetails(el)) return false;
+  // jsdom has no layout; a browser also rules out display:none and visibility:hidden. A rendered element of no
+  // size stays in: the browser tabs to it.
   return typeof el.checkVisibility === 'function' ? el.checkVisibility({ visibilityProperty: true }) : true;
 }
 
-// What Tab can reach inside `root`, in document order.
+// What Tab can reach inside `root`, in document order. Only a tabindex written on the element takes it out: the
+// tabIndex an editable region or a media element reports without one is not what the browser's Tab does.
 export function focusableIn(root) {
   if (!root) return [];
-  return [...root.querySelectorAll(CAN_FOCUS)].filter((el) => el.tabIndex >= 0 && canTakeFocus(el));
+  return [...root.querySelectorAll(CAN_FOCUS)]
+    .filter((el) => (!el.hasAttribute('tabindex') || el.tabIndex >= 0) && canTakeFocus(el))
+    // jsdom's selector engine does not return this list in document order; a browser's already is.
+    .sort((a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1));
 }
 
 // Where focus goes when a modal closes, best first: the opener, the nearest ancestor of a removed
@@ -101,6 +116,9 @@ function onStrayEscape(e) {
   top()?.requestClose();
 }
 
+// `onRequestClose` answers every close the user asks for (Escape, the overlay, the close button, requestClose()); a
+// guard whose answer never settles keeps the modal open, every request meanwhile shares that one pending answer, and
+// close() still closes it.
 export function openModal({ title, eyebrow, size = 'md', className, onRequestClose, opener, initialFocus } = {}) {
   const id = `modal-title-${++seq}`;
   const eyebrowEl = h('div', { class: 'modal-eyebrow' });
@@ -122,10 +140,16 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
   // Kept from open time: once the opener is removed its parent chain is gone.
   const ancestors = [];
   for (let p = from?.parentElement; p && p !== document.body; p = p.parentElement) ancestors.push(p);
+  // A modal beneath that closes first may hand this one its own target (see close()).
+  const back = { from, ancestors };
 
   let closed = false;
   let pending = null;       // the close request being decided, if any
   const closedFns = [];
+  const keyFns = [];        // onKey handlers, in the order they were added
+  const view = document.defaultView;
+  let pressed = false;      // a press that began inside the overlay is still held
+  const afterFns = new Set();
 
   function setTitle(value) {
     titleEl.replaceChildren(value == null ? '' : value);
@@ -134,15 +158,60 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
     eyebrowEl.textContent = text ?? '';
     eyebrowEl.hidden = !eyebrowEl.textContent;
   }
-  function run(fn) {
-    try { fn(); } catch (err) { console.error('modal onClosed callback failed', err); }
+  function run(fn, what = 'onClosed callback') {
+    try { return fn(); } catch (err) { console.error(`modal ${what} failed`, err); return undefined; }
+  }
+
+  // A press is held from a pointerdown inside the overlay until it is released anywhere, or the window loses it.
+  const RELEASE = ['pointerup', 'pointercancel'];
+  function press() {
+    if (pressed) return;
+    pressed = true;
+    for (const type of RELEASE) document.addEventListener(type, release, true);
+    view?.addEventListener('blur', release);
+  }
+  function release() {
+    if (!pressed) return;
+    pressed = false;
+    for (const type of RELEASE) document.removeEventListener(type, release, true);
+    view?.removeEventListener('blur', release);
+    // On the next task, so the click this release belongs to lands first.
+    if (afterFns.size) setTimeout(flush, 0);
+  }
+  function flush() {
+    if (closed || pressed) return;   // a new press keeps the queue for its own release
+    const fns = [...afterFns];
+    afterFns.clear();
+    for (const fn of fns) run(fn, 'afterPress callback');
+  }
+  function afterPress(fn) {
+    if (closed) return;
+    if (pressed) afterFns.add(fn);
+    else fn();
+  }
+
+  function onKey(fn) {
+    if (closed) return () => {};
+    const entry = { fn };
+    keyFns.push(entry);
+    return () => { const at = keyFns.indexOf(entry); if (at >= 0) keyFns.splice(at, 1); };
   }
 
   function close() {
     if (closed) return;
     closed = true;
     const wasTop = top() === handle;
-    stack.splice(stack.indexOf(handle), 1);
+    const at = stack.indexOf(handle);
+    // A modal above that was opened from inside this one would hand focus back into a dialog that is gone: it
+    // returns where this one would have.
+    for (const above of stack.slice(at + 1)) {
+      const r = returns.get(above);
+      if (r?.from && (dialog.contains(r.from) || r.ancestors.includes(dialog))) Object.assign(r, back);
+    }
+    stack.splice(at, 1);
+    keyFns.length = 0;
+    afterFns.clear();
+    release();
     overlay.remove();
     if (!stack.length) {
       document.removeEventListener('keydown', onTab, true);
@@ -151,7 +220,7 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
     syncLayers();
     // Focus moves only after the layers are released, or the target would still be inert.
     // A covered modal that closes leaves focus where it is, in the one on top.
-    for (const target of wasTop ? focusTargets(from, { ancestors, within: top()?.dialog }) : []) {
+    for (const target of wasTop ? focusTargets(back.from, { ancestors: back.ancestors, within: top()?.dialog }) : []) {
       try { target.focus(); } catch { /* a target that refuses focus is skipped */ }
       if (document.activeElement === target) break;
     }
@@ -184,7 +253,10 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
     setTitle, setEyebrow, requestClose, close,
     isTop: () => top() === handle,
     onClosed(fn) { if (closed) run(fn); else closedFns.push(fn); },
+    onKey, afterPress,
+    pressing: () => pressed,
   };
+  returns.set(handle, back);
 
   setTitle(title);
   setEyebrow(eyebrow);
@@ -195,12 +267,24 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
   let downOnOverlay = false;
   let upOnOverlay = false;
   overlay.addEventListener('pointerdown', (e) => { downOnOverlay = e.target === overlay && !e.button; upOnOverlay = false; });
+  overlay.addEventListener('pointerdown', press, true);
   overlay.addEventListener('pointerup', (e) => { upOnOverlay = e.target === overlay; });
   overlay.addEventListener('click', (e) => {
     const dismiss = downOnOverlay && upOnOverlay && e.target === overlay;
     downOnOverlay = upOnOverlay = false;
     if (dismiss) requestClose();
   });
+
+  // A form's own keys (Ctrl+Enter) are taken on the way down, before the focused control acts on them.
+  dialog.addEventListener('keydown', (e) => {
+    if (top() !== handle) return;
+    for (const { fn } of [...keyFns]) {
+      if (run(() => fn(e), 'onKey handler') !== true) continue;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  }, true);
 
   // Handled here and stopped, so a page-level Escape listener behind the modal never acts on the same key.
   overlay.addEventListener('keydown', (e) => {
