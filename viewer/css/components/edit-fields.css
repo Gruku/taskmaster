@@ -276,6 +276,8 @@
   font-size: var(--size-technical-small);
   vertical-align: middle;
 }
+/* Idle, it takes no room: beside a field that fills its line it would otherwise open a blank line of its own. */
+.if-status:empty { display: none; }
 .if-status-saving { color: var(--text-accent); animation: pulse calc(var(--dur-macro) * 2) var(--ease-pendulum) infinite; }
 .if-status-ok { color: var(--tone-success); }
 .if-status-error { color: var(--tone-critical); cursor: help; }

@@ -276,6 +276,29 @@ test('a task that fails to load says so in a sentence, offers Open full, and pri
   await expect(dialog.locator('.tm-empty').getByRole('link', { name: 'Open full' })).toHaveAttribute('href', '#/task/T-102');
 });
 
+// An inline field's save status sits beside it and is empty while idle. Beside a field that fills its line it used to
+// open a blank line of its own: a gap under every markdown section and under a title that wraps.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`at ${viewport.width}×${viewport.height} an idle inline field leaves no blank line under a section or a wrapped title`, async ({ page }) => {
+    test.setTimeout(30_000);   // the long task renders a 5,000-line plan
+    await page.setViewportSize(viewport);
+    await board(page);
+    // Bottom of the host minus bottom of the field's own content: only the host's padding may remain.
+    const slack = (locator) => locator.evaluate((host) => {
+      const wrap = host.querySelector('.if-wrap');
+      return host.getBoundingClientRect().bottom - parseFloat(getComputedStyle(host).paddingBottom) - wrap.getBoundingClientRect().bottom;
+    });
+    let dialog = await openCard(page, 'T-102');
+    for (const key of ['description', 'spec', 'plan', 'notes']) {
+      expect(await slack(dialog.locator(`[data-test="sec-${key}"]`)), key).toBeLessThanOrEqual(1);
+    }
+    await page.keyboard.press('Escape');
+    await expect(detail(page)).toHaveCount(0);
+    dialog = await openCard(page, 'T-105');
+    expect(await slack(titleOf(dialog)), 'wrapped title').toBeLessThanOrEqual(1);
+  });
+}
+
 // Review focus 5: a 140-character unbroken title, a 5,000-line plan and 40 dependencies.
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   test(`long content at ${viewport.width}×${viewport.height}: the body scrolls, the header stays, nothing is wider than the screen`, async ({ page }) => {
