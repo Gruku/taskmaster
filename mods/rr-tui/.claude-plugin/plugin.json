@@ -1,0 +1,16 @@
+{
+  "name": "rr-tui",
+  "version": "0.1.0",
+  "description": "Reality Reprojection for terminal mods: $.rr gives RR tokens and finished element trees for the active polarity; /rr-gallery tunes the look live.",
+  "author": { "name": "gruku" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "polarity": {
+      "type": "string",
+      "title": "Polarity",
+      "description": "auto follows the Claude Code theme (a theme named light draws light, anything else dark). survivalist is value only, no hue.",
+      "default": "auto",
+      "options": ["auto", "dark", "light", "survivalist"]
+    }
+  }
+}
