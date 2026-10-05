@@ -2,7 +2,7 @@
 // its digit hotkeys opening the panes and its review form asking before it signs anything off.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { DEMO_DETAILS } from '../hooks/demo'
+import { DEMO_DETAILS, DEMO_REASON } from '../hooks/demo'
 import type { TmSnapshot } from '../types'
 import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -12,9 +12,10 @@ import { stateOf, worldOf } from './fixtures/world'
 const DEMO = { options: { source: 'demo' }, plugins: [RR_STUB] }
 const SNAP = `${PLUGIN}.snapshot`
 
+// A demo-mode state no flow reaches: the bound task sits beyond the loaded window.
 const FAR: TmSnapshot = {
   reachable: true,
-  reason: '',
+  reason: DEMO_REASON,
   fetchedAt: 0,
   queue: [{ kind: 'task', id: 'docs-012', title: 'README', priority: 'low', humanAction: 'Read it', timestamp: '' }],
   queueTotal: 355,

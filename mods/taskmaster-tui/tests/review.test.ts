@@ -137,7 +137,7 @@ describe('review queue', () => {
 
   test('tm mode: y refuses until the writes are wired, and the card and tally stay', { plugins: [RR_STUB] }, async ($, on) => {
     worldOf(on, mock.clock(on))
-    stateOf(on, { [SNAP]: demoSnapshot(0), [`${PLUGIN}.details`]: DEMO_DETAILS })
+    stateOf(on, { [SNAP]: { ...demoSnapshot(0), reason: '' }, [`${PLUGIN}.details`]: DEMO_DETAILS })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
     await ui.press({ key: 'done' })

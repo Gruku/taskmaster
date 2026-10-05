@@ -5,7 +5,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { TmBandMode, TmCursor, TmSnapshot, TmTaskDetail } from '../types'
 import { demoActions, pendingActions } from './actions'
-import { DEMO_DETAILS, demoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_REASON, demoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import type { TmHost } from './host'
@@ -103,50 +103,104 @@ function writerOf($: EngineInterface): TmWriter {
   }
 }
 
-const mod: { flows: TmFlows | null } = { flows: null }
+// A module instance may never see session.start: a userConfig change or any reload of an unchanged module re-runs
+// register() with session.start not refiring. So nothing here waits for it: the flows are built by whichever acting hook
+// (session.start, command.run, ui.press, ui.input) runs first, and demo data is seeded there or drawn as a pure fallback.
+const mod: { flows: TmFlows | null; source: 'tm' | 'demo' } = { flows: null, source: 'tm' }
+
+function ensureFlows($: EngineInterface): TmFlows {
+  mod.flows ??= createFlows({
+    host: hostOf($),
+    write: writerOf($),
+    actions: mod.source === 'demo' ? demoActions() : pendingActions(),
+    afterWrite: () => undefined,
+  })
+  return mod.flows
+}
+
+const isDemo = (s: TmSnapshot | null): boolean => s !== null && s.reason === DEMO_REASON
+
+// Demo mode keeps demo data in $.state (seeded once, then changed only by the flows); tm mode never shows demo data.
+async function ensureSeeded($: EngineInterface): Promise<void> {
+  if (mod.source !== 'demo' || isDemo(await read($, SNAPSHOT))) return
+  const now = await $.clock.now()
+  await update($, SNAPSHOT, s => (isDemo(s) ? s : demoSnapshot(now)))
+  await update($, DETAILS, () => DEMO_DETAILS)
+}
+
+async function ready($: EngineInterface): Promise<TmFlows> {
+  const flows = ensureFlows($)
+  await ensureSeeded($)
+  return flows
+}
+
+/** What the surfaces draw: $.state, or in demo mode before the seed lands, the demo data itself (a render writes nothing). */
+async function dataOf($: EngineInterface): Promise<{ snapshot: TmSnapshot | null; details: Readonly<Record<string, TmTaskDetail>> }> {
+  const snapshot = await read($, SNAPSHOT)
+  const details = await read($, DETAILS)
+  if (mod.source === 'demo') return isDemo(snapshot) ? { snapshot, details } : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS }
+  return isDemo(snapshot) ? { snapshot: null, details: {} } : { snapshot, details }
+}
+
+// Press and input handlers run after the ui.press / ui.input hooks below have built the flows; they read mod.flows then.
+const act = (run: (flows: TmFlows) => Promise<void>): void => {
+  if (mod.flows !== null) void run(mod.flows)
+}
 
 export const register: Register = (on, options) => {
-  const source = options.source === 'demo' ? 'demo' : 'tm'
+  mod.source = options.source === 'demo' ? 'demo' : 'tm'
+  mod.flows = null
 
   on('session.start', async ($, e, next) => {
-    const actions = source === 'demo' ? demoActions() : pendingActions()
-    mod.flows = createFlows({ host: hostOf($), write: writerOf($), actions, afterWrite: () => undefined })
-    await $.command.register({ name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' })
-    await $.command.register({ name: HANDOVERS, description: 'The last five open Taskmaster handovers: copy for Telegram or resume' })
-    if (source === 'demo') {
-      const now = await $.clock.now()
-      await update($, SNAPSHOT, () => demoSnapshot(now))
-      await update($, DETAILS, () => DEMO_DETAILS)
+    await ready($)
+    for (const command of [
+      { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
+      { name: HANDOVERS, description: 'The last five open Taskmaster handovers: copy for Telegram or resume' },
+    ]) {
+      try {
+        await $.command.register(command)
+      } catch {
+        // already registered by an earlier load of this module: commands persist across reloads
+      }
     }
     return next(e)
   })
 
-  on('command.run', { command: 'tm-review' }, async () => {
-    await mod.flows?.openReview()
+  on('command.run', { command: 'tm-review' }, async $ => {
+    await (await ready($)).openReview()
     return { text: 'Review queue opened.' }
   })
 
-  on('command.run', { command: 'tm-handovers' }, async () => {
-    await mod.flows?.openHandovers()
+  on('command.run', { command: 'tm-handovers' }, async $ => {
+    await (await ready($)).openHandovers()
     return { text: 'Handovers opened.' }
+  })
+
+  on('ui.press', { plugin: 'taskmaster-tui' }, async ($, e, next) => {
+    await ready($)
+    return next(e)
+  })
+
+  on('ui.input', { plugin: 'taskmaster-tui' }, async ($, e, next) => {
+    await ready($)
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const below = await next(e)
-    const flows = mod.flows
-    if (flows === null || e.surface === 'mobile') return below
+    if (e.surface === 'mobile') return below
     await $.state.get(RR_POLARITY)
-    const model = bandModel(await read($, SNAPSHOT))
+    const model = bandModel((await dataOf($)).snapshot)
     if (model === null) return below
     const ui = $.ui.resolve(e) as unknown as Ui
     const ours = await bandTree(ui, rrOf($), model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
-      openReview: () => void flows.openReview(),
-      openHandovers: () => void flows.openHandovers(),
-      askDone: id => void flows.bandAskDone(id),
-      confirmDone: id => void flows.bandConfirmDone(id),
-      cancel: () => void flows.bandCancel(),
-      sendBack: id => void flows.openReview(id, 'note'),
+      openReview: () => act(f => f.openReview()),
+      openHandovers: () => act(f => f.openHandovers()),
+      askDone: id => act(f => f.bandAskDone(id)),
+      confirmDone: id => act(f => f.bandConfirmDone(id)),
+      cancel: () => act(f => f.bandCancel()),
+      sendBack: id => act(f => f.openReview(id, 'note')),
     })
     const { Box } = ui
     return (
@@ -158,44 +212,41 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-review' }, async ($, e) => {
-    const flows = mod.flows
     const { Text } = $.ui.resolve(e)
-    if (flows === null) return <Text>Loading…</Text>
     if (e.surface === 'mobile') return <Text>Open the review queue in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
-    const view = { snapshot: await read($, SNAPSHOT), cursor: await read($, CURSOR), details: await read($, DETAILS), now: await $.clock.now() }
+    const data = await dataOf($)
+    const view = { ...data, cursor: await read($, CURSOR), now: await $.clock.now() }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
       rrOf($),
       view,
       {
-        askDone: id => void flows.askDone(id),
-        confirmDone: id => void flows.confirmDone(id),
-        cancel: () => void flows.cancel(),
-        askNote: id => void flows.askNote(id),
-        sendBack: (id, note) => void flows.sendBack(id, note),
-        skip: id => void flows.skip(id),
-        fill: text => void flows.fill(text),
+        askDone: id => act(f => f.askDone(id)),
+        confirmDone: id => act(f => f.confirmDone(id)),
+        cancel: () => act(f => f.cancel()),
+        askNote: id => act(f => f.askNote(id)),
+        sendBack: (id, note) => act(f => f.sendBack(id, note)),
+        skip: id => act(f => f.skip(id)),
+        fill: text => act(f => f.fill(text)),
       },
       e.props.bodyColumns,
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-handovers' }, async ($, e) => {
-    const flows = mod.flows
     const { Text } = $.ui.resolve(e)
-    if (flows === null) return <Text>Loading…</Text>
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
-    const view = { snapshot: await read($, SNAPSHOT), pick: await read($, PICK) }
+    const view = { snapshot: (await dataOf($)).snapshot, pick: await read($, PICK) }
     return handoversPaneTree(
       $.ui.resolve(e) as unknown as Ui,
       rrOf($),
       view,
       {
-        pick: id => void flows.pick(id),
-        copy: (handover, surface) => void flows.copyHandover(handover, surface),
-        resume: handover => void flows.resumeHandover(handover),
+        pick: id => act(f => f.pick(id)),
+        copy: (handover, surface) => act(f => f.copyHandover(handover, surface)),
+        resume: handover => act(f => f.resumeHandover(handover)),
       },
       e.props.bodyColumns,
     )

@@ -3,6 +3,8 @@
 import type { TmHandover, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
+/** The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. */
+export const DEMO_REASON = 'demo'
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
 export const DEMO_REFUSING_ID = 'tm-audit-031'
 export const DEMO_REFUSAL =
@@ -59,7 +61,7 @@ export function demoSnapshot(now: number): TmSnapshot {
   }
   return {
     reachable: true,
-    reason: '',
+    reason: DEMO_REASON,
     fetchedAt: now,
     queue: [
       task('unified-chat-022', 1),
