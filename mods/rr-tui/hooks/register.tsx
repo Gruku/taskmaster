@@ -118,9 +118,14 @@ export const register: Register = (on, options) => {
       await update($, OVERRIDE, () => to)
       await publish($)
     }
-    const demo: Demo = (id, key, live) => (
-      <Button key={id} label={key} hotkey={live ? key : undefined} onPress={() => $.ui.toast(`rr-gallery: pressed ${id}`)} />
-    )
+    const demo: Demo = (id, b) => {
+      const press = () => $.ui.toast(b.toast ?? `rr-gallery: pressed ${id}`)
+      return b.plain ? (
+        <Button key={id} plain label={b.label} hotkey={b.hotkey} hover={b.hover} onPress={press} />
+      ) : (
+        <Button key={id} label={b.label} hotkey={b.hotkey} hover={b.hover} onPress={press} />
+      )
+    }
     const polarityButton = (id: string, key: string, label: string, to: RrPolarity | 'none') =>
       keyed(t, { id, treatment: 'chip', tone: 'signature', label }, <Button key={id} label={key} hotkey={key} onPress={flip(to)} />)
     return (

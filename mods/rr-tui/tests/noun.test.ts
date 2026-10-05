@@ -133,9 +133,21 @@ describe('$.rr', () => {
       }
       await ui.press({ key: 'skip-page' })
       await ui.press({ key: 'tones-info-overlay' })
+      // A drawn element carries `hover` beside its props, so it is read off the keyed chip Box that scopes it.
+      expect(await ui.find({ type: 'Box', key: 'whole-chip-1-warning-box' })).toMatchObject({
+        children: [{ type: 'Button', props: { label: 'back to agent', hotkey: '5', plain: true }, hover: { bold: true } }],
+      })
+      expect(await ui.find({ type: 'Button', key: 'whole-chip-2-signature' })).toMatchObject({ props: { label: ' '.repeat(7), hotkey: '8' } })
+      await ui.press({ key: 'whole-chip-1-signature' })
+      await ui.press({ key: 'whole-chip-2-warning' })
       await ui.unmount()
     }
-    const perSurface = ['rr-gallery: pressed skip-page', 'rr-gallery: pressed tones-info-overlay']
+    const perSurface = [
+      'rr-gallery: pressed skip-page',
+      'rr-gallery: pressed tones-info-overlay',
+      'rr-gallery: pressed whole-chip-1-signature',
+      'whole-chip variant 2 pressed',
+    ]
     expect(world.toasts).toEqual([...perSurface, ...perSurface])
   })
 })
