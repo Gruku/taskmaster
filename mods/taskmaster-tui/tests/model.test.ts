@@ -207,6 +207,11 @@ describe('review card', () => {
     expect(splitCheck('do a; then b').items).toEqual(['do a; then b'])
     expect(splitCheck('https://example.com/x should load').items).toEqual(['https://example.com/x should load'])
     expect(splitCheck('Smoke: it boots').items).toEqual(['it boots'])
+    expect(splitCheck('Verify at 10:30 that the deploy finished; then say so')).toEqual({
+      label: '',
+      detail: '',
+      items: ['Verify at 10:30 that the deploy finished; then say so'],
+    })
     expect(splitCheck('   ')).toEqual({ label: '', detail: '', items: [] })
   })
 

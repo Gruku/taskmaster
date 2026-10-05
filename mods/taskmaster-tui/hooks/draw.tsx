@@ -461,16 +461,27 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
     } else if (check.detail !== '') {
       body.push(...lines(ui, t.fg.subtle, check.detail, room))
     }
+    // Ticks press only in card mode. While the note Input or the confirm row is up, the items are plain text (marks still
+    // shown, same indent): a digit typed into the note, or pressed mid-confirm, can never tick or change the count.
+    const armed = mode === 'card'
     const rowProps = await Promise.all(check.items.map((_, i) => rr.buttonProps(i < 9 ? { key: String(i + 1) } : {})))
     check.items.forEach((entry, i) => {
       const press = rowProps[i]
       if (press === undefined) return
-      const lead = (press.hotkey === undefined ? 0 : press.hotkey.length + 2) + 2
+      const keyCells = press.hotkey === undefined ? 0 : press.hotkey.length + 2
+      const lead = keyCells + 2
       const wrapped = wrapText(entry, room - lead)
       const mark = ticked.includes(entry) ? '☑' : '☐'
+      const first = `${mark} ${wrapped[0] ?? ''}`
       body.push(
         <Box key={`tick-${i}-box`} flexDirection="column">
-          <Button key={`tick-${i}`} {...press} label={`${mark} ${wrapped[0] ?? ''}`} onPress={() => on.toggleTick(item.id, entry)} />
+          {armed ? (
+            <Button key={`tick-${i}`} {...press} label={first} onPress={() => on.toggleTick(item.id, entry)} />
+          ) : (
+            <Box paddingLeft={keyCells}>
+              <Text color={t.fg.default}>{first}</Text>
+            </Box>
+          )}
           {wrapped.slice(1).map(line => (
             <Box paddingLeft={lead}>
               <Text color={t.fg.default}>{line}</Text>
@@ -492,9 +503,16 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const more: RenderNode[] = []
   if (isTask) {
     const press = await rr.buttonProps({ key: 'i' })
+    const toggle = `${v.detailsOpen ? '▾' : '▸'} details`
     more.push(
       <Box key="details-box" flexDirection="row" marginTop={1}>
-        <Button key="details" {...press} label={`${v.detailsOpen ? '▾' : '▸'} details`} onPress={on.toggleDetails} />
+        {mode === 'card' ? (
+          <Button key="details" {...press} label={toggle} onPress={on.toggleDetails} />
+        ) : (
+          <Box paddingLeft={3}>
+            <Text color={t.fg.subtle}>{toggle}</Text>
+          </Box>
+        )}
       </Box>,
     )
     if (v.detailsOpen) {

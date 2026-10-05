@@ -94,6 +94,29 @@ describe('review card', () => {
     expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus).toBe(true)
   })
 
+  test('outside card mode the ticks and details are plain text: no keys to catch a digit typed in the note or pressed mid-confirm', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on), { [`ticks:${ID}`]: { at: 0, items: [SECOND] } })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100), surface: 'terminal' })
+    const disarmed = async (when: string) => {
+      for (const key of ['tick-0', 'tick-1', 'details']) expect(await ui.find({ type: 'Button', key }), `${when} ${key}`).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: `☐ ${FIRST}` }), when).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: `☑ ${SECOND}` }), when).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '▸ details' }), when).toBeDefined()
+    }
+    await ui.press({ key: 'done' })
+    expect(await ui.find({ type: 'Text', text: /1 of 2 unchecked — done anyway\?/ })).toBeDefined()
+    await disarmed('confirm')
+    expect(await ui.find({ type: 'Text', text: /1 of 2 unchecked — done anyway\?/ })).toBeDefined()
+    await ui.press({ key: 'confirm-no' })
+    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBe('1')
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ type: 'Input', key: 'note' })).toBeDefined()
+    await disarmed('note')
+    await ui.press({ key: 'note-cancel' })
+    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.hotkey).toBe('i')
+  })
+
   test('i shows notes, links and branch/PR under the check, and hides them again', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)

@@ -183,8 +183,9 @@ export function handoverCopyText(h: TmHandover): string {
 export type TmCheck = { readonly label: string; readonly detail: string; readonly items: readonly string[] }
 
 const LIST_LINE = /^(?:[-*•]|\d+[.)])\s+(.*)$/
-// `<label>:` or `<label> (<detail>):` at the start; a URL's `://` is never a label.
-const LEADING_LABEL = /^([A-Za-z][^:;()]{0,39}?)\s*(?:\(([^)]*)\))?\s*:(?!\/\/)\s*([\s\S]*)$/
+// `<label>:` or `<label> (<detail>):` at the start, the colon followed by whitespace or the end: a time (`10:30`) or a
+// URL's `://` is never a label.
+const LEADING_LABEL = /^([A-Za-z][^:;()]{0,39}?)\s*(?:\(([^)]*)\))?\s*:(?=\s|$)\s*([\s\S]*)$/
 
 function labelOf(text: string): { label: string; detail: string; rest: string } | null {
   const m = LEADING_LABEL.exec(text)
