@@ -54,6 +54,10 @@ function makeApi({ create, patch = [] } = {}) {
 const stale = (current, etag = 't1:fresh') => Object.assign(new Error('stale'), { code: 409, current, current_etag: etag });
 // A 409 that names no revision: the server refusing the write (gates still open, a legacy layout), not a lost race.
 const refusal = (reason) => Object.assign(new Error(reason), { code: 409 });
+// What the shared client throws for any other refused write: the raw request in the message, the status as the code.
+const httpError = (code, message) => Object.assign(new Error(message), { code });
+// The raw request is for the console, never the page.
+const RAW = /PATCH|POST|\/api\/|→|\{|Failed to fetch/;
 
 const tick = (ms = 0) => new Promise((ok) => setTimeout(ok, ms));
 // The banner module is loaded on first use, which takes as long as the machine is busy.
@@ -126,10 +130,13 @@ test('create: a board refresh that fails after the task was made still closes th
   assert.deepEqual(store.log, ['refresh']);
 });
 
-test('create shows a server error and stays open; a 422 names its fields', async () => {
+test('create shows a server error in words and stays open; a 422 names its fields', async () => {
   let n = 0;
   const api = makeApi({
-    create: () => { throw n++ ? Object.assign(new Error('validation failed'), { code: 422, errors: { epic: 'unknown epic', title: 'too long' } }) : new Error('Server down'); },
+    create: () => {
+      throw n++ ? Object.assign(new Error('validation failed'), { code: 422, errors: { epic: 'unknown epic', title: 'too long' } })
+        : httpError(500, 'POST /api/tasks → 500: {"ok": false, "error": "KeyError: epic"}');
+    },
   });
   openTaskCreateModal({ store: makeStore(), api });
   await tick();
@@ -137,11 +144,35 @@ test('create shows a server error and stays open; a 422 names its fields', async
   saveBtn().click();
   await tick();
   assert.ok(form(), 'stays open');
-  assert.equal(alertText(), 'Server down');
+  assert.match(alertText(), /could not save/i);
+  assert.doesNotMatch(alertText(), RAW);
   saveBtn().click();
   await tick();
-  assert.equal(alertText(), 'epic: unknown epic · title: too long');
+  assert.equal(alertText(), 'Epic: unknown epic · Title: too long');
   closeForm();
+});
+
+// No write path prints the request: a removed task, a crashed server and a lost connection each get a sentence (I-2).
+test('edit: a 404, a 5xx, a network failure and a bare 409 each read as a sentence in the footer', async () => {
+  for (const [error, expected] of [
+    [httpError(404, 'PATCH /api/tasks/t-001 → 404: {"ok": false, "error": "task t-001 not found"}'), /no longer exists/],
+    [httpError(502, 'PATCH /api/tasks/t-001 → 502: <html>Bad gateway</html>'), /could not save/i],
+    [new TypeError('Failed to fetch'), /could not reach the server/i],
+    [refusal('stale'), /changed/],
+  ]) {
+    const api = makeApi({ patch: [error] });
+    openTaskEditModal({ store: makeStore(), api, task: TASK });
+    await tick();
+    type('title', 'My title');
+    saveBtn().click();
+    await until(() => alertText(), 'the footer message');
+    assert.match(alertText(), expected);
+    assert.doesNotMatch(alertText(), RAW);
+    assert.notEqual(alertText(), 'stale');
+    assert.equal(banner(), null);
+    closeForm();
+    await tick();
+  }
 });
 
 test('edit opens prefilled, marks the task as being edited, and releases it on close', async () => {
@@ -273,27 +304,27 @@ test('409 → dismissing the banner returns to the form: open, editable, still d
 });
 
 test('409 → a merged save that fails leaves the form open and editable with the reason', async () => {
-  const { api } = await conflicted({ patch: [stale(SERVER), new Error('Server down')] });
+  const { api } = await conflicted({ patch: [stale(SERVER), new TypeError('Failed to fetch')] });
   banner().querySelector('.cb-resolve').click();
   await tick();
   assert.equal(api.calls.length, 2);
   assert.equal(banner(), null);
   assert.ok(form());
-  assert.equal(alertText(), 'Server down');
+  assert.match(alertText(), /could not reach the server/i);
   assert.equal(control('title').disabled, false);
   assert.equal(saveBtn().disabled, false);
   closeForm();
 });
 
 test('409 → a merged save that fails never stores the fresh revision, so the next save is compared again instead of overwriting a "use server" pick (M2)', async () => {
-  const { store, api } = await conflicted({ patch: [stale(SERVER), new Error('Server down'), stale(SERVER)] });
+  const { store, api } = await conflicted({ patch: [stale(SERVER), new TypeError('Failed to fetch'), stale(SERVER)] });
   const row = [...banner().querySelectorAll('.cb-multi-row')].find((r) => r.querySelector('.cb-key').textContent === 'title');
   const useServer = row.querySelector('input[value="server"]');
   useServer.checked = true;
   fire(useServer, 'change');
   banner().querySelector('.cb-resolve').click();
   await tick();
-  assert.equal(alertText(), 'Server down');
+  assert.match(alertText(), /could not reach the server/i);
   assert.equal(store.log.some((l) => l.startsWith('etag')), false, 'the revision the failed write named is not remembered');
   saveBtn().click();
   await until(banner, 'the banner, asked again');

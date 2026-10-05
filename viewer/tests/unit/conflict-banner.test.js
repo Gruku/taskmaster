@@ -52,3 +52,16 @@ test('Use server button calls onUseServer and dismisses', () => {
   assert.equal(called, true);
   assert.equal(document.querySelector('.cb-banner'), null);
 });
+
+// The same emptiness the form uses: a field one side left blank and the other never set is not a difference (M-4).
+test('the full banner lists only real differences: null, "", [] and {} are one emptiness, maps compare by key', async () => {
+  const { showFullConflict } = await import('../../js/components/edit/conflict-banner.js');
+  const close = showFullConflict({
+    entityKind: 'task', entityId: 'e1-001',
+    localDraft: { title: 'mine', notes: '', anchors: [], docs: { a: '1', b: '2' }, branch: null },
+    currentValue: { title: 'theirs', notes: null, anchors: null, docs: { b: '2', a: '1' }, branch: {} },
+    currentEtag: 'x', onResolve: async () => {}, onDismiss: () => {},
+  });
+  assert.deepEqual([...document.querySelectorAll('.cb-multi-row .cb-key')].map((e) => e.textContent), ['title']);
+  close();
+});

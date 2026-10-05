@@ -4,6 +4,7 @@
 //   showFullConflict  — multi-field diff, used by entity-modal.js
 
 import { h } from '../../util/h.js';
+import { sameValue } from './same-value.js';
 
 const HOST_ID = 'conflict-banner-host';
 
@@ -60,7 +61,7 @@ export function showFullConflict({
   const allKeys = new Set([...Object.keys(localDraft || {}), ...Object.keys(currentValue || {})]);
   const decisions = {};
   for (const k of allKeys) {
-    if (JSON.stringify(localDraft?.[k] ?? null) === JSON.stringify(currentValue?.[k] ?? null)) continue;
+    if (sameValue(localDraft?.[k], currentValue?.[k])) continue;
     decisions[k] = 'mine'; // default to keeping local
   }
   const rows = h('div', { class: 'cb-rows' });

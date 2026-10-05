@@ -44,7 +44,7 @@ async function http(method, path, body, options = {}) {
     throw err;
   }
   if (resp.status === 422) {
-    const j = await resp.json();
+    const j = await resp.json().catch(() => ({}));
     const err = new Error('validation failed');
     err.code = 422;
     err.errors = j.errors || {};
@@ -52,7 +52,14 @@ async function http(method, path, body, options = {}) {
   }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    throw new Error(`${method} ${path} → ${resp.status}: ${text}`);
+    // The message is for the console. What the page says is worded from the status and the server's own reason.
+    const err = new Error(`${method} ${path} → ${resp.status}: ${text}`);
+    err.code = resp.status;
+    try {
+      const j = JSON.parse(text);
+      if (typeof j?.error === 'string') err.reason = j.error;
+    } catch { /* not JSON: there is no reason to give */ }
+    throw err;
   }
   const ctype = resp.headers.get('Content-Type') || '';
   if (ctype.includes('application/json')) {

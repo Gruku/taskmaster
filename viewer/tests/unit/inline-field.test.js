@@ -353,3 +353,55 @@ test('a save error\'s message clears when the next save succeeds', async () => {
     assert.equal(root.querySelector('.ef-text').textContent, 'newer');
   } finally { ctrl.destroy(); root.remove(); }
 });
+
+const until = async (ok) => { for (let i = 0; i < 200 && !ok(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); };
+
+// ── Errors in words (I-2) ──
+const httpError = (code, message) => Object.assign(new Error(message), { code });
+
+test('a server failure is described in a sentence beside the field, never as the raw request', async () => {
+  for (const [error, expected] of [
+    [httpError(500, 'PATCH /api/tasks/x-1 → 500: {"ok": false, "error": "KeyError"}'), /could not save/i],
+    [httpError(404, 'PATCH /api/tasks/x-1 → 404: {"ok": false, "error": "task x-1 not found"}'), /no longer exists/],
+    [Object.assign(new Error('validation failed'), { code: 422, errors: { title: 'too long' } }), /^Title: too long$/],
+  ]) {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const ctrl = mountInlineField(root, {
+      schema: SCHEMA, fieldKey: 'title', entity: { id: 'x-1', title: 'old' },
+      onSave: async () => { throw error; },
+    });
+    try {
+      root.querySelector('.ef-text').click();
+      const input = root.querySelector('input');
+      input.value = 'new';
+      input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+      await until(() => root.querySelector('.if-error')?.textContent);
+      const text = root.querySelector('.if-error').textContent;
+      assert.match(text, expected);
+      assert.doesNotMatch(text, /PATCH|\/api\/|→|\{/);
+      assert.equal(root.querySelector('.if-status-error').title, text);
+    } finally { ctrl.destroy(); root.remove(); }
+  }
+});
+
+test('an emptied field that was never set writes nothing: null, "" and [] are one emptiness (M-4)', async () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const saved = [];
+  // A renderer that hands back the raw text, with no coerce of its own to turn '' into null first.
+  const Raw = { read: TextField.read, edit: TextField.edit };
+  const ctrl = mountInlineField(root, {
+    schema: { entity: 'task', fields: [{ key: 'title', label: 'Title', renderer: Raw }] },
+    fieldKey: 'title', entity: { id: 'empty-1', title: null },
+    onSave: async (v) => { saved.push(v); },
+  });
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = '';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(saved, []);
+  } finally { ctrl.destroy(); root.remove(); }
+});

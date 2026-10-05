@@ -4,7 +4,8 @@
 import { h } from '../../util/h.js';
 import { fieldByKey, isSystemManaged } from './schema.js';
 import { store } from '../../store.js';
-import { lostRace } from './task-actions.js';
+import { describeWriteError, lostRace } from './write-errors.js';
+import { sameValue } from './same-value.js';
 
 const DEBOUNCE_MS = 600;
 let seq = 0;
@@ -191,7 +192,7 @@ export function mountInlineField(parent, {
         setStatus('error', 'Conflict — see banner');
         return false;
       }
-      setStatus('error', e.message || String(e));
+      setStatus('error', describeWriteError(e));
       return false;
     }
   }
@@ -208,10 +209,6 @@ export function mountInlineField(parent, {
       const x = h('span', { class: 'if-status-error', title: msg || 'save failed', 'aria-hidden': 'true' }, '✕');
       status.appendChild(x);
     }
-  }
-
-  function sameValue(a, b) {
-    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
   }
 
   return {

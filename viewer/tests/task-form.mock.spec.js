@@ -280,7 +280,8 @@ test('while saving the form says so, is disabled and cannot be closed; a server 
   await expect(dialog).toBeVisible();
   await expect(confirmBox(page)).toHaveCount(0);
   release();
-  await expect(dialog.locator('[role="alert"]')).toContainText('store is locked');
+  // The failure is said in words; the server's raw text and status stay in the console.
+  await expect(dialog.locator('[role="alert"]')).toHaveText('The server could not save this change. Try again in a moment.');
   await expect(save(dialog)).toBeEnabled();
   await expect(save(dialog)).toBeFocused();
   await expect(ctl(dialog, 'title')).toBeEnabled();
@@ -437,7 +438,8 @@ test('409: "Apply choices" is held while it writes; a merged save that fails ret
   await expect(banner.getByRole('button', { name: 'Dismiss' })).toBeDisabled();
   land();
   await expect(banner).toHaveCount(0);
-  await expect(dialog.locator('[role="alert"]')).toContainText('500');
+  await expect(dialog.locator('[role="alert"]')).toContainText('could not save this change');
+  await expect(dialog.locator('[role="alert"]')).not.toContainText('500');
   await expect(ctl(dialog, 'title')).toBeEnabled();
   await save(dialog).click();
   await expect(page.locator('#conflict-banner-host .cb-banner')).toBeVisible();

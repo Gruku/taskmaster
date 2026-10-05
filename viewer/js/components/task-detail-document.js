@@ -14,7 +14,7 @@ import { copyToClipboard } from '../lib/copy.js';
 import { assignEpicColors, epicColor, epicCssVar } from '../lib/epics.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
-import { lostRace } from './edit/task-actions.js';
+import { describeWriteError, lostRace } from './edit/write-errors.js';
 import { EstimateField } from './edit/fields/estimate-field.js';
 import { renderGatePipeline } from './gate-pipeline.js';
 import { renderMergeLadder } from './merge-status.js';
@@ -51,12 +51,13 @@ function inlineSave(taskId, fieldKey, ctx) {
   return async (newValue) => {
     try {
       await ctx.api.patchTask(taskId, { [fieldKey]: newValue });
-      // Refresh backlog so the change is reflected in store + other screens.
-      await ctx.store.refreshBoard(ctx.api);
     } catch (e) {
       if (lostRace(e)) throw e; // a lost race goes back to inline-field, which settles it from the conflict banner
-      return { error: e.message || String(e) };
+      return { error: describeWriteError(e) };
     }
+    // The write has landed. Refresh so other screens show it; a refresh that fails catches up on the next poll and
+    // never turns the saved change into a reported failure.
+    await Promise.resolve(ctx.store.refreshBoard(ctx.api)).catch(() => {});
   };
 }
 

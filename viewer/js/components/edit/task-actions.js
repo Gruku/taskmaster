@@ -3,19 +3,10 @@
 // User intent: what reaches the server is what the user changed and nothing else — a new task carries its defaults and
 // what was typed, an edit carries only the changed fields, and a write that lost a race is settled field by field.
 
-import { openEntityModal, sameValue } from './entity-modal.js';
+import { openEntityModal } from './entity-modal.js';
+import { sameValue } from './same-value.js';
+import { describeWriteError, lostRace } from './write-errors.js';
 import { taskSchema } from './forms/task-form.js';
-
-function describe(e) {
-  if (e && e.code === 422 && e.errors) {
-    return Object.entries(e.errors).map(([k, v]) => `${k}: ${v}`).join(' · ');
-  }
-  return e?.message || String(e);
-}
-
-// A 409 that names the revision the write lost to is a race to settle field by field. Any other 409 is the server
-// refusing the write (gates still open, a legacy layout): its reason is the answer, and there is nothing to merge.
-export const lostRace = (e) => e?.code === 409 && !!e.current_etag;
 
 // The write has landed; a board that fails to refresh now catches up on its next poll. The form must not stay open
 // over it, or a second Save would make the same write again.
@@ -35,7 +26,7 @@ export function openTaskCreateModal({ store, api, prefillEpic }) {
       try {
         await api.createTask(draft);
       } catch (e) {
-        return { error: describe(e) };
+        return { error: describeWriteError(e) };
       }
       await refresh(store, api);
     },
@@ -69,7 +60,7 @@ export function openTaskEditModal({ store, api, task }) {
             if (Object.keys(patch).length) await api.patchTask(task.id, patch, { ifMatch: e.current_etag });
             else store.setEtag?.(`task:${task.id}`, e.current_etag);
           } catch (err) {
-            done({ error: lostRace(err) ? 'The task changed again — save to compare once more' : describe(err) });
+            done({ error: lostRace(err) ? 'The task changed again — save to compare once more' : describeWriteError(err) });
             return;
           }
           await refresh(store, api);
@@ -91,7 +82,7 @@ export function openTaskEditModal({ store, api, task }) {
         if (Object.keys(changes).length) await api.patchTask(task.id, changes);
       } catch (e) {
         if (lostRace(e)) return { error: 'Conflict — see banner', wait: resolveConflict(e, changes) };
-        return { error: describe(e) };
+        return { error: describeWriteError(e) };
       }
       await refresh(store, api);
     },

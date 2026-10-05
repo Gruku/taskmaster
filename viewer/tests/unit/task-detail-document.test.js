@@ -562,3 +562,39 @@ test('an inline save the server refuses with a 409 is an error with its reason, 
     assert.equal(host.children.length, 0, 'no conflict banner');
   } finally { t.done(); host.remove(); }
 });
+
+// A save that landed is never reported as failed because the board refresh after it did not (M-3).
+test('an inline save that landed stays saved when the board refresh after it fails', async () => {
+  const store = { ...makeCtx().store, refreshBoard: async () => { throw new Error('GET /api/board → 503: down'); } };
+  const t = mount(FAKE_TASK, { store });
+  try {
+    t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    const select = t.root.querySelector('[data-field="status"] select');
+    select.value = 'in-progress';
+    select.dispatchEvent(new dom.window.Event('change'));
+    for (let i = 0; i < 100 && t.root.querySelector('[data-field="status"] select'); i++) await tick(5);
+    assert.deepEqual(t.ctx._patches.map((p) => p.patch), [{ status: 'in-progress' }]);
+    assert.equal(t.root.querySelector('[data-field="status"] select'), null, 'back to reading');
+    assert.equal(t.root.querySelector('[data-field="status"] .marker__word').textContent, 'In progress');
+    assert.equal(t.root.querySelector('[data-field="status"] .if-error').textContent, '');
+    assert.equal(t.root.querySelector('[data-field="status"] .if-status-error'), null);
+  } finally { t.done(); }
+});
+
+// The raw request never reaches the page (I-2).
+test('an inline save on a task that was removed says so in a sentence, not as the request', async () => {
+  const gone = Object.assign(new Error('PATCH /api/tasks/T-001 → 404: {"ok": false, "error": "task T-001 not found"}'), { code: 404 });
+  const api = { ...makeCtx().api, patchTask: async () => { throw gone; } };
+  const t = mount(FAKE_TASK, { api });
+  try {
+    t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    const select = t.root.querySelector('[data-field="status"] select');
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    const message = () => t.root.querySelector('[data-field="status"] .if-error').textContent;
+    for (let i = 0; i < 100 && !message(); i++) await tick(5);
+    assert.match(message(), /no longer exists/);
+    assert.doesNotMatch(message(), /PATCH|\/api\/|404|\{/);
+  } finally { t.done(); }
+});
+
