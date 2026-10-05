@@ -11,7 +11,8 @@ const CSS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'css')
 export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css', 'components/button.css', 'components/status.css',
   'components/edit-fields.css', 'components/markdown.css', 'components/entity-modal.css',
   'screens/task-detail.css', 'components/state.css', 'components/handover-status.css',
-  'components/rows.css', 'components/popover.css'];
+  'components/rows.css', 'components/popover.css',
+  'components/chips.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
