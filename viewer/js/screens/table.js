@@ -95,7 +95,7 @@ export async function mount(root, { store, api, prefs }) {
     if (had) search.focus();
   });
   // A row sized by its chips (Status, Priority) does not grow back by itself once chips are parked; a new rail width
-  // lays every row out again from its full set.
+  // lays every row out again from its full set. (overflowRow's JSDoc: a row's width must come from its container.)
   let railWidth = null;
   const railObserver = window.ResizeObserver ? new ResizeObserver((entries) => {
     const w = entries.at(-1).contentRect.width;

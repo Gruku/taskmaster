@@ -127,8 +127,14 @@ test('a pressed epic at zero, parked behind More, stays enabled and is announced
   await expect(page.locator('.tbl-row')).toHaveCount(TABLE_BOARD.tasks.length);
 });
 
-test('at 390×844 no chip row wraps', async ({ page }) => {
-  await boot(page, { width: 390, height: 844 });
+test('at 390×844 no chip row wraps and every rail control is a 44px touch target', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, table: { filters: { status: ['done'] } } });
+  await expect(page.getByRole('button', { name: 'Clear filters' })).toBeVisible();
+  const heights = await page.locator('.tbl-chips').evaluate((rail) => [...rail.querySelectorAll('.chip, .overflow-more, .tbl-clear')]
+    .filter((el) => !el.hidden).map((el) => ({ el: el.className, h: el.getBoundingClientRect().height })));
+  expect(heights.some((x) => x.el.includes('tbl-clear'))).toBe(true);
+  expect(heights.some((x) => x.el.includes('overflow-more'))).toBe(true);
+  expect(heights.filter((x) => x.h < 44)).toEqual([]);
   const rows = page.locator('.tbl-chips .chip-row');
   expect(await rows.count()).toBe(4);
   for (const row of await rows.all()) {
@@ -205,11 +211,16 @@ test('leaving the Table, even with More open, leaves no observer or font listene
   await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore + 4);
   await group(page, 'Epic').locator('.overflow-more').click();
   await expect(page.getByRole('dialog', { name: 'More Epic' })).toBeVisible();
+  // Live observers on the rail itself (the Table's own) and on each row's chips (overflowRow's).
+  const watching = () => page.evaluate(() => {
+    const on = (cls) => [...window.__live].filter((o) => o.__targets.some((t) => t.classList?.contains(cls))).length;
+    return { rail: on('tbl-chips'), rows: on('chip-row__chips') };
+  });
+  expect(await watching()).toEqual({ rail: 1, rows: 8 });   // each row: a ResizeObserver and a MutationObserver
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('.card-task').first()).toBeVisible();
   expect(await page.evaluate(() => window.__fonts)).toBe(fontsBefore);
-  const leftover = await page.evaluate(() => [...window.__live].filter((o) => o.__targets.some((t) => t.classList?.contains('chip-row__chips'))).length);
-  expect(leftover).toBe(0);
+  expect(await watching()).toEqual({ rail: 0, rows: 0 });
   await expect(page.locator('.popover')).toHaveCount(0);
   await expect(page.locator('.chip-row')).toHaveCount(0);
 });

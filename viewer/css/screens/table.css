@@ -21,6 +21,11 @@
 .tbl-chips > .chip-row:is([data-kind="epic"], [data-kind="area"]) { flex: 1 1 240px; min-width: 240px; }
 .tbl-chips > .chip-row[hidden] { display: none; }
 .tbl-clear { flex: 0 0 auto; margin-left: auto; }
+/* Touch target: the rail sits in the screen, out of reach of the topbar's own 44px rule; the child selector outranks
+   .btn--sm's 24px whatever order the sheets load in. */
+@media (max-width: 768px) {
+  .tbl-chips > .tbl-clear { min-height: 44px; }
+}
 
 .tbl-host {
   flex: 1 1 auto; min-height: 0;
