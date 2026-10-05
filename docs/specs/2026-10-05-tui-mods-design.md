@@ -85,8 +85,9 @@ Methods only, all async. Declared in `mods/rr-tui/types/index.d.ts` (`Rr`, `RrTo
 | `signal({ kind, word, detail? })` | Shape + word + optional detail: ● success, ▲ warning, ◆ critical, ⓘ info |
 | `row({ cells, emphasis? })` | One-line row of text cells with RR spacing |
 | `rule()` | A thin divider (`border-default`; `border-subtle` is invisible on overlay in dark) |
-| `button({ treatment, tone })` | Wrapper `Box` props (`backgroundColor` / `borderStyle` + `borderColor`, `paddingX`) for a consumer-drawn `Button` (§5.4) |
-| `keycap({ key, tone })` | Key letter on a solid tone block, as a finished Text tree |
+| `button({ treatment, tone, on? })` | Wrapper `Box` props (`backgroundColor` / `borderStyle` + `borderColor`, `paddingX`) for a consumer-drawn `Button` (§5.4) |
+| `buttonProps({ key? })` | Props for that `Button`: `{ plain: true, hotkey?, hover: { bold, color: foreground-bold } }`; the consumer adds `label` and `onPress` (§5.4) |
+| `keycap({ key, tone })` | Key letter on a solid tone block, as a finished Text tree — legends for keys with no button (`Esc close`) |
 | `chip({ text, tone, strength })` | Non-interactive state chip (`strength` 12 or 24) |
 
 `children` and `cells` are plain-data trees or strings, so a consumer can nest its own Buttons inside an `rr` surface.
@@ -110,14 +111,18 @@ Source of truth: the RR Design System artifact's `project/tokens.json`. A genera
 
 ### 5.4 Button treatments
 
-`Button` takes no colour, so colour comes from a wrapper `Box` around a `plain` Button (verified live 2026-10-05: tinted and bordered wrappers render, the button stays pressable). Rows of wrappers set `alignItems="flex-start"` so a bordered sibling doesn't stretch tinted ones to three rows. Each treatment has one job (user's choice from the probe, tunable in `/rr-gallery`):
+`Button` takes no colour, so colour comes from a wrapper `Box` around a `plain` Button (verified live 2026-10-05: tinted and bordered wrappers render, the button stays pressable). Rows of wrappers set `alignItems="flex-start"` so a bordered sibling doesn't stretch tinted ones to three rows.
+
+**Button recipe (decided live 2026-10-05, tuning rounds 2–3):** the whole chip is the button. Inside the keyed wrapper `Box` from `button()` sits ONE plain `Button` with `buttonProps({ key })`, so the engine draws `d: done` / `a: back to agent` (key in the engine's accent, label in the terminal's default foreground) and the whole surface presses; on hover the label turns bold `foreground-bold` (style only, no motion). The wrapper needs its own unique JSX `key` for hover to work. Rejected: key-only buttons with a separate bold RR label (only the key was clickable) and an absolute overlay over a blank Button (clicks don't reach the Button).
+
+Each treatment has one job:
 
 | Treatment | Job | Where |
 |---|---|---|
 | Outline (`round` border in the tone colour) | The single primary action of a card (`done`) | Panes only — 3 rows tall |
 | Chip 12% (tone `-subtle` composited on the ground) | Secondary actions (`back to agent`, `skip`, `open`) | Panes and band |
 | Chip 24% (double-strength tint) | States, not actions: `refused` critical, `confirm done?` warning, `signed off` success | Card status line |
-| Keycap (key letter, dark ink on solid tone) | Key legends (`d done  a back  s skip  o open`) | Pane footer, band hints |
+| Keycap (key letter, dark ink on solid tone) | Legends for keys that have no button (`Esc close`) | Pane footer |
 
 Tones: `success` done, `warning` back to agent / pending, `critical` refused, `signature` neutral navigation. Tone always travels with a word; survivalist renders all four by weight and border only.
 
@@ -128,7 +133,9 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 #### Tuning log
 
 - 2026-10-05: Panes paint their own ground — new surface level `page` (`bg-page` for the active polarity) on pane roots; the band still never paints. (Claude Code paints pane backgrounds itself, ~`#262626` in dark, lighter than `bg-page`, so unpainted RR surfaces stepped the wrong way and `overlay` vanished.)
-- 2026-10-05: Button labels can't be coloured (no colour prop on `Button`); the engine draws them in the terminal's default foreground. `/rr-gallery` shows three label variants (a chip, b `variant="primary"`, c `›` glyph button + our own `foreground-bold` label) for the user to pick.
+- 2026-10-05: Button labels can't be coloured (no colour prop on `Button`); the engine draws them in the terminal's default foreground. Round 1 compared three label variants; the user chose the tinted chip (A) everywhere.
+- 2026-10-05 (round 2): key shown in every button. A keycap Button + separate bold RR label was built, but only the key was clickable.
+- 2026-10-05 (round 3): whole-chip recipe chosen (§5.4): one plain Button with hotkey inside the treatment wrapper, bold on hover. An absolute overlay over a blank Button was tried and does not press. Keycaps stay only as legends for keys without a button.
 - 2026-10-05: Survivalist chip buttons get a value-only ground one surface step from the ground they sit on, so they read as buttons without hue. "Hue-free" means channels within 2: survivalist keeps RR's warm D2 temperature.
 - 2026-10-05: `classic.SessionStart` can fire before a session is bound (`$.config.list` unavailable); it never throws and leaves the publish to `session.start`.
 - 2026-10-05: Verified live: under `auto`, `/theme` → light switches the gallery to light.
@@ -145,14 +152,14 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 ```
 TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pass
       IN PROGRESS → next: record merge
-▲ 16 waiting on you   1 review   2 handovers
+▲ 16 waiting on you   1: review   2: handovers
 ```
 
 - Task row: shown only while this session is bound to a task (§6.3). Second line = status + next outstanding gate (from `backlog_task_pipeline`).
 - When the bound task is `in-review`, the row becomes:
   ```
   REVIEW  tm-audit-030  waiting on you: <human_action, truncated>
-          [d done] [a back to agent]
+          d: done   a: back to agent      (chips; whole chip presses)
   ```
   `d`/`a` work when the band has focus; same actions as the queue (§6.2).
 - Needs-you line: shown when the review count > 0 or open decisions exist; open decisions count in "waiting on you". `1` (digit hotkey, works from an empty prompt without focus) opens the review queue; `2` opens handovers. How the band gets keyboard focus for letter keys is engine-defined (Ctrl+X Tab or click).
@@ -170,7 +177,8 @@ FULL · review-gate:pass · no branch
 Live check on dev (needs unifiedChatGenerate + unifiedChatBuild granted):
 first unified message stays on intent/brief and does not build; …
 ─────────────────────────────────────────────
-d done   a back to agent   s skip   o open in prompt   Esc close
+(d: done)  a: back to agent  s: skip  o: open in prompt     Esc close
+(`d: done` is the round outline primary; the others are chips; `Esc close` is a keycap legend)
 ```
 
 - Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
