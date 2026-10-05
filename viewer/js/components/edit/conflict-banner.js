@@ -40,10 +40,10 @@ export function showFieldConflict({
       ]),
     ]),
     h('div', { class: 'cb-actions' }, [
-      h('button', { type: 'button', class: 'cb-use-server',
+      h('button', { type: 'button', class: 'cb-use-server btn btn--secondary',
                     on: { click: () => { onUseServer(); dismiss(banner); } } },
         'Use server'),
-      h('button', { type: 'button', class: 'cb-keep-mine',
+      h('button', { type: 'button', class: 'cb-keep-mine btn btn--primary',
                     on: { click: async () => { await onKeepMine(); dismiss(banner); } } },
         'Keep mine'),
     ]),
@@ -85,9 +85,9 @@ export function showFullConflict({
     rows,
     h('div', { class: 'cb-actions' }, [
       // Stepping back is always possible: the form behind keeps the edits and can be saved again.
-      h('button', { type: 'button', class: 'cb-dismiss',
+      h('button', { type: 'button', class: 'cb-dismiss btn btn--secondary',
                     on: { click: () => { dismiss(banner); onDismiss?.(); } } }, 'Dismiss'),
-      h('button', { type: 'button', class: 'cb-resolve',
+      h('button', { type: 'button', class: 'cb-resolve btn btn--primary',
                     on: { click: async () => {
                       const merged = { ...currentValue };
                       for (const [k, choice] of Object.entries(decisions)) {

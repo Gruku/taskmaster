@@ -53,6 +53,26 @@ test('Use server button calls onUseServer and dismisses', () => {
   assert.equal(document.querySelector('.cb-banner'), null);
 });
 
+// The banner's buttons are the shared buttons: the accent fill carries its own readable text colour in both themes.
+test('the banner buttons are the shared primary and secondary buttons', async () => {
+  const { showFullConflict } = await import('../../js/components/edit/conflict-banner.js');
+  const classes = (sel) => document.querySelector(sel).className.split(' ').sort();
+  const close = showFieldConflict({
+    entityKind: 'task', entityId: 'e1-001', fieldKey: 'title', fieldLabel: 'Title',
+    localValue: 'a', currentValue: 'b', currentEtag: 'x', onKeepMine: async () => {}, onUseServer: () => {},
+  });
+  assert.deepEqual(classes('.cb-keep-mine'), ['btn', 'btn--primary', 'cb-keep-mine']);
+  assert.deepEqual(classes('.cb-use-server'), ['btn', 'btn--secondary', 'cb-use-server']);
+  close();
+  const closeFull = showFullConflict({
+    entityKind: 'task', entityId: 'e1-001', localDraft: { title: 'a' }, currentValue: { title: 'b' },
+    currentEtag: 'x', onResolve: async () => {}, onDismiss: () => {},
+  });
+  assert.deepEqual(classes('.cb-resolve'), ['btn', 'btn--primary', 'cb-resolve']);
+  assert.deepEqual(classes('.cb-dismiss'), ['btn', 'btn--secondary', 'cb-dismiss']);
+  closeFull();
+});
+
 // The same emptiness the form uses: a field one side left blank and the other never set is not a difference (M-4).
 test('the full banner lists only real differences: null, "", [] and {} are one emptiness, maps compare by key', async () => {
   const { showFullConflict } = await import('../../js/components/edit/conflict-banner.js');

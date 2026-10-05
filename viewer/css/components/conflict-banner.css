@@ -17,12 +17,8 @@
 .cb-multi-actions { display: flex; gap: 12px; margin-left: auto; }
 .cb-radio { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
 .cb-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.cb-actions button {
-  font: inherit; padding: 4px 12px; border-radius: 3px; cursor: pointer;
-  border: 1px solid var(--border);
-}
-.cb-keep-mine, .cb-resolve { background: var(--accent); color: white; border-color: var(--accent); }
-.cb-use-server, .cb-dismiss { background: transparent; color: var(--ink-2); }
+/* The buttons are the shared .btn--primary / .btn--secondary, whose text holds contrast in both themes; the full
+   banner restyle is plan 2b's. */
 
 /* ---- Mobile (< 768px) — above modal, vertical-stack rows ---- */
 @media (max-width: 768px) {
@@ -61,10 +57,8 @@
   .cb-actions {
     flex-wrap: wrap;
   }
-  .cb-actions button {
+  .cb-actions .btn {
     flex: 1;
-    text-align: center;
-    padding: 8px 12px;
     min-height: 44px;
   }
 }
