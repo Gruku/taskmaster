@@ -27,3 +27,13 @@ export function widthOf(n: unknown): number {
   const gap = num(p.columnGap ?? p.gap)
   return frame + widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1)
 }
+
+/** Every element in the tree, outermost first. */
+export function elementsOf(n: unknown): Drawn[] {
+  if (!isEl(n)) return []
+  return [n, ...(n.children ?? []).flatMap(elementsOf)]
+}
+
+/** The keys of an element's direct children. */
+export const childKeys = (n: Drawn): string[] =>
+  (n.children ?? []).flatMap(c => (isEl(c) && typeof c.props?.key === 'string' ? [c.props.key] : []))

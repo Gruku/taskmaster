@@ -8,7 +8,9 @@ export const RR_STUB: Plugin = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const tone = { success: '#3a9a5b', warning: '#c4881d', critical: '#d14343', info: '#5b8fc7', signature: '#8a9eeb' }
+      const strong = { success: '#1f5f35', warning: '#7a5410', critical: '#7d2525', info: '#2f557d', signature: '#4a5590' }
       const tint = { page: tone, raised: tone, overlay: tone }
+      const tint24 = { page: strong, raised: strong, overlay: strong }
       const glyph = { success: '●', warning: '▲', critical: '◆', info: 'ⓘ', signature: '' }
       const keycap = { bg: '#8a9eeb', ink: '#0d0d0c' }
       const text = (s: string) => h('Text', {}, s) as never
@@ -23,7 +25,7 @@ export const RR_STUB: Plugin = {
             signatureText: '#8a9eeb',
             tone,
             tint12: tint,
-            tint24: tint,
+            tint24,
             keycap: { success: keycap, warning: keycap, critical: keycap, info: keycap, signature: keycap },
           }),
           polarity: async () => 'dark' as const,
@@ -36,7 +38,7 @@ export const RR_STUB: Plugin = {
           button: async a =>
             a.treatment === 'outline'
               ? { borderStyle: 'round' as const, borderColor: tone[a.tone], paddingX: 1 }
-              : { backgroundColor: tone[a.tone], paddingX: 1 },
+              : { backgroundColor: (a.strength === 24 ? strong : tone)[a.tone], paddingX: 1 },
           buttonProps: async a => ({ plain: true as const, ...(a.key === undefined ? {} : { hotkey: a.key }), hover: { bold: true as const, color: '#f5f3ed' } }),
           keycap: async a => text(` ${a.key} `),
           chip: async a => text(` ${glyph[a.tone]} ${a.text} `),

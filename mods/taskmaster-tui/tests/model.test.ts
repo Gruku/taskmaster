@@ -9,14 +9,22 @@ import {
   cardMode,
   cardPosition,
   FRESH_CURSOR,
+  gateSignal,
   handoverCopyText,
   handoverPath,
   oneLine,
+  isStaleTicks,
   orderQueue,
+  queueDots,
   reviewQueue,
+  splitCheck,
   stageLine,
+  ticksOf,
+  toggleTick,
   truncate,
+  wrapText,
 } from '../hooks/model'
+import { DEMO_DETAILS } from '../hooks/demo'
 import type { TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 
 const task = (id: string, priority: 'critical' | 'high' | 'medium' | 'low'): TmQueueItem => ({
@@ -169,5 +177,74 @@ describe('text', () => {
     expect(handoverCopyText({ id: 'h1', created: '', tldr: 'Shipped it', nextAction: 'Record merge', path: '/p/h1.md' })).toBe(
       'Shipped it\n\nNext: Record merge\n\n/p/h1.md',
     )
+  })
+})
+
+describe('review card', () => {
+  test('the demo check: a leading label with its parenthetical, then ; clauses', () => {
+    expect(splitCheck(DEMO_DETAILS['unified-chat-022']!.humanAction)).toEqual({
+      label: 'Live check on dev',
+      detail: 'needs unifiedChatGenerate + unifiedChatBuild granted',
+      items: ['first unified message stays on intent/brief and does not build', 'second message builds with the full toolset'],
+    })
+  })
+
+  test('bullet and numbered lines are the items; an intro label labels them; continuation lines join the item above', () => {
+    expect(splitCheck('Check on dev:\n- the band shows\n  the task\n* the pane opens\n• copy works')).toEqual({
+      label: 'Check on dev',
+      detail: '',
+      items: ['the band shows the task', 'the pane opens', 'copy works'],
+    })
+    expect(splitCheck('Run these first, carefully\n1. build\n2) deploy')).toEqual({ label: '', detail: 'Run these first, carefully', items: ['build', 'deploy'] })
+  })
+
+  test('no list and no label: the whole text is one item; ; without a label never splits; a URL is no label', () => {
+    expect(splitCheck('Open the viewer and confirm one open handover per thread.')).toEqual({
+      label: '',
+      detail: '',
+      items: ['Open the viewer and confirm one open handover per thread.'],
+    })
+    expect(splitCheck('do a; then b').items).toEqual(['do a; then b'])
+    expect(splitCheck('https://example.com/x should load').items).toEqual(['https://example.com/x should load'])
+    expect(splitCheck('Smoke: it boots').items).toEqual(['it boots'])
+    expect(splitCheck('   ')).toEqual({ label: '', detail: '', items: [] })
+  })
+
+  test('more than nine items are all kept (only the first nine get digit keys)', () => {
+    const text = Array.from({ length: 12 }, (_, i) => `- item ${i + 1}`).join('\n')
+    expect(splitCheck(text).items).toHaveLength(12)
+  })
+
+  test('wrapping keeps every word and never passes the width', () => {
+    const lines = wrapText('first unified message stays on intent/brief and does not build', 20)
+    expect(lines.join(' ')).toBe('first unified message stays on intent/brief and does not build')
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(20)
+    expect(wrapText('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+    expect(wrapText('', 10)).toEqual([])
+  })
+
+  test('queue dots: done and current filled, ahead hollow, capped with +N', () => {
+    expect(queueDots(1, 5)).toBe('●○○○○')
+    expect(queueDots(3, 5)).toBe('●●●○○')
+    expect(queueDots(2, 355)).toBe('●●○○○○○○○○+345')
+    expect(queueDots(12, 15)).toBe('●●●●●●●●●●+5')
+  })
+
+  test('the gate signal reads the gate and its state', () => {
+    expect(gateSignal('review-gate:pass')).toEqual({ kind: 'success', word: 'review-gate pass' })
+    expect(gateSignal('review-gate:fail')).toEqual({ kind: 'critical', word: 'review-gate fail' })
+    expect(gateSignal('spec-review:pending')).toEqual({ kind: 'warning', word: 'spec-review pending' })
+    expect(gateSignal('')).toBeNull()
+  })
+
+  test('ticks: tolerant read, toggle, and 30-day staleness', () => {
+    const now = Date.parse('2026-10-06T12:00:00Z')
+    expect(ticksOf({ at: now, items: ['a', 3, 'b'] })).toEqual(['a', 'b'])
+    expect(ticksOf('junk')).toEqual([])
+    expect(toggleTick(['a'], 'b')).toEqual(['a', 'b'])
+    expect(toggleTick(['a', 'b'], 'a')).toEqual(['b'])
+    expect(isStaleTicks({ at: now - 31 * 86_400_000, items: [] }, now)).toBe(true)
+    expect(isStaleTicks({ at: now - 86_400_000, items: [] }, now)).toBe(false)
+    expect(isStaleTicks('junk', now)).toBe(true)
   })
 })

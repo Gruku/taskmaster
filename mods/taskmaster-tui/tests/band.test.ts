@@ -136,7 +136,7 @@ describe('band', () => {
     expect(world.opened).toEqual(['tm-review'])
     const review = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review'), surface: 'terminal' })
     expect(await review.find({ type: 'Text', text: 'far-001' })).toBeDefined()
-    expect(await review.find({ type: 'Text', text: 'Check the far task' })).toBeDefined()
+    expect(await review.find({ text: 'Check the far task' })).toBeDefined()
     await review.input({ key: 'note', text: 'not yet' })
     expect(world.fills).toEqual(['Back to far-001: not yet'])
   })

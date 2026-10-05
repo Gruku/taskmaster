@@ -11,13 +11,16 @@ import {
   cardMode,
   cardPosition,
   dateOf,
-  metaLine,
+  gateSignal,
   oneLine,
   PRIORITY_GLYPH,
   PRIORITY_TONE,
   PRIORITY_WORD,
+  queueDots,
   reviewQueue,
+  splitCheck,
   truncate,
+  wrapText,
 } from './model'
 import type { Rr, RrNode, RrTokens, RrTone, RrTreatment } from './rr'
 
@@ -55,13 +58,15 @@ type ChipSpec = {
   readonly onPress: (e: UiPressArgument) => void
   readonly hotkey?: string
   readonly autoFocus?: boolean
+  /** 24: the strong chip, a card's one primary (`done`). */
+  readonly strength?: 12 | 24
 }
 
 /** RR's button recipe: the treatment's keyed wrapper Box around ONE plain Button, so the whole chip presses (spec §5.4). */
 async function chip(ui: Ui, rr: Rr, c: ChipSpec): Promise<Piece> {
   const { Box, Button } = ui
   const [wrap, press] = await Promise.all([
-    rr.button({ treatment: c.treatment, tone: c.tone }),
+    rr.button(c.strength === 24 ? { treatment: c.treatment, tone: c.tone, strength: 24 } : { treatment: c.treatment, tone: c.tone }),
     rr.buttonProps(c.hotkey === undefined ? {} : { key: c.hotkey }),
   ])
   const focus = c.autoFocus === true ? { autoFocus: true as const } : {}
@@ -105,18 +110,39 @@ function chipRow(ui: Ui, children: readonly RenderNode[]): RenderNode {
   )
 }
 
-/** The legend for the one key with no button of its own. */
-async function escLegend(ui: Ui, rr: Rr, t: RrTokens): Promise<Piece> {
-  const { Box, Text } = ui
-  return {
-    el: (
-      <Box flexDirection="row" columnGap={1}>
-        {node(await rr.keycap({ key: 'Esc', tone: 'signature' }))}
-        <Text color={t.fg.subtle}>close</Text>
-      </Box>
-    ),
-    width: 5 + 1 + 5,
+/** The one key with no button of its own, as plain dim text (decided live 2026-10-06; no keycap). */
+function escHint(ui: Ui, t: RrTokens): Piece {
+  const { Text } = ui
+  return { el: <Text color={t.fg.subtle}>esc close</Text>, width: 'esc close'.length }
+}
+
+/**
+ * Lays chips out in rows of `width`, wrapping rather than dropping; to stay within two rows it may drop up to `optional`
+ * trailing chips, the last first.
+ */
+function chipRows(ui: Ui, pieces: readonly Piece[], width: number, optional: number): RenderNode[] {
+  const pack = (all: readonly Piece[]): Piece[][] => {
+    const rows: Piece[][] = []
+    let used = 0
+    for (const piece of all) {
+      const row = rows[rows.length - 1]
+      if (row !== undefined && used + 1 + piece.width <= width) {
+        row.push(piece)
+        used += 1 + piece.width
+      } else {
+        rows.push([piece])
+        used = piece.width
+      }
+    }
+    return rows
   }
+  let kept = [...pieces]
+  let rows = pack(kept)
+  for (let dropped = 0; dropped < optional && rows.length > 2; dropped += 1) {
+    kept = kept.slice(0, -1)
+    rows = pack(kept)
+  }
+  return rows.map(row => chipRow(ui, row.map(p => p.el)))
 }
 
 function cardBadge(t: RrTokens, item: TmQueueItem): { glyph: string; word: string; color: string } {
@@ -220,7 +246,7 @@ export async function bandTree(
       rows.push(chipRow(ui, fits ? [question, pair.el] : [pair.el, question]))
     } else if (task.review) {
       const [done, back] = await Promise.all([
-        chip(ui, rr, { id: 'band-done', hotkey: 'd', label: 'done', treatment: 'chip', tone: 'success', onPress: () => on.askDone(task.id) }),
+        chip(ui, rr, { id: 'band-done', hotkey: 'd', label: 'done', treatment: 'chip', tone: 'success', strength: 24, onPress: () => on.askDone(task.id) }),
         chip(ui, rr, { id: 'band-back', hotkey: 'a', label: 'back to agent', treatment: 'chip', tone: 'warning', onPress: () => on.sendBack(task.id) }),
       ])
       let refused: Piece | null = null
@@ -289,6 +315,9 @@ export type ReviewView = {
   cursor: TmCursor
   details: Readonly<Record<string, TmTaskDetail>>
   now: number
+  /** The ticked check items of a task (local UI state, never Taskmaster's). */
+  ticks: (taskId: string) => Promise<readonly string[]>
+  detailsOpen: boolean
 }
 
 export type ReviewHandlers = {
@@ -299,10 +328,65 @@ export type ReviewHandlers = {
   sendBack: (id: string, note: string) => void
   skip: (id: string) => void
   fill: (text: string) => void
+  toggleTick: (id: string, item: string) => void
+  toggleDetails: () => void
+  openViewer: (id: string) => void
+  copyCheck: (id: string, text: string, surface: RenderSurface) => void
+}
+
+/** `done <id>?` in `room` cells of chip text: the id shortens to MIN_ID, never away; the word goes before it does. */
+function namedAsk(id: string, room: number): string {
+  const least = Math.min(MIN_ID, id.length)
+  const prefix = room - 'done '.length - 1 >= least ? 'done ' : ''
+  return `${prefix}${truncate(id, Math.max(least, room - prefix.length - 1))}?`
+}
+
+/** The strip above the card: REVIEW, the queue as dots, position and tally, and `esc close` at the right edge. */
+async function headerStrip(ui: Ui, rr: Rr, t: RrTokens, n: number, total: number, done: number, width: number): Promise<RenderNode> {
+  const { Box, Text } = ui
+  const title = { el: node(await rr.label({ text: 'review' })), width: 'review'.length }
+  const esc = escHint(ui, t)
+  const dots = queueDots(n, total)
+  const at = [`${n} of ${total} · ${done} done this pass`, `${n} of ${total} · ${done} done`, `${n}/${total}`]
+  // Gives way right to left: the dots, then esc close, then the tally shortens.
+  const room = (withDots: boolean, withEsc: boolean) =>
+    width - title.width - 2 - (withDots ? dots.length + 2 : 0) - (withEsc ? esc.width + 2 : 0)
+  const showDots = (at[0] ?? '').length <= room(true, true)
+  const showEsc = at.some(a => a.length <= room(false, true))
+  const pos = at.find(a => a.length <= room(showDots, showEsc)) ?? truncate(at[at.length - 1] ?? '', room(false, false))
+  return (
+    <Box flexDirection="row">
+      <Box flexDirection="row" columnGap={2}>
+        {title.el}
+        {showDots ? <Text color={t.signatureText}>{dots}</Text> : null}
+        <Text color={t.fg.subtle}>{pos}</Text>
+      </Box>
+      <Box flexGrow={1} />
+      {showEsc ? (
+        <Box flexDirection="row" paddingLeft={2}>
+          {esc.el}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/** Wrapped lines in one colour: a card never draws a line wider than its room. */
+function lines(ui: Ui, color: string, text: string, width: number, indent = 0): RenderNode[] {
+  const { Text, Box } = ui
+  return wrapText(text, width - indent).map(line =>
+    indent === 0 ? (
+      <Text color={color}>{line}</Text>
+    ) : (
+      <Box paddingLeft={indent}>
+        <Text color={color}>{line}</Text>
+      </Box>
+    ),
+  )
 }
 
 export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderElement> {
-  const { Box, Text, Input } = ui
+  const { Box, Text, Button, Input } = ui
   const t = await rr.tokens()
   const title = node(await rr.label({ text: 'review' }))
   if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot)
@@ -313,36 +397,137 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
     return paneRoot(ui, rr, [title, node(await rr.signal({ kind: 'success', word: 'Queue clear', detail: tally }))])
   }
   const inner = Math.max(10, width - 2)
-  const rule = node(await rr.rule({ width: inner }))
-  const age = ageLabel(item.timestamp, v.now)
-  const badge = cardBadge(t, item)
+  const raised = await rr.surfaceProps({ level: 'raised' })
+  const room = Math.max(8, inner - 2 * (raised.paddingX ?? 0) - 2)
   const detail = item.kind === 'task' ? v.details[item.id] : undefined
-  const meta =
-    item.kind === 'task' ? (detail ? metaLine(detail, true) : 'loading details…') : item.kind === 'issue' ? `${item.severity} issue · open` : 'open decision'
-  const body =
-    item.kind === 'task'
-      ? item.humanAction || detail?.humanAction || '(no human_action recorded)'
+  const isTask = item.kind === 'task'
+  const action = item.kind === 'task' ? item.humanAction || detail?.humanAction || '' : ''
+  const check = splitCheck(action)
+  const ticked = isTask ? await v.ticks(item.id) : []
+  const mode = isTask ? cardMode(v.cursor, item) : 'card'
+
+  // Header line: priority glyph + word, id, age, lane, gate; it gives way from the right, and the word goes before the id
+  // shortens.
+  const badge = cardBadge(t, item)
+  const age = ageLabel(item.timestamp, v.now)
+  const fullBadge = `${badge.glyph} ${badge.word.toUpperCase()}`
+  const badgeText = fullBadge.length + 1 + item.id.length <= room ? fullBadge : badge.glyph
+  const idText = truncate(item.id, Math.max(Math.min(MIN_ID, item.id.length), room - badgeText.length - 1))
+  const gate = detail ? gateSignal(detail.gateState) : null
+  const lane = detail ? detail.lane.toUpperCase() || 'NO LANE' : 'loading…'
+  const headPieces: (Piece | null)[] = [
+    { el: <Text color={badge.color}>{badgeText}</Text>, width: badgeText.length },
+    {
+      el: (
+        <Text color={t.fg.bold} bold>
+          {idText}
+        </Text>
+      ),
+      width: idText.length,
+    },
+    age !== '' ? { el: <Text color={t.fg.subtle}>{`· ${age}`}</Text>, width: age.length + 2 } : null,
+    isTask ? { el: <Text color={t.fg.subtle}>{`· ${lane}`}</Text>, width: lane.length + 2 } : null,
+    gate !== null
+      ? {
+          el: (
+            <Box flexDirection="row" columnGap={1}>
+              <Text color={t.fg.subtle}>·</Text>
+              {node(await rr.signal({ kind: gate.kind, word: gate.word }))}
+            </Box>
+          ),
+          width: 2 + signalWidth(gate.word),
+        }
+      : null,
+  ]
+  const head = (
+    <Box flexDirection="row" columnGap={1}>
+      {fit(headPieces, room, 1)}
+    </Box>
+  )
+
+  // The check: a section label with its dim detail, then one tickable item per line (digit keys for the first nine).
+  const body: RenderNode[] = []
+  if (isTask && check.items.length > 0) {
+    if (check.label !== '') {
+      const label = truncate(check.label, room)
+      const left = room - label.length - 2
+      body.push(
+        <Box flexDirection="row" columnGap={2}>
+          {node(await rr.label({ text: label }))}
+          {check.detail !== '' && left >= MIN_TEXT ? <Text color={t.fg.subtle}>{truncate(check.detail, left)}</Text> : null}
+        </Box>,
+      )
+      if (check.detail !== '' && left < MIN_TEXT) body.push(...lines(ui, t.fg.subtle, check.detail, room))
+    } else if (check.detail !== '') {
+      body.push(...lines(ui, t.fg.subtle, check.detail, room))
+    }
+    const rowProps = await Promise.all(check.items.map((_, i) => rr.buttonProps(i < 9 ? { key: String(i + 1) } : {})))
+    check.items.forEach((entry, i) => {
+      const press = rowProps[i]
+      if (press === undefined) return
+      const lead = (press.hotkey === undefined ? 0 : press.hotkey.length + 2) + 2
+      const wrapped = wrapText(entry, room - lead)
+      const mark = ticked.includes(entry) ? '☑' : '☐'
+      body.push(
+        <Box key={`tick-${i}-box`} flexDirection="column">
+          <Button key={`tick-${i}`} {...press} label={`${mark} ${wrapped[0] ?? ''}`} onPress={() => on.toggleTick(item.id, entry)} />
+          {wrapped.slice(1).map(line => (
+            <Box paddingLeft={lead}>
+              <Text color={t.fg.default}>{line}</Text>
+            </Box>
+          ))}
+        </Box>,
+      )
+    })
+  } else {
+    const text = isTask
+      ? '(no human_action recorded)'
       : item.kind === 'issue'
         ? 'An open P0/P1 issue: look at it with the agent.'
         : 'An open decision: resolve it with the decision skill (taskmaster:decision).'
-  const openText = item.kind === 'decision' ? `Resolve decision ${item.id} with the taskmaster:decision skill` : `Look at ${item.id}`
-  const refusal =
-    v.cursor.refusal !== '' && v.cursor.currentId === item.id ? (
-      <Box flexDirection="column">
-        {node(await rr.chip({ text: 'refused', tone: 'critical', strength: 24 }))}
-        <Text color={t.fg.default} wrap="wrap">
-          {v.cursor.refusal}
-        </Text>
-      </Box>
-    ) : null
-  const mode = item.kind === 'task' ? cardMode(v.cursor, item) : 'card'
-  const esc = await escLegend(ui, rr, t)
+    body.push(...lines(ui, isTask ? t.fg.subtle : t.fg.default, text, room))
+  }
+
+  // Details on demand: branch / PR, notes, links.
+  const more: RenderNode[] = []
+  if (isTask) {
+    const press = await rr.buttonProps({ key: 'i' })
+    more.push(
+      <Box key="details-box" flexDirection="row" marginTop={1}>
+        <Button key="details" {...press} label={`${v.detailsOpen ? '▾' : '▸'} details`} onPress={on.toggleDetails} />
+      </Box>,
+    )
+    if (v.detailsOpen) {
+      if (detail === undefined) more.push(<Text color={t.fg.subtle}>loading details…</Text>)
+      else {
+        const facts = [
+          `branch: ${detail.branch || 'no branch'}`,
+          ...(detail.pr ? [`PR: ${detail.pr}`] : []),
+          ...(detail.notes ?? []).map(note => `note: ${note}`),
+          ...(detail.links ?? []).map(link => `link: ${link}`),
+        ]
+        for (const fact of facts) more.push(...lines(ui, t.fg.subtle, fact, room, 2))
+      }
+    }
+  }
+
+  const refusal: RenderNode[] =
+    v.cursor.refusal !== '' && v.cursor.currentId === item.id
+      ? [node(await rr.chip({ text: 'refused', tone: 'critical', strength: 24 })), ...lines(ui, t.fg.default, v.cursor.refusal, room)]
+      : []
+
+  // Beneath the card: the one action row, or the confirm / note row that replaces it.
   let actions: RenderNode[]
   if (mode === 'confirm') {
     const pair = await confirmPair(ui, rr, 'confirm', () => on.confirmDone(item.id), on.cancel)
-    const ask = { el: node(await rr.chip({ text: 'confirm done?', tone: 'warning', strength: 24 })), width: stateChipWidth('confirm done?', 'warning') }
-    // One row when the question and the pair fit; otherwise the question above and the pair (first, so always kept) below.
-    actions = ask.width + 1 + pair.width <= inner ? [chipRow(ui, fit([ask, pair, esc], inner, 1))] : [ask.el, chipRow(ui, fit([pair, esc], inner, 1))]
+    const open = check.items.filter(entry => !ticked.includes(entry)).length
+    const n = check.items.length
+    const asks =
+      open > 0 ? [`${open} of ${n} unchecked — done anyway?`, `${open}/${n} unchecked — done?`, `${open}/${n} unchecked?`] : [namedAsk(item.id, inner - 4)]
+    const ask = asks.find(a => stateChipWidth(a, 'warning') <= inner) ?? asks[asks.length - 1] ?? namedAsk(item.id, inner - 4)
+    const question = { el: node(await rr.chip({ text: ask, tone: 'warning', strength: 24 })), width: stateChipWidth(ask, 'warning') }
+    // One row when the question and the pair fit; otherwise the question above and the pair below: never y without n.
+    actions = question.width + 1 + pair.width <= inner ? [chipRow(ui, [question.el, pair.el])] : [question.el, chipRow(ui, [pair.el])]
   } else if (mode === 'note') {
     const cancel = await chip(ui, rr, { id: 'note-cancel', label: 'cancel', treatment: 'chip', tone: 'signature', onPress: on.cancel })
     actions = [
@@ -354,46 +539,47 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
         autoFocus
         onSubmit={value => on.sendBack(item.id, value)}
       />,
-      chipRow(ui, fit([cancel, esc], inner, 1)),
+      chipRow(ui, [cancel.el]),
     ]
   } else {
-    const pieces = await Promise.all([
-      item.kind === 'task'
-        ? chip(ui, rr, { id: 'done', hotkey: 'd', label: 'done', treatment: 'outline', tone: 'success', onPress: () => on.askDone(item.id) })
-        : null,
-      item.kind === 'task'
-        ? chip(ui, rr, { id: 'back', hotkey: 'a', label: 'back to agent', treatment: 'chip', tone: 'warning', onPress: () => on.askNote(item.id) })
-        : null,
+    const openText = item.kind === 'decision' ? `Resolve decision ${item.id} with the taskmaster:decision skill` : `Look at ${item.id}`
+    const taskOnly = isTask
+      ? await Promise.all([
+          chip(ui, rr, { id: 'done', hotkey: 'd', label: 'done', treatment: 'chip', tone: 'success', strength: 24, onPress: () => on.askDone(item.id) }),
+          chip(ui, rr, { id: 'back', hotkey: 'a', label: 'back to agent', treatment: 'chip', tone: 'warning', onPress: () => on.askNote(item.id) }),
+        ])
+      : []
+    const always = await Promise.all([
       chip(ui, rr, { id: 'skip', hotkey: 's', label: 'skip', treatment: 'chip', tone: 'signature', onPress: () => on.skip(item.id) }),
       chip(ui, rr, { id: 'open', hotkey: 'o', label: 'open in prompt', treatment: 'chip', tone: 'signature', onPress: () => on.fill(openText) }),
     ])
-    const buttons = pieces.filter((p): p is Piece => p !== null)
-    const together = buttons.reduce((sum, p) => sum + p.width, 0) + buttons.length + esc.width
-    // Esc close joins the buttons' row when it fits there; otherwise it takes its own row beneath them.
-    actions = together <= inner ? [chipRow(ui, [...buttons.map(p => p.el), esc.el])] : [chipRow(ui, buttons.map(p => p.el)), esc.el]
+    const extras = isTask
+      ? await Promise.all([
+          chip(ui, rr, { id: 'viewer', hotkey: 'v', label: 'viewer', treatment: 'chip', tone: 'signature', onPress: () => on.openViewer(item.id) }),
+          chip(ui, rr, {
+            id: 'copy',
+            hotkey: 'c',
+            label: 'copy',
+            treatment: 'chip',
+            tone: 'signature',
+            onPress: press => on.copyCheck(item.id, action, press.surface),
+          }),
+        ])
+      : []
+    actions = chipRows(ui, [...taskOnly, ...always, ...extras], inner, extras.length)
   }
+
   return paneRoot(ui, rr, [
-    <Box flexDirection="row" columnGap={2}>
-      {title}
-      <Text color={t.fg.subtle}>{`${card.n} of ${card.total} · ${v.cursor.done.length} done this pass`}</Text>
+    await headerStrip(ui, rr, t, card.n, card.total, v.cursor.done.length, inner),
+    <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
+      {head}
+      <Text color={t.fg.default}>{truncate(oneLine(item.title), room)}</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {body}
+      </Box>
+      {more}
+      {refusal}
     </Box>,
-    <Box flexDirection="row" columnGap={2}>
-      <Text color={t.fg.bold} bold>
-        {item.id}
-      </Text>
-      <Text color={badge.color}>{`${badge.glyph} ${badge.word}`}</Text>
-      {age !== '' ? <Text color={t.fg.subtle}>{`· ${age}`}</Text> : null}
-    </Box>,
-    <Text color={t.fg.default} wrap="wrap">
-      {item.title}
-    </Text>,
-    <Text color={t.fg.subtle}>{meta}</Text>,
-    rule,
-    <Text color={t.fg.default} wrap="wrap">
-      {body}
-    </Text>,
-    rule,
-    refusal,
     ...actions,
   ])
 }
@@ -414,11 +600,11 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
   const list = v.snapshot.handovers
   const picked = list.find(entry => entry.id === v.pick) ?? list[0]
   if (picked === undefined) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>No open handovers.</Text>])
-  const [rowPress, copy, resume, esc] = await Promise.all([
+  const esc = escHint(ui, t)
+  const [rowPress, copy, resume] = await Promise.all([
     rr.buttonProps({}),
     chip(ui, rr, { id: 'copy', hotkey: 'c', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copy(picked, press.surface) }),
     chip(ui, rr, { id: 'resume', hotkey: 'r', label: 'resume', treatment: 'chip', tone: 'signature', onPress: () => on.resume(picked) }),
-    escLegend(ui, rr, t),
   ])
   return paneRoot(ui, rr, [
     title,

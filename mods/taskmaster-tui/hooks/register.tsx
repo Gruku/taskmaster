@@ -9,13 +9,15 @@ import { DEMO_DETAILS, DEMO_REASON, demoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import type { TmHost } from './host'
-import { bandModel, FRESH_CURSOR, HANDOVERS, REVIEW } from './model'
+import { bandModel, FRESH_CURSOR, HANDOVERS, isStaleTicks, REVIEW, TICKS_PREFIX, ticksOf } from './model'
 import type { Rr } from './rr'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-tui', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-tui', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
 const DETAILS = atom({ plugin: 'taskmaster-tui', key: 'details' } as const, {} as Readonly<Record<string, TmTaskDetail>>)
 const PICK = atom({ plugin: 'taskmaster-tui', key: 'pick' } as const, '')
+const TICKS = atom({ plugin: 'taskmaster-tui', key: 'ticks' } as const, {} as Readonly<Record<string, readonly string[]>>)
+const DETAILS_OPEN = atom({ plugin: 'taskmaster-tui', key: 'detailsOpen' } as const, false)
 const BAND = atom({ plugin: 'taskmaster-tui', key: 'band' } as const, { confirmingId: '', refusal: '' } as TmBandMode)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
@@ -100,6 +102,12 @@ function writerOf($: EngineInterface): TmWriter {
     details: async change => {
       await update($, DETAILS, change)
     },
+    ticks: async change => {
+      await update($, TICKS, change)
+    },
+    detailsOpen: async change => {
+      await update($, DETAILS_OPEN, change)
+    },
   }
 }
 
@@ -114,6 +122,7 @@ function ensureFlows($: EngineInterface): TmFlows {
     write: writerOf($),
     actions: mod.source === 'demo' ? demoActions() : pendingActions(),
     afterWrite: () => undefined,
+    source: mod.source,
   })
   return mod.flows
 }
@@ -142,6 +151,23 @@ async function dataOf($: EngineInterface): Promise<{ snapshot: TmSnapshot | null
   return isDemo(snapshot) ? { snapshot: null, details: {} } : { snapshot, details }
 }
 
+/** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */
+async function ticksFor($: EngineInterface, taskId: string): Promise<readonly string[]> {
+  return (await read($, TICKS))[taskId] ?? ticksOf(await $.store.get(`${TICKS_PREFIX}${taskId}`))
+}
+
+// Ticks are kept 30 days, like the binding keys; an unreadable entry goes too. Never blocks the start.
+async function pruneTicks($: EngineInterface): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    for (const key of await $.store.keys()) {
+      if (key.startsWith(TICKS_PREFIX) && isStaleTicks(await $.store.get(key), now)) await $.store.delete(key)
+    }
+  } catch {
+    // a store that cannot be read now is pruned at a later start
+  }
+}
+
 // Press and input handlers run after the ui.press / ui.input hooks below have built the flows; they read mod.flows then.
 const act = (run: (flows: TmFlows) => Promise<void>): void => {
   if (mod.flows !== null) void run(mod.flows)
@@ -153,6 +179,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await ready($)
+    await pruneTicks($)
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
       { name: HANDOVERS, description: 'The last five open Taskmaster handovers: copy for Telegram or resume' },
@@ -216,7 +243,13 @@ export const register: Register = (on, options) => {
     if (e.surface === 'mobile') return <Text>Open the review queue in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
     const data = await dataOf($)
-    const view = { ...data, cursor: await read($, CURSOR), now: await $.clock.now() }
+    const view = {
+      ...data,
+      cursor: await read($, CURSOR),
+      now: await $.clock.now(),
+      ticks: (taskId: string) => ticksFor($, taskId),
+      detailsOpen: await read($, DETAILS_OPEN),
+    }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
       rrOf($),
@@ -229,6 +262,10 @@ export const register: Register = (on, options) => {
         sendBack: (id, note) => act(f => f.sendBack(id, note)),
         skip: id => act(f => f.skip(id)),
         fill: text => act(f => f.fill(text)),
+        toggleTick: (id, item) => act(f => f.toggleTick(id, item)),
+        toggleDetails: () => act(f => f.toggleDetails()),
+        openViewer: id => act(f => f.openViewer(id)),
+        copyCheck: (id, text, surface) => act(f => f.copyCheck(id, text, surface)),
       },
       e.props.bodyColumns,
     )

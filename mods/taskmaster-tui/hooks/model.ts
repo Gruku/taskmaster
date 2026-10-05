@@ -176,3 +176,119 @@ export function handoverPath(root: string, id: string): string {
 export function handoverCopyText(h: TmHandover): string {
   return [h.tldr.trim(), h.nextAction.trim() ? `Next: ${h.nextAction.trim()}` : '', h.path].filter(Boolean).join('\n\n')
 }
+
+// ── The review card (redesigned 2026-10-06, spec §6.1) ─────────────────────────────────────────────────────────────
+
+/** A human_action split into the card's checklist: an optional section label (with its dim detail) and the items. */
+export type TmCheck = { readonly label: string; readonly detail: string; readonly items: readonly string[] }
+
+const LIST_LINE = /^(?:[-*•]|\d+[.)])\s+(.*)$/
+// `<label>:` or `<label> (<detail>):` at the start; a URL's `://` is never a label.
+const LEADING_LABEL = /^([A-Za-z][^:;()]{0,39}?)\s*(?:\(([^)]*)\))?\s*:(?!\/\/)\s*([\s\S]*)$/
+
+function labelOf(text: string): { label: string; detail: string; rest: string } | null {
+  const m = LEADING_LABEL.exec(text)
+  if (m === null) return null
+  return { label: (m[1] ?? '').trim(), detail: (m[2] ?? '').trim(), rest: (m[3] ?? '').trim() }
+}
+
+/**
+ * Bullet or numbered lines are the items (continuation lines join the item above; a `<label>:` intro labels them).
+ * Else a leading `<label>:` labels the rest, split into `;` clauses. Else the whole text is one item.
+ */
+export function splitCheck(text: string): TmCheck {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line !== '')
+  if (lines.length === 0) return { label: '', detail: '', items: [] }
+  const first = lines.findIndex(line => LIST_LINE.test(line))
+  if (first >= 0) {
+    const items: string[] = []
+    for (const line of lines.slice(first)) {
+      const m = LIST_LINE.exec(line)
+      if (m !== null) items.push((m[1] ?? '').trim())
+      else items[items.length - 1] = `${items[items.length - 1] ?? ''} ${line}`.trim()
+    }
+    const intro = lines.slice(0, first).join(' ')
+    const head = labelOf(intro)
+    return head !== null && head.rest === '' ? { label: head.label, detail: head.detail, items } : { label: '', detail: intro, items }
+  }
+  const whole = oneLine(text)
+  const head = labelOf(whole)
+  if (head !== null && head.rest !== '') {
+    const items = head.rest
+      .split(';')
+      .map(clause => clause.trim().replace(/\.$/, ''))
+      .filter(clause => clause !== '')
+    return { label: head.label, detail: head.detail, items }
+  }
+  return { label: '', detail: '', items: [whole] }
+}
+
+/** Word-wraps to lines of at most `width` cells; a word longer than the width is cut. Empty text gives no lines. */
+export function wrapText(text: string, width: number): string[] {
+  const room = Math.max(1, Math.floor(width))
+  const lines: string[] = []
+  let line = ''
+  for (const word of oneLine(text).split(' ').filter(w => w !== '')) {
+    let rest = word
+    while (rest.length > room) {
+      if (line !== '') {
+        lines.push(line)
+        line = ''
+      }
+      lines.push(rest.slice(0, room))
+      rest = rest.slice(room)
+    }
+    if (rest === '') continue
+    if (line === '') line = rest
+    else if (line.length + 1 + rest.length <= room) line = `${line} ${rest}`
+    else {
+      lines.push(line)
+      line = rest
+    }
+  }
+  if (line !== '') lines.push(line)
+  return lines
+}
+
+/** The queue as dots: `●` done and current, `○` ahead; past `cap` dots the rest is `+N`. */
+export function queueDots(n: number, total: number, cap = 10): string {
+  const all = Math.max(0, total)
+  const shown = Math.min(all, cap)
+  const filled = Math.max(0, Math.min(n, shown))
+  return `${'●'.repeat(filled)}${'○'.repeat(shown - filled)}${all > cap ? `+${all - cap}` : ''}`
+}
+
+/** `review-gate:pass` → a success signal `review-gate pass`; fail critical, skip info, anything else pending (warning). */
+export function gateSignal(gateState: string): { kind: 'success' | 'warning' | 'critical' | 'info'; word: string } | null {
+  const [gate = '', state = ''] = gateState.split(':').map(part => part.trim())
+  if (gate === '') return null
+  const word = state === '' ? gate : `${gate} ${state}`
+  if (state === 'pass' || state === 'passed') return { kind: 'success', word }
+  if (state === 'fail' || state === 'failed') return { kind: 'critical', word }
+  if (state === 'skip' || state === 'skipped') return { kind: 'info', word }
+  return { kind: 'warning', word }
+}
+
+// Ticks are local UI state only: `$.store` `ticks:<task id>` = { at, items } (the ticked items' text, so an edited
+// human_action never moves a tick to another item). Never written to Taskmaster.
+export const TICKS_PREFIX = 'ticks:'
+export const TICKS_MAX_AGE_MS = 30 * 24 * 3_600_000
+
+export function ticksOf(stored: unknown): readonly string[] {
+  if (typeof stored !== 'object' || stored === null) return []
+  const items = (stored as { items?: unknown }).items
+  return Array.isArray(items) ? items.filter((i): i is string => typeof i === 'string') : []
+}
+
+export function toggleTick(ticks: readonly string[], item: string): string[] {
+  return ticks.includes(item) ? ticks.filter(t => t !== item) : [...ticks, item]
+}
+
+/** True for a ticks entry older than 30 days or unreadable: pruned at session start with the binding keys. */
+export function isStaleTicks(stored: unknown, now: number): boolean {
+  const at = typeof stored === 'object' && stored !== null ? (stored as { at?: unknown }).at : undefined
+  return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
+}

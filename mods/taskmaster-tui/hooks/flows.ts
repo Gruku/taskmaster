@@ -5,7 +5,7 @@ import type { RenderSurface } from 'claude-code'
 import type { TmBandMode, TmCursor, TmHandover, TmSnapshot, TmTaskDetail } from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
-import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW } from './model'
+import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW, TICKS_PREFIX, ticksOf, toggleTick } from './model'
 
 export type TmWriter = {
   snapshot: (change: (s: TmSnapshot | null) => TmSnapshot | null) => Promise<void>
@@ -13,6 +13,8 @@ export type TmWriter = {
   band: (change: (b: TmBandMode) => TmBandMode) => Promise<void>
   pick: (id: string) => Promise<void>
   details: (change: (d: Readonly<Record<string, TmTaskDetail>>) => Readonly<Record<string, TmTaskDetail>>) => Promise<void>
+  ticks: (change: (t: Readonly<Record<string, readonly string[]>>) => Readonly<Record<string, readonly string[]>>) => Promise<void>
+  detailsOpen: (change: (open: boolean) => boolean) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -20,6 +22,8 @@ export type TmFlowDeps = {
   write: TmWriter
   actions: TmActions
   afterWrite: (taskId: string, outcome: 'done' | 'sent-back') => void
+  /** Which data the flows act on: demo never reaches the tm server (the viewer is only announced). Default tm. */
+  source?: 'tm' | 'demo'
 }
 
 export type TmFlows = ReturnType<typeof createFlows>
@@ -119,6 +123,34 @@ export function createFlows(d: TmFlowDeps) {
     },
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
+    },
+    // Ticks are local UI state: read the stored set first (another session may have ticked), toggle, write it back, then
+    // mirror it into $.state so the card redraws. Never sent to Taskmaster.
+    toggleTick: async (taskId: string, item: string): Promise<void> => {
+      const key = `${TICKS_PREFIX}${taskId}`
+      const items = toggleTick(ticksOf(await d.host.storeGet(key)), item)
+      await d.host.storeSet(key, { at: await d.host.now(), items })
+      await d.write.ticks(all => ({ ...all, [taskId]: items }))
+    },
+    toggleDetails: async (): Promise<void> => {
+      await d.write.detailsOpen(open => !open)
+    },
+    openViewer: async (taskId: string): Promise<void> => {
+      if (d.source === 'demo') {
+        d.host.toast(`would open ${taskId} in the viewer`)
+        return
+      }
+      // backlog_open_viewer takes no task id (it opens the board); the review mode of spec §6.5 will take one.
+      try {
+        const r = await d.host.call('backlog_open_viewer', {})
+        d.host.toast(r.isError ? `taskmaster-tui: the viewer did not open (${r.text})` : `Viewer opened: look for ${taskId}`)
+      } catch (error) {
+        d.host.toast(`taskmaster-tui: the viewer did not open (${error instanceof Error ? error.message : String(error)})`)
+      }
+    },
+    copyCheck: async (taskId: string, text: string, surface: RenderSurface | undefined): Promise<void> => {
+      const r = await d.host.copy(text, surface)
+      d.host.toast(r.isCopied ? `Copied the check for ${taskId}` : `Clipboard unavailable (${r.reason}): o puts ${taskId} in the prompt`)
     },
   }
 }

@@ -23,6 +23,9 @@ export const DEMO_DETAILS: Readonly<Record<string, TmTaskDetail>> = {
     branch: '',
     humanAction:
       'Live check on dev (needs unifiedChatGenerate + unifiedChatBuild granted):\nfirst unified message stays on intent/brief and does not build; second message builds with the full toolset.',
+    notes: ['Pre-build now hands the supervisor its full toolset; the cookbook owns the step order.'],
+    links: ['docs/specs/unified-chat.md'],
+    pr: 'https://github.com/demo/project/pull/412',
   },
   'tm-audit-031': {
     id: 'tm-audit-031',

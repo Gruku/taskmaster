@@ -21,6 +21,10 @@ export type TmTaskDetail = {
   readonly gateState: string
   readonly branch: string
   readonly humanAction: string
+  /** The card's `i: details` (from backlog_get_task); absent until a reader fills them. */
+  readonly notes?: readonly string[]
+  readonly links?: readonly string[]
+  readonly pr?: string
 }
 export type TmPipeline = {
   readonly laneless: boolean
@@ -73,6 +77,9 @@ declare module 'claude-code' {
       pick: string
       band: TmBandMode
       binding: TmBinding | null
+      /** Ticked check items per task id: a mirror of `$.store` `ticks:<id>` that redraws the card; never sent to Taskmaster. */
+      ticks: Readonly<Record<string, readonly string[]>>
+      detailsOpen: boolean
     }
   }
 }
