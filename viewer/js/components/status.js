@@ -32,7 +32,17 @@ export const BUG_STATUS = freeze({
   archived: ['Archived', '✕', 'neutral'],
 });
 
-const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS };
+// By meaning too: an idea being explored is in motion, a candidate or a parked one is not started, a promoted one has
+// moved on into its task, a dropped one is dropped. The order is the order a form offers them in.
+export const IDEA_STATUS = freeze({
+  exploring: ['Exploring', '◐', 'accent'],
+  candidate: ['Candidate', '○', 'neutral'],
+  'parking-lot': ['Parking lot', '○', 'neutral'],
+  promoted: ['Promoted', '→', 'neutral'],
+  dropped: ['Dropped', '✕', 'neutral'],
+});
+
+const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS, idea: IDEA_STATUS };
 
 // None of the viewer's local fonts carries these glyphs, so the stylesheet draws each shape by name;
 // the glyph stays in the DOM as the fallback.

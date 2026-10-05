@@ -124,6 +124,22 @@ test('2. a Content section is open when it has content, or when it is the descri
   c.close();
 });
 
+test('2. which section a new item opens on is the schema\'s to say, not a field name the form knows', async () => {
+  const { MdField } = await import('../../js/components/edit/fields/md-field.js');
+  const sections = { fields: [
+    { key: 'description', label: 'Description', renderer: MdField, group: 'content' },
+    { key: 'body', label: 'Body', renderer: MdField, group: 'content', open: true },
+  ] };
+  const expanded = () => Object.fromEntries([...form().querySelectorAll('.eform-section')]
+    .map((s) => [s.dataset.key, s.querySelector('button[aria-expanded]').getAttribute('aria-expanded') === 'true']));
+  const a = open({ schema: sections, initialEntity: {} });
+  assert.deepEqual(expanded(), { description: false, body: true });
+  a.close();
+  const b = open({ schema: sections, mode: 'edit', initialEntity: { id: 'X-1' } });
+  assert.deepEqual(expanded(), { description: false, body: false }, 'an existing item opens only what has content');
+  b.close();
+});
+
 test('2. a collapsed section opens from its heading and says how much it holds when closed', () => {
   const { close } = openEdit(RICH);
   const section = field('specification');

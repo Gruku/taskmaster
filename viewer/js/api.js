@@ -92,6 +92,8 @@ export async function getEpic(id) {
   return http('GET', `/api/epic/${encodeURIComponent(id)}`);
 }
 
+export const createIdea = (payload) => http('POST', '/api/ideas', payload);
+
 export const api = {
   // Generic HTTP helpers — screens needing arbitrary endpoints (e.g. continuity
   // dashboard hitting /api/continuity, /api/decisions/*) route through these
@@ -116,6 +118,7 @@ export const api = {
   archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),
   validateTask: (taskId, patch) => http('POST', '/api/tasks/validate', { task_id: taskId, patch }),
   listBugs,
+  createIdea,
 
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);

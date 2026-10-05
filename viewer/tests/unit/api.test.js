@@ -63,3 +63,19 @@ test('a 409 whose error is not a non-empty string carries "stale", never an obje
     assert.equal(e.message, 'stale');
   });
 });
+
+test('createIdea posts through the shared client, so a refusal carries its code and the server\'s reason', async () => {
+  const { createIdea } = await import('../../js/api.js');
+  assert.equal(api.createIdea, createIdea);
+  await withFetch(() => json(201, { ok: true, id: 'IDEA-9' }), async (seen) => {
+    assert.deepEqual(await createIdea({ title: 'Faster board' }), { ok: true, id: 'IDEA-9' });
+    assert.equal(seen[0].path, '/api/ideas');
+    assert.equal(seen[0].init.method, 'POST');
+    assert.deepEqual(JSON.parse(seen[0].init.body), { title: 'Faster board' });
+  });
+  await withFetch(() => json(400, { ok: false, error: 'title is required' }), async () => {
+    const e = await createIdea({}).catch((err) => err);
+    assert.equal(e.code, 400);
+    assert.equal(e.reason, 'title is required');
+  });
+});
