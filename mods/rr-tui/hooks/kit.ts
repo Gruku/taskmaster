@@ -57,11 +57,11 @@ export function rule(t: RrTokens, a: { width: number }): RenderNode {
 export function button(t: RrTokens, a: { treatment: RrTreatment; tone: RrTone; on?: RrGround }): RrBoxProps {
   if (t.polarity === 'survivalist') {
     return a.treatment === 'outline'
-      ? { borderStyle: 'bold', borderColor: t.fg.bold }
+      ? { borderStyle: 'bold', borderColor: t.fg.bold, paddingX: 1 }
       : { backgroundColor: t.surface[NEXT_STEP[a.on ?? 'page']], paddingX: 1 }
   }
   return a.treatment === 'outline'
-    ? { borderStyle: 'round', borderColor: t.tone[a.tone] }
+    ? { borderStyle: 'round', borderColor: t.tone[a.tone], paddingX: 1 }
     : { backgroundColor: t.tint12[a.on ?? 'page'][a.tone], paddingX: 1 }
 }
 

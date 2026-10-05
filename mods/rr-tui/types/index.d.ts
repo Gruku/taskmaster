@@ -24,7 +24,7 @@ export type RrBoxProps = {
 }
 /**
  * RR's button recipe: the whole surface presses. The treatment's wrapper Box (`button()`: a chip's tint on its ground, or
- * the round tone outline for the one primary action) holds ONE plain Button carrying the label. `buttonProps()` gives that
+ * the round tone outline for the one primary action; both pad 1 column inside) holds ONE plain Button carrying the label. `buttonProps()` gives that
  * Button its `hotkey` (one digit or one lowercase letter), so the engine draws `d: back to agent`, and a `hover` that turns
  * the label bold `foreground-bold` (style only, no motion). Give the wrapper Box a unique `key`: a Button's `hover` only
  * applies inside a keyed Box. A noun can't hand out a Button or its press handler, so the consumer draws the Button.

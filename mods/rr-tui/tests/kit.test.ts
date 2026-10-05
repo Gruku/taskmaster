@@ -102,7 +102,7 @@ describe('elements', () => {
 
   test('outline is a round border in the tone, chip is the 12% tint on its ground, a state chip is 24% with its glyph', () => {
     const t = tokensFor('dark')
-    expect(kit.button(t, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'round', borderColor: t.tone.success })
+    expect(kit.button(t, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'round', borderColor: t.tone.success, paddingX: 1 })
     expect(kit.button(t, { treatment: 'chip', tone: 'warning', on: 'raised' })).toEqual({ backgroundColor: t.tint12.raised.warning, paddingX: 1 })
     const state = kit.chip(t, { text: 'confirm done?', tone: 'warning', strength: 24 }) as unknown as { props: { backgroundColor: string } }
     expect(state.props.backgroundColor).toBe(t.tint24.page.warning)
@@ -120,7 +120,7 @@ describe('elements', () => {
     for (const p of ['dark', 'light'] as const) {
       const t = tokensFor(p)
       for (const tone of TONES) {
-        expect(kit.button(t, { treatment: 'outline', tone })).toEqual({ borderStyle: 'round', borderColor: t.tone[tone] })
+        expect(kit.button(t, { treatment: 'outline', tone })).toEqual({ borderStyle: 'round', borderColor: t.tone[tone], paddingX: 1 })
         for (const on of ['page', 'raised', 'overlay'] as const) {
           expect(kit.button(t, { treatment: 'chip', tone, on })).toEqual({ backgroundColor: t.tint12[on][tone], paddingX: 1 })
         }
@@ -157,7 +157,7 @@ describe('elements', () => {
   test('the survivalist recipe is value only: grey-step chips, a bold fg.bold outline, hover in fg.bold', () => {
     const surv = tokensFor('survivalist')
     const grounds = new Set(Object.entries(RR_TABLE.survivalist).filter(([k]) => /^ground-\d+$/.test(k)).map(([, v]) => v))
-    expect(kit.button(surv, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'bold', borderColor: surv.fg.bold })
+    expect(kit.button(surv, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'bold', borderColor: surv.fg.bold, paddingX: 1 })
     for (const tone of TONES) {
       for (const on of ['page', 'raised', 'overlay'] as const) {
         expect(grounds.has(kit.button(surv, { treatment: 'chip', tone, on }).backgroundColor ?? '')).toBe(true)
@@ -198,7 +198,7 @@ describe('elements', () => {
     const grounds = new Set(Object.entries(RR_TABLE.survivalist).filter(([k]) => /^ground-\d+$/.test(k)).map(([, v]) => v))
     for (const element of everyElement('survivalist')) for (const c of colorsOf(element)) expect(grounds.has(c)).toBe(true)
     expect(kit.button(surv, { treatment: 'chip', tone: 'critical' })).toEqual({ backgroundColor: surv.surface.raised, paddingX: 1 })
-    expect(kit.button(surv, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'bold', borderColor: surv.fg.bold })
+    expect(kit.button(surv, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'bold', borderColor: surv.fg.bold, paddingX: 1 })
     expect(textOf(kit.chip(surv, { text: 'refused', tone: 'critical', strength: 24 }))).toBe('[◆ refused]')
   })
 })

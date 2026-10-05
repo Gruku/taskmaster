@@ -127,7 +127,7 @@ describe('$.rr', () => {
           expect(await ui.find({ type: 'Box', key: `${id}-box` })).toMatchObject({
             children: [{ type: 'Button', props: { label, ...recipe(letter) }, hover: { bold: true, color: t.fg.bold } }],
           })
-        expect(await ui.find({ type: 'Box', key: 'outline-page-box' })).toMatchObject({ props: { borderStyle: polarity === 'survivalist' ? 'bold' : 'round' } })
+        expect(await ui.find({ type: 'Box', key: 'outline-page-box' })).toMatchObject({ props: { borderStyle: polarity === 'survivalist' ? 'bold' : 'round', paddingX: 1 } })
         await wrapped('outline-page', 'done', 'd')
         await wrapped('back-to-agent-page', 'back to agent', 'a')
         await wrapped('skip-page', 'skip', 's')
