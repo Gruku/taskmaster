@@ -29,42 +29,6 @@
 .ho-status-pill > .icon { color: var(--foreground-subtle); transform: rotate(90deg); }
 .ho-status-pill[aria-expanded="true"] > .icon { transform: rotate(-90deg); }
 
-/* Placed by openStatusMenu (fixed, under its button). Above page content; inside a modal it stacks within the overlay. */
-.ho-status-menu {
-  z-index: 70;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  min-width: 168px;
-  padding: var(--space-micro);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--overlay-surface);
-}
-.ho-status-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  min-height: 32px;
-  padding: 0 var(--space-sm) 0 var(--space-xs);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--foreground-default);
-  font-family: var(--font-narrator);
-  font-weight: var(--font-narrator-weight);
-  font-size: var(--size-narrator-small);
-  line-height: var(--leading-tight);
-  text-align: left;
-  text-transform: capitalize;
-  cursor: pointer;
-}
-.ho-status-menu-item:hover,
-.ho-status-menu-item:focus-visible { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
-/* The current status is marked by the check and the heavier word, not by a colour. */
-.ho-status-menu-item.is-current { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }
+/* The menu itself is a popover (popover.css); only the status words' casing and the check column are its own. */
+.ho-status-menu-item { text-transform: capitalize; }
 .ho-status-menu-check { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; }
-
-@media (max-width: 768px) {
-  .ho-status-menu-item { min-height: 44px; }
-}
