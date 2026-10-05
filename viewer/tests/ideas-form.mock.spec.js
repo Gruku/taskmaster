@@ -37,6 +37,10 @@ async function openCreate(page, { theme = 'dark', post = { ok: true, id: 'IDEA-9
   });
   await page.goto('/#/ideas');
   await expect(page.locator('.ideas__list')).toContainText('Board swimlanes by epic');
+  // Once the fonts have settled the row, "New Idea" is in it or behind Filters (row 2 too narrow for it).
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
+  const filters = page.locator('#topbar-actions > .overflow-more');
+  if (await filters.isVisible()) await filters.click();
   await newIdea(page).click();
   const dialog = page.getByRole('dialog', { name: 'Create idea' });
   await expect(dialog).toBeVisible();
