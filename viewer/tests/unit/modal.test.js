@@ -644,6 +644,147 @@ test('10. the close button is a ghost icon button from the shared button family'
   m.close();
 });
 
+// ── Hooks for what the dialog holds: keys, presses ──
+test('11. onKey sees a key in the topmost dialog before the focused control: true takes it, false leaves it', async () => {
+  const m = openModal({ title: 'A' });
+  const input = document.createElement('input');
+  const reached = [];
+  input.addEventListener('keydown', (e) => reached.push(e.key));
+  m.body.appendChild(input);
+  await tick();
+  input.focus();
+  const seen = [];
+  const off = m.onKey((e) => { seen.push(e.key); return e.key === 'Enter'; });
+
+  assert.equal(fire(input, 'keydown', { key: 'Enter' }), false, 'a key the handler took is prevented');
+  assert.deepEqual(reached, [], 'and stopped before the control');
+  fire(input, 'keydown', { key: 'a' });
+  assert.deepEqual(reached, ['a'], 'a key the handler left reaches the control');
+  assert.deepEqual(seen, ['Enter', 'a']);
+
+  const b = openModal({ title: 'B' });
+  fire(input, 'keydown', { key: 'Enter' });
+  assert.deepEqual(seen, ['Enter', 'a'], 'a covered dialog\'s handlers do not run');
+  assert.deepEqual(reached, ['a', 'Enter']);
+  b.close();
+
+  off();
+  fire(input, 'keydown', { key: 'Enter' });
+  assert.deepEqual(seen, ['Enter', 'a'], 'off() removes the handler');
+  assert.deepEqual(reached, ['a', 'Enter', 'Enter']);
+
+  m.onKey((e) => { seen.push(e.key); return false; });
+  fire(input, 'keydown', { key: 'Escape' });
+  await tick();
+  assert.deepEqual(seen, ['Enter', 'a', 'Escape']);
+  assert.equal(m.dialog.isConnected, false, 'Escape a handler left alone still closes the modal');
+  fire(input, 'keydown', { key: 'x' });
+  assert.deepEqual(seen, ['Enter', 'a', 'Escape'], 'handlers are dropped on close');
+});
+
+test('12. a press that began in the modal holds afterPress work until it is released, then runs it once on the next task', async () => {
+  const m = openModal({ title: 'A' });
+  await tick();
+  let runs = 0;
+  const f = () => { runs++; };
+  assert.equal(m.pressing(), false);
+  m.afterPress(f);
+  assert.equal(runs, 1, 'no press held: runs now');
+
+  fire(overlayOf(m), 'pointerdown');
+  assert.equal(m.pressing(), true);
+  m.afterPress(f);
+  m.afterPress(f);
+  await tick();
+  assert.equal(runs, 1, 'nothing runs while the press is held');
+  fire(document, 'pointerup');
+  assert.equal(m.pressing(), false);
+  assert.equal(runs, 1, 'not inside the release itself');
+  await tick();
+  assert.equal(runs, 2, 'queued twice, run once');
+
+  fire(m.body, 'pointerdown');
+  m.afterPress(f);
+  fire(document.body, 'pointercancel');
+  await tick();
+  assert.equal(runs, 3, 'a cancelled press is released');
+
+  fire(m.body, 'pointerdown');
+  m.afterPress(f);
+  window.dispatchEvent(new dom.window.Event('blur'));
+  assert.equal(m.pressing(), false, 'the window losing focus releases');
+  await tick();
+  assert.equal(runs, 4);
+
+  fire(m.body, 'pointerdown');
+  m.afterPress(f);
+  m.close();
+  fire(document, 'pointerup');
+  await tick();
+  assert.equal(runs, 4, 'work queued when the modal closes never runs');
+  assert.equal(m.pressing(), false);
+});
+
+test('13. a covered modal that closes hands its focus-return target to the modal opened from it', async () => {
+  $('#opener').focus();
+  const a = openModal({ title: 'A' });
+  const edit = document.createElement('button');
+  a.body.appendChild(edit);
+  await tick();
+  edit.focus();
+  const b = openModal({ title: 'B' });
+  await tick();
+  a.close();
+  assert.equal(b.isTop(), true);
+  assert.equal(shell().hasAttribute('inert'), true);
+  assert.ok(b.dialog.contains(document.activeElement));
+  b.close();
+  assert.equal(document.activeElement, $('#opener'), 'not the first link of the screen');
+
+  // The same when the control that opened B was re-rendered away inside A first.
+  $('#opener').focus();
+  const c = openModal({ title: 'C' });
+  const again = document.createElement('button');
+  c.body.appendChild(again);
+  await tick();
+  again.focus();
+  const d = openModal({ title: 'D' });
+  await tick();
+  again.remove();
+  c.close();
+  d.close();
+  assert.equal(document.activeElement, $('#opener'));
+});
+
+test('14. focusableIn follows the browser\'s Tab sequence: summaries, editable regions, media controls; nothing in a closed details', () => {
+  const m = openModal({ title: 'A' });
+  m.body.innerHTML = '<details><summary id="s1">a</summary><input id="hidden-in"></details>'
+    + '<div id="ce" contenteditable="plaintext-only"></div><div contenteditable="false" id="cef"></div>'
+    + '<audio controls id="au"></audio><a id="nohref">x</a>';
+  assert.deepEqual(focusableIn(m.body).map((e) => e.id), ['s1', 'ce', 'au']);
+  m.body.querySelector('details').open = true;
+  assert.deepEqual(focusableIn(m.body).map((e) => e.id), ['s1', 'hidden-in', 'ce', 'au'], 'an open details shows what it holds');
+  m.close();
+});
+
+test('15. a guard that never settles keeps the modal open, shares one pending answer, and close() still closes', async () => {
+  const m = openModal({ title: 'A', onRequestClose: () => new Promise(() => {}) });
+  await tick();
+  key('Escape');
+  key('Escape');
+  await tick();
+  assert.equal(m.dialog.isConnected, true);
+  const p1 = m.requestClose();
+  const p2 = m.requestClose();
+  assert.equal(p1, p2);
+  const first = await Promise.race([p1.then(() => 'answer'), new Promise((ok) => setTimeout(() => ok('timer'), 20))]);
+  assert.equal(first, 'timer');
+  assert.equal(m.dialog.isConnected, true);
+  m.close();
+  assert.equal(m.dialog.isConnected, false);
+  assert.equal(openModalCount(), 0);
+});
+
 test('4. Escape inside the conflict banner belongs to the banner: the modal beneath stays open; Escape in the dialog still asks to close', async () => {
   const { buttons: [useServer] } = addBanner();
   let asked = 0;

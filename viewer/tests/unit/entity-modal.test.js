@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
 
 const PAGE = '<div class="shell"><button id="opener">o</button><section id="screen-mount"></section></div><div id="modal-host"></div><div id="conflict-banner-host"></div>';
 const dom = new JSDOM(`<!doctype html><html><body>${PAGE}</body></html>`);
@@ -305,6 +306,26 @@ test('6. leaving a field for the footer does not flag it: a message must not mov
   cancelBtn().focus();
   assert.equal(errorOf('title'), '');
   close();
+});
+
+test('6. a field left while a press is held is judged only once the press is released, wherever it ends', async () => {
+  const { close } = open();
+  await tick();
+  control('title').focus();
+  fire(control('status'), 'pointerdown');
+  control('status').focus();
+  await tick();
+  assert.equal(errorOf('title'), '', 'no message mid-press');
+  fire(document, 'pointerup');
+  await tick();
+  assert.equal(errorOf('title'), 'Title is required');
+  close();
+});
+
+test('18. the form reaches the shell only through its hooks: no walk up to the overlay, no listener of its own on the dialog', () => {
+  const source = readFileSync(new URL('../../js/components/edit/entity-modal.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /parentElement/);
+  assert.doesNotMatch(source, /dialog\.addEventListener/);
 });
 
 // ── 7. Save ──

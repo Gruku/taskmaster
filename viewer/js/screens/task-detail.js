@@ -1,5 +1,5 @@
 import { getTaskDetailFull } from '../store.js';
-import { mountTaskDetailDocument, rememberFocus } from '../components/task-detail-document.js';
+import { mountTaskDetailDocument, rememberView } from '../components/task-detail-document.js';
 import { stateBlock as busyBlock } from '../components/empty-state.js';
 import { claimTopbar } from '../lib/topbar.js';
 import { deepMerge } from '../lib/prefs-writer.js';
@@ -70,8 +70,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     prefs.patch({ ui: { last_task_id: id } });
   }
   async function paint(value, request) {
-    // A repaint replaces every node; focus is put back on the same control in the new document.
-    const refocus = rememberFocus(root);
+    // A repaint replaces every node; what was open is opened again and focus put back on the same control.
+    const restore = rememberView(root);
     cleanup?.();
     cleanup = null;
     const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view};
@@ -80,7 +80,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
     } else cleanup = mountTaskDetailDocument(root, ctx);
     shown = value;
-    refocus(root);
+    restore(root);
   }
   async function refresh() {
     if (disposed || store.isEditing(id)) return;

@@ -38,8 +38,6 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   let closed = false;
   let frozen = [];         // controls disabled for the busy period
   let focusBack = null;
-  let pointerHeld = false; // a press is in progress
-  let paintDue = false;    // a message is owed once the press is released
 
   const modal = openModal({
     title: `${create ? 'Create' : 'Edit'} ${noun}`,
@@ -171,7 +169,6 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
 
   function paint() {
     if (closed) return;
-    paintDue = false;
     const errs = errors();
     for (const f of fields) {
       const message = (attempted || f.touched) && errs[f.key] ? sentence(f.spec, errs[f.key]) : '';
@@ -189,20 +186,11 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   // is not that: the button's own action (save, cancel) says what happens next.
   // When the move is a click, the message waits for the release: appearing mid-press it would push the control
   // being clicked out from under the pointer, and the click would land on nothing.
-  const overlay = modal.dialog.parentElement;
-  overlay.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
-  for (const type of ['pointerup', 'pointercancel']) {
-    overlay.addEventListener(type, () => {
-      pointerHeld = false;
-      if (paintDue) setTimeout(() => { if (paintDue) paint(); }, 0);
-    }, true);
-  }
   for (const f of fields) {
     f.wrap.addEventListener('focusout', (e) => {
       if (busy || f.touched || f.wrap.contains(e.relatedTarget) || !form.contains(e.relatedTarget)) return;
       f.touched = true;
-      if (pointerHeld) paintDue = true;
-      else paint();
+      modal.afterPress(paint);
     });
   }
 
@@ -269,12 +257,11 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
 
   // Ctrl/⌘+Enter saves from anywhere in the dialog. Taken on the way down, so a textarea that uses the same chord
   // to commit an inline edit does not also act on it.
-  modal.dialog.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
-    e.preventDefault();
-    e.stopPropagation();
+  modal.onKey((e) => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.isComposing) return false;
     save();
-  }, true);
+    return true;
+  });
 
   paint();
   return () => modal.close();

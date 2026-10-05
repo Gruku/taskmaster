@@ -322,6 +322,76 @@ test('a refused status choice goes back to the stored status, keeps its reason, 
   await expect(titleOf(dialog)).toHaveText('Renamed after the refusal');
 });
 
+// Going to another screen while the Edit form is stacked on the dialog: the form is asked first, as with Back.
+test('navigating away with a clean form stacked closes both, with no confirm', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toBeVisible();
+
+  await page.evaluate(() => { location.hash = '#/table'; });
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/table$/);
+  // The new screen may still be mounting, so focus may rest on body, but never on a removed node.
+  expect(await page.evaluate(() => document.activeElement.isConnected)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('navigating away with unsaved edits asks; Keep editing keeps the stack over the new screen', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  const edit = dialog.getByRole('button', { name: 'Edit', exact: true });
+  await edit.click();
+  const form = page.getByRole('dialog', { name: 'Edit task' });
+  await expect(form).toBeVisible();
+  const title = form.locator('[data-key="title"] input');
+  await title.fill('Renamed in the form');
+  const confirm = page.getByRole('alertdialog', { name: 'Discard changes?' });
+
+  await page.evaluate(() => { location.hash = '#/table'; });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(form).toBeVisible();
+  await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() => location.hash)).toBe('#/table');
+  await expect(title).toBeFocused();
+  await expect(title).toHaveValue('Renamed in the form');
+
+  await page.keyboard.press('Escape');
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Discard' }).click();
+  await expect(form).toHaveCount(0);
+  await expect(edit).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(detail(page)).toHaveCount(0);
+  // The dialog's entry is no longer the current one: closing it does not go Back.
+  await expect(page).toHaveURL(/#\/table$/);
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('another writer\'s change keeps the reviewer note open', async ({ page }) => {
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  const toggle = dialog.locator('[data-focus="spec-note"]');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toBeFocused();
+
+  await renamedElsewhere(page, 'Renamed elsewhere');
+  await expect(titleOf(dialog)).toHaveText('Renamed elsewhere');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(dialog.locator('.td-codex-note')).toBeVisible();
+  await expect(toggle).toBeFocused();
+});
+
 // Two presses before the form's code has loaded used to stack two forms, each holding an edit lease (M-2).
 test('Edit pressed twice in a row opens one form, from the dialog and from the full page', async ({ page }) => {
   await board(page);

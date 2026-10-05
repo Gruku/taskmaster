@@ -45,13 +45,15 @@ export function openDetailModal({ kind, id, opener }) {
   const findTwin = twinFinder(from);
 
   let leaving = false;        // a history.back() is on its way to close the modal
+  let adrift = false;         // the user went to another screen: the modal's history entry is no longer the current one
+  const home = location.hash; // the screen the modal's entry belongs to
   const modal = openModal({
     title: knownTitle(kind, id), eyebrow: id, size: 'lg', className: 'modal--plain-title modal--detail', opener: from,
     initialFocus: (dialog) => dialog.querySelector('.modal-title'),
     // Escape, the overlay and the close button leave through the history entry the modal was opened with,
     // so they and the browser's Back are one path and the entry is always consumed.
     onRequestClose: () => {
-      if (!history.state?.detailModal) return true;
+      if (adrift || !history.state?.detailModal) return true;
       if (!leaving) { leaving = true; history.back(); }
       return false;
     },
@@ -116,10 +118,10 @@ export function openDetailModal({ kind, id, opener }) {
           onNavigate: (tid) => load('task', tid),
         });
       } else {
-        const { mountTaskDetailDocument, rememberFocus } = await import('./task-detail-document.js');
+        const { mountTaskDetailDocument, rememberView } = await import('./task-detail-document.js');
         const detail = await getTaskDetailFull(i, {force: true});
         if (closed || request !== generation) return;
-        const refocus = soft ? rememberFocus(modal.dialog) : null;
+        const restore = soft ? rememberView(modal.dialog) : null;
         const scrollTop = modal.body.scrollTop;
         dispose();
         // The title is edited where it is shown: its inline field lives in the dialog's heading.
@@ -132,7 +134,7 @@ export function openDetailModal({ kind, id, opener }) {
         });
         task = detail.task;
         editBtn.hidden = !task;
-        if (soft) { modal.body.scrollTop = scrollTop; refocus(modal.dialog); }
+        if (soft) { modal.body.scrollTop = scrollTop; restore(modal.dialog); }
         unsubscribe ??= store.subscribe(`task:${i}`, () => { if (!store.isEditing(i)) load(k, i, { soft: true }); });
       }
       // After a peek, focus is on the title of what is now shown — unless the user is already at the header's controls.
@@ -163,18 +165,40 @@ export function openDetailModal({ kind, id, opener }) {
   // did does the detail leave through that entry. One that stays open keeps the entry; Back is refused.
   let unwinding = false;
   async function onPop() {
+    // Going to another screen fires popstate too; the hashchange after it is the one that answers.
+    if (adrift || location.hash !== home) return;
     if (modal.isTop()) { modal.close(); return; }
     history.pushState({ detailModal: cur }, '');
     if (unwinding) return;            // a second Back while a guard is still asking is refused the same way
     unwinding = true;
     try {
-      for (let above = topModal(); above && above !== modal; above = topModal()) {
-        if (!(await above.requestClose())) return;
-      }
+      if (!(await closeAbove())) return;
     } finally { unwinding = false; }
     if (!closed) modal.requestClose();
   }
-  function onHash() { modal.close(); }   // sidebar nav while open → close, don't linger
+
+  // Asks every modal above the detail to close, top first; false as soon as one stays open.
+  async function closeAbove() {
+    for (let above = topModal(); above && above !== modal; above = topModal()) {
+      if (!(await above.requestClose())) return false;
+    }
+    return true;
+  }
+
+  // Going to another screen (the sidebar, a typed address) closes the detail too, but a modal above it guarding
+  // unsaved work (the Edit form) is asked first. One that stays open keeps the whole stack over the new screen.
+  // The detail's own entry is no longer current, so its later close does not go Back.
+  let navigating = false;
+  async function onHash() {
+    adrift = true;
+    if (modal.isTop()) { modal.close(); return; }
+    if (navigating) return;           // a second change while the first is still being asked is ignored
+    navigating = true;
+    try {
+      if (!(await closeAbove())) return;
+    } finally { navigating = false; }
+    if (!closed) modal.close();
+  }
 
   // Leaving for another screen takes over the modal's own history entry: Back from there returns to
   // where the modal was opened, not to a board that reopens nothing.
