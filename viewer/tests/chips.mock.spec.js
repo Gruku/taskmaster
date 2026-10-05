@@ -79,6 +79,20 @@ test('at 600px the chips stay on one line and the rest list behind More, in orde
   await expect(pop(page).locator('.chip').first()).toBeFocused();
 });
 
+test('in More each chip reads as a list line: swatch and label at its start, count at its end', async ({ page }) => {
+  await mount(page);
+  await more(page).click();
+  await expect(pop(page)).toBeVisible();
+  const lines = await pop(page).locator('.chip').evaluateAll((els) => els.map((el) => {
+    const box = (sel) => el.querySelector(sel).getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+    return { follows: Math.round(box('.chip__label').left - box('.chip__swatch').right - gap), end: Math.round(el.getBoundingClientRect().right - box('.chip__count').right) };
+  }));
+  expect(lines.length).toBeGreaterThan(1);
+  expect(lines.every((l) => l.follows === 0)).toBe(true);
+  expect(new Set(lines.map((l) => l.end)).size).toBe(1);
+});
+
 test('toggling a chip inside More keeps More open and flips the chip', async ({ page }) => {
   await mount(page);
   await more(page).click();

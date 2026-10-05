@@ -48,8 +48,9 @@
 .chip__swatch--cat-5 { background: var(--cat-5); }
 .chip__swatch--cat-6 { background: var(--cat-6); }
 
-/* The parked chips, listed in More's popover (overflow-row.css). */
-.overflow-list .chip { justify-content: space-between; }
+/* The parked chips, listed in More's popover (overflow-row.css): swatch and label start each line, the count ends it. */
+.overflow-list .chip { justify-content: flex-start; }
+.overflow-list .chip__count { margin-left: auto; padding-left: var(--space-sm); }
 
 @media (max-width: 768px) {
   .chip { min-height: 44px; }
