@@ -272,6 +272,33 @@ test('a refusing 409 shows the server\'s reason as an error, raises no banner an
   } finally { ctrl.destroy(); host.remove(); root.remove(); }
 });
 
+test('a save error is shown as text beside the field, announced, and tied to the control; cancelling clears it', async () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const reason = 'Completion blocked: review-gate is still open';
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'refused-2', title: 'old' },
+    onSave: async () => { throw Object.assign(new Error(reason), { code: 409 }); },
+  });
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = 'new';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    const message = () => root.querySelector('.if-error');
+    for (let i = 0; i < 100 && !message()?.textContent; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(message().textContent, reason, 'the reason is visible text, not only a tooltip');
+    assert.equal(message().getAttribute('role'), 'alert');
+    assert.ok(message().id);
+    assert.ok(input.getAttribute('aria-describedby')?.split(' ').includes(message().id), 'the control is described by the message');
+    assert.equal(root.querySelector('.if-status-error').getAttribute('aria-hidden'), 'true', 'the glyph is not read twice');
+
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert.equal(message()?.textContent ?? '', '', 'cancelling clears the message');
+    assert.equal(root.querySelector('.ef-text')?.textContent, 'old');
+  } finally { ctrl.destroy(); root.remove(); }
+});
+
 test('a lost race (409 naming the current revision) still raises the banner, and settling it stores that revision', async () => {
   const { store } = await import('../../js/store.js');
   const root = document.createElement('div');

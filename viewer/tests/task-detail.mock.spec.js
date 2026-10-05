@@ -248,7 +248,16 @@ test('an inline save the server refuses (409 with no revision) shows its reason,
     // The native select sits inside the marker picker; the change event is what the field listens to.
     await status.locator('select').evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
     await expect(status.locator('.if-status-error')).toHaveAttribute('title', reason);
+    // The reason is read on the page, not hovered for: visible text, announced, describing the select.
+    const message = status.locator('.if-error');
+    await expect(message).toBeVisible();
+    await expect(message).toHaveText(reason);
+    await expect(message).toHaveAttribute('role', 'alert');
+    const messageId = await message.getAttribute('id');
+    expect((await status.locator('select').getAttribute('aria-describedby')).split(' ')).toContain(messageId);
+    if (value === 'done') expect(await axe(page)).toEqual([]);
     await status.locator('select').press('Escape');
+    await expect(message).toBeHidden();
     await expect(status.locator('select')).toHaveCount(0);
   }
   await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);

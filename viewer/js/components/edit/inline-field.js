@@ -7,6 +7,7 @@ import { store } from '../../store.js';
 import { lostRace } from './task-actions.js';
 
 const DEBOUNCE_MS = 600;
+let seq = 0;
 
 export function mountInlineField(parent, {
   schema, fieldKey, entity, onSave,
@@ -38,10 +39,17 @@ export function mountInlineField(parent, {
 
   const status = h('span', { class: 'if-status' });
   parent.appendChild(status);
+  // Why a save failed, as words beside the field: a tooltip never reaches the keyboard or a touch screen. It is an
+  // alert so it is announced, and it describes the control while the editor is open.
+  const message = h('span', { class: 'ef-error if-error', id: `if-error-${++seq}`, role: 'alert' });
+  parent.appendChild(message);
+  let control = null;   // the focusable control of the open editor
 
   paint();
 
   function paint() {
+    showMessage('');
+    control = null;
     wrap.replaceChildren();
     if (mode === 'read') {
       const el = renderer.read({
@@ -82,8 +90,18 @@ export function mountInlineField(parent, {
         getBacklog,
         ...fieldSpec,
       });
+      control = el.control ?? el;
       wrap.appendChild(el);
     }
+  }
+
+  function showMessage(text) {
+    message.textContent = text || '';
+    const ids = (control?.getAttribute('aria-describedby') || '').split(' ').filter((id) => id && id !== message.id);
+    if (text) ids.push(message.id);
+    if (!control) return;
+    if (ids.length) control.setAttribute('aria-describedby', ids.join(' '));
+    else control.removeAttribute('aria-describedby');
   }
 
   function enterEdit() {
@@ -170,7 +188,7 @@ export function mountInlineField(parent, {
             store.endEdit(currentEntity.id);
           },
         });
-        setStatus('error', 'stale — see banner');
+        setStatus('error', 'Conflict — see banner');
         return false;
       }
       setStatus('error', e.message || String(e));
@@ -181,11 +199,13 @@ export function mountInlineField(parent, {
   function setStatus(kind, msg) {
     status.replaceChildren();
     status.className = 'if-status';
+    showMessage(kind === 'error' ? (msg || 'Save failed') : '');
     if (!kind) return;
     if (kind === 'saving')  status.appendChild(h('span', { class: 'if-status-saving' }, '●'));
     if (kind === 'ok')      status.appendChild(h('span', { class: 'if-status-ok' }, '✓'));
     if (kind === 'error') {
-      const x = h('span', { class: 'if-status-error', title: msg || 'save failed' }, '✕');
+      // The message beside the field says it in words; the glyph is not read a second time.
+      const x = h('span', { class: 'if-status-error', title: msg || 'save failed', 'aria-hidden': 'true' }, '✕');
       status.appendChild(x);
     }
   }
@@ -203,6 +223,7 @@ export function mountInlineField(parent, {
       wrap.disposeInline();
       wrap.remove();
       status.remove();
+      message.remove();
     },
   };
 }

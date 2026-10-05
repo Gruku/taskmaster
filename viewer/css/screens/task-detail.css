@@ -98,7 +98,10 @@
 
 /* ---------- Marker row: status and priority as markers, the rest as secondary tags ---------- */
 .td-markers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); min-width: 0; }
-.td-marker-host { display: inline-flex; align-items: center; min-height: 24px; }
+.td-marker-host { display: inline-flex; flex-wrap: wrap; align-items: center; min-height: 24px; }
+/* A refused save's reason takes its own line under the marker. */
+.td-marker-host > .if-error { flex: 1 0 100%; }
+.td-markers:has(> .td-marker-host > .if-error:not(:empty)) { align-items: flex-start; }
 .td-marker-host .ef-editable { display: inline-flex; align-items: center; min-height: 24px; cursor: pointer; }
 .td-marker-host .marker { font-size: var(--size-technical-default); color: var(--foreground-bold); }
 
