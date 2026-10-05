@@ -322,6 +322,31 @@ test('a refused status choice goes back to the stored status, keeps its reason, 
   await expect(titleOf(dialog)).toHaveText('Renamed after the refusal');
 });
 
+// Two presses before the form's code has loaded used to stack two forms, each holding an edit lease (M-2).
+test('Edit pressed twice in a row opens one form, from the dialog and from the full page', async ({ page }) => {
+  await board(page);
+  const dialog = await openCard(page, 'T-102');
+  await dialog.getByRole('button', { name: 'Edit', exact: true }).evaluate((b) => { b.click(); b.click(); });
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(1);
+  await page.waitForTimeout(200);   // a second form would arrive once its import settled
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(0);
+  expect(await editing(page, 'T-102')).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect(detail(page)).toHaveCount(0);
+
+  await page.goto('/#/task/T-102');
+  await expect(page.locator('.td-doc--page')).toBeVisible();
+  await page.getByTitle('Edit task').evaluate((b) => { b.click(); b.click(); });
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(1);
+  await page.waitForTimeout(200);
+  await expect(page.getByRole('dialog', { name: 'Edit task' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal')).toHaveCount(0);
+  expect(await editing(page, 'T-102')).toBe(false);
+});
+
 test('a task that fails to load says so in a sentence, offers Open full, and prints no raw API error', async ({ page }) => {
   await board(page, { table: { '/api/task/T-102/detail': { status: 500, json: { error: 'Traceback: KeyError depends_on' } } } });
   await card(page, 'T-102').click();

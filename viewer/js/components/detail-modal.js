@@ -198,12 +198,17 @@ export function openDetailModal({ kind, id, opener }) {
     else leaveTo(href);
   });
 
+  // A second press while the form's code is loading would stack a second form, with a second edit lease.
+  let editOpening = false;
   editBtn.addEventListener('click', async () => {
     const editing = task;
-    if (!editing) return;
-    const { openTaskEditModal } = await import('./edit/task-actions.js');
-    // Stacked on top; when it closes the task's edit lease ends and the subscription above re-reads the task.
-    if (!closed && task === editing) openTaskEditModal({ store, api, task: editing });
+    if (!editing || editOpening) return;
+    editOpening = true;
+    try {
+      const { openTaskEditModal } = await import('./edit/task-actions.js');
+      // Stacked on top; when it closes the task's edit lease ends and the subscription above re-reads the task.
+      if (!closed && task === editing && modal.isTop()) openTaskEditModal({ store, api, task: editing });
+    } finally { editOpening = false; }
   });
 
   modal.onClosed(() => {

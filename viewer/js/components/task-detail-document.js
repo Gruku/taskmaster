@@ -94,11 +94,14 @@ export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
   topbar.append(seg, editBtn);
 }
 
+let editOpening = null;
 export function openEditForm(ctx) {
-  // Late-import to avoid loading edit code on every viewer boot.
-  return import('./edit/task-actions.js').then(({ openTaskEditModal }) => {
+  // Late-import to avoid loading edit code on every viewer boot. A second press while that load is under way would
+  // open a second form, with a second edit lease, so it joins the first.
+  editOpening ??= import('./edit/task-actions.js').then(({ openTaskEditModal }) => {
     openTaskEditModal({ store: ctx.store, api: ctx.api, task: ctx.task });
-  });
+  }).finally(() => { editOpening = null; });
+  return editOpening;
 }
 
 // Where focus sits inside `scope`, as something a re-mounted document can find again. Returns a function that

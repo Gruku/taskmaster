@@ -598,3 +598,21 @@ test('an inline save on a task that was removed says so in a sentence, not as th
   } finally { t.done(); }
 });
 
+// Two presses on Edit before the form's code has loaded open one form, with one edit lease (M-2).
+test('Edit pressed twice in a row opens one form', async () => {
+  const { openEditForm } = await import('../../js/components/task-detail-document.js');
+  const { openModalCount } = await import('../../js/components/modal.js');
+  const leases = [];
+  const ctx = makeCtx();
+  ctx.store = { ...ctx.store, beginEdit: (id) => leases.push(id), endEdit: () => {} };
+  await Promise.all([openEditForm(ctx), openEditForm(ctx)]);
+  await tick();
+  try {
+    assert.equal(document.querySelectorAll('.modal--form').length, 1);
+    assert.deepEqual(leases, ['T-001']);
+  } finally {
+    for (const cancel of document.querySelectorAll('.modal--form [data-cancel]')) cancel.click();
+    await tick();
+    assert.equal(openModalCount(), 0);
+  }
+});
