@@ -1,0 +1,17 @@
+{
+  "name": "taskmaster-tui",
+  "version": "0.1.0",
+  "description": "Taskmaster in the terminal: review queue, this session's current task above the prompt, handovers pane, faults-only status line.",
+  "author": { "name": "gruku" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["rr-tui"],
+  "userConfig": {
+    "source": {
+      "type": "string",
+      "title": "Data source",
+      "description": "tm reads the Taskmaster MCP server; demo draws built-in sample data (screenshots and tuning without a backlog).",
+      "default": "tm",
+      "options": ["tm", "demo"]
+    }
+  }
+}
