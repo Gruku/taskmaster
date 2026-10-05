@@ -78,9 +78,9 @@ describe('$.rr', () => {
     rrWorldOf(on, 'dark')
     stateWorldOf(on, { 'rr-tui.override': 'survivalist' })
     const answers = JSON.parse((await $.command.run(command('rr-probe-all'))).text ?? '{}') as Record<string, unknown>
-    expect(Object.keys(answers).sort()).toEqual(['button', 'chip', 'keycap', 'keyedButton', 'label', 'row', 'rule', 'signal', 'surface', 'surfaceProps'])
+    expect(Object.keys(answers).sort()).toEqual(['button', 'buttonProps', 'chip', 'keycap', 'label', 'row', 'rule', 'signal', 'surface', 'surfaceProps'])
     expect(answers.button).toMatchObject({ borderStyle: 'bold' })
-    expect(answers.keyedButton).toMatchObject({ box: { paddingX: 1 }, label: { props: { bold: true } } })
+    expect(answers.buttonProps).toEqual({ plain: true, hotkey: 'a', hover: { bold: true, color: tokensFor('survivalist').fg.bold } })
     expect(JSON.stringify(answers.chip)).toContain('[◆ refused]')
   })
 
@@ -120,34 +120,32 @@ describe('$.rr', () => {
       for (const [key, polarity] of [['pol-dark', 'dark'], ['pol-light', 'light'], ['pol-survivalist', 'survivalist']] as const) {
         await ui.press({ key })
         expect((await ui.find({ type: 'Box' }))?.props.backgroundColor).toBe(tokensFor(polarity).surface.page)
-        for (const [key, letter] of [['outline-page', 'd'], ['back-to-agent-page', 'a'], ['skip-page', 's'], ['open-page', 'o']]) {
-          expect(await ui.find({ type: 'Button', key })).toMatchObject({ props: { label: letter, hotkey: letter } })
-        }
+        const t = tokensFor(polarity)
+        const recipe = (letter?: string) => ({ plain: true, ...(letter ? { hotkey: letter } : {}) })
+        // A drawn element carries `hover` beside its props, so the Button is read off the keyed wrapper that scopes it.
+        const wrapped = async (id: string, label: string, letter?: string) =>
+          expect(await ui.find({ type: 'Box', key: `${id}-box` })).toMatchObject({
+            children: [{ type: 'Button', props: { label, ...recipe(letter) }, hover: { bold: true, color: t.fg.bold } }],
+          })
+        expect(await ui.find({ type: 'Box', key: 'outline-page-box' })).toMatchObject({ props: { borderStyle: polarity === 'survivalist' ? 'bold' : 'round' } })
+        await wrapped('outline-page', 'done', 'd')
+        await wrapped('back-to-agent-page', 'back to agent', 'a')
+        await wrapped('skip-page', 'skip', 's')
+        await wrapped('open-page', 'open', 'o')
+        await wrapped('tones-signature-page', 'confirm', 'y')
+        await wrapped('tones-critical-overlay', 'discard')
         for (const on of ['page', 'raised', 'overlay']) {
           for (const tone of ['success', 'warning', 'critical', 'info', 'signature']) {
             expect(await ui.find({ type: 'Button', key: `tones-${tone}-${on}` })).toBeDefined()
           }
         }
-        expect(await ui.find({ type: 'Button', key: 'pol-survivalist' })).toMatchObject({ props: { label: '3', hotkey: '3' } })
-        expect(await ui.find({ type: 'Text', text: ' survivalist' })).toMatchObject({ props: { bold: true } })
+        await wrapped('pol-survivalist', 'survivalist', '3')
       }
       await ui.press({ key: 'skip-page' })
       await ui.press({ key: 'tones-info-overlay' })
-      // A drawn element carries `hover` beside its props, so it is read off the keyed chip Box that scopes it.
-      expect(await ui.find({ type: 'Box', key: 'whole-chip-1-warning-box' })).toMatchObject({
-        children: [{ type: 'Button', props: { label: 'back to agent', hotkey: '5', plain: true }, hover: { bold: true } }],
-      })
-      expect(await ui.find({ type: 'Button', key: 'whole-chip-2-signature' })).toMatchObject({ props: { label: ' '.repeat(7), hotkey: '8' } })
-      await ui.press({ key: 'whole-chip-1-signature' })
-      await ui.press({ key: 'whole-chip-2-warning' })
       await ui.unmount()
     }
-    const perSurface = [
-      'rr-gallery: pressed skip-page',
-      'rr-gallery: pressed tones-info-overlay',
-      'rr-gallery: pressed whole-chip-1-signature',
-      'whole-chip variant 2 pressed',
-    ]
+    const perSurface = ['rr-gallery: pressed skip-page', 'rr-gallery: pressed tones-info-overlay']
     expect(world.toasts).toEqual([...perSurface, ...perSurface])
   })
 })

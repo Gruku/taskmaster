@@ -23,27 +23,26 @@ export type RrBoxProps = {
   readonly width?: number | string
 }
 /**
- * RR's button with its key shown: a tinted chip (or, for the one primary action, the round tone outline) holding a keycap,
- * then a bold `foreground-bold` label. A Button's label takes no colour or weight, so the label is RR's own Text and the
- * Button carries only the key. A noun can't hand out a Button, so the consumer draws it inside `keycap`: a non-plain Button
- * whose label is the key, armed with `hotkey` = the key. It draws `[ d ]` (a plain Button with a hotkey would draw `d: d`).
- * Key or click presses it.
+ * RR's button recipe: the whole surface presses. The treatment's wrapper Box (`button()`: a chip's tint on its ground, or
+ * the round tone outline for the one primary action) holds ONE plain Button carrying the label. `buttonProps()` gives that
+ * Button its `hotkey` (one digit or one lowercase letter), so the engine draws `d: back to agent`, and a `hover` that turns
+ * the label bold `foreground-bold` (style only, no motion). Give the wrapper Box a unique `key`: a Button's `hover` only
+ * applies inside a keyed Box. A noun can't hand out a Button or its press handler, so the consumer draws the Button.
  *
  * @example
- * const p = await $.rr.keyedButton({ treatment: 'chip', tone: 'warning', on: 'raised', label: 'back to agent' })
- * <Box key="back-box" {...p.box}>
- *   <Box {...p.keycap}><Button key="back" label="a" hotkey="a" onPress={back} /></Box>
- *   {p.label}
+ * const wrap = await $.rr.button({ treatment: 'chip', tone: 'warning', on: 'raised' })
+ * const press = await $.rr.buttonProps({ key: 'a' })
+ * <Box key="back-box" {...wrap}>
+ *   <Button key="back" {...press} label="back to agent" onPress={back} />
  * </Box>
- * // Beside the 3-row outline, lay the row out with alignItems="flex-start" so chips stay one row tall.
+ * // The primary: button({ treatment: 'outline', tone: 'success' }) around `d: done`. Beside its 3-row outline, lay the
+ * // row out with alignItems="flex-start" so the chips stay one row tall.
  */
-export type RrKeyedButton = {
-  /** The button's own Box: the treatment of `button()` laid out as a row (an outline also pads 1). */
-  readonly box: RrBoxProps
-  /** The keycap Box around the consumer's Button: the tone's 24% tint on its ground (survivalist: a value step, no hue). */
-  readonly keycap: RrBoxProps
-  /** The label Text after the keycap: bold, foreground-bold, led by one space. */
-  readonly label: RrNode
+export type RrButtonProps = {
+  readonly plain: true
+  /** Present when `key` was given. Two Buttons on one hotkey in a site clash (the later wins). */
+  readonly hotkey?: string
+  readonly hover: { readonly bold: true; readonly color: string }
 }
 export type RrTokens = {
   readonly polarity: RrPolarity
@@ -66,7 +65,7 @@ export type Rr = {
   row: (args: { cells: readonly RrNode[]; emphasis?: 'strong' | 'quiet' }) => Promise<RrNode>
   rule: (args: { width: number }) => Promise<RrNode>
   button: (args: { treatment: RrTreatment; tone: RrTone; on?: RrGround }) => Promise<RrBoxProps>
-  keyedButton: (args: { treatment: RrTreatment; tone: RrTone; on?: RrGround; label: string }) => Promise<RrKeyedButton>
+  buttonProps: (args: { key?: string }) => Promise<RrButtonProps>
   keycap: (args: { key: string; tone: RrTone }) => Promise<RrNode>
   chip: (args: { text: string; tone: RrTone; strength: RrStrength; on?: RrGround }) => Promise<RrNode>
 }

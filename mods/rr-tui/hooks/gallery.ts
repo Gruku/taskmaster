@@ -1,8 +1,8 @@
 // User intent: the /rr-gallery body — every $.rr element in every state with sample data, so the RR terminal look is judged
 // and tuned on one screen against screenshots.
-import type { RenderNode, TextHoverProps } from 'claude-code'
+import type { RenderNode } from 'claude-code'
 
-import type { RrGround, RrLevel, RrSignalKind, RrTokens, RrTone, RrTreatment } from '../types'
+import type { RrButtonProps, RrGround, RrLevel, RrSignalKind, RrTokens, RrTone, RrTreatment } from '../types'
 import * as kit from './kit'
 import { RR_SOURCE } from './tokens'
 
@@ -10,8 +10,8 @@ const LEVELS: readonly RrLevel[] = ['raised', 'overlay', 'recessed']
 const KINDS: readonly RrSignalKind[] = ['success', 'warning', 'critical', 'info']
 const TONES: readonly RrTone[] = ['success', 'warning', 'critical', 'info', 'signature']
 const GROUNDS: readonly RrGround[] = ['page', 'raised', 'overlay']
-// The buttons taskmaster-tui draws (d done is the one primary), then one chip per tone; only the page row arms hotkeys, since
-// two Buttons on one hotkey clash.
+// The buttons taskmaster-tui draws (d done is the one primary), then one chip per tone on each ground. Only the page rows arm
+// hotkeys: two Buttons on one hotkey clash.
 const PRIMARY_ROW: readonly { id: string; key: string; label: string; tone: RrTone }[] = [
   { id: 'back-to-agent', key: 'a', label: 'back to agent', tone: 'warning' },
   { id: 'skip', key: 's', label: 'skip', tone: 'signature' },
@@ -19,86 +19,42 @@ const PRIMARY_ROW: readonly { id: string; key: string; label: string; tone: RrTo
 ]
 const TONE_SAMPLES: Readonly<Record<RrTone, { key: string; label: string }>> = {
   success: { key: 'r', label: 'resume' },
-  warning: { key: 'a', label: 'back' },
+  warning: { key: 'w', label: 'wait' },
   critical: { key: 'x', label: 'discard' },
   info: { key: 'c', label: 'copy' },
-  signature: { key: 'o', label: 'open' },
+  signature: { key: 'y', label: 'confirm' },
 }
 
 const box = (props: Record<string, unknown>, ...children: unknown[]): RenderNode => h('Box', props, ...children) as RenderNode
 
-// Round 2 addendum, a temporary experiment: can the whole chip be the click target? Box has no onPress, so two probes, each
-// on a warning and a signature chip with their own digit hotkeys (d/a/s/o are taken by the primary row).
-const WHOLE_CHIP: readonly { tone: RrTone; label: string; keys: readonly [string, string] }[] = [
-  { tone: 'warning', label: 'back to agent', keys: ['5', '7'] },
-  { tone: 'signature', label: 'open', keys: ['6', '8'] },
-]
-const WHOLE_CHIP_NOTES = [
-  '1: one plain Button is the chip; the engine draws `key: label`, hover makes the label bold foreground-bold',
-  '2: a blank plain Button is the click target; an absolute Box paints our keycap and bold label over it',
-] as const
+/** The consumer's Button in the recipe, drawn by register.tsx, which owns the press handlers. */
+export type Demo = (id: string, label: string, press: RrButtonProps) => RenderNode
 
-/** A Button the gallery asks register.tsx to draw, since only it owns press handlers. */
-export type DemoButton = {
-  readonly label: string
-  readonly hotkey?: string
-  readonly plain?: true
-  readonly hover?: TextHoverProps
-  /** The toast on press; `rr-gallery: pressed <id>` when absent. */
-  readonly toast?: string
-}
-export type Demo = (id: string, button: DemoButton) => RenderNode
-
-/** A keyed button assembled from kit.keyedButton's parts around the consumer's own Button (the recipe in types/index.d.ts). */
-export function keyed(
+/** The recipe's wrapper: the treatment's keyed Box (the key scopes the Button's hover) around the consumer's Button. */
+export function treated(
   t: RrTokens,
-  a: { id: string; treatment: RrTreatment; tone: RrTone; on?: RrGround; label: string },
+  a: { id: string; treatment: RrTreatment; tone: RrTone; on?: RrGround },
   pressable: RenderNode,
 ): RenderNode {
-  const parts = kit.keyedButton(t, a)
-  return box({ key: `${a.id}-box`, ...parts.box }, box(parts.keycap, pressable), parts.label)
+  return box({ key: `${a.id}-box`, ...kit.button(t, a) }, pressable)
 }
 
 export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode {
   const section = (name: string, ...rows: RenderNode[]) => box({ flexDirection: 'column' }, kit.label(t, { text: name }), ...rows)
   const primaryRow = box(
     { flexDirection: 'row', columnGap: 1, alignItems: 'flex-start' },
-    keyed(t, { id: 'outline-page', treatment: 'outline', tone: 'success', label: 'done' }, demo('outline-page', { label: 'd', hotkey: 'd' })),
-    ...PRIMARY_ROW.map(b => keyed(t, { id: `${b.id}-page`, treatment: 'chip', tone: b.tone, label: b.label }, demo(`${b.id}-page`, { label: b.key, hotkey: b.key }))),
+    treated(t, { id: 'outline-page', treatment: 'outline', tone: 'success' }, demo('outline-page', 'done', kit.buttonProps(t, { key: 'd' }))),
+    ...PRIMARY_ROW.map(b =>
+      treated(t, { id: `${b.id}-page`, treatment: 'chip', tone: b.tone }, demo(`${b.id}-page`, b.label, kit.buttonProps(t, { key: b.key }))),
+    ),
   )
   const toneRow = (on: RrGround) =>
     box(
       { flexDirection: 'row', columnGap: 1 },
-      ...TONES.map(tone =>
-        keyed(t, { id: `tones-${tone}-${on}`, treatment: 'chip', tone, on, label: TONE_SAMPLES[tone].label }, demo(`tones-${tone}-${on}`, { label: TONE_SAMPLES[tone].key })),
-      ),
-    )
-  const wholeChip = (variant: 1 | 2) =>
-    box(
-      { flexDirection: 'row', columnGap: 1, alignItems: 'flex-start' },
-      kit.row(t, { cells: [String(variant)], emphasis: 'quiet' }),
-      ...WHOLE_CHIP.map(({ tone, label, keys }) => {
-        const id = `whole-chip-${variant}-${tone}`
-        const key = keys[variant - 1] ?? ''
-        const ground = kit.button(t, { treatment: 'chip', tone }).backgroundColor
-        if (variant === 1) {
-          return box(
-            { key: `${id}-box`, ...kit.button(t, { treatment: 'chip', tone }) },
-            demo(id, { label, hotkey: key, plain: true, hover: { bold: true, color: t.fg.bold } }),
-          )
-        }
-        // Visible width: paddingX 1 each side, the ` k ` keycap, then ` label`. The plain Button draws `k: ` before its label,
-        // so its blank label is three columns short of that width.
-        const width = label.length + 6
-        return box(
-          { key: `${id}-box`, flexDirection: 'row', backgroundColor: ground },
-          demo(id, { label: ' '.repeat(width - 3), hotkey: key, plain: true, toast: 'whole-chip variant 2 pressed' }),
-          box(
-            { position: 'absolute', top: 0, left: 0, width, paddingX: 1, flexDirection: 'row', backgroundColor: ground },
-            kit.keycap(t, { key, tone }),
-            h('Text', { color: t.fg.bold, bold: true }, ` ${label}`),
-          ),
-        )
+      ...TONES.map(tone => {
+        const id = `tones-${tone}-${on}`
+        const press = kit.buttonProps(t, on === 'page' ? { key: TONE_SAMPLES[tone].key } : {})
+        return treated(t, { id, treatment: 'chip', tone, on }, demo(id, TONE_SAMPLES[tone].label, press))
       }),
     )
   return box(
@@ -119,11 +75,10 @@ export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode 
       primaryRow,
       ...GROUNDS.map(on =>
         on === 'page'
-          ? box({ flexDirection: 'column' }, kit.row(t, { cells: ['on page'], emphasis: 'quiet' }), toneRow(on))
+          ? box({ flexDirection: 'column' }, kit.row(t, { cells: ['on page · hotkeys armed here only'], emphasis: 'quiet' }), toneRow(on))
           : kit.surface(t, { level: on, children: [kit.row(t, { cells: [`on ${on}`], emphasis: 'quiet' }), toneRow(on)] }),
       ),
     ),
-    section('whole-chip click', wholeChip(1), wholeChip(2), ...WHOLE_CHIP_NOTES.map(note => kit.row(t, { cells: [note], emphasis: 'quiet' }))),
     section(
       'states',
       box(

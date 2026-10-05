@@ -18,7 +18,7 @@ export const CONSUMER: Plugin = {
         row: await $.rr.row({ cells: ['a', 'b'] }),
         rule: await $.rr.rule({ width: 3 }),
         button: await $.rr.button({ treatment: 'outline', tone: 'success' }),
-        keyedButton: await $.rr.keyedButton({ treatment: 'chip', tone: 'warning', label: 'back to agent' }),
+        buttonProps: await $.rr.buttonProps({ key: 'a' }),
         keycap: await $.rr.keycap({ key: 'd', tone: 'success' }),
         chip: await $.rr.chip({ text: 'refused', tone: 'critical', strength: 24 }),
       }

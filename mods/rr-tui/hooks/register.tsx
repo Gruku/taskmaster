@@ -4,7 +4,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode } from 'claude-code'
 
 import type { Rr, RrNode, RrPolarity, RrTokens } from '../types'
-import { galleryTree, keyed } from './gallery'
+import { galleryTree, treated } from './gallery'
 import type { Demo } from './gallery'
 import * as kit from './kit'
 import { isPolarity, resolvePolarity, tokensFor } from './polarity'
@@ -56,7 +56,7 @@ export const register: Register = (on, options) => {
       row: refuse,
       rule: refuse,
       button: refuse,
-      keyedButton: refuse,
+      buttonProps: refuse,
       keycap: refuse,
       chip: refuse,
     }
@@ -72,10 +72,7 @@ export const register: Register = (on, options) => {
   on('rr.row', async ($, a) => ({ value: out(kit.row(await tokensOf($), { ...a, cells: back(a.cells) })) }))
   on('rr.rule', async ($, a) => ({ value: out(kit.rule(await tokensOf($), a)) }))
   on('rr.button', async ($, a) => ({ value: kit.button(await tokensOf($), a) }))
-  on('rr.keyedButton', async ($, a) => {
-    const parts = kit.keyedButton(await tokensOf($), a)
-    return { value: { ...parts, label: out(parts.label) } }
-  })
+  on('rr.buttonProps', async ($, a) => ({ value: kit.buttonProps(await tokensOf($), a) }))
   on('rr.keycap', async ($, a) => ({ value: out(kit.keycap(await tokensOf($), a)) }))
   on('rr.chip', async ($, a) => ({ value: out(kit.chip(await tokensOf($), a)) }))
 
@@ -118,16 +115,15 @@ export const register: Register = (on, options) => {
       await update($, OVERRIDE, () => to)
       await publish($)
     }
-    const demo: Demo = (id, b) => {
-      const press = () => $.ui.toast(b.toast ?? `rr-gallery: pressed ${id}`)
-      return b.plain ? (
-        <Button key={id} plain label={b.label} hotkey={b.hotkey} hover={b.hover} onPress={press} />
-      ) : (
-        <Button key={id} label={b.label} hotkey={b.hotkey} hover={b.hover} onPress={press} />
-      )
-    }
+    const demo: Demo = (id, label, press) => (
+      <Button key={id} {...press} label={label} onPress={() => $.ui.toast(`rr-gallery: pressed ${id}`)} />
+    )
     const polarityButton = (id: string, key: string, label: string, to: RrPolarity | 'none') =>
-      keyed(t, { id, treatment: 'chip', tone: 'signature', label }, <Button key={id} label={key} hotkey={key} onPress={flip(to)} />)
+      treated(
+        t,
+        { id, treatment: 'chip', tone: 'signature' },
+        <Button key={id} {...kit.buttonProps(t, { key })} label={label} onPress={flip(to)} />,
+      )
     return (
       <Box {...kit.surfaceProps(t, { level: 'page' })} flexGrow={1} rowGap={1}>
         <Box flexDirection="row" columnGap={1} alignItems="flex-start">

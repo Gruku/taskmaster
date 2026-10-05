@@ -54,13 +54,8 @@ function everyElement(p: RrPolarity): unknown[] {
       kit.chip(t, { text: tone, tone, strength: 24 }),
       { props: kit.button(t, { treatment: 'outline', tone }) },
       ...(['page', 'raised', 'overlay'] as const).map(on => ({ props: kit.button(t, { treatment: 'chip', tone, on }) })),
-      ...(['page', 'raised', 'overlay'] as const).flatMap(on =>
-        (['chip', 'outline'] as const).flatMap(treatment => {
-          const parts = kit.keyedButton(t, { treatment, tone, on, label: tone })
-          return [{ props: parts.box }, { props: parts.keycap }, parts.label]
-        }),
-      ),
     ]),
+    { props: kit.buttonProps(t, { key: 'd' }).hover },
   ]
 }
 
@@ -121,55 +116,54 @@ describe('elements', () => {
     expect(rule.props.color).toBe(t.border.default)
   })
 
-  test('a keyed chip is the 12% tint row holding a 24% tint keycap, then a bold foreground-bold label', () => {
-    const t = tokensFor('dark')
-    const parts = kit.keyedButton(t, { treatment: 'chip', tone: 'warning', on: 'raised', label: 'back to agent' })
-    expect(parts.box).toEqual({ backgroundColor: t.tint12.raised.warning, paddingX: 1, flexDirection: 'row' })
-    expect(parts.keycap).toEqual({ backgroundColor: t.tint24.raised.warning })
-    const label = parts.label as unknown as { type: string; props: { color: string; bold: boolean } }
-    expect(label.type).toBe('Text')
-    expect(label.props).toMatchObject({ color: t.fg.bold, bold: true })
-    expect(textOf(label)).toBe(' back to agent')
-  })
-
-  test('the keyed primary keeps the round tone outline, padded, with the same keycap and bold label', () => {
-    const t = tokensFor('light')
-    const parts = kit.keyedButton(t, { treatment: 'outline', tone: 'success', label: 'done' })
-    expect(parts.box).toEqual({ borderStyle: 'round', borderColor: t.tone.success, paddingX: 1, flexDirection: 'row' })
-    expect(parts.keycap).toEqual({ backgroundColor: t.tint24.page.success })
-    expect((parts.label as unknown as { props: { bold: boolean } }).props.bold).toBe(true)
-  })
-
-  test('the engine-drawn key stays legible on its keycap under auto, and the keycap stands off its chip', () => {
-    // Assumed colours the engine draws a Button label in: Windows Terminal default (#cccccc) under a dark theme, near-black
-    // under the Claude Code light theme (live round 1: labels read correctly there).
-    const DEFAULT_FG: Readonly<Record<'dark' | 'light', string>> = { dark: '#cccccc', light: '#000000' }
+  test('the recipe wrapper: a chip is its 12% tint on its ground, the primary is the round tone outline', () => {
     for (const p of ['dark', 'light'] as const) {
       const t = tokensFor(p)
       for (const tone of TONES) {
+        expect(kit.button(t, { treatment: 'outline', tone })).toEqual({ borderStyle: 'round', borderColor: t.tone[tone] })
         for (const on of ['page', 'raised', 'overlay'] as const) {
-          const parts = kit.keyedButton(t, { treatment: 'chip', tone, on, label: 'x' })
-          expect(contrast(parts.keycap.backgroundColor ?? '', DEFAULT_FG[p])).toBeGreaterThanOrEqual(4.5)
-          expect(parts.keycap.backgroundColor).not.toBe(parts.box.backgroundColor)
+          expect(kit.button(t, { treatment: 'chip', tone, on })).toEqual({ backgroundColor: t.tint12[on][tone], paddingX: 1 })
         }
       }
     }
   })
 
-  test('a survivalist keyed button is value only: grey-step chip, a keycap a step above it, bold label', () => {
+  test('buttonProps: a plain Button armed with its key, bold foreground-bold on hover; no key, no hotkey', () => {
+    for (const p of POLARITIES) {
+      const t = tokensFor(p)
+      expect(kit.buttonProps(t, { key: 'd' })).toEqual({ plain: true, hotkey: 'd', hover: { bold: true, color: t.fg.bold } })
+      expect(kit.buttonProps(t, {})).toEqual({ plain: true, hover: { bold: true, color: t.fg.bold } })
+    }
+  })
+
+  test('the label stays legible on every chip at rest and on hover', () => {
+    // At rest the engine draws a Button label in the theme's foreground; assumed here as Windows Terminal's default (#cccccc)
+    // under a dark theme and near-black under the Claude Code light theme (live round 1: labels read correctly there).
+    // Survivalist is drawn on dark grounds. On hover the label turns foreground-bold.
+    const AT_REST: Readonly<Record<RrPolarity, string>> = { dark: '#cccccc', light: '#000000', survivalist: '#cccccc' }
+    for (const p of POLARITIES) {
+      const t = tokensFor(p)
+      const hover = kit.buttonProps(t, { key: 'd' }).hover.color
+      for (const tone of TONES) {
+        for (const on of ['page', 'raised', 'overlay'] as const) {
+          const chip = kit.button(t, { treatment: 'chip', tone, on }).backgroundColor ?? ''
+          expect(contrast(chip, AT_REST[p])).toBeGreaterThanOrEqual(4.5)
+          expect(contrast(chip, hover)).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    }
+  })
+
+  test('the survivalist recipe is value only: grey-step chips, a bold fg.bold outline, hover in fg.bold', () => {
     const surv = tokensFor('survivalist')
     const grounds = new Set(Object.entries(RR_TABLE.survivalist).filter(([k]) => /^ground-\d+$/.test(k)).map(([, v]) => v))
-    for (const on of ['page', 'raised', 'overlay'] as const) {
-      const parts = kit.keyedButton(surv, { treatment: 'chip', tone: 'critical', on, label: 'discard' })
-      expect(parts.box.backgroundColor).toBe(kit.button(surv, { treatment: 'chip', tone: 'critical', on }).backgroundColor)
-      const keycapBg = parts.keycap.backgroundColor ?? ''
-      expect(grounds.has(keycapBg)).toBe(true)
-      expect(keycapBg).not.toBe(parts.box.backgroundColor)
-      // Hue-free = a value on the survivalist ground ramp (as the no-hue sweep below defines it); the ramp warms slightly up
-      // its steps (#4d4c48), so no channel-spread bound applies here.
-      expect(contrast(keycapBg, '#cccccc')).toBeGreaterThanOrEqual(4.5)
-      expect((parts.label as unknown as { props: { bold: boolean; color: string } }).props).toMatchObject({ bold: true, color: surv.fg.bold })
+    expect(kit.button(surv, { treatment: 'outline', tone: 'success' })).toEqual({ borderStyle: 'bold', borderColor: surv.fg.bold })
+    for (const tone of TONES) {
+      for (const on of ['page', 'raised', 'overlay'] as const) {
+        expect(grounds.has(kit.button(surv, { treatment: 'chip', tone, on }).backgroundColor ?? '')).toBe(true)
+      }
     }
+    expect(grounds.has(kit.buttonProps(surv, { key: 'a' }).hover.color)).toBe(true)
   })
 
   test('a page surface paints bg-page, for pane roots', () => {
