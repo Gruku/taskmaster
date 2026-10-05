@@ -8,13 +8,9 @@
 //   - NO colored left rails / border-left accents. Use tinted fill + full-perimeter border.
 //   - NO hover motion (transform / translate / scale).
 //   - NO box-shadows for elevation — surface stepping only.
-//   - Gate state uses tinted backgrounds matching the existing color tokens:
-//       done     → green tint   (--green  / rgba(95,174,110,...))
-//       pass     → green tint
-//       warn     → amber tint   (--amber  / rgba(214,164,95,...))
-//       fail     → red tint     (--red    / rgba(214,107,95,...))
-//       skipped  → neutral tint (--ink-3  / rgba(124,130,144,...))
-//       pending  → transparent  (--border / dim outline only)
+//   - A gate's state is a shape plus a word (the marker language of status.css); the shape carries the hue:
+//       done / pass → ● success      warn → ▲ warning      fail → ◆ critical
+//       skipped     → ✕ neutral      pending → ○ neutral
 //
 // Source of truth: taskmaster_v3.py blocking_gates(). Review gates only — these gate completion.
 // Status gates (spec/plan/tests/impl) are non-blocking plumbing and are not shown in the tracker.
@@ -29,6 +25,16 @@ const BLOCKING_GATES = {
   full:     ['spec-review', 'plan-review', 'review-gate'],
   standard: ['design-review', 'review-gate'],
   express:  ['review-gate'],
+};
+
+// state → [marker tone, drawn shape, fallback glyph]
+const STATE_MARK = {
+  done:    ['success', 'dot', '●'],
+  pass:    ['success', 'dot', '●'],
+  warn:    ['warning', 'triangle', '▲'],
+  fail:    ['critical', 'diamond', '◆'],
+  skipped: ['neutral', 'cross', '✕'],
+  pending: ['neutral', 'ring', '○'],
 };
 
 // ---------------------------------------------------------------------------
@@ -77,7 +83,11 @@ export function renderGatePipeline(task) {
   // Build one node per required gate.
   const nodes = gates.map((gateName) => {
     const stateClass = gateStateClass(records[gateName]);
-    return `<span class="gp-gate gate--${stateClass}" title="${escapeHtml(gateName)}">${escapeHtml(gateName)}</span>`;
+    const [tone, shape, glyph] = STATE_MARK[stateClass];
+    return `<span class="gp-gate gate--${stateClass} marker marker--${tone}" title="${escapeHtml(gateName)}: ${stateClass}">`
+      + `<span class="marker__shape" data-shape="${shape}" aria-hidden="true">${glyph}</span>`
+      + `<span class="marker__word">${escapeHtml(gateName)}</span>`
+      + `<span class="gp-word">${stateClass}</span></span>`;
   }).join('');
 
   // Optional gate_state one-liner (current machine state from server).

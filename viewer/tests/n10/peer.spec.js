@@ -68,12 +68,12 @@ test('an idle detail and a reopened modal refresh after a peer delta', async ({p
   await expect(page.locator('.if-wrap[data-key="title"]')).toContainText('Idle detail peer update', {timeout: 10000});
   await page.goto('/#/kanban');
   await page.locator('.card-task[data-task-id="board-001"]').click();
-  await expect(page.locator('.dm-modal')).toContainText('Idle detail peer update');
+  await expect(page.locator('.modal--detail')).toContainText('Idle detail peer update');
   await page.keyboard.press('Escape');
-  await expect(page.locator('.dm-modal')).toHaveCount(0);
+  await expect(page.locator('.modal--detail')).toHaveCount(0);
   await peer(page, 'board-001', 'Reopened peer update');
   await page.locator('.card-task[data-task-id="board-001"]').click();
-  await expect(page.locator('.dm-modal')).toContainText('Reopened peer update');
+  await expect(page.locator('.modal--detail')).toContainText('Reopened peer update');
   await page.getByRole('link', {name: 'Open full'}).click();
   await expect(page.locator('.if-wrap[data-key="title"]')).toContainText('Reopened peer update');
 });

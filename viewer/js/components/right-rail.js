@@ -1,52 +1,36 @@
-// Shared right-rail used by Task Detail Variants A and B.
-// `mountRightRail(root, { task, related, onNavigate })` renders six panels:
-//   Docs · Links (typed, Plan C) · Handovers · Issues
-//   · Dependencies + Unblocks · Blockers
-// Returns a cleanup function.
+// Shared right rail of the task detail views (document and graph).
+// `railPanels({ task, related, level })` gives the panels that have something to show, in order:
+//   Relations (links · depends on · unblocks · blockers) · Docs · Handovers · Issues
+// — none at all for a task with nothing related, so the caller can leave the rail out.
+// `mountRightRail(root, ctx)` puts them in `root` and returns a cleanup function.
 
-import { renderLinkPills, legacyLinksToTyped } from './link-pills.js';
+import { linkPillsEl, legacyLinksToTyped } from './link-pills.js';
+import { renderMarkdown } from './markdown.js';
+import { statusMarker, priorityMarker } from './status.js';
+import { icon } from './icon.js';
+import { formatStamp } from '../lib/time.js';
 
-export function mountRightRail(root, { task, related, onNavigate }) {
-  root.innerHTML = '';
+export function mountRightRail(root, ctx = {}) {
   root.classList.add('td-rail');
-
-  root.appendChild(panelDocs(task));
-  root.appendChild(panelLinks(task, onNavigate));
-  root.appendChild(panelHandovers(related?.handovers || []));
-  root.appendChild(panelIssues(related?.issues || [], onNavigate));
-  root.appendChild(panelDeps(related?.dependencies || [], related?.unblocks || [], onNavigate));
-  root.appendChild(panelBlockers(task?.blockers || []));
-
-  return () => { root.innerHTML = ''; };
+  root.replaceChildren(...railPanels(ctx));
+  return () => { root.replaceChildren(); };
 }
 
+// `level` is the heading level of a panel title; sub-lists sit one below it.
+export function railPanels({ task, related, level = 2 } = {}) {
+  const t = task && typeof task === 'object' ? task : {};
+  const r = related && typeof related === 'object' ? related : {};
+  return [
+    panelRelations(t, r, level),
+    panelDocs(t, level),
+    panelHandovers(list(r.handovers), level),
+    panelIssues(list(r.issues), level),
+  ].filter(Boolean);
+}
 
-function panelLinks(task, onNavigate) {
-  // Plan C: typed links surface from `task.links`. Falls back to legacy fields
-  // when the project hasn't been migrated yet.
-  const links = task?.links && task.links.length
-    ? task.links
-    : legacyLinksToTyped(task || {}, 'task');
-  if (!links.length) {
-    return h('section', { class: 'td-panel' },
-      [panelHeader('Links'), h('div', { class: 'td-empty' }, 'none')]);
-  }
-  const wrap = h('section', { class: 'td-panel td-panel-links' },
-    [panelHeader('Links')]);
-  const pillsRoot = h('div', { class: 'td-link-pills-mount' });
-  pillsRoot.innerHTML = renderLinkPills({ ...task, links });
-  // Make link-pill anchors navigate within the SPA when applicable.
-  pillsRoot.querySelectorAll('a.link-pill').forEach((a) => {
-    a.addEventListener('click', (e) => {
-      const target = a.getAttribute('href')?.slice(1) || '';
-      if (target.startsWith('T-') || target.startsWith('ue-') || /^[a-z][\w-]+-\d+$/.test(target)) {
-        e.preventDefault();
-        onNavigate?.(target);
-      }
-    });
-  });
-  wrap.appendChild(pillsRoot);
-  return wrap;
+// Relation data is written by many hands: a list that is not a list is no list, and holes are dropped.
+function list(v) {
+  return Array.isArray(v) ? v.filter((x) => x != null) : [];
 }
 
 function h(tag, attrs = {}, children = []) {
@@ -57,150 +41,257 @@ function h(tag, attrs = {}, children = []) {
     else el.setAttribute(k, v);
   }
   for (const c of [].concat(children)) {
-    if (c == null) continue;
+    if (c == null || c === false) continue;
     el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   }
   return el;
 }
 
-function panelHeader(label) {
-  return h('div', { class: 'td-rail-h' }, label);
+function panel(name, label, level, children) {
+  return h('section', { class: `td-panel td-panel-${name}`, 'data-panel': name },
+    [h(`h${level}`, { class: 'td-rail-h' }, label), ...children]);
 }
 
-function panelDocs(task) {
-  const docs = task?.docs || {};
-  const items = Object.entries(docs).map(([type, href]) =>
-    h('a', { class: `td-doc td-doc-${type}`, href, target: '_blank', rel: 'noopener' },
-      [h('span', { class: 'td-doc-type' }, type), h('span', { class: 'td-doc-path mono' }, href)])
-  );
-  return h('section', { class: 'td-panel td-panel-docs' },
-    [panelHeader('Docs'), ...(items.length ? items : [h('div', { class: 'td-empty' }, 'no docs')])]);
+function sub(name, label, level, body) {
+  return h('div', { class: 'td-rail-group', 'data-sub': name }, [h(`h${level + 1}`, { class: 'td-rail-sub' }, label), body]);
 }
 
-function panelHandovers(handovers) {
-  if (!handovers.length) {
-    return h('section', { class: 'td-panel' },
-      [panelHeader('Handovers'), h('div', { class: 'td-empty' }, 'none')]);
-  }
-  return h('section', { class: 'td-panel td-panel-handovers' },
-    [panelHeader('Handovers'),
-     ...handovers.map((ho) => {
-       const when = formatHandoverTime(ho.created);
-       const idLine = `${ho.id} · ${ho.kind || ''}${when ? ` · ${when}` : ''}`;
-       const status = ho.status || 'open';
-       return h('div', { class: `td-handover td-handover-${ho.kind || 'mid-task'}` },
-         [statusPill(ho.id, status),
-          h('div', { class: 'mono td-handover-id' }, idLine),
-          h('blockquote', { class: 'serif td-handover-quote' }, `"${ho.quote || ''}"`)]);
-     })]);
+// A related task as the server resolved it ({id, title, status}), or just its id.
+function relatedTasks(v) {
+  return list(v)
+    .map((d) => (typeof d === 'string' ? { id: d } : d))
+    .filter((d) => typeof d === 'object' && (typeof d.id === 'string' || typeof d.id === 'number') && d.id !== '');
 }
+
+function taskRows(tasks) {
+  return h('ul', { class: 'td-dep-list' }, tasks.map((d) => h('li', {}, [
+    h('a', { class: 'td-dep', href: `#/task/${encodeURIComponent(d.id)}` }, [
+      h('span', { class: 'td-dep__id' }, String(d.id)),
+      typeof d.title === 'string' && d.title ? h('span', { class: 'td-dep__title' }, d.title) : null,
+      typeof d.status === 'string' && d.status ? statusMarker('task', d.status) : null,
+    ]),
+  ])));
+}
+
+function blockerText(b) {
+  if (typeof b === 'string') return b;
+  if (b && typeof b === 'object') return typeof b.text === 'string' ? b.text : JSON.stringify(b);
+  return String(b);
+}
+
+function panelRelations(task, related, level) {
+  const deps = relatedTasks(related.dependencies);
+  const unblocks = relatedTasks(related.unblocks);
+  // Typed links (Plan C) come from `task.links`; an unmigrated project falls back to the legacy fields.
+  // A dependency already listed with its title and status is not repeated as a pill.
+  const typed = Array.isArray(task.links) && task.links.length ? task.links : legacyLinksToTyped(task, 'task');
+  const pills = linkPillsEl(list(typed).filter((l) =>
+    !(deps.length && l.type === 'depends_on') && !(unblocks.length && l.type === 'blocks')));
+  const blockers = (Array.isArray(task.blockers) ? task.blockers : [task.blockers]).filter((b) => b != null && b !== '');
+
+  const groups = [
+    pills && sub('links', 'Links', level, pills),
+    deps.length && sub('depends', 'Depends on', level, taskRows(deps)),
+    unblocks.length && sub('unblocks', 'Unblocks', level, taskRows(unblocks)),
+    blockers.length && sub('blockers', 'Blockers', level,
+      h('ul', { class: 'td-blocker-list' }, blockers.map((b) => h('li', { class: 'td-blocker' }, blockerText(b))))),
+  ].filter(Boolean);
+  return groups.length ? panel('relations', 'Relations', level, groups) : null;
+}
+
+function panelDocs(task, level) {
+  const docs = task.docs && typeof task.docs === 'object' && !Array.isArray(task.docs) ? task.docs : {};
+  const items = Object.entries(docs)
+    .filter(([, href]) => typeof href === 'string' && href.trim())
+    .map(([type, href]) => {
+      const external = /^https?:\/\//i.test(href);
+      // A path is served from the project root by the viewer's file route.
+      const attrs = external
+        ? { href, target: '_blank', rel: 'noopener noreferrer' }
+        : { href: `/file/${encodeURI(href.replace(/^\/+/, ''))}`, target: '_blank', rel: 'noopener' };
+      return h('li', {}, [h('a', { class: 'td-doc-link', ...attrs },
+        [h('span', { class: 'td-doc-type' }, type), h('span', { class: 'td-doc-path' }, href)])]);
+    });
+  return items.length ? panel('docs', 'Docs', level, [h('ul', { class: 'td-doc-list' }, items)]) : null;
+}
+
+function stampEl(iso) {
+  const stamp = formatStamp(typeof iso === 'string' ? iso : null);
+  if (!stamp.title) return null;
+  return h('time', { datetime: iso, title: stamp.title }, stamp.text);
+}
+
+function panelHandovers(handovers, level) {
+  const items = handovers.filter((ho) => typeof ho === 'object' && typeof ho.id === 'string' && ho.id);
+  if (!items.length) return null;
+  return panel('handovers', 'Handovers', level, items.map((ho) => {
+    const quote = typeof ho.quote === 'string' && ho.quote.trim()
+      ? h('div', { class: 'td-handover-quote md-body' }) : null;
+    // renderMarkdown sanitises; it is the only path handover text takes into innerHTML.
+    if (quote) quote.innerHTML = renderMarkdown(ho.quote);
+    return h('div', { class: 'td-handover' }, [
+      h('div', { class: 'td-handover-head' }, [
+        statusPill(ho.id, typeof ho.status === 'string' && ho.status ? ho.status : 'open'),
+        typeof ho.kind === 'string' && ho.kind ? h('span', { class: 'td-handover-kind' }, ho.kind) : null,
+        stampEl(ho.created),
+      ]),
+      h('div', { class: 'td-handover-id' }, ho.id),
+      quote,
+    ]);
+  }));
+}
+
+function panelIssues(issues, level) {
+  const items = issues.filter((i) => typeof i === 'object' && typeof i.id === 'string' && i.id);
+  if (!items.length) return null;
+  return panel('issues', 'Issues', level, [h('ul', { class: 'td-issue-list' }, items.map((i) => h('li', {}, [
+    h('a', { class: 'td-issue', href: `#/issue/${encodeURIComponent(i.id)}` }, [
+      h('span', { class: 'td-issue-id' }, i.id),
+      typeof i.title === 'string' && i.title ? h('span', { class: 'td-issue-title' }, i.title) : null,
+      // Severity uses the priority scale: the same four words and shapes.
+      typeof i.severity === 'string' && i.severity ? priorityMarker(i.severity.toLowerCase()) : null,
+    ]),
+  ])))]);
+}
+
+// ── Handover status: a button that names the status and opens a menu to change it ──
+const HO_STATUSES = ['open', 'closed', 'superseded'];
+const statusClass = (status) => `ho-status-pill-${String(status).replace(/[^a-z0-9-]/gi, '')}`;
 
 export function statusPill(handoverId, status) {
   return h('button', {
-    class: `ho-status-pill ho-status-pill-${status}`,
+    type: 'button',
+    class: `ho-status-pill ${statusClass(status)}`,
     'data-handover-id': handoverId,
     'data-status': status,
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
     title: `Status: ${status} — click to change`,
     on: { click: (ev) => openStatusMenu(ev.currentTarget, handoverId, ev.currentTarget.dataset.status) },
-  }, status);
+  }, [h('span', { class: 'ho-status-pill__word' }, status), icon('chevron', { size: 12 })]);
 }
 
+// A pill built here holds a word and an arrow; one written by a screen's own template is just its word.
+function paintPill(pill, status) {
+  for (const s of HO_STATUSES) pill.classList.remove(statusClass(s));
+  pill.classList.add(statusClass(status));
+  pill.setAttribute('data-status', status);
+  pill.title = `Status: ${status} — click to change`;
+  const word = pill.querySelector('.ho-status-pill__word');
+  if (word) word.textContent = status;
+  else pill.textContent = status;
+}
+
+let openMenu = null;   // { anchor, close } — one menu at a time
+
+// Opens the menu under `anchor`; called again for the same anchor while it is open, it closes it.
+// The menu sits right after its button, so Tab order follows what is seen and a modal around it keeps it inside.
 export function openStatusMenu(anchor, handoverId, currentStatus) {
-  document.querySelectorAll('.ho-status-menu').forEach((m) => m.remove());
-  const menu = document.createElement('div');
+  if (openMenu) {
+    const same = openMenu.anchor === anchor;
+    openMenu.close(false);
+    if (same) return;
+  }
+  const doc = anchor.ownerDocument;
+  const view = doc.defaultView;
+  const menu = doc.createElement('div');
   menu.className = 'ho-status-menu';
-  for (const opt of ['open', 'closed', 'superseded']) {
-    const item = document.createElement('button');
-    item.className = `ho-status-menu-item${opt === currentStatus ? ' is-current' : ''}`;
-    item.textContent = opt;
-    item.addEventListener('click', async () => {
-      menu.remove();
-      try {
-        await fetch(`/api/handover/${encodeURIComponent(handoverId)}/status`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ status: opt, reason: 'viewer-override' }),
-        });
-        // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
-        for (const pill of document.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) {
-          pill.classList.remove('ho-status-pill-open', 'ho-status-pill-closed', 'ho-status-pill-superseded');
-          pill.classList.add(`ho-status-pill-${opt}`);
-          pill.setAttribute('data-status', opt);
-          pill.textContent = opt;
-          pill.title = `Status: ${opt} — click to change`;
-        }
-        window.dispatchEvent(new CustomEvent('viewer:handover-status-changed', {
-          detail: { id: handoverId, status: opt },
-        }));
-      } catch {}
-    });
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Handover status');
+  const items = HO_STATUSES.map((opt) => {
+    const current = opt === currentStatus;
+    const item = h('button', {
+      type: 'button', role: 'menuitemradio', 'aria-checked': String(current),
+      class: `ho-status-menu-item${current ? ' is-current' : ''}`,
+    }, [h('span', { class: 'ho-status-menu-check' }, current ? icon('check', { size: 14 }) : null), opt]);
+    item.addEventListener('click', () => choose(opt));
     menu.appendChild(item);
-  }
-  const rect = anchor.getBoundingClientRect();
-  menu.style.position = 'absolute';
-  menu.style.top = `${rect.bottom + window.scrollY}px`;
-  menu.style.left = `${rect.left + window.scrollX}px`;
-  document.body.appendChild(menu);
-  setTimeout(() => {
-    const off = (e) => {
-      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', off); }
-    };
-    document.addEventListener('click', off);
-  }, 0);
-}
-
-function formatHandoverTime(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
+    return item;
   });
-}
 
-function panelIssues(issues, onNavigate) {
-  if (!issues.length) {
-    return h('section', { class: 'td-panel' },
-      [panelHeader('Issues'), h('div', { class: 'td-empty' }, 'none')]);
+  let closed = false;
+  function close(returnFocus) {
+    if (closed) return;
+    closed = true;
+    if (openMenu?.anchor === anchor) openMenu = null;
+    doc.removeEventListener('pointerdown', onPress, true);
+    doc.removeEventListener('scroll', onScroll, true);
+    const hadFocus = menu.contains(doc.activeElement);
+    menu.remove();
+    anchor.setAttribute('aria-expanded', 'false');
+    if (returnFocus || hadFocus) anchor.focus?.();
   }
-  return h('section', { class: 'td-panel td-panel-issues' },
-    [panelHeader('Issues'),
-     ...issues.map((i) =>
-       h('div', { class: `td-issue td-issue-${(i.severity || '').toLowerCase()}` },
-         [h('span', { class: 'mono td-issue-id' }, i.id),
-          h('span', { class: 'td-issue-title' }, i.title || ''),
-          h('span', { class: 'td-issue-sev' }, i.severity || '')]))]);
+  // A press on the button itself is left to its click, which closes.
+  function onPress(e) { if (!menu.contains(e.target) && !anchor.contains(e.target)) close(false); }
+  function onScroll() { close(false); }
+
+  async function choose(opt) {
+    close(true);
+    try {
+      const resp = await fetch(`/api/handover/${encodeURIComponent(handoverId)}/status`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: opt, reason: 'viewer-override' }),
+      });
+      if (resp && resp.ok === false) throw new Error(`status ${resp.status}`);
+      // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
+      for (const pill of doc.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) paintPill(pill, opt);
+      view?.dispatchEvent(new view.CustomEvent('viewer:handover-status-changed', {
+        detail: { id: handoverId, status: opt },
+      }));
+    } catch (e) {
+      // The pill keeps the status the server still has.
+      console.error('handover status change failed', e);
+    }
+  }
+
+  menu.addEventListener('keydown', (e) => {
+    const at = items.indexOf(doc.activeElement);
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (e.key === 'Escape') {
+      // The key is used up here: a modal around the menu must not also close.
+      e.preventDefault();
+      e.stopPropagation();
+      close(true);
+    } else if (step) {
+      e.preventDefault();
+      items[(at + step + items.length) % items.length].focus();
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      items.at(e.key === 'Home' ? 0 : -1).focus();
+    }
+  });
+  menu.addEventListener('focusout', (e) => {
+    if (!closed && e.relatedTarget && !menu.contains(e.relatedTarget) && e.relatedTarget !== anchor) close(false);
+  });
+
+  anchor.after(menu);
+  anchor.setAttribute('aria-haspopup', 'menu');
+  anchor.setAttribute('aria-expanded', 'true');
+  place(menu, anchor, view);
+  openMenu = { anchor, close };
+  doc.addEventListener('pointerdown', onPress, true);
+  doc.addEventListener('scroll', onScroll, true);
+  (items.find((i) => i.getAttribute('aria-checked') === 'true') ?? items[0]).focus();
 }
 
-function panelDeps(deps, unblocks, onNavigate) {
-  return h('section', { class: 'td-panel td-panel-deps' },
-    [panelHeader('Dependencies'),
-     deps.length
-       ? h('ul', { class: 'td-dep-list' },
-           deps.map((d) =>
-             h('li', { class: `td-dep td-dep-${d.status}`,
-                       on: { click: () => onNavigate?.(d.id) } },
-               [h('span', { class: 'mono' }, d.id), ' ', d.title])))
-       : h('div', { class: 'td-empty' }, 'no dependencies'),
-     h('div', { class: 'td-rail-h td-rail-h-sub' }, 'Unblocks'),
-     unblocks.length
-       ? h('ul', { class: 'td-dep-list' },
-           unblocks.map((d) =>
-             h('li', { class: `td-dep td-dep-${d.status}`,
-                       on: { click: () => onNavigate?.(d.id) } },
-               [h('span', { class: 'mono' }, d.id), ' ', d.title])))
-       : h('div', { class: 'td-empty' }, 'this task gates nothing')]);
-}
-
-function panelBlockers(blockers) {
-  blockers = (Array.isArray(blockers) ? blockers : [blockers]).filter(Boolean);
-  return h('section', { class: 'td-panel td-panel-blockers' },
-    [panelHeader('Blockers'),
-     blockers.length
-       ? h('ul', { class: 'td-blocker-list' },
-           blockers.map((b) => h('li', { class: 'td-blocker' }, typeof b === 'string' ? b : (b.text || JSON.stringify(b)))))
-       : h('div', { class: 'td-empty' }, 'none')]);
+// Fixed, so no scrolling panel clips it; measured against wherever its containing block puts the origin
+// (a frosted overlay or a transformed panel is one), and flipped above the button when there is no room below.
+function place(menu, anchor, view) {
+  menu.style.position = 'fixed';
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const origin = menu.getBoundingClientRect();
+  const at = anchor.getBoundingClientRect();
+  const gap = 4;
+  const height = menu.offsetHeight || 0;
+  const width = menu.offsetWidth || 0;
+  const below = at.bottom + gap;
+  const fits = !view || below + height <= view.innerHeight;
+  const top = fits ? below : Math.max(gap, at.top - gap - height);
+  const left = view ? Math.max(gap, Math.min(at.left, view.innerWidth - width - gap)) : at.left;
+  menu.style.left = `${left - origin.left}px`;
+  menu.style.top = `${top - origin.top}px`;
 }
 
 // ---------------------------------------------------------------------------

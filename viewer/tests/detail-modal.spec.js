@@ -15,10 +15,10 @@ test.describe('Detail modal (task)', () => {
     const card = page.locator('.card-task').first();
     await card.waitFor();
     await card.click();
-    await expect(page.locator('.dm-overlay')).toBeVisible();
+    await expect(page.locator('.modal--detail')).toBeVisible();
     await expect(page).toHaveURL(/#\/kanban$/);          // overlay, not a route change
     await page.keyboard.press('Escape');
-    await expect(page.locator('.dm-overlay')).toHaveCount(0);
+    await expect(page.locator('.modal--detail')).toHaveCount(0);
   });
 
   test('modal mode: Open full navigates to the route and closes the overlay', async ({ page, request }) => {
@@ -27,9 +27,9 @@ test.describe('Detail modal (task)', () => {
     await page.goto('/v3');
     await page.evaluate(() => location.hash = '#/kanban');
     await page.locator('.card-task').first().click();
-    await page.locator('.dm-openfull').click();
+    await page.locator('.modal--detail [data-action="open-full"]').click();
     await expect(page).toHaveURL(/#\/task\//);
-    await expect(page.locator('.dm-overlay')).toHaveCount(0);
+    await expect(page.locator('.modal--detail')).toHaveCount(0);
   });
 
   test('full mode: clicking a card navigates to the route, no overlay', async ({ page, request }) => {
@@ -38,6 +38,6 @@ test.describe('Detail modal (task)', () => {
     await page.evaluate(() => location.hash = '#/kanban');
     await page.locator('.card-task').first().click();
     await expect(page).toHaveURL(/#\/task\//);
-    await expect(page.locator('.dm-overlay')).toHaveCount(0);
+    await expect(page.locator('.modal--detail')).toHaveCount(0);
   });
 });

@@ -14,7 +14,8 @@ function esc(s) {
     .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-// chrome: 'page' (route screen) | 'embedded' (modal). actionsHost: optional
+// chrome: 'page' (route screen) | 'embedded' (modal — the dialog heading shows the name, so it is
+// not repeated here). actionsHost: optional
 // element to receive an actions row (none in C1). onNavigate(taskId): jump to a task.
 // onComponentNav(componentKey): jump to the kanban filtered to that component.
 // Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on
@@ -51,7 +52,7 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
       ${closeableBadge(epic.stats)}
       ${epic.area ? `<span class="ed-area">${esc(epic.area)}</span>` : ''}
     </div>
-    <h1 class="ed-title">${esc(epic.name || epic.id)}</h1>
+    ${chrome === 'page' ? `<h1 class="ed-title">${esc(epic.name || epic.id)}</h1>` : ''}
     ${epic.done_when ? `<p class="ed-done-when"><strong>Done when:</strong> ${esc(epic.done_when)}</p>` : ''}
     <div class="ed-progress">
       <span class="ed-progress__bar"><span style="width:${prog.pct}%"></span></span>

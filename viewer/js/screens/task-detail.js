@@ -1,6 +1,9 @@
-import { getTaskDetailFull, invalidateTask } from '../store.js';
-import { mountTaskDetailDocument } from '../components/task-detail-document.js';
+import { getTaskDetailFull } from '../store.js';
+import { listBugs } from '../api.js';
+import { mountTaskDetailDocument, rememberFocus } from '../components/task-detail-document.js';
+import { stateBlock as busyBlock } from '../components/empty-state.js';
 import { claimTopbar } from '../lib/topbar.js';
+import { deepMerge } from '../lib/prefs-writer.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: null };
 
@@ -23,7 +26,7 @@ function stateBlock(headline, hint) {
 
 export function mount(root, { params, store, api, prefs, subpath }) {
   let id = subpath?.[0] || params?.id || null;
-  root.innerHTML = '<div class="td-page td-loading">Loading…</div>';
+  root.replaceChildren(busyBlock({ headline: 'Loading…', busy: true }));
 
   // No id in URL → fall back to the most-recently-viewed task from prefs.
   if (!id) {
@@ -38,18 +41,27 @@ export function mount(root, { params, store, api, prefs, subpath }) {
   }
 
   const onNavigate = (toId) => { location.hash = `#/task/${toId}`; };
-  const onToggleVariant = async (next) => {
-    await api.savePrefs({ screens: { task_detail: { view: next } } });
-    if (disposed) return;
-    invalidateTask(id);
-    location.reload();
-  };
 
   const prefsData = store?.getPrefs?.() || null;
   const urlView = params?.view === 'A' || params?.view === 'B' ? params.view : null;
-  const view = urlView || (prefsData?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
+  // The view on screen. The top bar's switch is built from this, never from the saved preference alone:
+  // an address that names a view wins over it.
+  let view = urlView || (prefsData?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
   let cleanup;
   let disposed = false, generation = 0;
+  let shown = null;      // the detail last painted, for switching views without a fetch
+
+  const onToggleVariant = async (next) => {
+    if ((next !== 'A' && next !== 'B') || next === view) return;
+    view = next;
+    // From here the choice is the saved one; an address still naming the other view would undo it on reload.
+    if (urlView) history.replaceState(history.state, '', `#/task/${encodeURIComponent(id)}`);
+    if (shown) await paint(shown, generation);
+    const patch = { screens: { task_detail: { view: next } } };
+    store.setPrefs(deepMerge(structuredClone(store.getPrefs() || {}), patch));
+    try { await api.savePrefs(patch); } catch (e) { console.error('savePrefs failed', e); }
+  };
+
   // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has
   // painted: remembering an id that does not load would send bare #/task to a dead end.
   let remembered = false;
@@ -59,12 +71,17 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     prefs.patch({ ui: { last_task_id: id } });
   }
   async function paint(value, request) {
+    // A repaint replaces every node; focus is put back on the same control in the new document.
+    const refocus = rememberFocus(root);
     cleanup?.();
-    const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant};
+    cleanup = null;
+    const ctx = {...value, prefs: prefsData, store, api, listBugs, onNavigate, onToggleVariant, view};
     if (view === 'B') {
       const mod = await import('../components/task-detail-graph.js');
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
     } else cleanup = mountTaskDetailDocument(root, ctx);
+    shown = value;
+    refocus(root);
   }
   async function refresh() {
     if (disposed || store.isEditing(id)) return;
@@ -78,6 +95,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     } catch (e) {
       if (!disposed && request === generation && !store.isEditing(id)) {
         cleanup?.();
+        cleanup = null;
+        shown = null;
         claimTopbar();
         // http() throws `GET <path> → <status>: <body>`; anchor on the arrow so an
         // id like T-404 in the path can't read as a status.

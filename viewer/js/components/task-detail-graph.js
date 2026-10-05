@@ -3,38 +3,25 @@
 // graph controls, and tabs (Spec / Plan / Notes / Activity / Anchors / Raw YAML).
 
 import { computeGraphLayout } from './dependency-graph.js';
-import { mountRightRail } from './right-rail.js';
+import { railPanels } from './right-rail.js';
 import { renderMarkdown } from './markdown.js';
-import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
+import { stateBlock } from './empty-state.js';
+import { mountTaskTopbar, openEditForm } from './task-detail-document.js';
 
 export function mountTaskDetailGraph(root, ctx) {
   if (ctx.etag) ctx.store?.setEtag?.(`task:${ctx.task.id}`, ctx.etag);
   root.innerHTML = '';
-  root.classList.add('td-page', 'td-page-B');
+  root.classList.add('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
+  root.dataset.detailLinks = 'follow';
 
-  mountTopbar(ctx);
-  root.appendChild(renderHeader(ctx));
+  // The switch shows the view on screen, which is this one.
+  mountTaskTopbar({ view: 'B', onToggleVariant: ctx.onToggleVariant, onEdit: () => openEditForm(ctx) });
   root.appendChild(renderGrid(ctx));
   return () => {
     root.innerHTML = '';
-    root.classList.remove('td-page', 'td-page-B');
+    root.classList.remove('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
+    delete root.dataset.detailLinks;
   };
-}
-
-function mountTopbar({ prefs, onToggleVariant }) {
-  const topbar = claimTopbar();
-  if (!topbar) return;
-  const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
-  const seg = tmSegmented(
-    [
-      { key: 'A', label: 'Document' },
-      { key: 'B', label: 'Graph' },
-    ],
-    { value: view, onChange: (v) => onToggleVariant?.(v) },
-  );
-  const editBtn = tmAction({ icon: '✎', label: 'Edit', title: 'Edit task — coming soon', disabled: true });
-  const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task — coming soon', disabled: true });
-  topbar.append(seg, editBtn, archiveBtn);
 }
 
 function h(tag, attrs = {}, children = []) {
@@ -53,49 +40,57 @@ function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-function renderHeader({ task }) {
-  return h('div', { class: 'td-ph' }, [
-    h('span', { class: 'td-back', on: { click: () => history.back() } }, '‹ back'),
-    h('span', { class: 'td-crumb' }, `Tasks / ${task?.epic || ''}`),
-  ]);
-}
-
 function renderGrid(ctx) {
-  return h('div', { class: 'td-grid' }, [
+  // With nothing related there is no rail, and the body takes the width.
+  const panels = railPanels({ task: ctx.task, related: ctx.related, level: 2 });
+  const rail = panels.length ? h('aside', { class: 'td-rail', 'data-test': 'rail', 'aria-label': 'Related' }, panels) : null;
+  return h('div', { class: `td-grid${rail ? '' : ' td-grid--solo'}` }, [
     renderBody(ctx),
-    renderRail(ctx),
+    rail,
   ]);
 }
 
 function renderBody(ctx) {
-  const main = h('main', { class: 'td-body' });
-  main.appendChild(renderCompactHead(ctx.task));
-  main.appendChild(renderGraphFrame(ctx));
-  main.appendChild(renderTabs(ctx));
-  return main;
+  const body = h('div', { class: 'td-body' });
+  body.appendChild(renderCompactHead(ctx.task));
+  body.appendChild(renderGraphFrame(ctx));
+  body.appendChild(renderTabs(ctx));
+  return body;
 }
+
+const words = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
 
 function renderCompactHead(task) {
+  const epic = words(task?.epic);
+  const parts = [
+    h('span', { class: 'td-id-text' }, words(task?.id)),
+    h('a', { href: '#/kanban' }, 'Tasks'),
+    epic ? h('a', { href: `#/epic/${encodeURIComponent(epic)}` }, epic) : null,
+    words(task?.phase) ? h('span', {}, words(task.phase)) : null,
+  ].filter(Boolean);
+  const meta = h('div', { class: 'td-meta' });
+  parts.forEach((part, i) => {
+    if (i) meta.appendChild(h('span', { class: 'td-sep', 'aria-hidden': 'true' }, '·'));
+    meta.appendChild(part);
+  });
   return h('div', { class: 'td-head-block', 'data-test': 'compact-head' }, [
-    h('div', { class: 'td-doc-meta' }, [
-      h('span', { class: 'td-id mono' }, task?.id || ''),
-      h('span', { class: 'td-sep' }, '·'),
-      h('span', {}, task?.epic || ''),
-      h('span', { class: 'td-sep' }, '·'),
-      h('span', {}, task?.phase || ''),
-    ]),
-    h('h2', { class: 'td-head-title' }, task?.title || ''),
+    meta,
+    h('h2', { class: 'td-head-title' }, words(task?.title)),
   ]);
-}
-
-function renderRail(ctx) {
-  const aside = h('aside', { class: 'td-rail-mount', 'data-test': 'rail' });
-  mountRightRail(aside, ctx);
-  return aside;
 }
 
 function renderGraphFrame(ctx) {
   const frame = h('div', { class: 'td-graph-frame', 'data-test': 'graph-frame' });
+  const list = (v) => (Array.isArray(v) ? v : []);
+  // A task with no neighbours has no graph to draw: say so instead of framing one lonely node.
+  if (!list(ctx.related?.dependencies).length && !list(ctx.related?.unblocks).length) {
+    frame.classList.add('td-graph-frame--empty');
+    frame.appendChild(stateBlock({
+      state: 'empty', label: 'Graph', headline: 'No dependencies to draw',
+      hint: 'This task depends on nothing and nothing waits on it.',
+    }));
+    return frame;
+  }
   frame.appendChild(renderGraphRail());
   frame.appendChild(renderGraphSvg(ctx));
   frame.appendChild(renderContextBand(ctx));
@@ -115,10 +110,11 @@ function renderGraphRail() {
 }
 
 function renderGraphSvg({ task, related, onNavigate }) {
-  const upstream = (related?.dependencies || []).map((d) => ({
+  const neighbours = (v) => (Array.isArray(v) ? v.filter((d) => d && typeof d === 'object') : []);
+  const upstream = neighbours(related?.dependencies).map((d) => ({
     id: d.id, title: d.title, status: d.status, depth: 1,
   }));
-  const downstream = (related?.unblocks || []).map((d) => ({
+  const downstream = neighbours(related?.unblocks).map((d) => ({
     id: d.id, title: d.title, status: d.status, depth: 1,
   }));
   const layout = computeGraphLayout({
@@ -172,8 +168,8 @@ function renderNode(n, onNavigate) {
   if (n.isCenter && (n.progress != null || n.step)) {
     const barW = n.w - 20;
     const pct = Math.max(0, Math.min(1, n.progress || 0));
-    g.appendChild(h('rect', { x: n.x + 10, y: n.y + n.h - 22, width: barW, height: 3, fill: 'rgba(255,255,255,0.05)' }));
-    g.appendChild(h('rect', { x: n.x + 10, y: n.y + n.h - 22, width: barW * pct, height: 3, fill: 'var(--accent)' }));
+    g.appendChild(h('rect', { class: 'node-progress-track', x: n.x + 10, y: n.y + n.h - 22, width: barW, height: 3 }));
+    g.appendChild(h('rect', { class: 'node-progress-fill', x: n.x + 10, y: n.y + n.h - 22, width: barW * pct, height: 3 }));
     if (n.step) {
       g.appendChild(h('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 26 }, truncate(n.step, 22)));
     }
@@ -183,8 +179,8 @@ function renderNode(n, onNavigate) {
 
 function truncate(s, n) { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 function renderContextBand({ related, onNavigate }) {
-  const handovers = related?.handovers || [];
-  const issues    = related?.issues || [];
+  const handovers = Array.isArray(related?.handovers) ? related.handovers.filter(Boolean) : [];
+  const issues    = Array.isArray(related?.issues) ? related.issues.filter(Boolean) : [];
   const band = h('div', { class: 'td-graph-context-band', 'data-test': 'context-band' });
   if (handovers.length) {
     band.appendChild(h('span', { class: 'lbl' }, 'Handovers'));
@@ -216,7 +212,7 @@ function renderGraphControls(ctx) {
       } },
   ];
   for (const b of buttons) {
-    const btn = h('button', { class: 'gc-btn', 'data-id': b.id, on: { click: (e) => b.toggle(e.currentTarget) } }, b.label);
+    const btn = h('button', { type: 'button', class: 'gc-btn', 'data-id': b.id, on: { click: (e) => b.toggle(e.currentTarget) } }, b.label);
     wrap.appendChild(btn);
   }
   wrap.querySelector('[data-id="hide-context"]').addEventListener('click', (e) => {
@@ -239,7 +235,7 @@ function renderTabs({ task, related }) {
   const bar = h('div', { class: 'td-tabs' });
   const panels = h('div', { class: 'td-tab-panels' });
   tabs.forEach(([id, label, build], idx) => {
-    const tab = h('button', { class: `td-tab ${idx === 0 ? 'on' : ''}`, 'data-tab': id }, label);
+    const tab = h('button', { type: 'button', class: `td-tab ${idx === 0 ? 'on' : ''}`, 'data-tab': id }, label);
     const panel = h('div', { class: `td-tab-panel ${idx === 0 ? 'on' : ''}`, 'data-tab-panel': id });
     panel.appendChild(build());
     tab.addEventListener('click', () => {
@@ -256,24 +252,31 @@ function renderTabs({ task, related }) {
 
 function renderMd(src) {
   const div = document.createElement('div');
+  if (typeof src !== 'string' || !src.trim()) {
+    div.className = 'td-empty';
+    div.textContent = 'Nothing written.';
+    return div;
+  }
   div.className = 'md-body';
-  div.innerHTML = renderMarkdown(src || '_(empty)_');
+  // renderMarkdown sanitises; it is the only path task text takes into innerHTML.
+  div.innerHTML = renderMarkdown(src);
   return div;
 }
 function renderActivityList(lines) {
   const ul = document.createElement('ul');
-  for (const l of (lines || []).slice(0, 30)) {
+  ul.className = 'td-activity';
+  for (const l of (Array.isArray(lines) ? lines : []).slice(0, 30)) {
     const li = document.createElement('li');
-    li.className = 'mono';
-    li.textContent = l;
+    li.textContent = typeof l === 'string' ? l : JSON.stringify(l);
     ul.appendChild(li);
   }
-  if (!ul.children.length) ul.innerHTML = '<li class="td-empty">no activity</li>';
+  if (!ul.children.length) ul.innerHTML = '<li class="td-empty">No activity.</li>';
   return ul;
 }
 function renderAnchors(anchors) {
   const wrap = document.createElement('div');
-  if (!anchors.length) { wrap.className = 'td-empty'; wrap.textContent = 'no anchors'; return wrap; }
+  anchors = Array.isArray(anchors) ? anchors.filter((a) => typeof a === 'string') : [];
+  if (!anchors.length) { wrap.className = 'td-empty'; wrap.textContent = 'No anchors.'; return wrap; }
   for (const a of anchors) {
     const pill = document.createElement('span');
     pill.className = 'td-anchor-pill';

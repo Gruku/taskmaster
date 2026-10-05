@@ -39,10 +39,18 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
   body.className = 'card-body';
   card.appendChild(body);
 
-  // Click opens task detail (modal or full per ui.detail_view_mode).
+  // Click opens task detail (modal or full per ui.detail_view_mode). The card is a keyboard stop so the
+  // detail modal can be opened without a pointer and can hand focus back here when it closes.
+  const open = () => import('../lib/open-detail.js').then(({ openDetail }) => openDetail('task', task.id, { opener: card }));
+  card.tabIndex = 0;
   card.addEventListener('click', (ev) => {
     if (ev.target.closest('.card-id') || ev.target.closest('.card-branch') || ev.target.closest('.cmp-icon-btn')) return;
-    import('../lib/open-detail.js').then(({ openDetail }) => openDetail('task', task.id));
+    open();
+  });
+  card.addEventListener('keydown', (ev) => {
+    if (ev.target !== card || ev.key !== 'Enter') return;
+    ev.preventDefault();
+    open();
   });
 
   // ── Meta line: id · priority · size · time-in-status ──

@@ -40,7 +40,8 @@ export function priorityMeta(value) {
   return lookup(PRIORITY, value);
 }
 
-function marker({ label, shape, tone }) {
+// A marker for a state that has no table of its own (a gate, a review verdict): the caller names the word, shape and tone.
+export function marker({ label, shape, tone }) {
   const el = document.createElement('span');
   el.className = `marker marker--${tone}`;
   const shapeEl = document.createElement('span');
