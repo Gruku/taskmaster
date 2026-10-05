@@ -238,7 +238,12 @@ export function confirmDialog({ title, message, confirmLabel = 'Confirm', cancel
     const confirm = h('button', { type: 'button', class: `btn ${critical ? 'btn--critical' : 'btn--primary'}`, 'data-confirm': '' }, confirmLabel);
     // A destructive answer is never one stray Enter away: critical confirms start on Cancel.
     const modal = openModal({ title, size: 'sm', className: 'modal--confirm', initialFocus: () => (critical ? cancel : confirm) });
-    modal.body.appendChild(h('p', { class: 'modal-message' }, message ?? ''));
+    // The question is read with the title: "Discard changes?" alone does not say what would be lost. A destructive
+    // one interrupts, as an alert dialog.
+    const messageId = `modal-message-${++seq}`;
+    modal.body.appendChild(h('p', { class: 'modal-message', id: messageId }, message ?? ''));
+    modal.dialog.setAttribute('aria-describedby', messageId);
+    if (critical) modal.dialog.setAttribute('role', 'alertdialog');
     modal.footer.append(cancel, confirm);
     cancel.addEventListener('click', () => modal.close());
     confirm.addEventListener('click', () => { confirmed = true; modal.close(); });

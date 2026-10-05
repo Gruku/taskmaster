@@ -245,7 +245,7 @@ test('at 390x844 a confirm stays a compact dialog with its answers right under t
   await page.setViewportSize({ width: 390, height: 844 });
   await boot(page);
   await page.evaluate(() => { window.__answer = window.__m.confirmDialog({ title: 'Discard changes?', message: 'Your edits to this task will be lost.', confirmLabel: 'Discard', tone: 'critical' }); });
-  const confirm = page.getByRole('dialog', { name: 'Discard changes?' });
+  const confirm = page.getByRole('alertdialog', { name: 'Discard changes?' });
   await expect(confirm).toBeVisible();
   await expect.poll(async () => (await confirm.boundingBox()).height).toBeLessThan(844 / 2);
   const box = await confirm.boundingBox();

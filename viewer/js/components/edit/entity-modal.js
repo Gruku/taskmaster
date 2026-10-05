@@ -215,7 +215,11 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       modal.dialog.focus();
       frozen = [...modal.dialog.querySelectorAll('button, input, select, textarea')].filter((el) => !el.disabled);
       for (const el of frozen) el.disabled = true;
+      // With every control disabled the body is the one thing Tab can reach, so it can still be scrolled from the
+      // keyboard — for as long as the conflict banner holds the form, not only for the moment of a save.
+      modal.body.tabIndex = 0;
     } else {
+      modal.body.removeAttribute('tabindex');
       for (const el of frozen) el.disabled = false;
       frozen = [];
       paint();

@@ -442,6 +442,34 @@ test('9. confirmDialog focuses confirm by default and cancel when critical; crit
   await p;
 });
 
+// The question is read with the title, not only the title: "Discard changes?" alone does not say what is lost (M-7).
+test('9. confirmDialog is described by its message; a critical one is an alertdialog', async () => {
+  let p = confirmDialog({ title: 'Apply', message: 'Apply the change?' });
+  let dialog = $('.modal--confirm');
+  const describedBy = dialog.getAttribute('aria-describedby');
+  assert.ok(describedBy, 'the dialog names its description');
+  assert.equal(document.getElementById(describedBy)?.textContent, 'Apply the change?');
+  assert.ok(dialog.querySelector(`#${describedBy}`), 'the description is the message inside it');
+  assert.equal(dialog.getAttribute('role'), 'dialog');
+  assert.ok(dialog.getAttribute('aria-labelledby'), 'still labelled by its title');
+  $('.modal [data-cancel]').click();
+  await p;
+
+  p = confirmDialog({ title: 'Discard changes?', message: 'Your edits to this task will be lost.', tone: 'critical' });
+  dialog = $('.modal--confirm');
+  assert.equal(dialog.getAttribute('role'), 'alertdialog');
+  assert.equal(document.getElementById(dialog.getAttribute('aria-describedby'))?.textContent, 'Your edits to this task will be lost.');
+  $('.modal [data-cancel]').click();
+  await p;
+
+  // Two confirms never share an id.
+  const a = confirmDialog({ title: 'A', message: 'a' });
+  const b = confirmDialog({ title: 'B', message: 'b' });
+  const ids = [...document.querySelectorAll('.modal--confirm')].map((d) => d.getAttribute('aria-describedby'));
+  assert.equal(new Set(ids).size, 2);
+  key('Escape'); await b; key('Escape'); await a;
+});
+
 test('9. a confirm stacked on a modal closes alone and hands focus back', async () => {
   const form = openModal({ title: 'Edit task' });
   const discard = document.createElement('button');

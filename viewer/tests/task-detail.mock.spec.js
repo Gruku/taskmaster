@@ -134,7 +134,7 @@ test('Back with unsaved edits asks first: "Keep editing" keeps everything and th
   const form = page.getByRole('dialog', { name: 'Edit task' });
   await expect(form).toBeVisible();
   await page.keyboard.type(' (draft)');
-  const confirm = page.getByRole('dialog', { name: 'Discard changes?' });
+  const confirm = page.getByRole('alertdialog', { name: 'Discard changes?' });
 
   await page.goBack();
   await expect(confirm).toBeVisible();

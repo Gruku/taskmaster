@@ -53,7 +53,7 @@ const field = (dialog, key) => dialog.locator(`[data-key="${key}"]`);
 const ctl = (dialog, key) => field(dialog, key).locator('input, select, textarea').first();
 const save = (dialog) => dialog.getByRole('button', { name: 'Save', exact: true });
 const cancel = (dialog) => dialog.getByRole('button', { name: 'Cancel', exact: true });
-const confirmBox = (page) => page.getByRole('dialog', { name: 'Discard changes?' });
+const confirmBox = (page) => page.getByRole('alertdialog', { name: 'Discard changes?' });
 const writes = (page, method, pathname) => {
   const seen = [];
   page.on('request', (r) => {
@@ -576,6 +576,46 @@ async function axe(page) {
   const result = await page.evaluate(() => window.axe.run(document.querySelector('.modal--form'), { resultTypes: ['violations'] }));
   return result.violations.filter((v) => AXE_RULES.test(v.id)).map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
 }
+
+// While saving, and for as long as the conflict banner holds it, the form's controls are disabled; its body must still
+// scroll from the keyboard, or a keyboard user cannot read what they are being asked to settle (M-10).
+test('a held form can still be scrolled from the keyboard: saving, and held by the conflict banner', async ({ page }) => {
+  let land;
+  const held = new Promise((ok) => { land = ok; });
+  const dialog = await openEdit(page);
+  await answerPatches(page, [async (route) => { await held; return route.fulfill(STALE); }]);
+  const body = dialog.locator('.modal-body');
+  expect(await body.evaluate((b) => b.scrollHeight > b.clientHeight), 'the full task overflows the form').toBe(true);
+  const scrollable = async () => {
+    await page.evaluate(axeSource);
+    const result = await page.evaluate(() => window.axe.run(document.querySelector('.modal--form'), {
+      runOnly: { type: 'rule', values: ['scrollable-region-focusable'] }, resultTypes: ['violations'],
+    }));
+    return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+  };
+  expect(await scrollable()).toEqual([]);
+  await ctl(dialog, 'title').fill('My title');
+  await save(dialog).click();
+  await expect(dialog.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  expect(await scrollable(), 'saving').toEqual([]);
+  // Reached with Tab, the body scrolls with the arrow keys.
+  await page.keyboard.press('Tab');
+  await expect(body).toBeFocused();
+  await page.keyboard.press('PageDown');
+  await expect.poll(() => body.evaluate((b) => b.scrollTop)).toBeGreaterThan(0);
+
+  land();
+  const banner = page.locator('#conflict-banner-host .cb-banner');
+  await expect(banner).toBeVisible();
+  await expect(ctl(dialog, 'title')).toBeDisabled();
+  expect(await scrollable(), 'held by the banner').toEqual([]);
+  await banner.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(ctl(dialog, 'title')).toBeEnabled();
+  await expect(body).not.toHaveAttribute('tabindex');
+  await page.keyboard.press('Escape');
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
 
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the Create form, clean and with its messages shown`, async ({ page }) => {
