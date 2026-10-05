@@ -2,15 +2,16 @@
 // polarity and the gallery can be driven without a session.
 import type { On } from 'claude-code'
 
-export type RrWorld = { opened: string[]; toasts: string[]; registered: string[]; theme: string }
+// `configFails` makes $.config.list throw while it is set, as the host does before a session is bound ("no session is bound
+// in this process") or when its config read fails.
+export type RrWorld = { opened: string[]; toasts: string[]; registered: string[]; theme: string; configFails: boolean }
 
-// `configFails` makes every $.config.list throw, standing for a host whose config read fails during session.start.
-export function rrWorldOf(on: On, theme = 'dark', opts: { configFails?: boolean } = {}): RrWorld {
-  const world: RrWorld = { opened: [], toasts: [], registered: [], theme }
+export function rrWorldOf(on: On, theme = 'dark'): RrWorld {
+  const world: RrWorld = { opened: [], toasts: [], registered: [], theme, configFails: false }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({}))
   on('config.list', () => {
-    if (opts.configFails) throw new Error('config unavailable')
+    if (world.configFails) throw new Error('$.config.list is not available in this mode: no session is bound in this process')
     return { value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: world.theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }] } as never
   })
   on('config.set', ($, e) => {

@@ -94,9 +94,21 @@ describe('$.rr', () => {
   })
 
   test('/rr-gallery is registered even when the first publish fails', async ($, on) => {
-    const world = rrWorldOf(on, 'dark', { configFails: true })
+    const world = rrWorldOf(on, 'dark')
+    world.configFails = true
     await $.session.start(SESSION).catch(() => undefined)
     expect(world.registered).toEqual(['rr-gallery'])
+  })
+
+  test('classic.SessionStart before a session is bound completes, and session.start publishes once one is', async ($, on) => {
+    const world = rrWorldOf(on, 'light')
+    const state = stateWorldOf(on)
+    world.configFails = true
+    await $.classic.SessionStart({ source: 'startup' } as never)
+    expect(state.values.get('rr-tui.polarity')).toBeUndefined()
+    world.configFails = false
+    await $.session.start(SESSION)
+    expect(state.values.get('rr-tui.polarity')).toBe('light')
   })
 
   test('every element validates on the terminal and the desktop in every polarity', async ($, on) => {

@@ -86,9 +86,15 @@ export const register: Register = (on, options) => {
     return done
   })
 
-  // /clear, /resume and /branch reset $.state without a new session.start; republish so the atom matches $.rr again.
+  // /clear, /resume and /branch reset $.state without a new session.start; republish so the atom matches $.rr again. At startup
+  // this fires before a session is bound, when $.config.list throws: leave that publish to session.start, which follows once
+  // the REPL mounts. Never throw here — a missed publish only leaves the atom stale, since $.rr and the gallery resolve per call.
   on('classic.SessionStart', async ($, e, next) => {
-    await publish($)
+    try {
+      await publish($)
+    } catch {
+      // no session bound yet (startup); session.start publishes
+    }
     return next(e)
   })
 
