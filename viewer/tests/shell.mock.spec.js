@@ -648,7 +648,8 @@ test('an empty child keeps its place in a row while the others park and come bac
       if (text) Object.assign(el, { type: 'button', textContent: text, style: 'flex-shrink: 0; width: 100px' });
       return el;
     };
-    row.append(child('a', 'Alpha'), child('e', ''), child('b', 'Bravo'), child('c', 'Charlie'));
+    // The empty child sits between the two that park, so only putting each back in its own place keeps the order.
+    row.append(child('a', 'Alpha'), child('b', 'Bravo'), child('e', ''), child('c', 'Charlie'));
     document.getElementById('screen-mount').replaceChildren(row);
     window.__ov = overflowRow(row);
   });
@@ -657,12 +658,12 @@ test('an empty child keeps its place in a row while the others park and come bac
     count: window.__ov.more.hidden ? null : window.__ov.more.querySelector('.overflow-more__count').textContent,
   }));
   await expect.poll(look).toEqual({ row: ['a', 'e'], count: '2' });
-  // The empty child fills while Bravo and Charlie are parked; when room comes back they return after it, not before.
+  // The empty child fills while Bravo and Charlie are parked; when room comes back each returns to its own side of it.
   await page.evaluate(() => {
     document.querySelector('[data-k="e"]').textContent = 'Echo';
     document.getElementById('probe-row').style.width = '1200px';
   });
-  await expect.poll(look).toEqual({ row: ['a', 'e', 'b', 'c'], count: null });
+  await expect.poll(look).toEqual({ row: ['a', 'b', 'e', 'c'], count: null });
   await page.evaluate(() => window.__ov.destroy());
 });
 

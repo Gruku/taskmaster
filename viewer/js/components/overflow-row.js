@@ -63,13 +63,14 @@ export function overflowRow(row, {
   const isChild = (n) => n.nodeType === 1 && n !== more && !n.classList.contains('popover');
   const children = () => [...row.children].filter(isChild);
 
-  // Parked children go back to their places; a child added after More moves before it, so More stays last.
+  // Parked children go back to their places, and the place of one its caller removed meanwhile goes too; a child
+  // added after More moves before it, so More stays last.
   function restore() {
-    for (const el of [...list.children]) {
+    for (const [el, place] of places) {
       el.removeAttribute('data-popover-item');
-      const place = places.get(el);
-      if (place?.parentNode === row) place.replaceWith(el);
-      else { place?.remove(); row.insertBefore(el, more); }
+      if (el.parentNode !== list) place.remove();
+      else if (place.parentNode === row) place.replaceWith(el);
+      else { place.remove(); row.insertBefore(el, more); }
     }
     places.clear();
     for (const el of children()) if (more.compareDocumentPosition(el) & view.Node.DOCUMENT_POSITION_FOLLOWING) row.insertBefore(el, more);

@@ -193,6 +193,18 @@ test('widening to 2400px brings every chip back in order and hides More', async 
   await expect(more(page)).toBeVisible();
 });
 
+test('a parked chip dropped from the row leaves no trace of its place behind', async ({ page }) => {
+  await mount(page);
+  await expect(more(page)).toBeVisible();
+  // Epic 20 is parked; the new set leaves it out, and the row is rearranged without it.
+  await page.evaluate(() => window.__row.update(window.__chips().filter((c) => c.value !== 'e20')));
+  await setWidth(page, 2400);
+  await expect(more(page)).toBeHidden();
+  await expect(rowChips(page)).toHaveCount(19);
+  const comments = await page.locator('.chip-row__chips').evaluate((row) => [...row.childNodes].filter((n) => n.nodeType === Node.COMMENT_NODE).length);
+  expect(comments).toBe(0);
+});
+
 test('a click on a visible chip while More is open closes More and toggles the chip', async ({ page }) => {
   await mount(page);
   await more(page).click();
