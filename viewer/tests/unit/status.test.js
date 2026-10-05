@@ -8,7 +8,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>');
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 
-const { TASK_STATUS, PRIORITY, BUG_STATUS, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
+const { TASK_STATUS, PRIORITY, BUG_STATUS, IDEA_STATUS, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
 
 const TASK = {
   todo: ['Todo', '○', 'neutral'],
@@ -35,6 +35,15 @@ const BUG = {
   shelved: ['Shelved', '✕', 'neutral'],
   archived: ['Archived', '✕', 'neutral'],
 };
+// Ideas follow the same table by meaning: one being explored is in motion, a candidate or one parked is not started, a
+// promoted one has moved on into its task, a dropped one is dropped.
+const IDEA = {
+  exploring: ['Exploring', '◐', 'accent'],
+  candidate: ['Candidate', '○', 'neutral'],
+  'parking-lot': ['Parking lot', '○', 'neutral'],
+  promoted: ['Promoted', '→', 'neutral'],
+  dropped: ['Dropped', '✕', 'neutral'],
+};
 const TONES = ['neutral', 'accent', 'warning', 'critical', 'success', 'orange'];
 // None of the viewer's local fonts carries these glyphs, so each one is also named for the stylesheet to draw.
 const DRAWN = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '→': 'arrow', '✕': 'cross' };
@@ -54,6 +63,16 @@ test('every bug status has the shape and tone of its meaning in the spec table (
     assert.deepEqual(statusMeta('bug', value), { label, shape, tone }, value);
     assertMarker(statusMarker('bug', value), { label, shape, tone });
   }
+});
+
+test('every idea status has the shape and tone of its meaning in the spec table (§5.1), in the order a form offers them', () => {
+  assert.deepEqual(Object.keys(IDEA_STATUS), Object.keys(IDEA));
+  for (const [value, [label, shape, tone]] of Object.entries(IDEA)) {
+    assert.deepEqual(statusMeta('idea', value), { label, shape, tone }, value);
+    assertMarker(statusMarker('idea', value), { label, shape, tone });
+  }
+  assert.equal(statusMeta('idea', 'parking-lot').label, 'Parking lot');
+  assert.throws(() => { IDEA_STATUS.exploring.label = 'x'; }, TypeError);
 });
 
 test('every priority has its full word, shape and tone', () => {
@@ -130,7 +149,7 @@ test('priorityMarker builds the same structure', () => {
 });
 
 test('every shape in the tables has a drawn form', () => {
-  for (const m of [...Object.values(TASK_STATUS), ...Object.values(PRIORITY), ...Object.values(BUG_STATUS)]) assert.ok(DRAWN[m.shape], m.shape);
+  for (const m of [...Object.values(TASK_STATUS), ...Object.values(PRIORITY), ...Object.values(BUG_STATUS), ...Object.values(IDEA_STATUS)]) assert.ok(DRAWN[m.shape], m.shape);
 });
 
 test('a status that carries markup is shown as text, never parsed', () => {

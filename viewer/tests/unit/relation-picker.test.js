@@ -50,3 +50,36 @@ test('epics source returns id+name pairs', async () => {
 test('unknown source kind throws', () => {
   assert.throws(() => makeRelationSource('bogus', () => FAKE_BACKLOG));
 });
+
+// ── A task is never offered as its own dependency ──
+const BOARD = { tasks: ['T-101', 'T-102', 'T-103'].map((id) => ({ id, title: `Task ${id}`, status: 'todo' })) };
+
+test('a source given ids to exclude never offers them', async () => {
+  const out = await makeRelationSource('tasks', () => BOARD, { exclude: ['T-102'] })('T-10');
+  assert.deepEqual(out.map((o) => o.value), ['T-101', 'T-103']);
+  const all = await makeRelationSource('tasks', () => BOARD)('T-10');
+  assert.deepEqual(all.map((o) => o.value), ['T-101', 'T-102', 'T-103'], 'nothing excluded by default');
+});
+
+test('Depends on, edited inline, does not offer the task itself', async () => {
+  globalThis.queueMicrotask ??= queueMicrotask;
+  const { RelationPicker } = await import('../../js/components/edit/fields/relation-picker.js');
+  const { mountInlineField } = await import('../../js/components/edit/inline-field.js');
+  const schema = {
+    entity: 'task',
+    fields: [{ key: 'depends_on', label: 'Depends on', renderer: RelationPicker, kind: 'tasks', getBacklog: () => BOARD }],
+  };
+  const root = document.createElement('div');
+  document.body.replaceChildren(root);
+  const ctrl = mountInlineField(root, { schema, fieldKey: 'depends_on', entity: { id: 'T-102', depends_on: [] }, onSave: async () => {} });
+  try {
+    root.querySelector('.ef-chips').click();
+    const input = root.querySelector('input');
+    input.value = 'T-10';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await new Promise((ok) => setTimeout(ok, 0));
+    const offered = [...root.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+    assert.equal(offered.length, 2);
+    assert.ok(offered.every((t) => !t.includes('T-102')), offered.join(' | '));
+  } finally { ctrl.destroy(); root.remove(); }
+});

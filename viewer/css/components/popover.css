@@ -17,6 +17,9 @@
   background: var(--overlay-surface);
   color: var(--foreground-default);
   animation: popover-in var(--dur-micro) var(--ease-hourglass) backwards;
+  /* Placed by measuring from the corner: under reduced motion's near-zero duration on every property it would
+     otherwise glide out of that corner, drawn there for a frame. */
+  transition-property: none;
 }
 @keyframes popover-in { from { opacity: 0; } }
 

@@ -6,40 +6,26 @@
   gap: var(--page-gap);
 }
 
+/* The filter rail: one chip row per group. A whole group may move to the next line; chips inside a group never wrap,
+   what does not fit waits behind that row's More. Status and Priority keep their natural width; Epic and Area share
+   what is left. */
 .tbl-chips {
-  display: flex; align-items: center; flex-wrap: wrap;
-  gap: 6px var(--sp-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-lg);
   flex: 0 0 auto;
+  min-width: 0;
 }
-.tbl-chip-group { display: flex; align-items: center; gap: 6px; }
-.tbl-chip-label {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--ink-3); margin-right: 2px;
+.tbl-chips > .chip-row { flex: 0 0 auto; max-width: 100%; }
+.tbl-chips > .chip-row:is([data-kind="epic"], [data-kind="area"]) { flex: 1 1 240px; min-width: 240px; }
+.tbl-chips > .chip-row[hidden] { display: none; }
+.tbl-clear { flex: 0 0 auto; margin-left: auto; }
+/* Touch target: the rail sits in the screen, out of reach of the topbar's own 44px rule; the child selector outranks
+   .btn--sm's 24px whatever order the sheets load in. */
+@media (max-width: 768px) {
+  .tbl-chips > .tbl-clear { min-height: 44px; }
 }
-.tbl-chip {
-  display: inline-flex; align-items: center;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--ink-2);
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-}
-.tbl-chip:hover { background: var(--bg-card, var(--surface)); color: var(--ink); }
-.tbl-chip.is-active {
-  background: rgba(74,158,255,0.14);
-  border-color: rgba(74,158,255,0.45);
-  color: var(--ink);
-}
-.tbl-chip--clear {
-  margin-left: auto;
-  border-color: rgba(214,107,95,0.35);
-  color: var(--red, #d66b5f);
-}
-.tbl-chip--clear:hover { background: rgba(214,107,95,0.10); }
 
 .tbl-host {
   flex: 1 1 auto; min-height: 0;
@@ -59,25 +45,23 @@ table.tbl thead, table.tbl tbody, table.tbl tr {
   display: contents;
 }
 
+/* Header cells are sortHeader cells; the button inside takes this type and colour. */
 .tbl-th {
   position: sticky; top: 0; z-index: 1;
-  background: var(--bg-panel, var(--surface2, #17181d));
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  display: flex; align-items: center;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
   text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
   user-select: none;
-  display: flex; align-items: center; gap: 4px;
 }
-.tbl-th.is-sortable { cursor: pointer; }
-.tbl-th.is-sortable:hover { color: var(--ink); }
-.tbl-th.is-active { color: var(--ink); }
-.tbl-th-arrow { font-family: var(--font-sans); font-size: 11px; }
+.tbl-th[aria-sort] { color: var(--foreground-bold); }
 
 .tbl-row { cursor: pointer; }
 .tbl-row:hover .tbl-cell {

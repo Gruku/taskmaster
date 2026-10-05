@@ -71,7 +71,7 @@ export function taskSchema({ getBacklog }) {
         keyLabel: 'Type', valueLabel: 'Path or URL', addLabel: 'Add doc' },
       { key: 'anchors',  label: 'Anchors',  renderer: ChipInput, group: 'relations',
         allowFree: true, placeholder: 'add a file or path…' },
-      { key: 'description', label: 'Description', renderer: MdField, group: 'content' },
+      { key: 'description', label: 'Description', renderer: MdField, group: 'content', open: true },
       { key: 'specification', label: 'Specification', renderer: MdField, group: 'content' },
       { key: 'plan', label: 'Plan', renderer: MdField, group: 'content' },
       { key: 'notes', label: 'Notes', renderer: MdField, group: 'content' },

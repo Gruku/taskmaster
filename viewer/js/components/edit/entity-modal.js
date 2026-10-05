@@ -76,7 +76,7 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       onChange: (v) => set(f, v),
       onCommit: (v) => set(f, v),
       // No onCancel: Escape in a field with nothing of its own to close belongs to the modal.
-      id, describedBy: f.errEl.id, autoFocus: false,
+      id, describedBy: f.errEl.id, autoFocus: false, entityId: initial.id,
     });
   }
 
@@ -104,7 +104,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
       // A pointer opened it to write in it; a keyboard user stays on the heading and Tabs in.
       if (!f.panel.hidden && e.detail > 0) controlOf(f).focus();
     });
-    expand(f, f.value != null || (create && f.key === 'description'));
+    // A new item opens on the section its schema marks `open` — where that kind of item is mostly written.
+    expand(f, f.value != null || (create && !!f.spec.open));
     f.wrap = h('div', { class: 'eform-section', 'data-key': f.key }, [h('h4', { class: 'eform-section-head' }, f.toggle), f.panel]);
     return f.wrap;
   }

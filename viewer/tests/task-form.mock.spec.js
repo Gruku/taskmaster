@@ -551,7 +551,8 @@ for (const [width, height] of [[1440, 900], [390, 844]]) {
     await input.evaluate((el) => el.scrollIntoView({ block: 'end' }));
     await input.fill('T-10');
     const rows = field(dialog, 'depends_on').locator('.ef-chip-dd-row');
-    await expect(rows).toHaveCount(6);
+    // T-101..T-107, less T-101 (already chosen) and T-102 (the task itself).
+    await expect(rows).toHaveCount(5);
     const report = await page.evaluate(() => {
       const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
       const dialogBox = box(document.querySelector('.modal--form'));
@@ -573,12 +574,38 @@ for (const [width, height] of [[1440, 900], [390, 844]]) {
       expect(row.left).toBeGreaterThanOrEqual(report.dialogBox.left - 0.5);
       expect(row.right).toBeLessThanOrEqual(report.dialogBox.right + 0.5);
     }
-    // Still attached to its input: the list starts right under it.
-    expect(report.rows[0].top - report.input.bottom).toBeLessThan(12);
-    expect(report.rows[0].top).toBeGreaterThanOrEqual(report.input.bottom);
+    // Still attached to its input: right under it, or right above it when there is no room below.
+    const first = report.rows[0];
+    const last = report.rows.at(-1);
+    const below = first.top >= report.input.bottom && first.top - report.input.bottom < 12;
+    const above = last.bottom <= report.input.top && report.input.top - last.bottom < 12;
+    expect(below || above, JSON.stringify({ input: report.input, first, last })).toBe(true);
     await page.keyboard.press('Escape');
   });
 }
+
+test('Depends on never offers the task itself', async ({ page }) => {
+  const dialog = await openEdit(page);
+  const input = ctl(dialog, 'depends_on');
+  await expect(input).toHaveAttribute('role', 'combobox');
+  await input.fill('T-10');
+  const list = page.getByRole('listbox', { name: 'Depends on suggestions' });
+  await expect(list).toBeVisible();
+  await expect(input).toHaveAttribute('aria-expanded', 'true');
+  await expect(input).toHaveAttribute('aria-controls', await list.getAttribute('id'));
+  const offered = await list.getByRole('option').allTextContents();
+  expect(offered.some((t) => t.startsWith('T-103'))).toBe(true);
+  expect(offered.some((t) => t.startsWith('T-102'))).toBe(false);
+  // T-101 is already chosen; the add list offers it again only once it is removed.
+  await page.keyboard.press('Escape');
+  await field(dialog, 'depends_on').getByRole('button', { name: /^Remove T-101/ }).click();
+  await input.fill('T-10');
+  await expect(list.getByRole('option', { name: /^T-101/ })).toHaveCount(1);
+  await expect(list.getByRole('option', { name: /^T-102/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(list).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+});
 
 // ── Phone ──
 test('390×844: one column, nothing wider than the screen, Save and Cancel in view without scrolling', async ({ page }) => {
@@ -699,6 +726,15 @@ for (const theme of ['dark', 'light']) {
     const dialog = await openEdit(page, { theme, task: { ...RICH_TASK, estimate: '2 weeks', status: 'someday' } });
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(dialog.locator('.eform-section-toggle[aria-expanded="true"]')).toHaveCount(6);
+    expect(await axe(page)).toEqual([]);
+  });
+
+  test(`axe (${theme}): the Depends on suggestion list, open with a highlighted option`, async ({ page }) => {
+    const dialog = await openEdit(page, { theme });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await ctl(dialog, 'depends_on').fill('T-10');
+    await expect(page.getByRole('listbox', { name: 'Depends on suggestions' })).toBeVisible();
+    await page.keyboard.press('ArrowDown');
     expect(await axe(page)).toEqual([]);
   });
 }
