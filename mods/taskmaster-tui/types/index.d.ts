@@ -60,7 +60,8 @@ export type TmCursor = {
   readonly mode: 'card' | 'confirm' | 'note'
   readonly refusal: string
 }
-export type TmBandMode = { readonly confirmingId: string; readonly refusal: string }
+/** `refusalId` names the task `refusal` was given for; the band shows a refusal only on that task (absent: shown nowhere). */
+export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 
 declare module 'claude-code' {
   interface PluginState {

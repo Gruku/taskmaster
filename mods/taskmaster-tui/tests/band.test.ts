@@ -2,40 +2,15 @@
 // its digit hotkeys opening the panes and its review form asking before it signs anything off.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { DEMO_DETAILS } from '../hooks/demo'
 import type { TmSnapshot } from '../types'
 import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { RR_STUB } from './fixtures/rr-stub'
+import { type Drawn, isEl, widthOf } from './fixtures/measure'
 import { stateOf, worldOf } from './fixtures/world'
 
 const DEMO = { options: { source: 'demo' }, plugins: [RR_STUB] }
-
-type Drawn = { type: string; props?: Record<string, unknown>; children?: unknown[] }
-const isEl = (n: unknown): n is Drawn => typeof n === 'object' && n !== null && 'type' in n
-const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
-
-// Cells a drawn node takes across, laid out as the terminal lays it out: a Box in a row sums its children and gaps, in a
-// column takes the widest; padding and borders count; plain Buttons draw `k: label`.
-function widthOf(n: unknown): number {
-  if (typeof n === 'string') return n.length
-  if (typeof n === 'number') return String(n).length
-  if (!isEl(n)) return 0
-  const p = n.props ?? {}
-  const kids = n.children ?? []
-  if (p.display === 'none' || p.position === 'absolute') return 0
-  if (n.type === 'Text') return kids.reduce<number>((sum, kid) => sum + widthOf(kid), 0)
-  if (n.type === 'Button') {
-    const label = String(p.label ?? kids.join(''))
-    if (p.plain !== true) return label.length + 4
-    return typeof p.hotkey === 'string' ? `${p.hotkey}: ${label}`.length : label.length
-  }
-  const frame =
-    2 * num(p.paddingX ?? p.padding) + num(p.paddingLeft) + num(p.paddingRight) + (typeof p.borderStyle === 'string' ? 2 : 0)
-  const widths = kids.map(widthOf)
-  const column = p.flexDirection === 'column' || p.flexDirection === 'column-reverse'
-  if (column) return frame + Math.max(0, ...widths)
-  const gap = num(p.columnGap ?? p.gap)
-  return frame + widths.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, widths.length - 1)
-}
+const SNAP = `${PLUGIN}.snapshot`
 
 const FAR: TmSnapshot = {
   reachable: true,
@@ -140,7 +115,7 @@ describe('band', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
     await ui.press({ key: 'band-done' })
-    expect(await ui.find({ type: 'Text', text: /confirm done\?/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /done unified-chat-022\?/ })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'band-no' }))?.props.autoFocus).toBe(true)
     await ui.press({ key: 'band-no' })
     expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeDefined()
@@ -150,10 +125,11 @@ describe('band', () => {
     expect(await ui.find({ type: 'Text', text: /4 waiting on you/ })).toBeDefined()
   })
 
-  test('a sends back the bound task even when the loaded queue window does not hold it', { plugins: [RR_STUB] }, async ($, on) => {
+  test('a sends back the bound task even when the loaded queue window does not hold it', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
-    stateOf(on, { 'taskmaster-tui.snapshot': FAR })
+    const state = stateOf(on)
     await $.session.start(SESSION)
+    state.set(SNAP, FAR)
     const band = await $.ui.mount({ plugin: PLUGIN, ...BAND })
     await band.press({ key: 'band-back' })
     expect(world.opened).toEqual(['tm-review'])
@@ -162,5 +138,74 @@ describe('band', () => {
     expect(await review.find({ type: 'Text', text: 'Check the far task' })).toBeDefined()
     await review.input({ key: 'note', text: 'not yet' })
     expect(world.fills).toEqual(['Back to far-001: not yet'])
+  })
+
+  test('a narrow confirm row never shows y without n, and its question names the task', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    for (const columns of [44, 30, 24]) {
+      const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND, props: { ...BAND.props, bodyColumns: columns, maxRows: 3 } })
+      await ui.press({ key: 'band-done' })
+      expect(await ui.find({ type: 'Button', key: 'band-yes' }), `${columns}`).toBeDefined()
+      expect((await ui.find({ type: 'Button', key: 'band-no' }))?.props.autoFocus, `${columns}`).toBe(true)
+      expect(await ui.find({ type: 'Text', text: /(done )?unified[-a-z0-9]*…?\?/ }), `${columns}`).toBeDefined()
+      const drawn = JSON.stringify(await ui.drawn())
+      if (columns >= 30) {
+        const ours = ((await ui.drawn()) as unknown as Drawn).children?.[0]
+        for (const row of isEl(ours) ? (ours.children ?? []) : []) expect(widthOf(row), `${columns}: ${JSON.stringify(row)}`).toBeLessThanOrEqual(columns)
+      } else {
+        // Too narrow for both: the pair is drawn first, so the edge clips the question, never `n`.
+        expect(drawn.indexOf('band-no')).toBeLessThan(drawn.indexOf('unified'))
+      }
+      await ui.press({ key: 'band-no' })
+      await ui.unmount()
+    }
+  })
+
+  test('a band refusal shows only on the task it was given for', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const demo = state.get(SNAP) as TmSnapshot
+    const bind = (id: string) => state.set(SNAP, { ...demo, bound: { taskId: id, inferred: false, detail: DEMO_DETAILS[id] ?? null, pipeline: null } })
+    bind('tm-audit-031')
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    await ui.press({ key: 'band-done' })
+    await ui.redraw()
+    await ui.press({ key: 'band-yes' })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: / ◆ refused / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /outstanding gates/ })).toBeDefined()
+    bind('docs-012')
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: / ◆ refused / })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /outstanding gates/ })).toBeUndefined()
+  })
+
+  test('a refresh between d and y never retargets y (Review Focus 5)', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const demo = state.get(SNAP) as TmSnapshot
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    // Reordered: the asked task is no longer first; y still signs off the task d was pressed on.
+    await ui.press({ key: 'band-done' })
+    await ui.redraw()
+    state.set(SNAP, { ...demo, queue: [...demo.queue].reverse() })
+    await ui.redraw()
+    await ui.press({ key: 'band-yes' })
+    const after = state.get(SNAP) as TmSnapshot
+    expect(after.queue.map(i => i.id)).toEqual(['DEC-4', 'ISS-7', 'docs-012', 'tm-audit-031'])
+    expect(after.bound).toBeNull()
+    // Replaced: the session is now bound to another task; the pending confirm does not carry over to it.
+    state.set(SNAP, { ...demo, bound: { taskId: 'tm-audit-031', inferred: false, detail: DEMO_DETAILS['tm-audit-031'] ?? null, pipeline: null } })
+    await ui.redraw()
+    await ui.press({ key: 'band-done' })
+    await ui.redraw()
+    state.set(SNAP, { ...demo })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeDefined()
+    expect((state.get(SNAP) as TmSnapshot).queue).toHaveLength(5)
   })
 })

@@ -2,12 +2,15 @@
 // pane, done asks first and shows a refusal on the card, back-to-agent takes a note and closes the pane.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { DEMO_DETAILS, demoSnapshot } from '../hooks/demo'
+import type { TmSnapshot } from '../types'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { RR_STUB } from './fixtures/rr-stub'
-import { worldOf } from './fixtures/world'
+import { stateOf, worldOf } from './fixtures/world'
 
 const DEMO = { options: { source: 'demo' }, plugins: [RR_STUB] }
 const REVIEW_PANE = pane('tm-review')
+const SNAP = `${PLUGIN}.snapshot`
 
 describe('review queue', () => {
   test('/tm-review opens the review pane', DEMO, async ($, on) => {
@@ -117,5 +120,52 @@ describe('review queue', () => {
       await ui.press({ key: 'note-cancel' })
       await ui.unmount()
     }
+  })
+  test('a narrow pane never shows y without n, and n keeps the focus', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    for (const columns of [72, 34, 28, 20]) {
+      const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE, props: { ...REVIEW_PANE.props, bodyColumns: columns } })
+      await ui.press({ key: 'done' })
+      expect(await ui.find({ type: 'Button', key: 'confirm-yes' }), `${columns}`).toBeDefined()
+      expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus, `${columns}`).toBe(true)
+      expect(await ui.find({ type: 'Text', text: /confirm done\?/ }), `${columns}`).toBeDefined()
+      await ui.press({ key: 'confirm-no' })
+      await ui.unmount()
+    }
+  })
+
+  test('tm mode: y refuses until the writes are wired, and the card and tally stay', { plugins: [RR_STUB] }, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    stateOf(on, { [SNAP]: demoSnapshot(0), [`${PLUGIN}.details`]: DEMO_DETAILS })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
+    await ui.press({ key: 'done' })
+    await ui.redraw()
+    await ui.press({ key: 'confirm-yes' })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: /writes not wired yet/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /1 of 5 · 0 done this pass/ })).toBeDefined()
+  })
+
+  test('a refresh between d and y never retargets y (Review Focus 5)', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const demo = state.get(SNAP) as TmSnapshot
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
+    await ui.press({ key: 'done' })
+    await ui.redraw()
+    // The refusing task moves to the head of the queue: a retargeted y would sign it off (and be refused).
+    const [first, second, ...rest] = demo.queue
+    state.set(SNAP, { ...demo, queue: [second!, first!, ...rest] })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
+    await ui.press({ key: 'confirm-yes' })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: /refused|outstanding gates/ })).toBeUndefined()
+    expect((state.get(SNAP) as TmSnapshot).queue.map(i => i.id)).toEqual(['tm-audit-031', 'docs-012', 'ISS-7', 'DEC-4'])
+    expect(await ui.find({ type: 'Text', text: /2 of 5 · 1 done this pass/ })).toBeDefined()
   })
 })

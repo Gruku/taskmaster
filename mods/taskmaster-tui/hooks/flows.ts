@@ -108,7 +108,7 @@ export function createFlows(d: TmFlowDeps) {
           d.afterWrite(id, 'done')
           return
         }
-        await d.write.band(() => ({ confirmingId: '', refusal: out.refusal }))
+        await d.write.band(() => ({ confirmingId: '', refusal: out.refusal, refusalId: id }))
       }),
     pick: async (id: string): Promise<void> => {
       await d.write.pick(id)

@@ -4,7 +4,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { TmBandMode, TmCursor, TmSnapshot, TmTaskDetail } from '../types'
-import { demoActions } from './actions'
+import { demoActions, pendingActions } from './actions'
 import { DEMO_DETAILS, demoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
@@ -109,7 +109,8 @@ export const register: Register = (on, options) => {
   const source = options.source === 'demo' ? 'demo' : 'tm'
 
   on('session.start', async ($, e, next) => {
-    mod.flows = createFlows({ host: hostOf($), write: writerOf($), actions: demoActions(), afterWrite: () => undefined })
+    const actions = source === 'demo' ? demoActions() : pendingActions()
+    mod.flows = createFlows({ host: hostOf($), write: writerOf($), actions, afterWrite: () => undefined })
     await $.command.register({ name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' })
     await $.command.register({ name: HANDOVERS, description: 'The last five open Taskmaster handovers: copy for Telegram or resume' })
     if (source === 'demo') {

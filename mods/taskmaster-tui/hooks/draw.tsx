@@ -74,6 +74,27 @@ async function chip(ui: Ui, rr: Rr, c: ChipSpec): Promise<Piece> {
   return { el, width: label + 2 * (wrap.paddingX ?? 0) + (wrap.borderStyle === undefined ? 0 : 2) }
 }
 
+/**
+ * `y: yes` and `n: no` as ONE piece: no fitting may keep `y` without `n`, the focused safe default (Enter cancels).
+ * Keys are `<prefix>-yes` / `<prefix>-no`.
+ */
+async function confirmPair(ui: Ui, rr: Rr, prefix: string, onYes: () => void, onNo: () => void): Promise<Piece> {
+  const { Box } = ui
+  const [yes, no] = await Promise.all([
+    chip(ui, rr, { id: `${prefix}-yes`, hotkey: 'y', label: 'yes', treatment: 'chip', tone: 'success', onPress: onYes }),
+    chip(ui, rr, { id: `${prefix}-no`, hotkey: 'n', label: 'no', treatment: 'chip', tone: 'signature', autoFocus: true, onPress: onNo }),
+  ])
+  return {
+    el: (
+      <Box flexDirection="row" columnGap={1}>
+        {yes.el}
+        {no.el}
+      </Box>
+    ),
+    width: yes.width + 1 + no.width,
+  }
+}
+
 /** A row of chips and states: top-aligned so an outlined primary never stretches its neighbours to three rows. */
 function chipRow(ui: Ui, children: readonly RenderNode[]): RenderNode {
   const { Box } = ui
@@ -121,6 +142,7 @@ export type BandHandlers = {
 }
 
 const MIN_TEXT = 12
+const MIN_ID = 8
 
 export async function bandTree(
   ui: Ui,
@@ -186,12 +208,16 @@ export async function bandTree(
   }
   if (task !== null && keep.includes('stage')) {
     if (task.review && mode.confirmingId === task.id) {
-      const [yes, no] = await Promise.all([
-        chip(ui, rr, { id: 'band-yes', hotkey: 'y', label: 'yes', treatment: 'chip', tone: 'success', onPress: () => on.confirmDone(mode.confirmingId) }),
-        chip(ui, rr, { id: 'band-no', hotkey: 'n', label: 'no', treatment: 'chip', tone: 'signature', autoFocus: true, onPress: on.cancel }),
-      ])
-      const ask = stateChipWidth('confirm done?', 'warning') + yes.width + no.width + 2 <= width ? 'confirm done?' : 'done?'
-      rows.push(chipRow(ui, [node(await rr.chip({ text: ask, tone: 'warning', strength: 24 })), yes.el, no.el]))
+      const pair = await confirmPair(ui, rr, 'band', () => on.confirmDone(mode.confirmingId), on.cancel)
+      // The question always names the task it signs off: `done <id>?`, then `<id>?`; the id shortens to MIN_ID, never away.
+      const room = width - pair.width - 1 - stateChipWidth('', 'warning')
+      const least = Math.min(MIN_ID, task.id.length)
+      const prefix = room - 'done '.length - 1 >= least ? 'done ' : ''
+      const ask = `${prefix}${truncate(task.id, Math.max(least, room - prefix.length - 1))}?`
+      const question = node(await rr.chip({ text: ask, tone: 'warning', strength: 24 }))
+      // Too narrow for both: the pair goes first, so what the edge clips is the question, never `n`.
+      const fits = stateChipWidth(ask, 'warning') + 1 + pair.width <= width
+      rows.push(chipRow(ui, fits ? [question, pair.el] : [pair.el, question]))
     } else if (task.review) {
       const [done, back] = await Promise.all([
         chip(ui, rr, { id: 'band-done', hotkey: 'd', label: 'done', treatment: 'chip', tone: 'success', onPress: () => on.askDone(task.id) }),
@@ -199,7 +225,7 @@ export async function bandTree(
       ])
       let refused: Piece | null = null
       let reason: Piece | null = null
-      if (mode.refusal !== '') {
+      if (mode.refusal !== '' && mode.refusalId === task.id) {
         refused = { el: node(await rr.chip({ text: 'refused', tone: 'critical', strength: 24 })), width: stateChipWidth('refused', 'critical') }
         const room = width - (done.width + back.width + refused.width + 3)
         if (room >= MIN_TEXT) {
@@ -313,12 +339,10 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const esc = await escLegend(ui, rr, t)
   let actions: RenderNode[]
   if (mode === 'confirm') {
-    const [yes, no] = await Promise.all([
-      chip(ui, rr, { id: 'confirm-yes', hotkey: 'y', label: 'yes', treatment: 'chip', tone: 'success', onPress: () => on.confirmDone(item.id) }),
-      chip(ui, rr, { id: 'confirm-no', hotkey: 'n', label: 'no', treatment: 'chip', tone: 'signature', autoFocus: true, onPress: on.cancel }),
-    ])
+    const pair = await confirmPair(ui, rr, 'confirm', () => on.confirmDone(item.id), on.cancel)
     const ask = { el: node(await rr.chip({ text: 'confirm done?', tone: 'warning', strength: 24 })), width: stateChipWidth('confirm done?', 'warning') }
-    actions = [chipRow(ui, fit([ask, yes, no, esc], inner, 1))]
+    // One row when the question and the pair fit; otherwise the question above and the pair (first, so always kept) below.
+    actions = ask.width + 1 + pair.width <= inner ? [chipRow(ui, fit([ask, pair, esc], inner, 1))] : [ask.el, chipRow(ui, fit([pair, esc], inner, 1))]
   } else if (mode === 'note') {
     const cancel = await chip(ui, rr, { id: 'note-cancel', label: 'cancel', treatment: 'chip', tone: 'signature', onPress: on.cancel })
     actions = [
