@@ -119,9 +119,10 @@ Each treatment has one job:
 
 | Treatment | Job | Where |
 |---|---|---|
-| Outline (`round` border in the tone colour) | The single primary action of a card (`done`) | Panes only — 3 rows tall |
+| Outline (`round` border in the tone colour) | Available in `$.rr`; no longer used on the review card (2026-10-06: its 3 rows broke the action bar's baseline) | — |
+| Strong chip (24% tint, button recipe) | The single primary action of a card (`done`) | Panes and band |
 | Chip 12% (tone `-subtle` composited on the ground) | Secondary actions (`back to agent`, `skip`, `open`) | Panes and band |
-| Chip 24% (double-strength tint) | States, not actions: `refused` critical, `confirm done?` warning, `signed off` success | Card status line |
+| Chip 24% (double-strength tint), non-interactive | States, not actions: `refused` critical, `confirm done?` warning, `signed off` success | Card status line |
 | Keycap (key letter, dark ink on solid tone) | Legends for keys that have no button (`Esc close`) | Pane footer |
 
 Tones: `success` done, `warning` back to agent / pending, `critical` refused, `signature` neutral navigation. Tone always travels with a word; survivalist renders all four by weight and border only.
@@ -166,26 +167,35 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - `[-]` collapses the band to one summary line; `[+]` restores it.
 - Hidden entirely when there is no bound task and nothing waiting.
 
-**Review queue pane — `/review` or band `1`.** Opened with `focus: true, closeOnEscape: true`. One card at a time:
+**Review queue pane — `/tm-review` or band `1`.** Opened with `focus: true, closeOnEscape: true`. One card at a time (redesigned live 2026-10-06; the terminal card is the lean quick-sign-off surface, the rich review lives in the viewer — §6.5):
 
 ```
-REVIEW  3 of 16 · 2 done this pass
-unified-chat-022  ◆ Critical · 1h
-Unified chat pre-build gets the full supervisor toolset; cookbook owns the order
-FULL · review-gate:pass · no branch
-─────────────────────────────────────────────
-Live check on dev (needs unifiedChatGenerate + unifiedChatBuild granted):
-first unified message stays on intent/brief and does not build; …
-─────────────────────────────────────────────
-(d: done)  a: back to agent  s: skip  o: open in prompt     Esc close
-(`d: done` is the round outline primary; the others are chips; `Esc close` is a keycap legend)
+ REVIEW  ●○○○○  1 of 5 · 0 done this pass                      esc close
+╭─────────────────────────────────────────────────────────────────────╮
+│ ◆ CRITICAL  unified-chat-022 · 1h · FULL · ● review-gate pass       │
+│ Unified chat pre-build gets the full supervisor toolset; cookbook…  │
+│                                                                     │
+│ CHECK ON DEV  needs unifiedChatGenerate + unifiedChatBuild granted  │
+│ 1 ☐ first unified message stays on intent/brief and does not build  │
+│ 2 ☑ second message builds with the full toolset                     │
+│                                                                     │
+│ i: ▸ details                                                        │
+╰─────────────────────────────────────────────────────────────────────╯
+ d: done  a: back to agent  s: skip  o: open in prompt  v: viewer  c: copy
 ```
+
+- The card is a `raised` surface with a `round` border (the active surface); the header strip shows the queue as dots (`●` done/current, `○` ahead; capped, then `+N`), position and pass tally; `esc close` is dim text, not a keycap.
+- Card header line: priority glyph + word, id, age, lane, gate signal. Then the title. Then the check.
+- **Checklist.** `human_action` is split into items: bullet or numbered lines; else, after a leading `<label>:` (shown as the uppercase section label, e.g. `CHECK ON DEV`, with any parenthetical as its dim detail), clauses separated by `;`; else the whole text is one item. Each item is a Button (`1`…`9`, Enter) toggling `☐`/`☑`. Ticks are local UI state only — stored per task id in `$.store` (`ticks:<task id>`, pruned with the binding keys) — never written to Taskmaster.
+- `i` toggles details inline under the check: notes, links, branch/PR (from `backlog_get_task`).
+- Action bar, one row: `done` is the primary — a 24% success chip with the button recipe (§5.4), so it reads stronger than the 12% secondary chips; the 3-row outline is no longer used on the card.
 
 - Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
-- `human_action` is the body, shown in full (scrolls if long).
-- `d` → inline confirm row `confirm done? y / n` (focus starts on `n`, so Enter cancels) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
+- The check is shown in full (the pane scrolls if long).
+- `d` → inline confirm row `done <id>?  y: yes  n: no` (focus starts on `n`, so Enter cancels; with unticked items it reads `1 of 2 unchecked — done anyway?`) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
 - `a` → an `Input` "note for the agent" → `backlog_update_task(id, status, in-progress)`, clear `human_action`, record the note with `backlog_note` → close the pane and `$.prompt.fill` "Back to <id>: <note>" (not submitted).
 - `s` → next card; `o` → `$.prompt.fill("Look at <id>")` and the pane stays open. Only "back to agent" closes the pane.
+- `v` → open this task in the Taskmaster viewer (`backlog_open_viewer`; the review mode of §6.5 once it exists, the task view until then). `c` → `$.ui.copy` the check text (toast; path-less fallback toast on `no-clipboard`).
 - After the last card: "Queue clear" with the pass tally.
 
 **Handovers pane — `/handovers` or band `2`.** On demand. Last 5 open handovers, newest first (`superseded` hidden), one Button per row (Up/Down to move). Footer `5 of 23 · superseded hidden`.
@@ -225,6 +235,10 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 - Every call is wrapped in a 3 s timeout (the API has none) and aborts on `next.signal` where it runs inside a hook.
 - **Refresh triggers:** `session.start`, `turn.complete` (main agent only, `e.agentId` unset), and after any `mcp__plugin_taskmaster_tm__*` write the session makes. Single-flight: one refresh at a time, later triggers collapse into one trailing refresh. Never on a timer. Never awaited by a turn.
 - Results live in `$.state` so drawings redraw on write.
+
+### 6.5 Viewer review mode (hybrid split, decided 2026-10-06)
+
+Reviews are hybrid: the terminal keeps the band and the lean card above for quick sign-offs; the rich review experience (full RR typography and layout) is a review mode in the Taskmaster viewer, opened from the card with `v`. That viewer mode is its own design → spec → plan cycle (alongside the viewer RR re-skin's screens work) and is not part of this epic's tasks; until it ships, `v` opens the viewer at the task.
 
 ## 7. Failure handling
 
