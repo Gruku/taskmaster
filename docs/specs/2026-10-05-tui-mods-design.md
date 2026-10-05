@@ -125,6 +125,14 @@ Tones: `success` done, `warning` back to agent / pending, `critical` refused, `s
 
 A pane (opened by command) drawing every `$.rr` element in every relevant state with sample data, plus buttons `1` dark, `2` light, `3` survivalist to flip polarity live. This is the design surface: the look is tuned here against screenshots, and decisions are recorded back into this spec.
 
+#### Tuning log
+
+- 2026-10-05: Panes paint their own ground — new surface level `page` (`bg-page` for the active polarity) on pane roots; the band still never paints. (Claude Code paints pane backgrounds itself, ~`#262626` in dark, lighter than `bg-page`, so unpainted RR surfaces stepped the wrong way and `overlay` vanished.)
+- 2026-10-05: Button labels can't be coloured (no colour prop on `Button`); the engine draws them in the terminal's default foreground. `/rr-gallery` shows three label variants (a chip, b `variant="primary"`, c `›` glyph button + our own `foreground-bold` label) for the user to pick.
+- 2026-10-05: Survivalist chip buttons get a value-only ground one surface step from the ground they sit on, so they read as buttons without hue. "Hue-free" means channels within 2: survivalist keeps RR's warm D2 temperature.
+- 2026-10-05: `classic.SessionStart` can fire before a session is bound (`$.config.list` unavailable); it never throws and leaves the publish to `session.start`.
+- 2026-10-05: Verified live: under `auto`, `/theme` → light switches the gallery to light.
+
 ## 6. `taskmaster-tui`
 
 ### 6.1 Surfaces
