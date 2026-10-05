@@ -321,3 +321,35 @@ test('a lost race (409 naming the current revision) still raises the banner, and
     assert.equal(root.querySelector('.ef-text')?.textContent, 'peer');
   } finally { ctrl.destroy(); host.remove(); root.remove(); }
 });
+
+test('a save error\'s message clears when the next save succeeds', async () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  let refuse = true;
+  const saved = [];
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'retry-1', title: 'old' },
+    onSave: async (v) => {
+      if (refuse) { refuse = false; return { error: 'Title is locked while in review' }; }
+      saved.push(v);
+    },
+  });
+  const wait = async (ok) => { for (let i = 0; i < 100 && !ok(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); };
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = 'new';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    const message = root.querySelector('.if-error');
+    await wait(() => message.textContent);
+    assert.equal(message.textContent, 'Title is locked while in review');
+    assert.ok(input.getAttribute('aria-describedby').split(' ').includes(message.id));
+
+    input.value = 'newer';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await wait(() => saved.length && root.querySelector('.ef-text'));
+    assert.deepEqual(saved, ['newer']);
+    assert.equal(message.textContent, '', 'the message is gone after the save that worked');
+    assert.equal(root.querySelector('.ef-text').textContent, 'newer');
+  } finally { ctrl.destroy(); root.remove(); }
+});
