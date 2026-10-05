@@ -240,3 +240,57 @@ test('tabbing through an inline estimate editor writes nothing, whatever form th
     } finally { ctrl.destroy(); root.remove(); }
   }
 });
+
+// A 409 is one of two things. With `current_etag` the write lost a race: the banner settles it. Without one the server
+// refused the write (gates still open, a legacy layout): that is an error with the server's reason, the stored
+// revision is left alone, and no banner claims another writer changed anything.
+test('a refusing 409 shows the server\'s reason as an error, raises no banner and keeps the stored revision', async () => {
+  const { store } = await import('../../js/store.js');
+  const root = document.createElement('div');
+  const host = document.createElement('div');
+  host.id = 'conflict-banner-host';
+  document.body.append(root, host);
+  store.setEtag('task:refused-1', 'rev-7');
+  const reason = 'Completion blocked: review-gate is still open';
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'refused-1', title: 'old' },
+    onSave: async () => { throw Object.assign(new Error(reason), { code: 409 }); },
+  });
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = 'new';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    for (let i = 0; i < 100 && !root.querySelector('.if-status-error'); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    // Give a wrongly loaded banner module time to arrive before saying there is none.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(root.querySelector('.if-status-error')?.title, reason);
+    assert.equal(host.children.length, 0, 'no conflict banner');
+    assert.equal(store.getEtag('task:refused-1'), 'rev-7');
+    assert.ok(root.querySelector('input'), 'the edit stays open with the value typed');
+    assert.equal(root.querySelector('input').value, 'new');
+  } finally { ctrl.destroy(); host.remove(); root.remove(); }
+});
+
+test('a lost race (409 naming the current revision) still raises the banner, and settling it stores that revision', async () => {
+  const { store } = await import('../../js/store.js');
+  const root = document.createElement('div');
+  const host = document.createElement('div');
+  host.id = 'conflict-banner-host';
+  document.body.append(root, host);
+  store.setEtag('task:race-2', 'rev-1');
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'race-2', title: 'old' },
+    onSave: async () => { throw Object.assign(new Error('stale'), { code: 409, current: { title: 'peer' }, current_etag: 'rev-2' }); },
+  });
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = 'mine';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    for (let i = 0; i < 400 && !host.querySelector('.cb-use-server'); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    host.querySelector('.cb-use-server').click();
+    assert.equal(store.getEtag('task:race-2'), 'rev-2');
+    assert.equal(root.querySelector('.ef-text')?.textContent, 'peer');
+  } finally { ctrl.destroy(); host.remove(); root.remove(); }
+});

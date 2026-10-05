@@ -234,6 +234,28 @@ test('peeking a dependency swaps the content in place, focuses its title, and ke
   await expect(page).toHaveURL(/#\/kanban$/);
 });
 
+test('an inline save the server refuses (409 with no revision) shows its reason, raises no conflict banner, and the next save still sends If-Match', async ({ page }) => {
+  const reason = 'Completion blocked: review-gate is still open';
+  const sent = [];
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH') sent.push({ path: new URL(r.url()).pathname, ifMatch: r.headers()['if-match'] ?? null });
+  });
+  await board(page, { table: { 'PATCH /api/tasks/T-102': { status: 409, json: { ok: false, error: reason } } } });
+  const dialog = await openCard(page, 'T-102');
+  const status = dialog.locator('[data-field="status"]');
+  for (const value of ['done', 'in-review']) {
+    await status.locator('.ef-editable').click();
+    // The native select sits inside the marker picker; the change event is what the field listens to.
+    await status.locator('select').evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
+    await expect(status.locator('.if-status-error')).toHaveAttribute('title', reason);
+    await status.locator('select').press('Escape');
+    await expect(status.locator('select')).toHaveCount(0);
+  }
+  await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);
+  expect(sent.length).toBe(2);
+  expect(sent.every((s) => s.path === '/api/tasks/T-102' && s.ifMatch), JSON.stringify(sent)).toBe(true);
+});
+
 test('a task that fails to load says so in a sentence, offers Open full, and prints no raw API error', async ({ page }) => {
   await board(page, { table: { '/api/task/T-102/detail': { status: 500, json: { error: 'Traceback: KeyError depends_on' } } } });
   await card(page, 'T-102').click();

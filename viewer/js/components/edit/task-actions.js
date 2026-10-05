@@ -15,7 +15,7 @@ function describe(e) {
 
 // A 409 that names the revision the write lost to is a race to settle field by field. Any other 409 is the server
 // refusing the write (gates still open, a legacy layout): its reason is the answer, and there is nothing to merge.
-const lostRace = (e) => e?.code === 409 && !!e.current_etag;
+export const lostRace = (e) => e?.code === 409 && !!e.current_etag;
 
 // The write has landed; a board that fails to refresh now catches up on its next poll. The form must not stay open
 // over it, or a second Save would make the same write again.

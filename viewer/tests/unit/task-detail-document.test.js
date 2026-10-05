@@ -80,14 +80,19 @@ test('a live claim banner disappears at expiry without a board refresh', async (
   const root = document.createElement('div');
   document.body.appendChild(root);
   const dispose = mountTaskDetailDocument(root, ctx);
-  const banner = root.querySelector('.td-lock-banner');
-  assert.ok(banner);
-  assert.match(banner.textContent, /Locked by peer/);
-  assert.ok(!ISO.test(banner.textContent), 'the expiry is not printed as a raw ISO string');
-  await new Promise(resolve => setTimeout(resolve, 140));
-  assert.equal(root.querySelector('.td-lock-banner'), null);
-  dispose();
-  root.remove();
+  try {
+    const banner = root.querySelector('.td-lock-banner');
+    assert.ok(banner);
+    assert.match(banner.textContent, /Locked by peer/);
+    assert.ok(!ISO.test(banner.textContent), 'the expiry is not printed as a raw ISO string');
+    // Timers run late on a loaded machine: wait for the expiry, bounded, rather than a fixed 140 ms.
+    for (let i = 0; i < 100 && root.querySelector('.td-lock-banner'); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(root.querySelector('.td-lock-banner'), null);
+  } finally {
+    // A failure here must not leave a mounted document behind for the tests that follow.
+    dispose();
+    root.remove();
+  }
 });
 
 // ── Template line 1: meta line ──
@@ -234,7 +239,9 @@ test('tags with nothing to show are left out', () => {
 
 test('status and priority can be reached and opened from the keyboard', async () => {
   const t = mount();
-  const read = t.root.querySelector('[data-field="status"] .if-wrap > *');
+  // Not `.if-wrap > *`: jsdom's selector engine has been seen to miss that child once an earlier test left a document
+  // mounted, so the element is reached by structure instead.
+  const read = t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild;
   assert.equal(read.getAttribute('tabindex'), '0');
   assert.equal(read.getAttribute('role'), 'button');
   assert.match(read.getAttribute('aria-label'), /^Status: Todo/);
@@ -535,4 +542,23 @@ test('linked bugs come from api.listBugs, after the sections and before the date
   const order = [...m.root.querySelector('.td-body').children].map((el) => el.dataset.test).filter(Boolean);
   assert.ok(order.indexOf('linked-bugs') < order.indexOf('dates'), order.join(','));
   m.done();
+});
+
+test('an inline save the server refuses with a 409 is an error with its reason, not a conflict', async () => {
+  const reason = 'Completion blocked: review-gate is still open';
+  const host = document.createElement('div');
+  host.id = 'conflict-banner-host';
+  document.body.appendChild(host);
+  const api = { ...makeCtx().api, patchTask: async () => { throw Object.assign(new Error(reason), { code: 409 }); } };
+  const t = mount(FAKE_TASK, { api });
+  try {
+    t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    const select = t.root.querySelector('[data-field="status"] select');
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    for (let i = 0; i < 100 && !t.root.querySelector('[data-field="status"] .if-status-error'); i++) await tick(5);
+    await tick(100);
+    assert.equal(t.root.querySelector('[data-field="status"] .if-status-error')?.title, reason);
+    assert.equal(host.children.length, 0, 'no conflict banner');
+  } finally { t.done(); host.remove(); }
 });

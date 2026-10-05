@@ -14,6 +14,7 @@ import { copyToClipboard } from '../lib/copy.js';
 import { assignEpicColors, epicColor, epicCssVar } from '../lib/epics.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
+import { lostRace } from './edit/task-actions.js';
 import { EstimateField } from './edit/fields/estimate-field.js';
 import { renderGatePipeline } from './gate-pipeline.js';
 import { renderMergeLadder } from './merge-status.js';
@@ -53,7 +54,7 @@ function inlineSave(taskId, fieldKey, ctx) {
       // Refresh backlog so the change is reflected in store + other screens.
       await ctx.store.refreshBoard(ctx.api);
     } catch (e) {
-      if (e && e.code === 409) throw e; // re-throw so inline-field can show conflict banner
+      if (lostRace(e)) throw e; // a lost race goes back to inline-field, which settles it from the conflict banner
       return { error: e.message || String(e) };
     }
   };

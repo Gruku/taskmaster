@@ -4,6 +4,7 @@
 import { h } from '../../util/h.js';
 import { fieldByKey, isSystemManaged } from './schema.js';
 import { store } from '../../store.js';
+import { lostRace } from './task-actions.js';
 
 const DEBOUNCE_MS = 600;
 
@@ -131,7 +132,9 @@ export function mountInlineField(parent, {
       setTimeout(() => setStatus(''), 800);
       return true;
     } catch (e) {
-      if (e && e.code === 409) {
+      // Only a 409 that names the revision it lost to is a conflict; any other is the server refusing the write,
+      // and falls through to the error below with its reason, leaving the stored revision as it was.
+      if (lostRace(e)) {
         // Stale write — surface conflict banner.
         conflicted = true;
         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
