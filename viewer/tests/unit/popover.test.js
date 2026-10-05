@@ -228,7 +228,7 @@ test('6. an anchor that leaves the document closes it within one observer callba
   const restore = [spy(document), spy(window)];
   const p = open();
   restore.forEach((r) => r());
-  assert.deepEqual(signals.map(([t]) => t).sort(), ['pointerdown', 'resize', 'scroll']);
+  assert.deepEqual(signals.map(([t]) => t).sort(), ['animationcancel', 'animationend', 'pointerdown', 'resize', 'scroll']);
   $('#wrap').remove();
   await tick();
   assert.deepEqual(p.reasons, ['detached']);
