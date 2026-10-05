@@ -9,7 +9,7 @@ html, body {
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 /* Links no rule has claimed: the browser's default blue is unreadable on the dark grounds.
-   :where() keeps this at zero specificity so any class rule (.sidebar-link, .tm-action…) still wins. */
+   :where() keeps this at zero specificity so any class rule (.sidebar-link, .btn…) still wins. */
 :where(a[href]) { color: var(--text-accent); }
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 ::selection { background: var(--signature-dim); }

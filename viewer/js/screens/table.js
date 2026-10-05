@@ -65,7 +65,7 @@ export async function mount(root, { store, api, prefs }) {
   });
   const search = searchBuilt.input;
   const newTaskBtn = tmAction({
-    icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
+    icon: 'plus', label: 'Task', variant: 'primary', title: 'Add task',
     onClick: () => openTaskCreateModal({ store, api }),
   });
   topbar?.appendChild(subcount);

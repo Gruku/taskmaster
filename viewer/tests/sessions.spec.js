@@ -21,7 +21,8 @@ test.describe('Sessions screen', () => {
     // the old per-screen <h2> header was retired.
     await expect(page.locator('.tm-segmented button')).toHaveCount(3);
     await expect(page.locator('[data-role=kinds] .sessions-kind-chip')).toHaveCount(2);
-    await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
+    // No "coming soon" placeholder: a control that does nothing is not rendered.
+    await expect(page.locator('[aria-label*="coming soon"]')).toHaveCount(0);
 
     // No JS errors during initial mount.
     expect(errors).toEqual([]);
@@ -64,7 +65,7 @@ test.describe('Sessions screen', () => {
     const chips = await page.locator('[data-role=kinds] .sessions-kind-chip').allTextContents();
     expect(chips.join(' ').toLowerCase()).toMatch(/sessions/);
     expect(chips.join(' ').toLowerCase()).toMatch(/handovers/);
-    // "+ New note" button is present (currently disabled with "coming soon" affordance).
-    await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
+    // No "+ New note" placeholder until it does something.
+    await expect(page.locator('[aria-label*="coming soon"]')).toHaveCount(0);
   });
 });

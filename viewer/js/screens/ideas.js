@@ -310,7 +310,7 @@ export async function mount(root, { store, prefs }) {
 
   // Create Idea button — explicit user request, use tmAction with onClick
   const newBtn = tmAction({
-    icon: '+',
+    icon: 'plus',
     label: 'New Idea',
     variant: 'primary',
     title: 'Create a new idea',

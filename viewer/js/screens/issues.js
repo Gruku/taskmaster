@@ -3,7 +3,7 @@ import { severityLabel } from '../util/severity-label.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import * as api from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmSubcount, tmSearch, tmSegmented } from '../lib/topbar.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { groupByStatus, groupBySeverity } from '../util/issues-grouping.js';
 import { issueEvidence } from '../util/issue-fields.js';
@@ -85,11 +85,6 @@ export async function mount(root, { store, prefs }) {
     ],
     { value: initialView, onChange: setView },
   );
-  const newBtn = tmAction({
-    icon: '+', label: 'Issue', variant: 'primary',
-    title: 'New issue — coming soon',
-    disabled: true,
-  });
 
   // Component chip-row (populated dynamically once issues load).
   const compRow = document.createElement('div');
@@ -105,7 +100,6 @@ export async function mount(root, { store, prefs }) {
   topbar?.appendChild(filters);
   topbar?.appendChild(compRow);
   topbar?.appendChild(toggle);
-  topbar?.appendChild(newBtn);
 
   // ---- columns + resolved shelf
   const columns = document.createElement('div');
