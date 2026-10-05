@@ -12,7 +12,9 @@ test('missing task shows not-found and clears the topbar', async ({ page }) => {
   await page.goto('/#/task/NOPE-999');
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('Task not found');
   await expect(page.locator('#screen-mount')).not.toContainText('GET /api');
-  await expect(page.locator('#topbar-actions > *')).toHaveCount(0);
+  // Row 2 keeps only its hidden Filters button.
+  await expect(page.locator('#topbar-actions > :not(.overflow-more)')).toHaveCount(0);
+  await expect(page.locator('#topbar-actions')).toBeHidden();
 });
 
 test('the not-found link takes the signature colour in both themes, not the browser default blue', async ({ page }) => {
@@ -53,7 +55,8 @@ test('missing task opened after a real one drops that task\'s topbar controls', 
 
   await page.evaluate(() => { location.hash = '#/task/NOPE-999'; });
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('Task not found');
-  await expect(page.locator('#topbar-actions > *')).toHaveCount(0);
+  await expect(page.locator('#topbar-actions > :not(.overflow-more)')).toHaveCount(0);
+  await expect(page.locator('#topbar-actions')).toBeHidden();
   expect(errors).toEqual([]);
 });
 

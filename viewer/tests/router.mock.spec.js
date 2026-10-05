@@ -13,11 +13,12 @@ async function openScreenWithControls(page) {
     document.getElementById('topbar-primary').appendChild(document.createElement('button')).textContent = 'New';
   });
 }
+// Row 2 keeps only its Filters button, hidden, and with it the row.
 async function expectClearedTopbar(page) {
-  for (const sel of SLOTS) {
-    await expect(page.locator(`${sel} > *`), sel).toHaveCount(0);
-    await expect(page.locator(sel), sel).toHaveText('');
-  }
+  for (const sel of SLOTS) await expect(page.locator(`${sel} > :not(.overflow-more)`), sel).toHaveCount(0);
+  for (const sel of ['#topbar-count', '#topbar-primary']) await expect(page.locator(sel), sel).toHaveText('');
+  await expect(page.locator('#topbar-actions > .overflow-more')).toBeHidden();
+  await expect(page.locator('#topbar-actions')).toBeHidden();
 }
 const screenModule = (body) => (route) => route.fulfill({ contentType: 'text/javascript', body });
 

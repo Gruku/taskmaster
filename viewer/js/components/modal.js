@@ -137,8 +137,11 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
 
   const active = document.activeElement;
   const from = opener ?? (active && active !== document.body ? active : null);
-  // Kept from open time: once the opener is removed its parent chain is gone.
-  const ancestors = [];
+  // Kept from open time: once the opener is removed its parent chain is gone. An opener inside a popover goes when
+  // the popover closes (a control parked behind Filters is out of the page again); the button that opened the
+  // popover stands in for it first.
+  const popover = from?.closest('.popover');
+  const ancestors = popover?.id ? [...document.querySelectorAll(`[aria-controls="${popover.id}"]`)] : [];
   for (let p = from?.parentElement; p && p !== document.body; p = p.parentElement) ancestors.push(p);
   // A modal beneath that closes first may hand this one its own target (see close()).
   const back = { from, ancestors };
