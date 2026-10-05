@@ -6,7 +6,14 @@
 import { ChipInput } from './chip-input.js';
 import { statusMeta } from '../../status.js';
 
-export function makeRelationSource(kind, getBacklog) {
+// `exclude` lists ids never offered: a task is not its own dependency.
+export function makeRelationSource(kind, getBacklog, { exclude = [] } = {}) {
+  const source = _source(kind, getBacklog);
+  if (!exclude.length) return source;
+  return async (q) => (await source(q)).filter((r) => !exclude.includes(r.value));
+}
+
+function _source(kind, getBacklog) {
   if (kind === 'tasks') {
     return async (q) => {
       const b = getBacklog() || {};
@@ -51,11 +58,11 @@ export function makeRelationSource(kind, getBacklog) {
 // Forms can use ChipInput directly + makeRelationSource OR call this helper.
 export const RelationPicker = {
   read: ChipInput.read,
-  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder, id, describedBy, autoFocus }) {
-    const source = makeRelationSource(kind, getBacklog);
+  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder, id, describedBy, autoFocus, label, entityId }) {
+    const source = makeRelationSource(kind, getBacklog, { exclude: entityId ? [entityId] : [] });
     return ChipInput.edit({
       value, source, allowFree: false,
-      onChange, onCommit, onCancel, id, describedBy, autoFocus,
+      onChange, onCommit, onCancel, id, describedBy, autoFocus, label,
       placeholder: placeholder || `add ${kind.slice(0, -1)}…`,
     });
   },

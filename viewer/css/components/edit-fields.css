@@ -152,19 +152,10 @@
 .ef-chip-input { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 200px; }
 .ef-chip-list { display: flex; flex-wrap: wrap; gap: var(--space-micro); }
 .ef-chip-list:empty { display: none; }
-.ef-chip-input-row { position: relative; }
-/* As wide as its input and as tall as its (at most eight, one-line) rows: it never scrolls inside itself, so a
-   scrolling dialog can bring the whole list into view and no row is cut off. */
-.ef-chip-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  box-sizing: border-box;
-  margin-top: var(--space-micro);
-  /* Brought into view with a little room under it, not flush against the dialog's footer. */
-  scroll-margin: var(--space-sm);
+/* The suggestion list is a popover (placed and stacked by openPopover, at least as wide as its input); it keeps the
+   look of a list of rows flush to its edge. */
+.popover.ef-chip-dropdown {
+  padding: 0;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--overlay-surface);
@@ -292,5 +283,6 @@
 
 @media (max-width: 768px) {
   .ef-chip-input { min-width: 0; }
+  .ef-chip-dd-row { box-sizing: border-box; align-items: center; min-height: 44px; }
   .ef-kv-key { flex-basis: 96px; }
 }

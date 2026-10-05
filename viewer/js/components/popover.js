@@ -69,6 +69,8 @@ export function openPopover({
   on(el, 'keydown', onEscape);
   on(anchor, 'keydown', onEscape);
   on(el, 'keydown', (e) => {
+    // A key already used, or a modified arrow (the browser's or the system's), is not the list's.
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
     const list = items();
     const at = list.indexOf(doc.activeElement);
     if (at < 0) return;   // a text input in a dialog popover keeps its arrows
@@ -109,6 +111,8 @@ export function openPopover({
       || [...el.querySelectorAll(FOCUSABLE)].find(usable);
     // Placed inside the viewport already; scrolling to it would read as a scroll away and close it.
     target?.focus({ preventScroll: true });
+    // Within a list that scrolls inside itself, though, a checked item far down is brought into sight.
+    target?.scrollIntoView?.({ block: 'nearest' });
   }
   return handle;
 }
