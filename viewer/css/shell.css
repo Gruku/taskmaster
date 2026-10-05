@@ -29,6 +29,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
   overflow: hidden;
   background: var(--bg-page);
 }
+/* A conflict banner shown over the page (conflict-banner.js sets its height) pushes the page down rather than
+   covering the topbar. With a modal open the overlay makes that room instead, so the page stays put under it. */
+body:not(.modal-open) .shell { padding-top: var(--conflict-banner-height); }
+@media (min-width: 769px) {
+  body:not(.modal-open) .shell { box-sizing: border-box; grid-template-rows: calc(100vh - var(--conflict-banner-height)); }
+}
 
 /* Sidebar */
 .sidebar {

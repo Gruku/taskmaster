@@ -325,6 +325,7 @@
   --bundle: var(--bundle-1);
   --anim-dur: var(--dur-macro);
   --card-w: 240px;
+  --conflict-banner-height: 0px;              /* the shown conflict banner's height; the modal overlay starts below it */
 }
 
 [data-theme="light"] {

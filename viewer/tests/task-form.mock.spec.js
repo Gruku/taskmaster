@@ -466,7 +466,7 @@ test('409: the banner sits above the held form, lists only my change, and is wor
   await expect(dialog.locator('[role="alert"]')).toHaveText('Conflict — see banner');
   await expect(save(dialog)).toHaveText('Save');
   await expect(ctl(dialog, 'title')).toBeDisabled();
-  await expect(banner.locator('.cb-key')).toHaveText(['title']);
+  await expect(banner.locator('.cb-key')).toHaveText(['Title']);
   // Painted above the modal: the point at each banner control is that control.
   for (const control of await banner.locator('input, button').all()) {
     expect(await control.evaluate((el) => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)) || el.parentElement.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); })).toBe(true);
