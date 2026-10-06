@@ -32,7 +32,9 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'screens/issues.css',
   'components/detail-modal.css',
   'screens/sessions.css',
-  'screens/sessions.css', 'screens/archived.css'];
+  'screens/sessions.css', 'screens/archived.css',
+  'screens/issues.css',
+  'screens/ideas.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {

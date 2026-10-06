@@ -135,7 +135,7 @@ const editOver = (id) => async (page) => {
 const openIdeas = async (page) => {
   await page.goto(`${BASE}/#/ideas`);
   await page.locator('.ideas__list').getByText('Board swimlanes by epic').waitFor();
-  await (await topbarControl(page, '[aria-label="Create a new idea"]')).click();
+  await settleRow(page); await page.locator('#topbar-primary [aria-label="Create a new idea"]').click();
   await page.getByRole('dialog', { name: 'Create idea' }).waitFor();
 };
 const openTable = async (page) => {

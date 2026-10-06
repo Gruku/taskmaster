@@ -528,3 +528,21 @@ export const archivedMocks = ({ theme = 'dark' } = {}) => ({
 export const BUG = { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P2', found_in: 'T-102', discovered: '2026-09-30T10:00:00Z', discovered_by: 'user', components: ['viewer'], location: ['viewer/css/screens/kanban.css:87'], summary: 'The card border uses `--border-subtle`.\n\n1. Light theme\n2. Laptop screen' };
 export const BUG_FIXED = { ...BUG, id: 'B-030', status: 'fixed', severity: null, fix_commit: 'abfb1b9c0ffee', adopted_into: 'T-101', promoted_to: 'ISS-012' };
 export const LONG_BUG = { ...BUG, id: 'B-1234', title: 'y'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
+
+// ── Ideas (3d Task 9) ──
+export const LIST_IDEAS = [
+  { id: 'IDEA-1', title: 'Board swimlanes by epic', status: 'exploring', tags: ['UX', 'board'], created: daysAgo(5),
+    body: 'Group the **board** by epic.\n\n- fold a lane\n- keep the counts', links: [{ type: 'relates_to', target: 'ISS-001' }] },
+  { id: 'IDEA-2', title: 'Faster store writes', status: 'candidate', tags: ['perf'], created: daysAgo(4) },
+  { id: 'IDEA-3', title: 'Phone layout for the table', status: 'parking-lot', tags: ['ux', 'mobile', 'table', 'layout', 'phone'], created: daysAgo(3) },
+  { id: 'IDEA-4', title: 'A note with no status yet', tags: [], created: daysAgo(2) },
+  { id: 'IDEA-5', title: 'Retire the JSON mirror', status: 'promoted', promoted_to: 'T-111', tags: ['store'], created: daysAgo(30), archived: true },
+];
+export const LONG_IDEAS = Array.from({ length: 31 }, (_, i) => ({
+  id: `IDEA-${1201 + i}`, title: longText(`Idea ${1201 + i}`, { unbroken: i === 2 }),
+  status: [undefined, 'exploring', 'candidate', 'parking-lot', 'promoted', 'dropped'][i % 6],
+  tags: Array.from({ length: (i % 5) + 1 }, (_, k) => `tag-${String(((i + k) % 40) + 1).padStart(2, '0')}`), created: daysAgo(i + 1),
+}));
+// The table plan 4's a11y gate reuses for #/ideas; loaded when `.ideas__list .idea-row` is visible.
+export const ideasMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/ideas': { ideas: LIST_IDEAS }, '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/task/T-111/detail': taskDetail({ ...DONE_TASK, id: 'T-111' }) });

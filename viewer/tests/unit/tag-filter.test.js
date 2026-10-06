@@ -139,7 +139,6 @@ test('typing filters case-insensitively: a choice that does not match is hidden 
   type(search, '');
   assert.ok(boxes().every((b) => !b.disabled && !b.closest('.tag-filter__option').hidden));
   assert.equal(pop().querySelector('.tag-filter__none').textContent, '');
-  void tf;
 });
 
 test('ArrowDown in the search box moves to the first enabled checkbox and is used up', () => {
@@ -153,7 +152,6 @@ test('ArrowDown in the search box moves to the first enabled checkbox and is use
   const ev = key(search, 'ArrowDown');
   assert.equal(ev.defaultPrevented, true);
   assert.equal(document.activeElement, box('perf'));
-  void tf;
 });
 
 test('checking a tag calls onChange with the keys in the order chosen and repaints the button; focus stays', () => {
@@ -259,4 +257,28 @@ test('a tag that looks like markup is text', () => {
   assert.equal(pop().querySelector('img'), null);
   assert.equal(pop().querySelector('.tag-filter__name').textContent, evil);
   assert.equal(box(tagKey(evil).replace(/"/g, '\\"')).value, tagKey(evil));
+});
+
+test('a choice is named by its tag alone: the count is hidden from the accessible name', () => {
+  click(mount().el);
+  const count = option('ux').querySelector('.tag-filter__count');
+  assert.equal(count.getAttribute('aria-hidden'), 'true');
+  assert.equal(count.textContent, '3', 'still shown');
+});
+
+test('selected: null is an empty selection', () => {
+  const tf = mount({ selected: null });
+  assert.deepEqual(tf.selected(), []);
+  assert.equal(tf.el.getAttribute('aria-label'), 'Tags');
+});
+
+test('opening puts focus straight in the search box, with no stop on a choice first', () => {
+  const tf = mount();
+  const visited = [];
+  const seen = (e) => visited.push(e.target);
+  document.addEventListener('focusin', seen);
+  click(tf.el);
+  document.removeEventListener('focusin', seen);
+  assert.equal(document.activeElement, pop().querySelector('.tag-filter__search'));
+  assert.ok(!visited.some((n) => n.type === 'checkbox'), 'no checkbox took focus on the way');
 });

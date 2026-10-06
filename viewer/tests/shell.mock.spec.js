@@ -612,17 +612,41 @@ test.describe('topbar row 2 at phone width', () => {
 
   test('Filters counts the controls it holds; an empty chip group is neither parked nor counted', async ({ page }) => {
     await mockApi(page, withContent());
-    await page.goto('/#/ideas');
+    await page.goto('/#/settings');
+    await expect(page.locator('#page-title')).toHaveText('Settings');
+    // Probe controls stand in for a screen's row 2: an empty chip group among more buttons than fit at 390.
+    await page.evaluate(() => {
+      const row = document.getElementById('topbar-actions');
+      const more = row.querySelector(':scope > .overflow-more');
+      const empty = document.createElement('div');
+      empty.className = 'tm-chip-row probe-empty';
+      const probes = Array.from({ length: 6 }, (_, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn--secondary probe';
+        b.textContent = `Probe control ${i + 1}`;
+        b.style.width = '120px';
+        return b;
+      });
+      // A probe leads: rowSettled waits on the row's first child, and the empty group has no box to be visible.
+      for (const el of [probes[0], empty, ...probes.slice(1)]) row.insertBefore(el, more);
+    });
+    await rowSettled(page);
     await expect(filters(page)).toBeVisible();
-    // With no ideas the status and tag groups have no chips yet: they stay in the row, taking no room.
-    await expect(page.locator('#topbar-actions > .ideas__status-chips:empty')).toHaveCount(1);
-    await expect(page.locator('#topbar-actions > .ideas__tag-chips:empty')).toHaveCount(1);
+    // The empty group stays in the row, taking no room.
+    await expect(page.locator('#topbar-actions > .probe-empty')).toHaveCount(1);
     await filters(page).click();
     const items = filtersPopover(page).locator('.overflow-list > *');
     await expect(items.first()).toBeVisible();
-    const sizes = await items.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width));
-    expect(sizes.every((w) => w > 0)).toBe(true);
-    await expect(filters(page).locator('.overflow-more__count')).toHaveText(String(sizes.length));
+    const look = await items.evaluateAll((els) => ({
+      sizes: els.map((el) => el.getBoundingClientRect().width),
+      empties: els.filter((el) => el.classList.contains('probe-empty')).length,
+    }));
+    expect(look.sizes.every((w) => w > 0)).toBe(true);
+    expect(look.empties).toBe(0);
+    await expect(filters(page).locator('.overflow-more__count')).toHaveText(String(look.sizes.length));
+    await page.evaluate(() => { location.hash = '#/kanban'; });
+    await expect(page.locator('#page-title')).toHaveText('Kanban');
   });
 
   test('a parked segmented control stays one piece', async ({ page }) => {
