@@ -1,9 +1,11 @@
-// Chronological timeline with parallel-block clusters.
-// Pure-DOM. The render takes session-shaped rows; sessions group together if their
-// [start, end] windows overlap (transitively). Independent flat handovers can be
-// passed alongside; they render outside any cluster as standalone rows.
+// User intent: the Sessions timeline — every session and handover is a real button that leads with its title (the
+// tldr) and keeps the slug as a subline, sessions whose windows overlap sit together in a parallel block, and the row
+// shown in the rail is marked. Built from nodes: row data is never markup.
 
 import { formatAbsolute, formatDurationCompact } from '../lib/time.js';
+import { truncate } from '../lib/text.js';
+import { h } from '../util/h.js';
+import { HO_STATUS_LABEL } from './right-rail.js';
 
 /**
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
@@ -41,44 +43,34 @@ export function clusterParallelSessions(sessions) {
   return groups;
 }
 
-/** Render the timeline into `root`. Items shape:
- *    sessions: [{id, start, end, kind:'session', task_ids[], handover_ids[]}],
- *    handovers: dict id→{viewer_kind, ...}, used to render nested sub-rows
- *    independent: flat handover items not tied to a session
+// 'mid-task' → 'Mid-task'; a handover with no kind is just a handover.
+export function kindLabel(kind) {
+  const k = String(kind ?? '').trim();
+  return k ? k.charAt(0).toUpperCase() + k.slice(1) : 'Handover';
+}
+
+/** Render the timeline into `root`.
+ *    sessions: [{id, start, end, tldr?, task_ids[], handover_ids[]}] — the handovers to show under each
+ *    handovers: id → {viewer_kind, status, tldr}
+ *    onSelect({ kind: 'session' | 'handover', id }, button)
+ *    selected: { kind, id } | null — that row is marked aria-current
  *  Returns a cleanup function.
  */
-export function renderTimeline(root, { sessions, handovers, independent, onSelect, dimmedIds }) {
-  root.innerHTML = '';
-  const wrapper = document.createElement('div');
-  wrapper.className = 'tl';
-  const dim = dimmedIds instanceof Set ? dimmedIds : new Set(dimmedIds || []);
-  const groups = clusterParallelSessions(sessions);
-
-  for (const group of groups) {
+export function renderTimeline(root, { sessions, handovers, onSelect, selected = null }) {
+  const isSelected = (kind, id) => !!selected && selected.kind === kind && selected.id === id;
+  const container = (s) => sessionContainer(s, handovers || {}, onSelect, isSelected);
+  const wrapper = h('div', { class: 'tl' });
+  for (const group of clusterParallelSessions(sessions || [])) {
     if (group.length > 1) {
-      const par = document.createElement('div');
-      par.className = 'par-block';
-      const lbl = document.createElement('div');
-      lbl.className = 'par-label';
-      lbl.textContent = `Parallel · ${formatRange(group)}`;
-      par.appendChild(lbl);
-      const grid = document.createElement('div');
-      grid.className = 'par-grid';
-      grid.style.gridTemplateColumns = `repeat(${group.length}, 1fr)`;
-      for (const s of group) grid.appendChild(renderSessionContainer(s, handovers, onSelect, dim.has(s.id)));
-      par.appendChild(grid);
-      wrapper.appendChild(par);
+      wrapper.append(h('div', { class: 'par-block' },
+        h('div', { class: 'par-label' }, `Parallel · ${formatRange(group)}`),
+        h('div', { class: 'par-grid' }, group.map(container))));
     } else {
-      wrapper.appendChild(renderSessionContainer(group[0], handovers, onSelect, dim.has(group[0].id)));
+      wrapper.append(container(group[0]));
     }
   }
-
-  for (const h of (independent || [])) {
-    wrapper.appendChild(renderIndependentHandover(h, onSelect));
-  }
-
-  root.appendChild(wrapper);
-  return () => { root.innerHTML = ''; };
+  root.replaceChildren(wrapper);
+  return () => { root.replaceChildren(); };
 }
 
 function formatRange(group) {
@@ -89,42 +81,43 @@ function formatRange(group) {
   return a === b ? a : `${a} → ${b}`;
 }
 
-function renderSessionContainer(session, handovers, onSelect, dimmed) {
-  const c = document.createElement('div');
-  c.className = 'ses-container' + (dimmed ? ' is-dimmed' : '');
-
-  const ho = document.createElement('div');
-  ho.className = 'ho';
-  ho.dataset.sessionId = session.id;
-  ho.innerHTML = sessionHeadHtml(session);
-  ho.addEventListener('click', () => onSelect && onSelect({ kind: 'session', id: session.id }));
-  c.appendChild(ho);
-
-  const childIds = session.handover_ids || [];
-  if (childIds.length) {
-    const kids = document.createElement('div');
-    kids.className = 'ses-children';
-    for (const cid of childIds) {
-      const h = (handovers || {})[cid];
-      const child = document.createElement('div');
-      child.className = 'ho-child';
-      child.dataset.handoverId = cid;
-      child.innerHTML = handoverChildHtml(cid, h);
-      child.addEventListener('click', () => onSelect && onSelect({ kind: 'handover', id: cid }));
-      kids.appendChild(child);
-    }
-    c.appendChild(kids);
-  }
-  return c;
+// A row of the timeline: a button holding spans only, so nothing in it is a control of its own.
+function row(kind, id, attrs, isSelected, onSelect, children) {
+  const btn = h('button', { type: 'button', ...attrs, 'aria-controls': 'right-rail' }, children);
+  if (isSelected(kind, id)) btn.setAttribute('aria-current', 'true');
+  btn.addEventListener('click', () => onSelect?.({ kind, id }, btn));
+  return btn;
 }
 
-function renderIndependentHandover(h, onSelect) {
-  const el = document.createElement('div');
-  el.className = 'ho ho-standalone';
-  el.dataset.handoverId = h.id;
-  el.innerHTML = handoverChildHtml(h.id, h);
-  el.addEventListener('click', () => onSelect && onSelect({ kind: 'handover', id: h.id }));
-  return el;
+// The title is the tldr when there is one, and then the id follows as the slug.
+const titleAndSlug = (tldr, id) => [
+  truncate(tldr || id, { lines: 2, className: 'ho-title' }),
+  tldr ? truncate(id, { className: 'ho-slug' }) : null,
+];
+
+function sessionContainer(session, handovers, onSelect, isSelected) {
+  const tasks = session.task_ids || [];
+  const head = row('session', session.id, { class: 'ho', 'data-session-id': session.id }, isSelected, onSelect, [
+    h('span', { class: 'ho-head' },
+      h('span', { class: 'ho-kind' }, 'Thread'),
+      h('span', { class: 'ho-time' }, sessionTimeLine(session))),
+    ...titleAndSlug(session.tldr, session.id),
+    tasks.length ? h('span', { class: 'ho-tasks' }, tasks.map((t) => h('span', { class: 'ho-task' }, String(t)))) : null,
+  ]);
+  const childIds = session.handover_ids || [];
+  return h('div', { class: 'ses-container' },
+    head,
+    childIds.length ? h('div', { class: 'ses-children' }, childIds.map((cid) => handoverRow(cid, handovers[cid] || {}, onSelect, isSelected))) : null);
+}
+
+function handoverRow(id, meta, onSelect, isSelected) {
+  const status = meta.status || 'open';
+  return row('handover', id, { class: 'ho-child', 'data-handover-id': id }, isSelected, onSelect, [
+    h('span', { class: 'ho-head' },
+      h('span', { class: 'ho-kind' }, kindLabel(meta.viewer_kind)),
+      h('span', { class: 'ho-status' }, Object.hasOwn(HO_STATUS_LABEL, status) ? HO_STATUS_LABEL[status] : kindLabel(status))),
+    ...titleAndSlug(meta.tldr, id),
+  ]);
 }
 
 function sessionTimeLine(s) {
@@ -144,35 +137,6 @@ function sessionTimeLine(s) {
   return timeLine;
 }
 
-function sessionHeadHtml(s) {
-  return (
-    `<div class="ho-head">`
-    + `<span class="ho-kind session">THREAD</span>`
-    + `<span class="ho-time mono">${escapeHtml(sessionTimeLine(s))}</span>`
-    + `</div>`
-    + `<div class="ho-title">${escapeHtml(s.id)}</div>`
-    + `<div class="ho-foot">`
-    + (s.task_ids || []).map(t => `<span class="pill task mono">${escapeHtml(t)}</span>`).join('')
-    + `</div>`
-  );
-}
-
-function handoverChildHtml(id, h) {
-  const k = (h && h.viewer_kind) || 'standalone';
-  return (
-    `<div class="ho-head">`
-    + `<span class="ho-kind handover ${k}">${k.toUpperCase()}</span>`
-    + `<span class="ho-time mono">${escapeHtml(id)}</span>`
-    + `</div>`
-    + `<div class="ho-summary">${escapeHtml((h && h.tldr) || '')}</div>`
-  );
-}
-
 function shortTime(iso) {
   return formatAbsolute(iso, { date: false });
-}
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
