@@ -209,3 +209,10 @@ def test_unservable_native_store_refuses_every_verb_with_a_json_body(twins):
         body = json.loads(raw)
         assert body["ok"] is False and "not ready" in body["error"], (method, path, raw)
     assert committed(twins.native) == before
+
+
+def test_single_bug_reads_match(twins):
+    legacy, _native = same(twins, "GET", "/api/bugs/B-001")
+    assert legacy[0] == 200, "the seed's bug must exist, or this compares two 404s"
+    for path in ("/api/bugs/B-404", "/api/bugs/", "/api/bugs/B-001?x=1"):
+        same(twins, "GET", path)
