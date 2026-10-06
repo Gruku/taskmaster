@@ -1,31 +1,17 @@
 import { getTaskDetailFull } from '../store.js';
 import { mountTaskDetailDocument, rememberView } from '../components/task-detail-document.js';
-import { stateBlock as busyBlock } from '../components/empty-state.js';
+import { stateBlock } from '../components/empty-state.js';
+import { openModalCount, topModal } from '../components/modal.js';
 import { claimTopbar } from '../lib/topbar.js';
 import { deepMerge } from '../lib/prefs-writer.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: null };
 
-function stateBlock(headline, hint) {
-  const wrap = document.createElement('div');
-  wrap.className = 'tm-empty';
-  const h = document.createElement('div');
-  h.className = 'tm-empty__headline';
-  h.textContent = headline;
-  const p = document.createElement('div');
-  p.className = 'tm-empty__hint';
-  p.append(hint, ' ');
-  const a = document.createElement('a');
-  a.href = '#/kanban';
-  a.textContent = 'Open the Kanban';
-  p.appendChild(a);
-  wrap.append(h, p);
-  return wrap;
-}
+const TO_KANBAN = { label: 'Open the Kanban', href: '#/kanban' };
 
 export function mount(root, { params, store, api, prefs, subpath }) {
   let id = subpath?.[0] || params?.id || null;
-  root.replaceChildren(busyBlock({ headline: 'Loading…', busy: true }));
+  root.replaceChildren(stateBlock({ headline: 'Loading…', busy: true }));
 
   // No id in URL → fall back to the most-recently-viewed task from prefs.
   if (!id) {
@@ -35,7 +21,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
       return () => {};
     }
     claimTopbar();
-    root.replaceChildren(stateBlock('No task open', 'Pick a task from a board.'));
+    root.replaceChildren(stateBlock({ state: 'empty', label: 'Task', headline: 'No task open', hint: 'Pick a task from a board.', action: TO_KANBAN }));
     return () => {};
   }
 
@@ -63,6 +49,24 @@ export function mount(root, { params, store, api, prefs, subpath }) {
 
   // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has
   // painted: remembering an id that does not load would send bare #/task to a dead end.
+  // Set by Try again: whatever the retried read paints next takes keyboard focus, so it is never left on <body>.
+  let refocus = false;
+  function takeFocus(el) {
+    if (!refocus) return;
+    refocus = false;
+    if (!el) return;
+    if (!el.matches('a[href], button') && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    el.focus();
+  }
+  function retry() {
+    const loading = stateBlock({ headline: 'Loading…', busy: true });
+    loading.setAttribute('tabindex', '-1');
+    root.replaceChildren(loading);
+    loading.focus();
+    refocus = true;
+    void refresh();
+  }
+
   let remembered = false;
   function rememberAsLast() {
     if (remembered || !prefs?.patch) return;
@@ -89,7 +93,11 @@ export function mount(root, { params, store, api, prefs, subpath }) {
       const value = await getTaskDetailFull(id, {force: true});
       if (!disposed && request === generation && !store.isEditing(id)) {
         await paint(value, request);
-        if (!disposed && request === generation) rememberAsLast();
+        if (!disposed && request === generation) {
+          rememberAsLast();
+          // The document's h1, or the graph view's heading.
+          takeFocus(root.querySelector('h1') ?? root.querySelector('.td-head-title'));
+        }
       }
     } catch (e) {
       if (!disposed && request === generation && !store.isEditing(id)) {
@@ -97,10 +105,11 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         cleanup = null;
         shown = null;
         claimTopbar();
-        // http() throws `GET <path> → <status>: <body>`; anchor on the arrow so an
-        // id like T-404 in the path can't read as a status.
-        const missing = /→ 404\b/.test(String(e?.message));
-        root.replaceChildren(stateBlock(missing ? 'Task not found' : 'Could not load task', missing ? `${id} does not exist.` : 'Something went wrong while loading this task.'));
+        // Said in words: the request, its status and the server's text are never shown on the page.
+        root.replaceChildren(stateBlock(e?.code === 404
+          ? { state: 'missing', label: id, headline: 'Task not found', hint: 'It may have been archived, renamed or removed.', action: TO_KANBAN }
+          : { state: 'error', label: id, headline: 'Could not load this task', hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: retry } }));
+        takeFocus(root.querySelector('.tm-empty :is(a[href], button)'));
       }
     }
   }
@@ -108,5 +117,13 @@ export function mount(root, { params, store, api, prefs, subpath }) {
   // Return cleanup before the first read resolves. The router cannot cancel an
   // async mount whose disposer has not arrived, and every route shares its root.
   void refresh();
-  return () => { disposed = true; generation++; unsubscribe(); cleanup?.(); };
+  return () => {
+    // First, so a read that resolves from here on paints nothing.
+    generation++;
+    disposed = true;
+    unsubscribe();
+    cleanup?.();
+    // The Edit form opened from this page goes with it: closed when clean, asked first when it holds typing.
+    if (openModalCount() > 0) topModal().requestClose();
+  };
 }

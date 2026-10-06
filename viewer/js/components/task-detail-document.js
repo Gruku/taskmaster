@@ -7,12 +7,10 @@
 //                       and the document starts at the marker row.
 // Either way a refused title save is said under the heading, never inside it: the heading names the dialog.
 
-import { renderMarkdown } from './markdown.js';
 import { railPanels } from './right-rail.js';
-import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
-import { formatStamp, formatAbsolute } from '../lib/time.js';
-import { copyToClipboard } from '../lib/copy.js';
-import { assignEpicColors, epicColor, epicCssVar } from '../lib/epics.js';
+import { claimTopbar, claimTopbarPrimary, tmSegmented, tmAction } from '../lib/topbar.js';
+import { formatAbsolute } from '../lib/time.js';
+import { epicIndex } from '../lib/epics.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
 import { describeWriteError, lostRace } from './edit/write-errors.js';
@@ -21,8 +19,10 @@ import { renderGatePipeline } from './gate-pipeline.js';
 import { renderMergeLadder } from './merge-status.js';
 import { marker, statusMarker } from './status.js';
 import { icon } from './icon.js';
+import {
+  detailMeta, stampEl, copyButton, copyId, detailHead, detailTag, sectionHeading, markdownBody, datesList, detailGrid,
+} from './detail-page.js';
 
-const COPIED_MS = 1500;
 let seq = 0;
 
 // The documents of a task that can be edited in place, in reading order. One that is empty is not printed: it is
@@ -45,7 +45,6 @@ const VERDICT_MARK = {
 // than as "[object Object]", and never throws.
 const text = (v) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 const prose = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
-const stampOf = (v) => formatStamp(typeof v === 'string' ? v : null);
 
 // Inline-edit save callback. Returns either undefined (success) or { error }.
 function inlineSave(taskId, fieldKey, ctx) {
@@ -77,7 +76,21 @@ function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-// The Document / Graph switch and Edit, for the full page. `view` is the view actually on screen.
+// The page's meta line: the id to copy, the way back to the tasks, the epic, the phase and when it was created.
+export function taskMeta(raw, { timers } = {}) {
+  raw ??= {};
+  const epic = text(raw.epic);
+  return detailMeta([
+    copyId({ id: text(raw.id), noun: 'task', timers }),
+    h('a', { href: '#/kanban' }, 'Tasks'),
+    epic ? h('a', { href: `#/epic/${encodeURIComponent(epic)}` }, epic) : null,
+    text(raw.phase),
+    stampEl(raw.created, { prefix: 'created' }),
+  ]);
+}
+
+// The full page's top bar: the Document / Graph switch alone in row 2, and Edit as the page's primary in row 1.
+// `view` is the view actually on screen.
 export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
   const topbar = claimTopbar();
   if (!topbar) return;
@@ -88,11 +101,11 @@ export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
     ],
     { value: view === 'B' ? 'B' : 'A', onChange: (v) => onToggleVariant?.(v) },
   );
-  const editBtn = tmAction({
-    icon: 'edit', label: 'Edit', title: 'Edit task',
+  topbar.append(seg);
+  claimTopbarPrimary()?.append(tmAction({
+    icon: 'edit', label: 'Edit', title: 'Edit task', variant: 'primary',
     onClick: () => onEdit?.(),
-  });
-  topbar.append(seg, editBtn);
+  }));
 }
 
 let editOpening = null;
@@ -113,10 +126,12 @@ const SHUT_TOGGLE = 'button[aria-expanded="false"][data-focus]:not([aria-haspopu
 // What the user had open, what a field was still saying about a refused save, and where focus sat inside `scope`, as
 // something a re-mounted document can find again. Returns a function that re-opens the same disclosures under `next`,
 // says the same refusals beside the same fields, puts focus on the same thing, and says whether focus could be restored.
+// A refusal is said again only while the field still holds the stored value it was refused against (`data-stored`):
+// once another writer has changed that field, the reason was about a value that is gone.
 export function rememberView(scope) {
   const open = scope ? [...scope.querySelectorAll(OPEN_TOGGLE)].map((b) => b.dataset.focus) : [];
   const said = scope ? [...scope.querySelectorAll('.if-wrap[data-key]')]
-    .map((w) => [w.dataset.key, w.refusal?.()]).filter(([, text]) => text) : [];
+    .map((w) => [w.dataset.key, w.refusal?.(), w.dataset.stored]).filter(([, text]) => text) : [];
   const active = scope?.ownerDocument.activeElement;
   const focused = !!active && scope.contains(active) && active !== scope;
   const key = focused ? active.closest('.if-wrap')?.dataset.key : null;
@@ -128,7 +143,9 @@ export function rememberView(scope) {
     for (const toggle of next.querySelectorAll(SHUT_TOGGLE)) {
       if (open.includes(toggle.dataset.focus)) toggle.click();
     }
-    for (const [field, text] of said) find('.if-wrap', (w) => w.dataset.key === field)?.sayRefusal?.(text);
+    for (const [field, text, stored] of said) {
+      find('.if-wrap', (w) => w.dataset.key === field && w.dataset.stored === stored)?.sayRefusal?.(text);
+    }
     if (!focused) return false;
     const target = (key && find('.if-wrap', (w) => w.dataset.key === key)?.querySelector('[tabindex="0"]'))
       || (key && find('[data-focus]', (e) => e.dataset.focus === `edit:${key}`))
@@ -173,6 +190,8 @@ export function mountTaskDetailDocument(root, ctx) {
     const handle = mountInlineField(host, { schema, fieldKey, entity: task, onSave: inlineSave(task.id, fieldKey, ctx), messageHost });
     fields.push(handle);
     const wrap = [...host.children].find((el) => el.classList.contains('if-wrap') && el.dataset.key === fieldKey);
+    // The value this field was drawn from, so a refusal carried across a re-mount can tell whether it still applies.
+    wrap.dataset.stored = JSON.stringify(task[fieldKey] ?? null);
     let editing = false;
     function dress() {
       const el = wrap.firstElementChild;
@@ -206,49 +225,6 @@ export function mountTaskDetailDocument(root, ctx) {
     return { handle, wrap, open: () => wrap.firstElementChild?.click() };
   }
 
-  function copyButton(attrs, children, value) {
-    const status = h('span', { class: 'td-copy__status', role: 'status' });
-    const glyph = h('span', { class: 'td-copy__icon' }, icon('copy', { size: 14 }));
-    const btn = h('button', { type: 'button', ...attrs, class: `td-copy ${attrs.class || ''}`.trim() }, [...children, glyph, status]);
-    let timer;
-    btn.addEventListener('click', async () => {
-      const ok = await copyToClipboard(value);
-      // Said in words, in a live region: the change is not carried by colour alone.
-      status.textContent = ok ? 'Copied' : 'Copy failed';
-      glyph.replaceChildren(icon(ok ? 'check' : 'alert', { size: 14 }));
-      clearTimeout(timer);
-      timers.delete(timer);
-      timer = setTimeout(() => {
-        status.textContent = '';
-        glyph.replaceChildren(icon('copy', { size: 14 }));
-      }, COPIED_MS);
-      timers.add(timer);
-    });
-    return btn;
-  }
-
-  // ── Header (page chrome) ──
-  function renderMeta() {
-    const epic = text(raw.epic);
-    const phase = text(raw.phase);
-    const created = stampOf(raw.created);
-    const parts = [
-      copyButton({ class: 'td-id', 'data-test': 'task-id', 'data-focus': 'copy:id', 'aria-label': 'Copy task id' },
-        [h('span', { class: 'td-id-text' }, task.id || '—')], task.id),
-      h('a', { href: '#/kanban' }, 'Tasks'),
-      epic ? h('a', { href: `#/epic/${encodeURIComponent(epic)}` }, epic) : null,
-      phase ? h('span', {}, phase) : null,
-      created.title ? h('span', { class: 'td-meta__created' },
-        ['created ', h('time', { datetime: raw.created, title: created.title }, created.text)]) : null,
-    ].filter(Boolean);
-    const line = h('div', { class: 'td-meta', 'data-test': 'meta' });
-    parts.forEach((part, i) => {
-      if (i) line.appendChild(h('span', { class: 'td-sep', 'aria-hidden': 'true' }, '·'));
-      line.appendChild(part);
-    });
-    return line;
-  }
-
   // A refused title is said on its own line under the heading; the save glyph stays beside the title.
   function mountTitle(host) {
     const messageHost = h('div', { class: 'td-title-message' });
@@ -257,11 +233,6 @@ export function mountTaskDetailDocument(root, ctx) {
   }
 
   // ── Marker row ──
-  function tag(name, label, value) {
-    return h('span', { class: 'td-tag', 'data-tag': name },
-      [h('span', { class: 'td-tag__k' }, label), h('span', { class: 'td-tag__v' }, value)]);
-  }
-
   function renderMarkers() {
     const row = h('div', { class: 'td-markers', 'data-test': 'chips' });
     for (const [key, label] of [['status', 'Status'], ['priority', 'Priority']]) {
@@ -273,31 +244,34 @@ export function mountTaskDetailDocument(root, ctx) {
     }
     // The estimate is read the way the picker stores it ('3' is three days).
     const estimate = EstimateField.read({ value: typeof raw.estimate === 'object' ? null : raw.estimate, readOnly: true });
-    if (!estimate.classList.contains('ef-placeholder')) row.appendChild(tag('estimate', 'Estimate', estimate.textContent));
+    if (!estimate.classList.contains('ef-placeholder')) row.appendChild(detailTag('estimate', 'Estimate', estimate.textContent));
 
+    // The epic is its swatch and its name; one missing from the backlog shows its id and no swatch.
     const epic = text(raw.epic);
     if (epic) {
-      const colors = assignEpicColors(ctx.store?.getBacklog?.()?.epics);
-      row.appendChild(h('a', {
-        class: 'td-tag td-epic', 'data-tag': 'epic', href: `#/epic/${encodeURIComponent(epic)}`,
-        style: epicCssVar(epicColor(epic, colors)),
-      }, [h('span', { class: 'td-swatch', 'aria-hidden': 'true' }), h('span', { class: 'td-tag__k' }, 'Epic'), h('span', { class: 'td-tag__v' }, epic)]));
+      const known = epicIndex(ctx.store?.getBacklog?.()?.epics).get(epic);
+      row.appendChild(h('a', { class: 'td-tag td-epic', 'data-tag': 'epic', href: `#/epic/${encodeURIComponent(epic)}` }, [
+        known ? h('span', { class: `td-swatch td-swatch--cat-${known.swatch}`, 'aria-hidden': 'true' }) : null,
+        h('span', { class: 'td-tag__k' }, 'Epic'),
+        h('span', { class: 'td-tag__v' }, known?.name ?? epic),
+      ]));
     }
     const phase = text(raw.phase);
-    if (chrome === 'embedded' && phase) row.appendChild(tag('phase', 'Phase', phase));
+    if (chrome === 'embedded' && phase) row.appendChild(detailTag('phase', 'Phase', phase));
 
     for (const [key, label] of [['branch', 'Branch'], ['worktree', 'Worktree']]) {
       const value = text(raw[key]);
       if (!value) continue;
       row.appendChild(copyButton({
-        class: 'td-tag', 'data-tag': key, 'data-test': key === 'branch' ? 'branch' : null, 'data-focus': `copy:${key}`,
-        'aria-label': `Copy ${label.toLowerCase()} ${value}`,
-      }, [h('span', { class: 'td-tag__k' }, label), h('span', { class: 'td-tag__v' }, value)], value));
+        value, label: `Copy ${label.toLowerCase()} ${value}`, className: 'td-tag', tag: key,
+        test: key === 'branch' ? 'branch' : null, focus: `copy:${key}`, timers,
+        children: [h('span', { class: 'td-tag__k' }, label), h('span', { class: 'td-tag__v' }, value)],
+      }));
     }
     const release = text(raw.release);
-    if (release) row.appendChild(tag('release', 'Release', release));
+    if (release) row.appendChild(detailTag('release', 'Release', release));
     const subRepo = text(raw.sub_repo);
-    if (subRepo) row.appendChild(tag('sub_repo', 'Sub-repo', subRepo));
+    if (subRepo) row.appendChild(detailTag('sub_repo', 'Sub-repo', subRepo));
     return row;
   }
 
@@ -348,17 +322,6 @@ export function mountTaskDetailDocument(root, ctx) {
   }
 
   // ── Sections ──
-  function heading(label, extra) {
-    return h('div', { class: 'td-section-head' }, [h(`h${level}`, { class: 'td-section-h' }, label), extra]);
-  }
-
-  function mdBody(source) {
-    const el = h('div', { class: 'md-body' });
-    // renderMarkdown sanitises; it is the only path task text takes into innerHTML.
-    el.innerHTML = renderMarkdown(source);
-    return el;
-  }
-
   // An editable document: heading, an Edit button, and the inline field. Empty in read mode, it collapses.
   function editableSection(spec) {
     const editBtn = h('button', {
@@ -366,7 +329,7 @@ export function mountTaskDetailDocument(root, ctx) {
       'aria-label': `Edit ${spec.label.toLowerCase()}`, title: `Edit ${spec.label.toLowerCase()}`, 'data-focus': `edit:${spec.key}`,
     }, icon('edit', { size: 14 }));
     const section = h('section', { class: 'td-section td-inline-host', 'data-test': spec.test, 'data-section': spec.key },
-      [heading(spec.label, editBtn)]);
+      [sectionHeading(spec.label, level, editBtn)]);
     const field = inlineField(section, spec.key, {
       asButton: false,
       onRead: ({ el, lost }) => {
@@ -432,7 +395,7 @@ export function mountTaskDetailDocument(root, ctx) {
       .map((l) => (typeof l === 'string' ? l : typeof l === 'object' ? JSON.stringify(l) : String(l)));
     if (!lines.length) return null;
     return h('section', { class: 'td-section', 'data-test': 'sec-activity' }, [
-      heading('Latest activity'),
+      sectionHeading('Latest activity', level),
       h('ul', { class: 'td-activity' }, lines.slice(0, 8).map((l) => h('li', {}, l))),
     ]);
   }
@@ -440,19 +403,7 @@ export function mountTaskDetailDocument(root, ctx) {
   function renderPatchnote() {
     const note = prose(raw.patchnote);
     if (raw.status !== 'done' || !note.trim()) return null;
-    return h('section', { class: 'td-section', 'data-test': 'sec-patchnote' }, [heading('Patchnote'), mdBody(note)]);
-  }
-
-  function renderDates() {
-    const cells = [['Created', raw.created], ['Started', raw.started], ['Completed', raw.completed]]
-      .map(([label, iso]) => [label, iso, stampOf(iso)])
-      .filter(([, , stamp]) => stamp.title);
-    if (!cells.length) return null;
-    return h('dl', { class: 'td-dates', 'data-test': 'dates' }, cells.map(([label, iso, stamp]) =>
-      h('div', { class: 'td-date' }, [
-        h('dt', {}, label),
-        h('dd', {}, h('time', { datetime: iso, title: stamp.title }, stamp.text)),
-      ])));
+    return h('section', { class: 'td-section', 'data-test': 'sec-patchnote' }, [sectionHeading('Patchnote', level), markdownBody(note)]);
   }
 
   // ── Assemble ──
@@ -460,7 +411,7 @@ export function mountTaskDetailDocument(root, ctx) {
   if (chrome === 'page') {
     const title = h('h1', { class: 'td-title', 'data-test': 'title' });
     titleMessage = mountTitle(title);
-    root.appendChild(h('header', { class: 'td-head' }, [renderMeta(), title, titleMessage]));
+    root.appendChild(detailHead({ meta: taskMeta(raw, { timers }), title, after: [titleMessage] }));
   } else if (ctx.titleHost) {
     titleMessage = mountTitle(ctx.titleHost);
   }
@@ -476,7 +427,7 @@ export function mountTaskDetailDocument(root, ctx) {
     renderActivity(),
     renderPatchnote(),
     tail,
-    renderDates(),
+    datesList([['Created', raw.created], ['Started', raw.started], ['Completed', raw.completed]]),
   ].filter(Boolean));
 
   for (const spec of SECTIONS) {
@@ -489,11 +440,7 @@ export function mountTaskDetailDocument(root, ctx) {
   }
   paintEmpties();
 
-  // With nothing related there is no rail, and the body takes the width.
-  const panels = railPanels({ task: raw, related: ctx.related, level });
-  const rail = panels.length ? h('aside', { class: 'td-rail', 'data-test': 'rail', 'aria-label': 'Related' }, panels) : null;
-  const grid = h('div', { class: `td-grid${rail ? '' : ' td-grid--solo'}` }, [body, rail]);
-  root.appendChild(grid);
+  root.appendChild(detailGrid({ body, panels: railPanels({ task: raw, related: ctx.related, level }) }));
 
   // A claim can expire without any committed row changing (and hence while
   // every board poll is 304). Never leave its banner visible past that instant.

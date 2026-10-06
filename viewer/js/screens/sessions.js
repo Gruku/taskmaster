@@ -1,5 +1,6 @@
 import { renderTimeline } from '../components/timeline.js';
-import { RightRail } from '../components/right-rail.js';
+import { RightRail, statusPill } from '../components/right-rail.js';
+import { icon } from '../components/icon.js';
 import { listSessions, getSessionDetail, listThreads } from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
@@ -7,6 +8,8 @@ import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
 import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
 import { bindCopy } from '../lib/copy.js';
+import { truncate } from '../lib/text.js';
+import { h } from '../util/h.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -53,7 +56,7 @@ export async function mount(root, { params, store, prefs }) {
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
 
-  const rail = new RightRail({ width: 480 });
+  const rail = new RightRail({ host: root.querySelector('[data-role=rail-host]'), label: 'Session details' });
   const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['open', 'closed'];
   const state = {
     sessions: [],
@@ -283,48 +286,36 @@ function render(root, state, rail) {
   });
 }
 
-async function openSessionDetail(rail, sid, state) {
+// Exported for the unit tests. A screen left while the detail loads opens nothing (the rail's host is gone).
+export async function openSessionDetail(rail, sid, state, opener = null) {
   const detail = state.detailCache.get(sid) || await getSessionDetail(sid);
   state.detailCache.set(sid, detail);
+  if (!rail.host.isConnected) return;
+  const s = detail.session;
   rail.open({
     kind: 'session',
-    render: () => renderSessionRail(detail),
-    onMount: (el) => bindRailClose(el, rail),
+    title: s.tldr || s.id,
+    opener,
+    // The button that opens a handover goes with this rail, so the handover's rail hands focus to this rail's opener.
+    ...renderSessionRail(detail, (hid) => openHandoverDetail(rail, hid, state, opener)),
   });
 }
 
-async function openHandoverDetail(rail, hid, state) {
+export async function openHandoverDetail(rail, hid, state, opener = null) {
   // Locate the session containing this handover, then pull its detail.
   const owner = state.sessions.find(s => (s.handover_ids || []).includes(hid));
   if (!owner) return;
   const detail = state.detailCache.get(owner.id) || await getSessionDetail(owner.id);
   state.detailCache.set(owner.id, detail);
-  const h = (detail.handovers || []).find(x => x.id === hid);
-  if (!h) return;
+  if (!rail.host.isConnected) return;
+  const ho = (detail.handovers || []).find(x => x.id === hid);
+  if (!ho) return;
   rail.open({
     kind: 'handover',
-    render: () => renderHandoverRail(h, owner),
-    onMount: (el) => {
-      const cleanup = bindRailClose(el, rail);
-      const pill = el.querySelector('.ho-status-pill');
-      if (pill) {
-        pill.addEventListener('click', () => {
-          import('../components/right-rail.js').then(({ openStatusMenu }) => {
-            openStatusMenu(pill, h.id, h.status || 'open');
-          });
-        });
-      }
-      const copyBtn = el.querySelector('.rr-resume .copy');
-      if (copyBtn) bindCopy(copyBtn, h.resume_prompt || h.next_action || '');
-      return cleanup;
-    },
+    title: ho.tldr || ho.id,
+    opener,
+    ...renderHandoverRail(ho, owner),
   });
-}
-
-function bindRailClose(el, rail) {
-  const btn = el.querySelector('[data-role=rail-close]');
-  if (btn) btn.addEventListener('click', () => rail.close());
-  return () => {};
 }
 
 function railSessionTimeLine(s) {
@@ -341,64 +332,101 @@ function railSessionTimeLine(s) {
   return timeLine;
 }
 
-function renderSessionRail(detail) {
+// 'mid-task' → 'Mid-task'
+const sentenceCase = (word) => {
+  const w = String(word || '');
+  return w.charAt(0).toUpperCase() + w.slice(1);
+};
+
+const taskLinks = (ids) => (ids || []).length
+  ? ids.map(id => h('a', { class: 'rr-task', href: `#/task/${encodeURIComponent(id)}` }, String(id)))
+  : ['—'];
+
+// The rail's head and body for a session; the title (its tldr, or its id) is the rail's own.
+function renderSessionRail(detail, openHandover) {
   const s = detail.session;
-  return (
-    `<div class="rr-h">`
-    + `<span class="kind-pill session">THREAD</span>`
-    + `<span class="ts">${escapeHtml(railSessionTimeLine(s))}</span>`
-    + `<span class="actions">`
-    + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
-    + `</span></div>`
-    + `<div class="rr-title">${escapeHtml(s.id)}</div>`
-    + (s.tldr ? `<div class="rr-meta"><span>${escapeHtml(s.tldr)}</span></div>` : '')
-    + `<div class="rr-meta"><span>Tasks: ${(s.task_ids||[]).map(escapeHtml).join(', ') || '—'}</span></div>`
-    + (detail.handovers || []).map(h =>
-        `<div class="rr-section"><h4>${escapeHtml(h.viewer_kind.toUpperCase())} <span class="ct mono">${escapeHtml(h.id)}</span></h4>`
-        + `<div class="ho-summary">${escapeHtml(h.tldr || '')}</div></div>`).join('')
+  const handovers = detail.handovers || [];
+  const head = [
+    h('span', { class: 'rr-kind' }, 'Thread'),
+    h('span', { class: 'rr-when' }, railSessionTimeLine(s)),
+  ];
+  const body = [
+    s.tldr ? h('div', { class: 'rr-slug' }, s.id) : null,
+    h('div', { class: 'rr-meta' }, h('span', { class: 'rr-label' }, 'Tasks'), ...taskLinks(s.task_ids)),
+    h('section', { class: 'rr-section' },
+      h('h3', {}, 'Handovers ', h('span', { class: 'rr-count' }, String(handovers.length))),
+      ...handovers.map(ho => h('button', {
+        type: 'button',
+        class: 'rr-ho btn btn--ghost btn--sm',
+        'data-handover-id': ho.id,
+        on: { click: () => openHandover(ho.id) },
+      },
+        h('span', { class: 'rr-kind' }, sentenceCase(ho.viewer_kind || 'standalone')),
+        h('span', { class: 'rr-ho__id' }, ho.id),
+        h('span', { class: 'rr-when' }, formatRelative(ho.created || ho.date)),
+      )),
+    ),
+  ].filter(Boolean);
+  return { head, body };
+}
+
+const FILES_SHOWN = 8;
+
+function checklist(title, items, mark) {
+  if (!(items || []).length) return null;
+  return h('section', { class: 'rr-section' },
+    h('h3', {}, `${title} `, h('span', { class: 'rr-count' }, String(items.length))),
+    h('ul', { class: 'rr-checklist' }, items.map(item => h('li', { class: 'rr-check' },
+      icon(mark, { size: 14 }),
+      h('span', {}, String(item)),
+    ))),
   );
 }
 
-function renderHandoverRail(h, owner) {
-  const fp = `.taskmaster/handovers/${h.id}.md`;
-  const status = h.status || 'open';
-  return (
-    `<div class="rr-h">`
-    + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
-    + `<span class="ho-status-pill ho-status-pill-${escapeHtml(status)}" `
-    +   `data-handover-id="${escapeHtml(h.id)}" data-status="${escapeHtml(status)}" `
-    +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
-    + `<span class="ts">${escapeHtml(formatRelative(h.created || h.date))}</span>`
-    + `<span class="actions">`
-    + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
-    + `</span></div>`
-    + `<div class="rr-title">${escapeHtml(h.tldr || h.id)}</div>`
-    + `<div class="rr-meta">`
-    + `<span>Session: <a href="#/sessions/${escapeHtml(owner.id)}">${escapeHtml(owner.id)}</a></span>`
-    + `<span class="filepath" title="Click to copy">${escapeHtml(fp)}</span>`
-    + `</div>`
-    + `<div class="rr-resume">`
-    + `<span class="label">RESUME</span>`
-    + `<button class="copy">⧉ copy</button>`
-    + `<div class="body">${escapeHtml(h.resume_prompt || h.next_action || '')}</div>`
-    + `</div>`
-    + `<div class="rr-section"><h4>What's done <span class="ct mono">${(h.done_items||[]).length}</span></h4>`
-    +   (h.done_items||[]).map(i => `<div class="checkitem done"><span class="mark">✓</span><span>${escapeHtml(i)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>What's open <span class="ct mono">${(h.open_items||[]).length}</span></h4>`
-    +   (h.open_items||[]).map(i => `<div class="checkitem open"><span class="mark">○</span><span>${escapeHtml(i)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>Related</h4>`
-    +   (h.task_ids||[]).map(t =>
-        `<div class="related-row"><span class="id">${escapeHtml(t)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>Files touched</h4><div class="files-list">`
-    +   (h.files_touched||[]).slice(0, 8).map(f =>
-        `<div class="files-row mod"><span class="pre">~</span><span>${escapeHtml(typeof f === 'string' ? f : f.path)}</span></div>`).join('')
-    + ((h.files_touched||[]).length > 8
-        ? `<div class="more">+ ${(h.files_touched||[]).length - 8} more…</div>` : '')
-    + `</div></div>`
-  );
+// The rail's head and body for one handover; the title (its tldr, or its id) is the rail's own.
+function renderHandoverRail(ho, owner) {
+  const fp = `.taskmaster/handovers/${ho.id}.md`;
+  const resume = ho.resume_prompt || ho.next_action || '';
+  const files = (ho.files_touched || []).map(f => (typeof f === 'string' ? f : f && f.path)).filter(Boolean);
+
+  const pathBtn = h('button', { type: 'button', class: 'rr-path btn btn--ghost btn--sm', 'aria-label': `Copy path ${fp}` },
+    icon('copy', { size: 14 }), truncate(fp));
+  bindCopy(pathBtn, fp);
+  const copyBtn = h('button', { type: 'button', class: 'btn btn--ghost btn--sm' }, icon('copy', { size: 14 }), 'Copy');
+  bindCopy(copyBtn, resume);
+
+  const head = [
+    h('span', { class: 'rr-kind' }, sentenceCase(ho.viewer_kind || 'standalone')),
+    statusPill(ho.id, ho.status || 'open'),
+    h('span', { class: 'rr-when' }, formatRelative(ho.created || ho.date)),
+  ];
+  const body = [
+    h('div', { class: 'rr-slug' }, ho.id),
+    h('div', { class: 'rr-meta' },
+      h('span', { class: 'rr-label' }, 'Session'),
+      h('a', { href: `#/sessions/${encodeURIComponent(owner.id)}` }, owner.id),
+      pathBtn,
+    ),
+    h('section', { class: 'rr-resume' },
+      h('span', { class: 'rr-label' }, 'Resume'),
+      copyBtn,
+      h('div', { class: 'rr-resume__body' }, resume),
+    ),
+    checklist("What's done", ho.done_items, 'check'),
+    checklist("What's open", ho.open_items, 'minus'),
+    (ho.task_ids || []).length ? h('section', { class: 'rr-section' },
+      h('h3', {}, 'Related'),
+      h('div', { class: 'rr-meta' }, ...taskLinks(ho.task_ids)),
+    ) : null,
+    files.length ? h('section', { class: 'rr-section' },
+      h('h3', {}, 'Files touched'),
+      h('ul', { class: 'rr-files' },
+        ...files.slice(0, FILES_SHOWN).map(f => h('li', {}, truncate(f))),
+        files.length > FILES_SHOWN ? h('li', {}, `+ ${files.length - FILES_SHOWN} more`) : null,
+      ),
+    ) : null,
+  ].filter(Boolean);
+  return { head, body };
 }
 
 export default mount;

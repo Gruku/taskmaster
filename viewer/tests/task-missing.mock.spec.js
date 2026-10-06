@@ -1,6 +1,10 @@
 // User intent: a task that doesn't exist must show a plain not-found state and no controls from the previously opened task.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
+
+const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
 // A write the mock did not expect means the page talked to an endpoint this spec never set up.
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
@@ -11,29 +15,37 @@ test('missing task shows not-found and clears the topbar', async ({ page }) => {
   });
   await page.goto('/#/task/NOPE-999');
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('Task not found');
+  await expect(page.locator('#screen-mount .tm-empty__label')).toHaveText('NOPE-999');
   await expect(page.locator('#screen-mount')).not.toContainText('GET /api');
   // Row 2 keeps only its hidden Filters button.
   await expect(page.locator('#topbar-actions > :not(.overflow-more)')).toHaveCount(0);
   await expect(page.locator('#topbar-actions')).toBeHidden();
 });
 
-test('the not-found link takes the signature colour in both themes, not the browser default blue', async ({ page }) => {
+test('the not-found state offers one way on, a link styled as a button', async ({ page }) => {
   const missing = { '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } } };
-  const link = page.locator('#screen-mount .tm-empty__hint a');
+  const link = page.locator('#screen-mount .tm-empty a.btn');
 
-  await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'dark', ui: {}, screens: {} } });
-  await page.goto('/#/task/NOPE-999');
-  await expect(link).toHaveCSS('color', 'rgb(138, 158, 235)');   // text-accent dark = signature-vivid #8a9eeb
-
-  await mockApi(page, { ...missing, '/api/viewer/prefs': { theme: 'light', ui: {}, screens: {} } });
-  await page.reload();
-  await expect(link).toHaveCSS('color', 'rgb(63, 88, 192)');     // text-accent light = signature #3f58c0
+  for (const theme of ['dark', 'light']) {
+    await mockApi(page, { ...missing, '/api/viewer/prefs': { theme, ui: {}, screens: {} } });
+    await page.goto('/#/task/NOPE-999');
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(link).toHaveText('Open the Kanban');
+    await expect(link).toHaveAttribute('href', '#/kanban');
+    await page.evaluate(axeSource);
+    const result = await page.evaluate(() => window.axe.run(document.getElementById('screen-mount'), { runOnly: ['color-contrast'] }));
+    expect(result.violations.map((v) => `${theme} ${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  }
 });
 
 test('no task id shows the empty state without inline styles', async ({ page }) => {
   await mockApi(page);
   await page.goto('/#/task');
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('No task open');
+  const link = page.locator('#screen-mount .tm-empty a.btn');
+  await expect(link).toHaveText('Open the Kanban');
+  await expect(link).toHaveAttribute('href', '#/kanban');
   expect(await page.locator('#screen-mount [style]').count()).toBe(0);
 });
 
@@ -50,11 +62,12 @@ test('missing task opened after a real one drops that task\'s topbar controls', 
     '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } },
   });
   await page.goto('/#/task/REAL-1');
-  await expect(page.locator('#topbar-actions [aria-label="Edit task"]')).toBeVisible();
+  await expect(page.locator('#topbar-primary [aria-label="Edit task"]')).toBeVisible();
   await expect(page.locator('#screen-mount')).toContainText('A real task');
 
   await page.evaluate(() => { location.hash = '#/task/NOPE-999'; });
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('Task not found');
+  await expect(page.locator('#topbar-primary > *')).toHaveCount(0);
   await expect(page.locator('#topbar-actions > :not(.overflow-more)')).toHaveCount(0);
   await expect(page.locator('#topbar-actions')).toBeHidden();
   expect(errors).toEqual([]);

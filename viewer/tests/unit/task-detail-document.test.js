@@ -32,7 +32,7 @@ const FAKE_TASK = {
 
 const FAKE_BACKLOG = {
   tasks: [FAKE_TASK],
-  epics: [{ id: 'core', label: 'Core' }],
+  epics: [{ id: 'core', name: 'Core platform' }],
   phases: [{ id: 'p1', label: 'Phase 1' }],
 };
 
@@ -59,7 +59,7 @@ function makeCtx(task = FAKE_TASK, extra = {}) {
 }
 
 // --- Import the module under test ---
-const { mountTaskDetailDocument, rememberView } = await import('../../js/components/task-detail-document.js');
+const { mountTaskDetailDocument, rememberView, taskMeta } = await import('../../js/components/task-detail-document.js');
 
 function mount(task, extra) {
   const ctx = makeCtx(task, extra);
@@ -253,6 +253,45 @@ test('marker row: estimate, epic, then branch / worktree / release / sub-repo as
   assert.match(row.querySelector('[data-tag="release"]').textContent, /7\.1\.0/);
   assert.match(row.querySelector('[data-tag="sub_repo"]').textContent, /viewer/);
   t.done();
+});
+
+test('the epic tag is a swatch and the epic\'s name, with no inline style, on the page and in the dialog', () => {
+  for (const chrome of ['page', 'embedded']) {
+    const t = mount(FAKE_TASK, { chrome });
+    const epic = t.root.querySelector('[data-test="chips"] [data-tag="epic"]');
+    assert.equal(epic.tagName, 'A', chrome);
+    assert.ok(epic.classList.contains('td-tag') && epic.classList.contains('td-epic'), chrome);
+    assert.equal(epic.getAttribute('href'), '#/epic/core', chrome);
+    assert.equal(epic.hasAttribute('style'), false, chrome);
+    const swatch = epic.querySelector('.td-swatch');
+    assert.ok(swatch.classList.contains('td-swatch--cat-1'), chrome);
+    assert.equal(swatch.getAttribute('aria-hidden'), 'true', chrome);
+    assert.equal(epic.querySelector('.td-tag__k').textContent, 'Epic', chrome);
+    assert.equal(epic.querySelector('.td-tag__v').textContent, 'Core platform', chrome);
+    t.done();
+  }
+});
+
+test('an epic missing from the backlog shows its id and no swatch', () => {
+  const t = mount({ ...FAKE_TASK, epic: 'gone' });
+  const epic = t.root.querySelector('[data-tag="epic"]');
+  assert.equal(epic.querySelector('.td-swatch'), null);
+  assert.equal(epic.querySelector('.td-tag__v').textContent, 'gone');
+  assert.equal(epic.getAttribute('href'), '#/epic/gone');
+  assert.equal(epic.hasAttribute('style'), false);
+  t.done();
+});
+
+test('the gate strip says each gate and its state in words and never prints the raw gate_state', () => {
+  const task = { ...FAKE_TASK, lane: 'full', gates: { 'spec-review': { verdict: 'pass' } }, gate_state: 'plan-review:pending' };
+  for (const chrome of ['page', 'embedded']) {
+    const t = mount(task, { chrome });
+    const strip = t.root.querySelector('[data-test="gate-pipeline"]');
+    assert.deepEqual([...strip.querySelectorAll('.marker__word')].map((el) => el.textContent), ['Spec review', 'Plan review', 'Review gate']);
+    assert.deepEqual([...strip.querySelectorAll('.gp-gate__state')].map((el) => el.textContent), ['passed', 'pending', 'pending']);
+    assert.ok(!strip.textContent.includes('plan-review:pending'), chrome);
+    t.done();
+  }
 });
 
 test('tags with nothing to show are left out', () => {
@@ -505,6 +544,48 @@ test('rememberView: a refusal still said beside a field is said again after a re
     assert.equal(message(next.root).textContent, '', 'opening the field clears it');
     assert.equal(message(next.root).hasAttribute('aria-live'), false, 'the next refusal is announced again');
   } finally { next.done(); }
+});
+
+// The reason was about the value the user tried to replace; once another writer has replaced it, it is stale.
+test('rememberView: a refusal is dropped when another writer changed that field, and kept when they changed another', async () => {
+  const api = { ...makeCtx().api, patchTask: async () => { throw Object.assign(new Error('No'), { code: 409 }); } };
+  const message = (root) => root.querySelector('[data-field="status"] .if-error');
+  const refused = async () => {
+    const t = mount(FAKE_TASK, { api });
+    for (const wrap of t.root.querySelectorAll('.if-wrap')) assert.ok(wrap.hasAttribute('data-stored'), `${wrap.dataset.key} carries data-stored`);
+    assert.equal(t.root.querySelector('[data-field="status"] .if-wrap').dataset.stored, JSON.stringify(FAKE_TASK.status));
+    t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    const select = t.root.querySelector('[data-field="status"] select');
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    for (let i = 0; i < 100 && !message(t.root).textContent; i++) await tick(5);
+    select.blur();
+    assert.equal(message(t.root).textContent, 'No');
+    const restore = rememberView(t.root);
+    t.done();
+    return restore;
+  };
+
+  let restore = await refused();
+  const changed = mount({ ...FAKE_TASK, status: 'in-review' }, { api });
+  try {
+    restore(changed.root);
+    assert.equal(message(changed.root).textContent, '', 'the status itself changed: no reason carried');
+  } finally { changed.done(); }
+
+  restore = await refused();
+  const other = mount({ ...FAKE_TASK, title: 'Renamed elsewhere' }, { api });
+  try {
+    restore(other.root);
+    assert.equal(message(other.root).textContent, 'No', 'another field changed: the reason still stands');
+  } finally { other.done(); }
+});
+
+test('taskMeta of a missing record draws a meta line without throwing', () => {
+  for (const raw of [null, undefined]) {
+    const meta = taskMeta(raw);
+    assert.ok(meta.querySelector('a[href="#/kanban"]'), 'the way back to the tasks is still there');
+  }
 });
 
 test('rememberView with no scope gives back a restore that restores nothing, called with or without a target', () => {

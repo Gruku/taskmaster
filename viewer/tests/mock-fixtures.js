@@ -141,6 +141,105 @@ export const EPIC = {
   tasks: BOARD.tasks.filter((t) => t.epic === 'viewer'),
 };
 
+// ---- 3b: Table + Epics + Epic detail -----------------------------------------------------------------------------------
+
+// Plan 3's review focus 1: a real backlog's volume — 27 epics, 230 tasks, ids up to 27 characters (slug ids every
+// tenth task, one very long one), every third title 120 characters, one task in ten archived, long branches.
+// One active epic (`LONG_CLOSEABLE_EPIC`) has every task done or archived, so the "Closeable" path meets long data too.
+export const LONG_CLOSEABLE_EPIC = 'epic-02';
+const LONG_WORDS = ['store', 'viewer', 'handover', 'linear', 'gate', 'index', 'board', 'theme', 'sync', 'hooks'];
+const LONG_SENTENCE = 'keep the whole sentence readable when the table has to cut it short ';
+export const LONG_IDS_BOARD = (() => {
+  const epics = Array.from({ length: 27 }, (_, i) => (i === 26
+    ? { id: 'database-native-tracking', name: 'Database-native tracking: the SQLite store becomes the one authority', status: 'active', phase: 'P1' }
+    : { id: `epic-${String(i + 1).padStart(2, '0')}`, name: `${LONG_WORDS[i % 10]} work ${i + 1}`, status: ['active', 'active', 'planned', 'done', 'archived'][i % 5], phase: 'P1' }));
+  const statuses = ['todo', 'in-progress', 'in-review', 'blocked', 'done', 'done', 'todo', 'done', 'todo', 'archived'];
+  const tasks = Array.from({ length: 230 }, (_, i) => {
+    const id = i === 229 ? 'database-native-n17-cutover' : i % 10 === 9 ? `v3-polish-${String(i).padStart(3, '0')}` : `T-${1000 + i}`;
+    const base = `${LONG_WORDS[i % 10]} task ${i + 1}`;
+    return {
+      id, title: i % 3 === 0 ? `${base} — ${LONG_SENTENCE.repeat(3)}`.slice(0, 120) : base,
+      status: epics[i % 27].id === LONG_CLOSEABLE_EPIC ? (i % 2 ? 'done' : 'archived') : statuses[i % 10], priority: ['critical', 'high', 'medium', 'low'][i % 4], epic: epics[i % 27].id, phase: 'P1',
+      area: ['viewer-ui', 'store', 'docs', 'hooks'][i % 4], estimate: ['S', 'M', 'L', '3d'][i % 4], depends_on: [],
+      ...(i % 5 === 0 ? { branch: `feat/${id}-${'long-branch-name-'.repeat(3)}end` } : {}),
+      ...(i % 4 === 0 ? { started: `2026-09-2${i % 9}T09:00:00Z` } : {}),
+    };
+  });
+  return { revision: 'r-long', cursor: 'c-long', meta: { project: 'Long fixture' },
+    phases: [{ id: 'P1', name: 'Foundation', status: 'active' }], epics, tasks };
+})();
+
+// GET /api/epic/<id> for an epic of `board`, built as backlog_server.py _epic_full_from builds it.
+export function epicPayload(board, id, extra = {}) {
+  const epic = board.epics.find((e) => e.id === id) ?? { id };
+  const tasks = board.tasks.filter((t) => t.epic === id);
+  const count = (s) => tasks.filter((t) => (t.status || 'todo') === s).length;
+  const stats = { total: tasks.length, done: count('done'), 'in-progress': count('in-progress'), 'in-review': count('in-review'),
+    todo: count('todo'), blocked: count('blocked'), archived: count('archived') };
+  stats.closeable = stats.total > 0 && stats.done + stats.archived === stats.total;
+  return {
+    description: '', docs: {}, components: {}, design_status: 'exploring', done_when: '', area: null, ...epic,
+    stats, closeable: stats.closeable, component_rollup: {},
+    // Blocked tasks, and any other task that names blockers (`blocked: false`), in task order.
+    attention: tasks.filter((t) => t.status === 'blocked' || t.blockers)
+      .map((t) => (t.status === 'blocked' ? { id: t.id, title: t.title, blocked: true, why: t.blockers || '' }
+        : { id: t.id, title: t.title, blocked: false, why: t.blockers })),
+    tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status || 'todo', component: t.component ?? null,
+      priority: t.priority, phase: t.phase, design_change: t.design_change ?? null })),
+    ...extra,
+  };
+}
+
+// ── Sessions ──
+// GET /api/threads: one open thread, one parked.
+export const THREADS = [
+  { name: 'team-relayout', status: 'open', tldr: 'M1 shipped', next_action: 'start M2',
+    task_ids: ['T-1'], branch: 'feat/relayout', last_touched: '2026-07-13T10:00:00+00:00', staleness_days: 0 },
+  { name: 'guard-hooks-polish', status: 'parked', tldr: 'awaiting review', next_action: '',
+    task_ids: [], branch: '', last_touched: '2026-07-10T10:00:00+00:00', staleness_days: 3 },
+];
+
+// GET /api/sessions: two threads, three handovers in all, one of each status.
+export const SESSIONS = [
+  { id: 'team-relayout', kind: 'thread', status: 'open',
+    start: '2026-07-12T09:00:00+00:00', end: '2026-07-13T10:00:00+00:00', duration: 90000, time_resolution: 'full',
+    handover_ids: ['2026-07-12-scope', '2026-07-13-m1-shipped'],
+    handovers: [
+      { id: '2026-07-12-scope', status: 'closed', viewer_kind: 'mid-task', tldr: 'Scope the relayout' },
+      { id: '2026-07-13-m1-shipped', status: 'open', viewer_kind: 'checkpoint', tldr: 'M1 shipped' },
+    ],
+    task_ids: ['T-102'], tldr: 'M1 shipped', next_action: 'start M2' },
+  { id: 'guard-hooks-polish', kind: 'thread', status: 'closed',
+    start: '2026-07-10T10:00:00+00:00', end: '2026-07-10T10:00:00+00:00', duration: 0, time_resolution: 'full',
+    handover_ids: ['2026-07-10-hooks-old'],
+    handovers: [{ id: '2026-07-10-hooks-old', status: 'superseded', viewer_kind: 'wrap', tldr: 'Old hook plan' }],
+    task_ids: ['T-102'], tldr: 'Old hook plan', next_action: '' },
+];
+
+// Ten files, one of them a 140-character path, so the rail's list is cut at eight and its long line is truncated.
+const FILES_TOUCHED = [
+  'viewer/js/screens/sessions.js', 'viewer/js/components/right-rail.js', 'viewer/css/components/right-rail.css',
+  'viewer/css/components/handover-status.css', 'viewer/index.html',
+  `viewer/tests/${'deeply-nested-fixture-directory/'.repeat(3)}${'x'.repeat(140 - 13 - 32 * 3 - 8)}.spec.js`,
+  'viewer/tests/unit/right-rail.test.js', 'viewer/tests/mock-fixtures.js', 'docs/plans/3e.md', 'CHANGELOG.md',
+];
+const sessionHandover = (id, viewer_kind, status, tldr, created) => ({
+  id, viewer_kind, status, tldr, created,
+  done_items: ['Rail rebuilt from nodes', 'Status pill says its word'],
+  open_items: ['Rows become buttons', 'Phone layout check'],
+  task_ids: ['T-102'], files_touched: FILES_TOUCHED,
+  next_action: `Continue from ${id}`,
+  resume_prompt: `Resume ${id}: read the plan, then pick up the open items.`,
+});
+
+// GET /api/sessions/<id>: the session and its handovers in full.
+export const SESSION_DETAILS = Object.fromEntries(SESSIONS.map((s) => [s.id, {
+  session: s,
+  handovers: s.handovers.map((ho) => sessionHandover(ho.id, ho.viewer_kind, ho.status, ho.tldr,
+    `${ho.id.slice(0, 10)}T10:00:00+00:00`)),
+  task_ids: s.task_ids,
+}]));
+
 // Review focus 1: a board at real data volume (27 epics, 230 tasks, IDs up to T-1234, 120-character titles) for the
 // phone-width checks. Deterministic — no Date.now().
 const PHASE_WORDS = ['Foundation and tokens', 'Shell and navigation', 'Shared components and modals',
@@ -185,3 +284,95 @@ export function longBoard() {
   });
   return { revision: 'long-r1', cursor: 'c1', meta: { project: 'Long fixture' }, phases, epics, tasks };
 }
+
+// ── Dashboard ──
+// A Claude note eight paragraphs long, ending in a 300-character link, so the clamp, the fade and "Show more" show.
+export const LONG_NOTE = {
+  id: 'NOTE-099', author: 'claude', pinned: false, created: ago(2),
+  body: Array.from({ length: 8 }, (_, i) => `Paragraph ${i + 1}: `
+    + 'The cutover moves every row into the native store and checks the counts. '.repeat(7)).join('\n\n')
+    + '\n\nhttps://example.com/' + 'a'.repeat(300),
+};
+
+// The Dashboard with notes and an empty continuity band.
+export const deskMocks = ({ theme = 'dark', notes = NOTES } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/notes': notes,
+  '/api/continuity': { items: [] },
+});
+
+// The Dashboard's summary strip: two open issues, one investigating, one fixed (3 open); two open bugs, one fixed.
+export const ISSUES_LIST = {
+  issues: [
+    { id: 'ISS-011', title: 'Board poll drops a delta under load', status: 'open', severity: 'high', created: ago(30) },
+    { id: 'ISS-012', title: 'Light theme pills fail contrast', status: 'open', severity: 'medium', created: ago(20) },
+    { id: 'ISS-013', title: 'Writer mutex held across the projection scan', status: 'investigating', severity: 'critical', created: ago(10) },
+    { id: 'ISS-009', title: 'Handover list ignores the archive cap', status: 'fixed', severity: 'low', created: ago(90), resolved: ago(40) },
+  ],
+};
+
+export const BUGS_LIST = [
+  { id: 'B-031', title: 'Card edge vanishes at 390px', status: 'open', found_in: 'T-102', discovered: ago(6) },
+  { id: 'B-032', title: 'Note fade covers the last line', status: 'open', found_in: 'T-103', discovered: ago(4) },
+  { id: 'B-027', title: 'Sessions timeline keeps the legacy palette', status: 'fixed', found_in: 'T-104', discovered: ago(80) },
+];
+
+// The Dashboard with a board, issues and bugs behind its summary strip; `extra` overrides any route.
+export const summaryMocks = ({ theme = 'dark', ...extra } = {}) => ({
+  ...deskMocks({ theme }),
+  '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
+  ...extra,
+});
+
+// ── Plan 3d: list screens ──
+const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+// 120 characters with spaces in them, so a title wraps; `unbroken` gives one long word that must not push the page wide.
+const longText = (lead, { unbroken = false } = {}) =>
+  (unbroken ? lead + '-' + 'x'.repeat(120) : `${lead} — the words keep going past the edge of a phone screen and on again`.repeat(2)).slice(0, 120);
+// GET /api/bugs?include_archive=1: every bug, the archived ones flagged.
+export const LIST_BUGS = [
+  { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P1', found_in: 'T-102', components: ['viewer'], discovered: daysAgo(2) },
+  { id: 'B-030', title: 'Phase strip clips the current phase name', status: 'open', found_in: 'T-102', discovered: daysAgo(3) },
+  { id: 'B-029', title: 'Store write hangs for six seconds on a large backlog', status: 'fixed', severity: 'P0', components: ['store'], discovered: daysAgo(16) },
+  { id: 'B-028', title: 'Handover quote loses its heading', status: 'shelved', severity: 'P3', discovered: daysAgo(18) },
+  { id: 'B-027', title: 'Inbox message archived twice', status: 'adopted', severity: 'P2', adopted_into: 'T-118', discovered: daysAgo(21) },
+  { id: 'B-026', title: 'Legacy mirror written after cutover', status: 'fixed', archived: true, discovered: daysAgo(35) },
+];
+const BUG_STATUSES = ['open', 'open', 'shelved', 'fixed', 'adopted', 'promoted'];
+export const LONG_BUGS = Array.from({ length: 23 }, (_, i) => ({
+  id: `B-${1201 + i}`, title: longText(`Bug ${1201 + i}`, { unbroken: i === 4 }), status: BUG_STATUSES[i % 6],
+  severity: i % 5 === 4 ? undefined : `P${i % 4}`, found_in: `T-${1234 + i}`, components: ['viewer', 'store'], discovered: daysAgo(i + 1),
+}));
+// The table plan 4's a11y gate reuses for #/bugs; loaded when `.bugs__list .bug-row` is visible.
+export const bugsMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/bugs': LIST_BUGS, '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
+
+// The Dashboard's continuity band: seven open handovers (five fit the Resume rail, two are "older"), two tasks to
+// review, one open decision, and a task, an issue and an idea to clean up.
+const continuityDaysAgo = (d) => ago(d * 24);
+const HANDOVER_TLDR = ['Cards done, columns next', 'Columns re-skinned', 'Detail modal header', 'Topbar row 1 at 390px',
+  'Chips overflow row', 'Popover stacking ladder', 'Theme toggle saved'];
+export const CONTINUITY = {
+  items: [
+    ...HANDOVER_TLDR.map((title, i) => ({
+      id: `2026-10-05-r${i + 1}`, type: 'handover', title, action_class: 'resume', age_days: i + 1, timestamp: continuityDaysAgo(i + 1),
+      next: 'Pick up the next screen', where: 'rr3/e',
+    })),
+    { id: 'T-107', type: 'task', title: 'Review the cutover checklist', action_class: 'review', age_days: 1, timestamp: continuityDaysAgo(1),
+      next: 'in-review', where: 'store' },
+    { id: 'T-102', type: 'task', title: 'Re-skin the Kanban cards and columns', action_class: 'review', age_days: 2, timestamp: continuityDaysAgo(2),
+      next: 'in-review', where: 'viewer' },
+    { id: 'DEC-001', type: 'decision', title: 'Land the cutover', action_class: 'decide', age_days: 1, timestamp: continuityDaysAgo(1),
+      next: 'rec: Merge develop first', where: 'T-107' },
+    { id: 'T-106', type: 'task', title: 'Quarantined rows must not force a projection scan', action_class: 'clean-up', age_days: 9,
+      timestamp: continuityDaysAgo(9), next: 'in-progress', where: 'store' },
+    { id: 'ISS-012', type: 'issue', title: 'Light theme pills fail contrast', action_class: 'clean-up', age_days: 15,
+      timestamp: continuityDaysAgo(15), next: 'P2 · open', where: 'viewer' },
+    { id: 'IDEA-7', type: 'idea', title: 'Pin a handover to the desk', action_class: 'clean-up', age_days: 8, timestamp: continuityDaysAgo(8),
+      next: 'brainstorm', where: 'brainstorm' },
+  ],
+};
+
+export const DECISION = {
+  id: 'DEC-001', title: 'Land the cutover', options: ['Push the MR', 'Merge develop first', 'Hold'], recommendation: 2, body: '',
+};
