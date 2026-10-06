@@ -783,3 +783,25 @@ for (const theme of ['light', 'dark']) {
     });
   }
 }
+
+// The whisper is shown whole or not at all, and its words stay in the heading's name either way.
+const whisperState = (page) => colOf(page, 'in-review').evaluate((col) => {
+  const t = col.querySelector('.kanban-col-title');
+  const w = t.querySelector('.kanban-col-whisper');
+  const shown = !!w && getComputedStyle(w).display !== 'none' && w.getClientRects().length > 0;
+  return { shown, whisperCut: shown && w.scrollWidth > w.clientWidth, headingCut: shown && t.scrollWidth > t.clientWidth, title: t.title };
+});
+test('the In review whisper is never cut: hidden when its head is too narrow, whole when there is room, always in the name', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const h2 = colOf(page, 'in-review').getByRole('heading', { level: 2 });
+  const at1440 = await whisperState(page);
+  console.log(`1440 whisper: ${JSON.stringify(at1440)}`);
+  expect([at1440.whisperCut, at1440.headingCut]).toEqual([false, false]);
+  expect(at1440.title).toBe('In review, waiting on you');
+  await expect(h2).toHaveAccessibleName(/waiting on you/);
+  for (const key of ['blocked', 'todo', 'done']) await toggleOf(page, key).click();
+  await expect.poll(async () => (await whisperState(page)).shown).toBe(true);
+  const roomy = await whisperState(page);
+  expect([roomy.whisperCut, roomy.headingCut]).toEqual([false, false]);
+  await expect(h2).toHaveAccessibleName(/waiting on you/);
+});

@@ -390,6 +390,11 @@ export async function mount(root, { store, api, prefs }) {
         whisper.className = 'kanban-col-whisper';
         whisper.textContent = 'waiting on you';
         title.appendChild(whisper);
+        // The whisper is shown whole or not at all (fitWhisper); its words stay in the name and tooltip either way.
+        title.title = `${label}, waiting on you`;
+        title.setAttribute('aria-label', title.title);
+        whisperObs.disconnect();
+        whisperObs.observe(title);
       }
       const num = document.createElement('span');
       num.className = 'kanban-col-count';
@@ -517,6 +522,15 @@ export async function mount(root, { store, api, prefs }) {
     el?.focus({ preventScroll: true });
   }
 
+  // The heading's width never depends on the whisper (it flex-grows into the head), so toggling it cannot loop.
+  function fitWhisper(title) {
+    const w = title.querySelector('.kanban-col-whisper');
+    if (!w) return;
+    w.hidden = false;
+    w.hidden = title.scrollWidth > title.clientWidth;
+  }
+  const whisperObs = new ResizeObserver((entries) => { for (const e of entries) fitWhisper(e.target); });
+
   function updateGridTemplate(animate = true) {
     // On mobile (< 768px = --bp-md), CSS handles the stacked layout;
     // skip all JS width logic so inline styles don't fight the media query.
@@ -587,6 +601,7 @@ export async function mount(root, { store, api, prefs }) {
   return () => {
     unsubBacklog();
     resizeObs.disconnect();
+    whisperObs.disconnect();
     mq?.removeEventListener?.('change', onMedia);
     tabs.destroy();
     strip.destroy();
