@@ -230,3 +230,10 @@ These override the sections they name.
 - **§5.3 chips (plan 2b).** A chip's `title` is its full label; the shift-click hint moves to the group label.
 - **§4 topbar row 2 (plan 2b).** Row 2 parks what does not fit behind "Filters", in order, and brings it back when room returns; the search field always stays in the row.
 - **§9 Table (plan 2b).** The Table adopts chips and sortable headers in plan 2b as the proving consumer of those components; its layout (§6 Table) stays in plan 3b.
+- **§6 Sessions (plan 3e).** Search hides non-matching sessions instead of dimming them (dimmed text failed AA); the rail docks beside the timeline above 1024px and sits above it below.
+- **§5.12 right rail (plan 3e).** The right rail is an in-flow panel the screen places, not a fixed overlay.
+- **§6 Dashboard (plan 3e).** Summary links go to `#/table?status=in-progress` / `#/table?status=in-review` (filtered by 3b Task 2's route parameter), `#/issues` and `#/bugs`; "+N older" is a link styled as a button (it navigates); the dead `dashboard.layout` ids needed no change (the default is already empty).
+- **§6 Settings (plan 3e).** Card density is Full / Minimal; Detail view is Modal / Full page.
+- **§4 Sessions filters (plan 3e).** Sessions' filter chips sit in a bar at the top of the page, as the Table's do, not in topbar row 2 (a chip row's own overflow inside row 2's overflow would fight it).
+- **§4 tags (plan 3e).** Tags (kinds, reasons, type words) are 12px Technical; the 11px uppercase label is for section labels only.
+- **§4 counts (plan 3e).** The Sessions and Archived counts read "n <noun> · m visible".
