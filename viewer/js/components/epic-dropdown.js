@@ -69,5 +69,14 @@ export function openEpicOptions({ anchor, epics = [], counts = new Map(), pinned
     list,
   ]);
   draw();
-  return openPopover({ anchor, content, role: 'dialog', label: 'Epic options', focus: 'first', className: 'epic-options' });
+  const handle = openPopover({ anchor, content, role: 'dialog', label: 'Epic options', focus: 'first', className: 'epic-options' });
+  // A poll while open rewrites the counts in place: rows keep their order, focus and the search text.
+  handle.updateCounts = (next) => {
+    counts = next;
+    for (const li of list.children) {
+      const c = li.querySelector('.epic-option__count');
+      if (c) c.textContent = String(counts.get(li.dataset.epic) ?? 0);
+    }
+  };
+  return handle;
 }

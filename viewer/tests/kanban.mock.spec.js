@@ -669,7 +669,9 @@ test('a collapsed column stays collapsed across a poll, and the toggle works fro
   await t.focus();
   await page.keyboard.press('Enter');
   await expect(t).toHaveAttribute('aria-expanded', 'false');
+  await markBodies(page);
   await bumpBoard(page);
+  await expectRepainted(page);
   await expect(toggleOf(page, 'in-review')).toHaveAttribute('aria-expanded', 'false');
   await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
   await expect(toggleOf(page, 'in-review')).toBeFocused();
@@ -697,11 +699,15 @@ test('a search that matches nothing says so once and offers Clear filters', asyn
 test('a poll that redraws the board keeps focus on the same card', async ({ page }) => {
   await board(page, { viewport: { width: 1440, height: 900 } });
   await linkOf(page, 'T-102').focus();
+  await markBodies(page);
   await renameTask(page, 'T-104', 'Renamed by the poll');
+  await expectRepainted(page);
   await expect(card(page, 'T-104')).toContainText('Renamed by the poll');
   await expect(linkOf(page, 'T-102')).toBeFocused();
   await card(page, 'T-102').locator('.card-id').focus();
+  await markBodies(page);
   await renameTask(page, 'T-104', 'Renamed again');
+  await expectRepainted(page);
   await expect(card(page, 'T-104')).toContainText('Renamed again');
   await expect(card(page, 'T-102').locator('.card-id')).toBeFocused();
 });
@@ -710,7 +716,9 @@ test('a poll keeps a column\'s scroll at 1440, and the chosen tab and page scrol
   await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
   const todo = page.locator('#kanban-col-body-todo');
   await todo.evaluate((b) => { b.scrollTop = 400; });
+  await markBodies(page);
   await bumpBoard(page);
+  await expectRepainted(page);
   await page.waitForTimeout(100);
   expect(await page.locator('#kanban-col-body-todo').evaluate((b) => b.scrollTop)).toBe(400);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -720,7 +728,9 @@ test('a poll keeps a column\'s scroll at 1440, and the chosen tab and page scrol
   const tab = list.getByRole('tab', { name: 'In progress 46' });
   await tab.focus();
   await page.evaluate(() => window.scrollTo(0, 600));
+  await markBodies(page);
   await bumpBoard(page);
+  await expectRepainted(page);
   await page.waitForTimeout(100);
   await expect(tab).toHaveAttribute('aria-selected', 'true');
   await expect(tab).toBeFocused();
@@ -831,4 +841,91 @@ test('390, the long board: the sticky column head stays below the sticky topbar 
   console.log(`390 sticky head: ${JSON.stringify(m)}`);
   expect(m.headTop).toBeGreaterThanOrEqual(m.barBottom);
   expect(m.covered).toBe(false);
+});
+
+// Task 9 carries: each poll test proves a repaint happened; phone focus, scroll lock, narrow strip, live epic counts.
+const markBodies = (page) => page.evaluate(() => document.querySelectorAll('.kanban-col-body').forEach((b) => { b.dataset.stale = '1'; }));
+const expectRepainted = (page) => expect(page.locator('.kanban-col-body[data-stale]')).toHaveCount(0);
+const setStatus = (page, pick, status) => page.evaluate(([pick, status]) => import('/js/store.js').then(({ store }) => {
+  const next = structuredClone(store.getBacklog());
+  next.revision = `r-${Date.now()}`;
+  let hit = null;
+  const walk = (o) => {
+    if (!o || typeof o !== 'object' || hit) return;
+    if ('status' in o && typeof o.id === 'string' && /^T-/.test(o.id)
+      && (pick.id ? o.id === pick.id : o.epic === pick.epic && o.status !== 'done')) { o.status = status; hit = o.id; return; }
+    Object.values(o).forEach(walk);
+  };
+  walk(next);
+  store.setBoard(next);
+  return hit;
+}), [pick, status]);
+
+test('390: a focused card that a poll moves into a hidden column hands focus to its old column\'s tab', async ({ page }) => {
+  await board(page, { viewport: { width: 390, height: 844 } });
+  const first = page.locator('.card-task:visible').first();
+  const id = await first.getAttribute('data-task-id');
+  const key = await first.evaluate((c) => c.closest('.kanban-col').dataset.key);
+  await linkOf(page, id).focus();
+  await markBodies(page);
+  expect(await setStatus(page, { id }, key === 'done' ? 'todo' : 'done')).toBe(id);
+  await expectRepainted(page);
+  await expect(page.locator(`#kanban-col-${key}-tab`)).toBeFocused();
+});
+
+test('390, the long board: with a task open in the modal the page behind it does not scroll', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await page.evaluate(() => window.scrollTo(0, 300));
+  const before = await page.evaluate(() => scrollY);
+  await page.locator('.card-task:visible > .link-row__link').first().click();
+  await expect(page.locator('.modal--detail')).toBeVisible();
+  for (const [x, y] of [[195, 422], [8, 836]]) {
+    await page.mouse.move(x, y);
+    await page.mouse.wheel(0, 1200);
+  }
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => scrollY)).toBe(before);
+  expect(await page.evaluate(() => getComputedStyle(document.body).overflowY)).toBe('hidden');
+});
+
+test('at 360, the long board: More and Archived stay whole on screen and nothing scrolls sideways', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 360, height: 800 } });
+  await expect(page.locator('.phase-strip .overflow-more')).toBeVisible();
+  const m = await page.evaluate(() => {
+    const box = (sel) => { const el = document.querySelector(sel); const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, cut: el.scrollWidth - el.clientWidth }; };
+    return { more: box('.phase-strip .overflow-more'), archived: box('.phase-strip .phase-archived'), vw: innerWidth,
+      sideways: document.documentElement.scrollWidth - innerWidth };
+  });
+  for (const b of [m.more, m.archived]) {
+    expect(b.left).toBeGreaterThanOrEqual(0);
+    expect(b.right).toBeLessThanOrEqual(m.vw);
+    expect(b.cut).toBeLessThanOrEqual(0);
+  }
+  expect(m.sideways).toBeLessThanOrEqual(0);
+});
+
+test('Epic options open across a poll: counts follow the board, search text and focus stay', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  const count = epicOption(page, 'viewer').locator('.epic-option__count');
+  const n = Number(await count.textContent());
+  expect(n).toBeGreaterThan(0);
+  await page.locator('.epic-options__filter').fill('view');
+  const pin = epicOption(page, 'viewer').locator('.epic-option__pin');
+  await pin.focus();
+  expect(await setStatus(page, { epic: 'viewer' }, 'done')).toMatch(/^T-/);
+  await expect(count).toHaveText(String(n - 1));
+  await expect(page.locator('.epic-options__filter')).toHaveValue('view');
+  await expect(pin).toBeFocused();
+});
+
+test('a collapsed In review rail hides its whisper (nothing cut) and its title keeps its words', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await toggleOf(page, 'in-review').click();
+  await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
+  await expect.poll(async () => (await whisperState(page)).shown).toBe(false);
+  const s = await whisperState(page);
+  expect(s.whisperCut).toBe(false);
+  expect(s.title).toBe('In review, waiting on you');
+  await expect(colOf(page, 'in-review').getByRole('heading', { level: 2 })).toHaveAccessibleName(/waiting on you/);
 });

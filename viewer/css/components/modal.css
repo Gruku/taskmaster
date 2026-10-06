@@ -2,6 +2,8 @@
    body alone scrolls, and a full-height sheet on a phone. Elevation is surface stepping and a border, never a shadow. */
 
 body.modal-open { overflow: hidden; }
+/* At phone width html clips sideways (shell.css), so body's overflow no longer reaches the viewport: lock html too. */
+html:has(> body.modal-open) { overflow: hidden; }
 
 /* Above the mobile drawer (80), below the conflict banner (90). Stacked modals each bring their own
    overlay; the later one in the host paints on top. */
