@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, BUG, BUG_FIXED, LONG_BUG } from './mock-fixtures.js';
+import { BOARD, BUG, BUG_FIXED, LONG_BUG, bugDetailMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 let errors;
@@ -25,12 +25,7 @@ test.afterEach(async ({ page }) => {
 });
 
 async function open(page, hash, { theme = 'dark', before } = {}) {
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
-    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [], '/api/issues': { issues: [] },
-    '/api/bugs/B-031': BUG, '/api/bugs/B-030': BUG_FIXED, '/api/bugs/B-1234': LONG_BUG,
-    '/api/bugs/B-999': { status: 404, json: { ok: false, error: 'unknown bug B-999' } },
-  });
+  await mockApi(page, { ...bugDetailMocks({ theme }), '/api/bugs': [], '/api/issues': { issues: [] } });
   if (before) await before();
   await page.goto(`/${hash}`);
 }
@@ -106,6 +101,8 @@ test('B-999 is not found in words; a 500 says so without the server\'s text; no 
   const busy = m.locator('.tm-empty[aria-busy="true"]');
   await expect(busy).toBeVisible();
   await expect(busy).toBeFocused();
+  // Nothing is loaded yet, so row 1 offers no primary action.
+  await expect(page.locator('#topbar-primary')).toBeEmpty();
   release();
   await expect(m.locator('h1')).toHaveText(BUG.title);
   await expect(m.locator('h1')).toBeFocused();

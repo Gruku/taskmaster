@@ -208,6 +208,8 @@ export function mount(root, { params, subpath, store }) {
         answer = await shelveBug({ bug, onConfirm: () => setBusy(true) });
       } finally {
         shelving = false;
+        // A throw leaves no answer: the row must not stay busy with its buttons off.
+        if (answer === undefined && !disposed) setBusy(false);
       }
       if (disposed) return;
       if (answer?.error || answer?.cancelled) {
