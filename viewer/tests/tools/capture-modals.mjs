@@ -85,7 +85,10 @@ const TABLE = {
   '/api/task/T-105/detail': F.taskDetail(F.LONG_TASK, 't1', F.LONG_RELATED),
   // The error state: the store answers with a raw message the modal must not print.
   '/api/task/T-103/detail': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
+  '/api/epic/viewer': F.epicPayload(BOARD, 'viewer', { design_status: 'locked', done_when: 'All screens pass the audit in both themes.', description: F.EPIC.description }),
+  '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
 };
+const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
 
 // /api/bugs?found_in=<id> answers only that task's bugs; mockApi keys on the path alone and would hand every task the bug.
 const BUGS = [{ id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', found_in: 'T-102' }];
@@ -142,6 +145,10 @@ const openTable = async (page) => {
   await page.goto(`${BASE}/#/table`);
   await page.locator('table.tbl .tbl-row').first().waitFor();
   await settleRow(page);
+};
+const openScreen = (hash, ready) => async (page) => {
+  await page.goto(`${BASE}/${hash}`);
+  await page.locator(ready).first().waitFor();
 };
 
 // [name, { open, drive?, routes?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default).
@@ -225,6 +232,21 @@ const ALL_SCENES = [
     await filters(p).click();
     await p.getByRole('dialog', { name: 'Filters' }).waitFor();
   } }],
+  // Plan 3b: Table, Epics and Epic detail, with a real backlog's volume (LONG_IDS_BOARD).
+  ['table-long', { open: openTable, routes: longIdsBoard, scope: '#screen-mount' }],
+  ['table-long-scrolled', { open: openTable, routes: longIdsBoard, scope: '#screen-mount', drive: async (p) => {
+    await p.locator('.tbl-host').evaluate((h) => { h.scrollLeft = h.scrollWidth; h.scrollTop = 600; });
+  } }],
+  ['epics', { open: openScreen('#/epics', '.epic-row'), scope: '#screen-mount' }],
+  ['epics-long', { open: openScreen('#/epics', '.epic-row'), routes: longIdsBoard, fullPage: true, scope: '#screen-mount' }],
+  ['epic-detail', { open: openScreen('#/epic/viewer', '.ed-head'), fullPage: true, scope: '#screen-mount' }],
+  ['epic-detail-long', { open: openScreen('#/epic/epic-01', '.ed-head'), routes: longIdsBoard, fullPage: true, scope: '#screen-mount' }],
+  ['epic-modal', { open: openScreen('#/epics', '.epic-row'), drive: async (p) => {
+    await p.locator('.epic-row').filter({ hasText: 'Viewer re-skin' }).first().click();
+    await p.getByRole('dialog').last().waitFor();
+  } }],
+  ['epic-missing', { open: openScreen('#/epic/nope', '.tm-empty'), scope: '#screen-mount',
+    routes: (p) => p.route('**/api/epic/nope*', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'epic not found' } })) }],
 ];
 const ONLY = flag('only');
 const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));
