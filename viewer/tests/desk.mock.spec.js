@@ -618,3 +618,12 @@ test('an idea row says its status once, as a shape plus a word', async ({ page }
   await expect(idea.locator('.co-row__next .marker__word')).toHaveText('Brainstorm', { timeout: 15_000 });
   expect((await idea.innerText()).match(/brainstorm/gi)).toHaveLength(1);
 });
+
+test('at 390px the "+N older" control of the real dashboard is at least 44px tall', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, dashboardMocks({ theme: 'light' }));
+  await page.goto('/#/dashboard');
+  const older = page.locator('.dk-older').first();
+  await expect(older).toBeVisible({ timeout: 15_000 });
+  expect((await older.boundingBox()).height).toBeGreaterThanOrEqual(44);
+});
