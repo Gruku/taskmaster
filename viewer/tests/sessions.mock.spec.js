@@ -116,6 +116,29 @@ test('keyboard: a session row opened with Enter gets focus back when Escape clos
   await expect(page.locator('#screen-mount [aria-controls]')).toHaveCount(0);
 });
 
+test('closing the rail cancels a detail still loading: it lands and the rail stays closed', async ({ page }) => {
+  await boot(page);
+  await sessionRow(page, 'team-relayout').click();
+  await expect(rail(page).locator('h2.rr-title')).toBeVisible();
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let asked;
+  const requested = new Promise((r) => { asked = r; });
+  await page.route('**/api/sessions/guard-hooks-polish', async (route) => { asked(); await held; await route.fallback(); });
+  await sessionRow(page, 'guard-hooks-polish').click();
+  await requested;
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+
+  const answered = page.waitForResponse('**/api/sessions/guard-hooks-polish');
+  release();
+  await answered;
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+  await expect(page.locator('#screen-mount [aria-current]')).toHaveCount(0);
+});
+
 test('the mark moves with the rail: a handover opened from a session\'s rail is the marked row', async ({ page }) => {
   await boot(page);
   await sessionRow(page, 'team-relayout').click();
@@ -197,8 +220,10 @@ test('the sessions rail says a failed status change in words', async ({ page }) 
   await page.locator('.ho-status-menu').getByRole('menuitemradio', { name: 'closed' }).click();
   await expect(rail(page).locator('.ho-status-pill + .ho-status-error[role="alert"]'))
     .toHaveText('The server could not save this change. Try again in a moment.');
-  await expect(pill.locator('.ho-status-pill__word')).toHaveText('open');
-  await expect(hoRow(page, M1).locator('.ho-status')).toHaveText('Open');
+  await expect(pill.locator('.ho-status-pill__word .marker__word')).toHaveText('Open');
+  await expect(pill.locator('.marker__shape')).toHaveAttribute('data-shape', 'ring');
+  await expect(pill).toHaveAccessibleName('Open');
+  await expect(hoRow(page, M1).locator('.ho-status .marker__word')).toHaveText('Open');
 });
 
 test('a status change the server takes is the timeline\'s too', async ({ page }) => {
@@ -206,7 +231,7 @@ test('a status change the server takes is the timeline\'s too', async ({ page })
   await hoRow(page, M1).click();
   await rail(page).locator('.ho-status-pill').click();
   await page.locator('.ho-status-menu').getByRole('menuitemradio', { name: 'closed' }).click();
-  await expect(hoRow(page, M1).locator('.ho-status')).toHaveText('Closed');
+  await expect(hoRow(page, M1).locator('.ho-status .marker__word')).toHaveText('Closed');
   await expect(chip(page, 'Status', 'Closed').locator('.chip__count')).toHaveText('2');
   await expect(hoRow(page, M1)).toHaveAttribute('aria-current', 'true');
 });
@@ -349,3 +374,26 @@ for (const theme of ['dark', 'light']) {
     expect(await axe(page, '#topbar')).toEqual([]);
   });
 }
+
+// Plan 4's accessibility gate reuses sessionsMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`sessions loads its content from sessionsMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, sessionsMocks({ theme }));
+    await page.goto('/#/sessions');
+    await expect(page.locator('.ho-child[data-handover-id="2026-07-13-m1-shipped"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
+  });
+}
+
+test('at 390px a picked handover brings the rail into view with its top below the sticky topbar', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  await hoRow(page, M1).click();
+  await expect(rail(page)).toBeVisible();
+  await expect.poll(async () => {
+    const barBottom = await page.locator('.topbar').evaluate((el) => el.getBoundingClientRect().bottom);
+    const railTop = await rail(page).evaluate((el) => el.getBoundingClientRect().top);
+    return railTop >= barBottom - 1;
+  }).toBe(true);
+});

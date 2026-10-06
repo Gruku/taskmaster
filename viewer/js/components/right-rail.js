@@ -8,7 +8,7 @@
 
 import { linkPillsEl, legacyLinksToTyped } from './link-pills.js';
 import { renderMarkdown } from './markdown.js';
-import { statusMarker, priorityMarker } from './status.js';
+import { statusMarker, priorityMarker, marker } from './status.js';
 import { icon } from './icon.js';
 import { openPopover } from './popover.js';
 import { topModal } from './modal.js';
@@ -162,6 +162,18 @@ function panelIssues(issues, level) {
 // ── Handover status: a button that names the status and opens a menu to change it ──
 const HO_STATUSES = ['open', 'closed', 'superseded'];
 export const HO_STATUS_LABEL = Object.freeze({ open: 'Open', closed: 'Closed', superseded: 'Superseded' });
+// status.js (track 3d) has no handover table, so it lives here. By meaning: an open handover is not yet picked up,
+// a closed one is complete, a superseded one has moved on into the handover that replaced it.
+export const HANDOVER_STATUS = Object.freeze({
+  open: Object.freeze({ label: 'Open', shape: '○', tone: 'neutral' }),
+  closed: Object.freeze({ label: 'Closed', shape: '●', tone: 'success' }),
+  superseded: Object.freeze({ label: 'Superseded', shape: '→', tone: 'neutral' }),
+});
+export function handoverStatusMarker(status) {
+  const meta = Object.hasOwn(HANDOVER_STATUS, status) ? HANDOVER_STATUS[status]
+    : { label: String(status || '—'), shape: '○', tone: 'neutral' };
+  return marker({ ...meta });
+}
 const statusClass = (status) => `ho-status-pill-${String(status).replace(/[^a-z0-9-]/gi, '')}`;
 
 export function statusPill(handoverId, status) {
@@ -174,7 +186,7 @@ export function statusPill(handoverId, status) {
     'aria-expanded': 'false',
     title: `Status: ${status} — click to change`,
     on: { click: (ev) => openStatusMenu(ev.currentTarget, handoverId, ev.currentTarget.dataset.status) },
-  }, [h('span', { class: 'ho-status-pill__word' }, status), icon('chevron', { size: 12 })]);
+  }, [h('span', { class: 'ho-status-pill__word' }, handoverStatusMarker(status)), icon('chevron', { size: 12 })]);
 }
 
 // A pill built here holds a word and an arrow; one written by a screen's own template is just its word.
@@ -184,7 +196,7 @@ function paintPill(pill, status) {
   pill.setAttribute('data-status', status);
   pill.title = `Status: ${status} — click to change`;
   const word = pill.querySelector('.ho-status-pill__word');
-  if (word) word.textContent = status;
+  if (word) word.replaceChildren(handoverStatusMarker(status));
   else pill.textContent = status;
 }
 
@@ -323,8 +335,13 @@ export class RightRail {
       this.close();
     };
     doc.addEventListener('keydown', this._onKey);
-    // Not preventScroll: on a narrow screen the rail may sit below the fold, and the reader is taken to it.
-    titleEl.focus();
+    // On a narrow screen the rail may sit out of view, and the reader is taken to it — with its top below the sticky
+    // topbar (whose height depends on its second row), not under it as a plain focus scroll leaves it.
+    titleEl.focus({ preventScroll: true });
+    const win = doc.defaultView;
+    const barBottom = doc.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+    const railTop = el.getBoundingClientRect().top;
+    if (win && (railTop < barBottom || railTop > win.innerHeight - 44)) win.scrollBy(0, railTop - barBottom);
     return el;
   }
 

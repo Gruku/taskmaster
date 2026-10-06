@@ -77,6 +77,8 @@ div.co-row:has(> .co-row__toggle) { display: block; }
 }
 .co-row__when { flex: none; white-space: nowrap; }
 .co-row__next, .co-row__where { display: block; }
+.co-row__next .marker__word { color: var(--foreground-default); }
+.co-row__markers { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
 
 /* A link row: the same three lines, with the link (the title) in the middle of the first. */
 .co-row.link-row {

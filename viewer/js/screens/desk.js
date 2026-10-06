@@ -49,6 +49,13 @@ export async function mount(root, { store, api }) {
     strip.update(summaryCounts({ tasks: store?.getBacklog?.()?.tasks, issues: openIssues, bugs: openBugs }));
   }
 
+  // Subscribed before any await, so the returned cleanup always owns it. A mount the router abandoned mid-fetch never
+  // gets that cleanup called: it drops the subscription itself once its fetches land (below) or on the next emit.
+  const unsubscribe = store?.subscribe?.('backlog', () => {
+    if (!strip.root.isConnected) { unsubscribe?.(); return; }
+    renderStrip();
+  });
+
   let notes = [];
   let items = [];
 
@@ -129,10 +136,14 @@ export async function mount(root, { store, api }) {
   const bodies = new Map();
 
   // The band control focus was last on. A write disables the pressed button, which can drop focus to <body> before the
-  // redraw; this remembers that it was in the band. Focus moved somewhere else on the page forgets it.
+  // redraw; this remembers that it was in the band. Focus moved somewhere else on the page, or let go onto blank space
+  // from a control that is still there and enabled, forgets it.
   let bandFocus = null;
   bandEl.addEventListener('focusin', (e) => { bandFocus = e.target; });
-  bandEl.addEventListener('focusout', (e) => { if (e.relatedTarget && !bandEl.contains(e.relatedTarget)) bandFocus = null; });
+  bandEl.addEventListener('focusout', (e) => {
+    const left = e.relatedTarget ? !bandEl.contains(e.relatedTarget) : e.target.isConnected && !e.target.disabled;
+    if (left) bandFocus = null;
+  });
 
   const CONTROLS = 'a[href], button';
   // Where focus was, in terms that survive a redraw: the item, the rail, the control's place in its item.
@@ -322,12 +333,7 @@ export async function mount(root, { store, api }) {
   renderStrip();
   renderBoard();
   await renderBand();
-
-  // A mount the router abandoned never gets its cleanup called, so a detached strip unsubscribes itself.
-  const unsubscribe = store?.subscribe?.('backlog', () => {
-    if (!strip.root.isConnected) { unsubscribe?.(); return; }
-    renderStrip();
-  });
+  if (!strip.root.isConnected) { unsubscribe?.(); return () => {}; }
 
   // Leaving with a note mid-edit: blurring its editor saves it, once, before the screen is torn down.
   return async () => {

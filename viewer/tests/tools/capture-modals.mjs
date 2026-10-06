@@ -89,6 +89,11 @@ const TABLE = {
   '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
 };
 const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
+// Plan 3e: Sessions, Archived and Dashboard read the same builders plan 4 reuses; prefs (the loop's theme) and the board stay as above.
+const without = (t, ...keys) => Object.fromEntries(Object.entries(t).filter(([k]) => !keys.includes(k)));
+for (const build of [F.sessionsMocks, F.dashboardMocks, F.archivedMocks]) Object.assign(TABLE, without(build(), '/api/viewer/prefs', '/api/board', '/api/backlog'));
+const archivedRoutes = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.archivedMocks()['/api/board'] }))));
+const M1_ROW = '.ho-child[data-handover-id="2026-07-13-m1-shipped"]';
 
 // /api/bugs?found_in=<id> answers only that task's bugs; mockApi keys on the path alone and would hand every task the bug.
 const BUGS = [{ id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', found_in: 'T-102' }];
@@ -253,6 +258,18 @@ const ALL_SCENES = [
   } }],
   ['epic-missing', { open: openScreen('#/epic/nope', '.tm-empty'), scope: '#screen-mount',
     routes: (p) => p.route('**/api/epic/nope*', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'epic not found' } })) }],
+  // Plan 3e: Sessions (and its right rail), Archived, Dashboard, Settings.
+  ['sessions', { open: openScreen('#/sessions', M1_ROW), fullPage: true, scope: '#screen-mount' }],
+  ['sessions-rail', { open: openScreen('#/sessions', M1_ROW), scope: '#screen-mount', drive: async (p) => {
+    await p.locator(M1_ROW).click();
+    await p.waitForLoadState('networkidle');
+  } }],
+  ['archived', { open: openScreen('#/archived', '.arch-row[data-task-id="T-1001"] .link-row__link'), routes: archivedRoutes, fullPage: true, scope: '#screen-mount' }],
+  ['dashboard', { open: openScreen('#/dashboard', '.dk-note[data-note-id="NOTE-001"] .dk-note__body'), fullPage: true, scope: '#screen-mount' }],
+  ['dashboard-note-expanded', { open: openScreen('#/dashboard', '.dk-note[data-note-id="NOTE-001"] .dk-note__body'), fullPage: true, scope: '#screen-mount', drive: async (p) => {
+    await p.getByRole('button', { name: /Show more/ }).first().click();
+  } }],
+  ['settings', { open: openScreen('#/settings', '.set-control[role="group"] .tm-segmented > button[data-key="system"]'), fullPage: true, scope: '#screen-mount' }],
 ];
 const ONLY = flag('only');
 const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));

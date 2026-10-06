@@ -28,7 +28,8 @@ const segment = (page, groupName, label) => group(page, groupName).getByRole('bu
 async function openSettings(page, mocks = settingsMocks()) {
   await mockApi(page, mocks);
   await page.goto('/#/settings');
-  await expect(page.locator(LOADED)).toBeVisible();
+  // 15s: the first test of a cold run waits on the dev server compiling the screen.
+  await expect(page.locator(LOADED)).toBeVisible({ timeout: 15_000 });
 }
 
 test('the three blocks are in order, each a group named by its heading and described by its sentence', async ({ page }) => {
@@ -76,7 +77,8 @@ test('a theme chosen in Settings applies at once, persists, and never flashes', 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(page.locator('#sidebar .sidebar-link')).toHaveCount(0);   // boot is still waiting on prefs
   release();
-  await expect(page.locator(LOADED)).toBeVisible();
+  // 15s: the first test of a cold run waits on the dev server compiling the screen.
+  await expect(page.locator(LOADED)).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect(segment(page, 'Theme', 'Light')).toHaveAttribute('aria-pressed', 'true');
 });
@@ -129,7 +131,8 @@ test('density and detail view are saved and shown again', async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
   await mockApi(page, settingsMocks({ card_density: 'minimal', ui: { detail_view_mode: 'full' } }));
   await page.reload();
-  await expect(page.locator(LOADED)).toBeVisible();
+  // 15s: the first test of a cold run waits on the dev server compiling the screen.
+  await expect(page.locator(LOADED)).toBeVisible({ timeout: 15_000 });
   await expect(segment(page, 'Card density', 'Minimal')).toHaveAttribute('aria-pressed', 'true');
   await expect(segment(page, 'Card density', 'Full')).toHaveAttribute('aria-pressed', 'false');
   await expect(segment(page, 'Detail view', 'Full page')).toHaveAttribute('aria-pressed', 'true');
@@ -167,5 +170,16 @@ for (const theme of ['dark', 'light']) {
     await page.evaluate(axeSource);
     const result = await page.evaluate(() => window.axe.run(document.querySelector('#screen-mount'), { resultTypes: ['violations'] }));
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  });
+}
+
+// Plan 4's accessibility gate reuses settingsMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`settings loads its content from settingsMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, settingsMocks({ theme }));
+    await page.goto('/#/settings');
+    await expect(page.locator('.set-control[role="group"] .tm-segmented > button[data-key="system"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
   });
 }

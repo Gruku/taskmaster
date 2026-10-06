@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
 import {
-  NOTES, LONG_NOTE, BOARD, EMPTY_TASK, CONTINUITY, DECISION, deskMocks, summaryMocks, taskDetail,
+  NOTES, LONG_NOTE, BOARD, EMPTY_TASK, CONTINUITY, DECISION, summaryMocks, taskDetail, dashboardMocks,
 } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
@@ -33,7 +33,12 @@ async function serveNotes(page, current) {
     : route.fallback()));
 }
 
-async function openDesk(page, mocks = deskMocks()) {
+// The base table is plan 4's dashboardMocks(); a test narrows the notes or continuity it needs on top.
+const deskRoutes = ({ theme = 'dark', notes = NOTES, continuity = { items: [] } } = {}) => ({
+  ...dashboardMocks({ theme }), '/api/notes': notes, '/api/continuity': continuity,
+});
+
+async function openDesk(page, mocks = deskRoutes()) {
   await mockApi(page, mocks);
   return page;
 }
@@ -64,6 +69,19 @@ test('the strip counts from the board, issues and bugs, and each count is a link
   await strip.getByRole('link', { name: /Open issues/ }).click();
   await expect(page).toHaveURL(/#\/issues$/);
   await expect(page.locator('.dk-summary')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a summary link lands on the filtered Table', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  await summary(page).getByRole('link', { name: /In progress/ }).click();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/table?status=in-progress');
+  await expect(page.getByRole('group', { name: 'Status' }).locator('.chip[data-value="in-progress"]')).toHaveAttribute('aria-pressed', 'true');
+  const words = page.locator('.tbl-row .tbl-cell--status .marker__word');
+  await expect(words.first()).toBeVisible();
+  expect(new Set(await words.allTextContents())).toEqual(new Set(['In progress']));
   expect(errors).toEqual([]);
 });
 
@@ -137,7 +155,7 @@ test('the board mounts with no error, no focused composer, and marked loaded loc
 
 test('the composer creates a note', async ({ page }) => {
   const { writes } = watch(page);
-  await openDesk(page, { ...deskMocks(), 'POST /api/notes': { ok: true, id: 'NOTE-005' } });
+  await openDesk(page, { ...deskRoutes(), 'POST /api/notes': { ok: true, id: 'NOTE-005' } });
   const added = { id: 'NOTE-005', author: 'user', body: 'Ship it', created: new Date().toISOString() };
   await serveNotes(page, () => (writes.length ? [...NOTES.notes, added] : NOTES.notes));
   await page.goto('/#/dashboard');
@@ -153,7 +171,7 @@ test('the composer creates a note', async ({ page }) => {
 test('pin and archive work from the keyboard', async ({ page }) => {
   const { writes } = watch(page);
   await openDesk(page, {
-    ...deskMocks(),
+    ...deskRoutes(),
     'POST /api/notes/NOTE-002/update': { ok: true },
     'POST /api/notes/NOTE-002/archive': { ok: true },
   });
@@ -189,7 +207,7 @@ test('pin and archive work from the keyboard', async ({ page }) => {
 });
 
 test('a very long note is clamped and expands from the keyboard', async ({ page }) => {
-  await openDesk(page, deskMocks({ notes: { notes: [LONG_NOTE] } }));
+  await openDesk(page, deskRoutes({ notes: { notes: [LONG_NOTE] } }));
   await page.goto('/#/dashboard');
   const card = note(page, 'NOTE-099');
   const body = card.locator('.dk-note__body');
@@ -224,7 +242,7 @@ test('a very long note is clamped and expands from the keyboard', async ({ page 
 });
 
 test('a link in the clamped-away part of a long note opens the note when Tab reaches it', async ({ page }) => {
-  await openDesk(page, deskMocks({ notes: { notes: [LONG_NOTE] } }));
+  await openDesk(page, deskRoutes({ notes: { notes: [LONG_NOTE] } }));
   await page.goto('/#/dashboard');
   const card = note(page, 'NOTE-099');
   await expect(card.locator('.dk-note__more')).toHaveText('Show more');
@@ -243,7 +261,7 @@ test('a link in the clamped-away part of a long note opens the note when Tab rea
 
 test('an expanded note stays expanded when the board refreshes, and focus stays on the control used', async ({ page }) => {
   const { writes } = watch(page);
-  await openDesk(page, { ...deskMocks(), 'POST /api/notes/NOTE-099/update': { ok: true } });
+  await openDesk(page, { ...deskRoutes(), 'POST /api/notes/NOTE-099/update': { ok: true } });
   await serveNotes(page, () => [{ ...LONG_NOTE, pinned: writes.length > 0 }]);
   await page.goto('/#/dashboard');
   const card = note(page, 'NOTE-099');
@@ -262,7 +280,7 @@ test('an expanded note stays expanded when the board refreshes, and focus stays 
 
 test('a failed note write is said in words and keeps the text', async ({ page }) => {
   await openDesk(page, {
-    ...deskMocks(),
+    ...deskRoutes(),
     'POST /api/notes': { status: 500, json: { ok: false, error: 'database is locked' } },
   });
   await page.goto('/#/dashboard');
@@ -277,7 +295,7 @@ test('a failed note write is said in words and keeps the text', async ({ page })
 
 test('leaving with a note mid-edit saves it once and throws nothing', async ({ page }) => {
   const { errors, writes } = watch(page);
-  await openDesk(page, { ...deskMocks(), 'POST /api/notes/NOTE-003/update': { ok: true } });
+  await openDesk(page, { ...deskRoutes(), 'POST /api/notes/NOTE-003/update': { ok: true } });
   await page.goto('/#/dashboard');
   await note(page, 'NOTE-003').getByRole('button', { name: 'Edit note' }).click();
   const editor = note(page, 'NOTE-003').getByRole('textbox', { name: 'Edit note' });
@@ -293,7 +311,7 @@ test('leaving with a note mid-edit saves it once and throws nothing', async ({ p
 
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the board with a clamped note shows no violations`, async ({ page }) => {
-    await openDesk(page, deskMocks({ theme, notes: { notes: [LONG_NOTE, ...NOTES.notes] } }));
+    await openDesk(page, deskRoutes({ theme, notes: { notes: [LONG_NOTE, ...NOTES.notes] } }));
     await page.goto('/#/dashboard');
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(page.locator('.dk-note__more')).toBeVisible();
@@ -307,7 +325,7 @@ for (const theme of ['dark', 'light']) {
 
 // The Dashboard with a full continuity band behind it; `extra` overrides any route.
 const bandMocks = ({ theme = 'dark', ...extra } = {}) => ({
-  ...deskMocks({ theme }),
+  ...deskRoutes({ theme }),
   '/api/continuity': CONTINUITY,
   '/api/decisions/DEC-001': DECISION,
   '/api/handover/2026-10-05-r1': { body: '<lc>Cards done</lc>' },
@@ -341,9 +359,15 @@ test('clean-up rows are links', async ({ page }) => {
   await page.goto('/#/dashboard');
   await spine(page, 'Clean-up').locator('a[href="#/issue/ISS-012"]').click();
   await expect(page).toHaveURL(/#\/issue\/ISS-012$/);
+  // Going back re-mounts the band; wait for its fetch to land and the row to paint, so the click does not race
+  // the redraw on a loaded machine.
+  const remounted = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/continuity');
   await page.goBack();
   await expect(page).toHaveURL(/#\/dashboard$/);
-  await spine(page, 'Clean-up').locator('a[href="#/task/T-106"]').click();
+  await remounted;
+  const task = spine(page, 'Clean-up').locator('a[href="#/task/T-106"]');
+  await expect(task).toBeVisible({ timeout: 15_000 });
+  await task.click({ timeout: 15_000 });
   const dialog = page.locator('.modal--detail');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('T-106');
@@ -427,6 +451,21 @@ test('a decision settled from the keyboard leaves focus in the band', async ({ p
   await page.keyboard.press('Enter');
   await expect(page.locator('.co-decision')).toHaveCount(0);
   await expect.poll(() => focusInBand(page).then((f) => f.inBand)).toBe(true);
+});
+
+test('focus let go onto blank space is not pulled back into the band by a later redraw', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await spine(page, 'Resume').locator('.co-row__toggle').first().focus();
+  // A click on blank space: the toggle loses focus to <body> while it is still there and enabled.
+  await page.evaluate(() => document.activeElement.blur());
+  // A redraw that does not come from a focused control (a programmatic click moves no focus).
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).dispatchEvent('click');
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.waitForTimeout(150);
+  expect(await focusInBand(page).then((f) => f.inBand)).toBe(false);
 });
 
 test('a decision refused from the keyboard puts focus back on the pressed button', async ({ page }) => {
@@ -521,3 +560,70 @@ for (const theme of ['dark', 'light']) {
     expect(found).toEqual([]);
   });
 }
+
+// Plan 4's accessibility gate reuses dashboardMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`dashboard loads its content from dashboardMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, dashboardMocks({ theme }));
+    await page.goto('/#/dashboard');
+    await expect(page.locator('.dk-note[data-note-id="NOTE-001"] .dk-note__body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
+  });
+}
+
+test('leaving with a summary fetch in flight throws nothing and paints nothing into the next screen', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await mockApi(page, summaryMocks());
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let arrived;
+  const asked = new Promise((r) => { arrived = r; });
+  await page.route((url) => url.pathname === '/api/issues', async (route) => {
+    arrived();
+    await held;
+    await route.fulfill({ json: summaryMocks()['/api/issues'] }).catch(() => {});
+  });
+  await page.goto('/#/dashboard');
+  await asked;
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.locator('.set-control[role="group"]').first()).toBeVisible({ timeout: 15_000 });
+  const landed = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/issues');
+  release();
+  await landed;
+  // Let the abandoned mount finish its remaining awaits before looking.
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  await expect(page.locator('#screen-mount .dk-summary, #screen-mount .dk-board, #screen-mount .dk-continuity')).toHaveCount(0);
+  await expect(page.locator('#screen-mount .set-control[role="group"]').first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('review and clean-up rows say status and severity as a shape plus a word, never the stored slug', async ({ page }) => {
+  await mockApi(page, dashboardMocks({ theme: 'dark' }));
+  await page.goto('/#/dashboard');
+  const row = (id) => page.locator(`.dk-continuity [data-item-id="${id}"]`);
+  await expect(row('T-107').locator('.co-row__next .marker__word')).toHaveText('In review', { timeout: 15_000 });
+  await expect(row('T-107').locator('.co-row__next .marker__shape')).toHaveAttribute('data-shape', 'triangle');
+  await expect(row('T-106').locator('.co-row__next .marker__word')).toHaveText('In progress');
+  await expect(row('ISS-012').locator('.co-row__next .marker__word')).toHaveText(['Medium', 'Open']);
+  const text = await page.locator('.dk-continuity').innerText();
+  for (const slug of ['in-review', 'in-progress', 'P2 · open']) expect(text).not.toContain(slug);
+});
+
+test('an idea row says its status once, as a shape plus a word', async ({ page }) => {
+  await mockApi(page, dashboardMocks({ theme: 'dark' }));
+  await page.goto('/#/dashboard');
+  const idea = page.locator('.dk-continuity [data-item-id="IDEA-7"]');
+  await expect(idea.locator('.co-row__next .marker__word')).toHaveText('Brainstorm', { timeout: 15_000 });
+  expect((await idea.innerText()).match(/brainstorm/gi)).toHaveLength(1);
+});
+
+test('at 390px the "+N older" control of the real dashboard is at least 44px tall', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, dashboardMocks({ theme: 'light' }));
+  await page.goto('/#/dashboard');
+  const older = page.locator('.dk-older').first();
+  await expect(older).toBeVisible({ timeout: 15_000 });
+  expect((await older.boundingBox()).height).toBeGreaterThanOrEqual(44);
+});

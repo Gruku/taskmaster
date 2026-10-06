@@ -65,14 +65,14 @@ test('a failed handover status change is said in words beside the pill', async (
   await expect(alert).toHaveText('The server could not save this change. Try again in a moment.');
   await expect(pill).toHaveAttribute('aria-describedby', await alert.getAttribute('id'));
   await expect(pill).toHaveAttribute('data-status', 'open');
-  await expect(pill.locator('.ho-status-pill__word')).toHaveText('open');
+  await expect(pill.locator('.ho-status-pill__word .marker__word')).toHaveText('Open');
   const text = await page.locator('#screen-mount').textContent();
   for (const raw of ['sqlite3', '500', '/api']) expect(text, `no "${raw}" on the page`).not.toContain(raw);
 
   await answerStatus(page, { json: { ok: true } });
   await choose(page, pill, 'closed');
   await expect(pill).toHaveAttribute('data-status', 'closed');
-  await expect(pill.locator('.ho-status-pill__word')).toHaveText('closed');
+  await expect(pill.locator('.ho-status-pill__word .marker__word')).toHaveText('Closed');
   await expect(page.locator('.ho-status-error')).toHaveCount(0);
   await expect(pill).not.toHaveAttribute('aria-describedby', /.+/);
 });

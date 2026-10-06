@@ -345,7 +345,7 @@ test('choosing a status posts it, updates every pill for that handover, and retu
     assert.equal(p.dataset.status, 'closed');
     assert.ok(p.classList.contains('ho-status-pill-closed'));
     assert.ok(!p.classList.contains('ho-status-pill-open'));
-    assert.match(p.textContent, /closed/);
+    assert.match(p.textContent, /Closed/);
   }
   assert.deepEqual(heard, [{ id: 'HO-1', status: 'closed' }]);
   assert.equal(document.querySelector('.ho-status-menu'), null);
@@ -376,7 +376,7 @@ test('a failed status change is said beside the pill and the pill keeps its stat
   for (const pp of [pill, twin]) {
     assert.equal(pp.dataset.status, 'open');
     assert.ok(pp.classList.contains('ho-status-pill-open'));
-    assert.match(pp.textContent, /open/);
+    assert.match(pp.textContent, /Open/);
   }
   assert.ok(!twin.nextElementSibling?.classList.contains('ho-status-error'), 'the twin pill has no alert');
   assert.equal(twin.hasAttribute('aria-describedby'), false);

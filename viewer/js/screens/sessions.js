@@ -86,6 +86,8 @@ export function mount(root, { params, subpath, store, prefs }) {
   }
   state.onRailOpen = (sel) => { state.selected = sel; paintSelected(); };
   state.onRailClose = () => {
+    // A detail still loading when the rail is closed must not reopen it when it lands.
+    nextOpen(state);
     const closed = state.selected;
     state.selected = null;
     paintSelected();

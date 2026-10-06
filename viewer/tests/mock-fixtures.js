@@ -379,8 +379,21 @@ export const DECISION = {
 
 // Settings: the prefs alone; `prefs` merges any other stored values (card_density, ui.detail_view_mode) into them.
 // Its content is loaded when `.set-control[role="group"] .tm-segmented > button[data-key="system"]` is on the page.
+// The table plan 4's a11y gate reuses for #/settings; loaded when
+// `.set-control[role="group"] .tm-segmented > button[data-key="system"]` is visible.
 export const settingsMocks = ({ theme = 'dark', ...prefs } = {}) => ({
-  '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...prefs },
+  '/api/viewer/prefs': { theme, card_density: 'full', ui: { detail_view_mode: 'modal' }, screens: {}, ...prefs },
+});
+
+// The table plan 4's a11y gate reuses for #/dashboard; loaded when `.dk-note[data-note-id="NOTE-001"] .dk-note__body`
+// is visible.
+export const dashboardMocks = ({ theme = 'dark' } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/notes': { notes: [...NOTES.notes, LONG_NOTE] },
+  '/api/continuity': CONTINUITY,
+  '/api/decisions/DEC-001': DECISION,
+  '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
+  '/api/board': BOARD, '/api/backlog': BOARD,
 });
 
 // ---- 3b Task 5: Epic detail ------------------------------------------------------------------------------------------
