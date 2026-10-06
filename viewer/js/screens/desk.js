@@ -59,6 +59,9 @@ export async function mount(root, { store, api }) {
     return true;
   }
 
+  // Notes the person expanded stay expanded across redraws.
+  const expandedNotes = new Set();
+
   const composer = createComposer({ onCreate: (text) => act(() => api.createNote(text)) });
 
   // The error line and the composer stay in place across redraws, so the composer keeps its focus and its text.
@@ -77,16 +80,19 @@ export async function mount(root, { store, api }) {
         onPin: (n) => act(() => api.updateNote(n.id, { pinned: !n.pinned })),
         onArchive: (n) => act(() => api.archiveNote(n.id)),
         onSave: (n, text) => act(() => api.updateNote(n.id, { text })),
+        expanded: expandedNotes.has(note.id),
+        onExpand: (open) => { if (open) expandedNotes.add(note.id); else expandedNotes.delete(note.id); },
       });
-      cards.set(note.id, card.root);
+      cards.set(note.id, card);
       boardEl.appendChild(card.root);
     }
+    // Measured now rather than a frame later, so a remembered "Show more" exists to take focus back.
+    for (const card of cards.values()) card.measure();
     if (notes.length === 0) boardEl.appendChild(h('p', { class: 'dk-empty' }, 'Your desk is clear.'));
 
     if (!focusedNote) return;
-    const card = cards.get(focusedNote);
+    const card = cards.get(focusedNote)?.root;
     if (!card) { composer.focus(); return; }
-    // "Show more" appears only once the note is measured, a frame later; until then its Edit button stands in.
     (card.querySelector(`.${focusedControl}`) || card.querySelector('.dk-note__edit')).focus();
   }
   async function refreshBoard() { await loadNotes(); renderBoard(); }

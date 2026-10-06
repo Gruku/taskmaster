@@ -8,7 +8,8 @@ import { mountMarkdown } from '../markdown.js';
 
 // User notes are warm paper, Claude notes cool paper; the static tilt comes from the id hash.
 // onPin(note), onArchive(note), onSave(note, text) resolve true when the write went through, false when it was refused.
-export function createNoteCard({ note, onPin, onArchive, onSave }) {
+// `expanded` opens the note already expanded (when it overflows); onExpand(open) reports each expand and collapse.
+export function createNoteCard({ note, onPin, onArchive, onSave, expanded = false, onExpand }) {
   const whoId = `dk-note-who-${note.id}`;
   const bodyId = `dk-note-body-${note.id}`;
   const root = h('article', {
@@ -55,24 +56,40 @@ export function createNoteCard({ note, onPin, onArchive, onSave }) {
   }, 'Show more');
 
   function setExpanded(open) {
+    const was = root.classList.contains('is-expanded');
     root.classList.toggle('is-expanded', open);
     more.setAttribute('aria-expanded', open ? 'true' : 'false');
     more.textContent = open ? 'Show less' : 'Show more';
+    if (was !== open) onExpand?.(open);
   }
+  if (expanded) setExpanded(true);
 
-  // Expanded, the body has no clamp left to overflow, so its Show less stays until it is pressed.
+  // The clamp is measured with the note collapsed for that instant (no paint in between), so an expanded note keeps
+  // its Show less while its text still needs the room, and loses it when the text fits.
   function measure() {
-    if (root.classList.contains('is-editing') || root.classList.contains('is-expanded')) return;
+    if (root.classList.contains('is-editing')) return;
+    const open = root.classList.contains('is-expanded');
+    if (open) root.classList.remove('is-expanded');
     const clamped = body.scrollHeight > body.clientHeight + 1;
+    if (open) root.classList.add('is-expanded');
     root.classList.toggle('is-clamped', clamped);
     if (clamped) {
       if (fade.parentNode !== body) body.append(fade);
       if (!more.isConnected) body.after(more);
     } else {
+      if (open) setExpanded(false);
       fade.remove();
       more.remove();
     }
   }
+
+  // Whatever takes focus inside a clamped body (a link Tab reaches) opens the note, so it is never focused out of sight.
+  body.addEventListener('focusin', (e) => {
+    if (!root.classList.contains('is-clamped') || root.classList.contains('is-expanded')) return;
+    setExpanded(true);
+    body.scrollTop = 0;
+    e.target.scrollIntoView?.({ block: 'nearest' });
+  });
 
   // A link in the body follows its href; a click anywhere else on it edits.
   body.addEventListener('click', (e) => {

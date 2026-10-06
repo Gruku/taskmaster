@@ -121,20 +121,63 @@ test('a very long note is clamped and expands from the keyboard', async ({ page 
   expect(clamp.client).toBeLessThanOrEqual(16 * clamp.font + 1);
   expect(clamp.scroll).toBeGreaterThan(clamp.client + 1);
 
+  // Tab passes the note's link on the way, and a focused link opens the note; Enter then closes and reopens it.
   await page.locator('.dk-composer__input').focus();
   await tabTo(page, '.dk-note__more');
+  const toggle = card.locator('.dk-note__more');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await page.keyboard.press('Enter');
-  await expect(card.locator('.dk-note__more')).toHaveAttribute('aria-expanded', 'true');
-  await expect(card.locator('.dk-note__more')).toHaveText('Show less');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveText('Show more');
+  expect(await body.evaluate((el) => el.clientHeight)).toBeLessThanOrEqual(16 * clamp.font + 1);
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveText('Show less');
   const open = await body.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }));
   expect(open.client).toBeGreaterThanOrEqual(open.scroll - 1);
   await page.keyboard.press('Enter');
-  await expect(card.locator('.dk-note__more')).toHaveAttribute('aria-expanded', 'false');
-  await expect(card.locator('.dk-note__more')).toHaveText('Show more');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(more).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('a link in the clamped-away part of a long note opens the note when Tab reaches it', async ({ page }) => {
+  await openDesk(page, deskMocks({ notes: { notes: [LONG_NOTE] } }));
+  await page.goto('/#/dashboard');
+  const card = note(page, 'NOTE-099');
+  await expect(card.locator('.dk-note__more')).toHaveText('Show more');
+  await page.locator('.dk-composer__input').focus();
+  await tabTo(page, '.dk-note__body a');
+  await expect(card).toHaveClass(/is-expanded/);
+  await expect(card.locator('.dk-note__more')).toHaveAttribute('aria-expanded', 'true');
+  // The focused link is drawn inside the note, not scrolled out of a clipped body.
+  const [link, paper, body] = await Promise.all([
+    card.locator('.dk-note__body a').boundingBox(), card.boundingBox(), card.locator('.dk-note__body').boundingBox()]);
+  expect(link.y).toBeGreaterThanOrEqual(paper.y);
+  expect(link.y + link.height).toBeLessThanOrEqual(paper.y + paper.height);
+  expect(link.y + link.height).toBeLessThanOrEqual(body.y + body.height);
+  expect(await card.locator('.dk-note__body').evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('an expanded note stays expanded when the board refreshes, and focus stays on the control used', async ({ page }) => {
+  const { writes } = watch(page);
+  await openDesk(page, { ...deskMocks(), 'POST /api/notes/NOTE-099/update': { ok: true } });
+  await serveNotes(page, () => [{ ...LONG_NOTE, pinned: writes.length > 0 }]);
+  await page.goto('/#/dashboard');
+  const card = note(page, 'NOTE-099');
+  await card.getByRole('button', { name: 'Show more' }).click();
+  await expect(card).toHaveClass(/is-expanded/);
+  await card.locator('.dk-note__pin').focus();
+  await page.keyboard.press('Space');
+  const pin = card.locator('.dk-note__pin');
+  await expect(pin).toHaveText('Unpin');
+  await expect(pin).toBeFocused();
+  await expect(card).toHaveClass(/is-expanded/);
+  await expect(card.locator('.dk-note__more')).toHaveText('Show less');
+  await expect(card.locator('.dk-note__more')).toHaveAttribute('aria-expanded', 'true');
+  expect(writes).toEqual([{ path: '/api/notes/NOTE-099/update', body: { pinned: true } }]);
 });
 
 test('a failed note write is said in words and keeps the text', async ({ page }) => {
