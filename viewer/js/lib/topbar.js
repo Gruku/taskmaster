@@ -100,8 +100,9 @@ export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd, 
   function clearSearch() {
     input.value = '';
     syncClearVisibility();
-    // Dispatch a real input event so debounced handlers and chip-count guards fire.
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // Dispatch a real input event so debounced handlers and chip-count guards fire —
+    // unless the screen that built this search is gone.
+    if (input.isConnected) input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus();
   }
 
@@ -129,7 +130,8 @@ export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd, 
     input.addEventListener('input', () => {
       syncClearVisibility();
       if (t) clearTimeout(t);
-      t = setTimeout(() => onInput(input.value), debounceMs);
+      // The 180ms wait can outlive the screen that built this search; a call then would paint into the next screen.
+      t = setTimeout(() => { if (input.isConnected) onInput(input.value); }, debounceMs);
     });
   } else {
     // Even without an onInput callback, keep the clear-button visibility in sync.

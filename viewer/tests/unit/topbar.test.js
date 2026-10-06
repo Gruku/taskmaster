@@ -131,3 +131,20 @@ test('claimTopbar: a new route clears the count and its title', () => {
   assert.equal(count.textContent, '');
   assert.equal(count.hasAttribute('title'), false);
 });
+
+test('tmSearch: a debounced input does not reach onInput once the search has left the document', async () => {
+  const calls = [];
+  const { el, input } = tmSearch({ onInput: (v) => calls.push(v), debounceMs: 5 });
+  document.body.appendChild(el);
+  input.value = 'abc';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  el.remove();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls, [], 'a screen that is gone must not be painted into the next one');
+  document.body.appendChild(el);
+  input.value = 'abcd';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls, ['abcd']);
+  el.remove();
+});
