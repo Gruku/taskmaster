@@ -197,14 +197,14 @@ test('leaving the Table, even with More open, leaves no observer or font listene
     document.fonts.addEventListener = (type, fn, opts) => { if (type === 'loadingdone' && !seen.has(fn)) { seen.add(fn); window.__fonts++; } return add(type, fn, opts); };
     document.fonts.removeEventListener = (type, fn, opts) => { if (type === 'loadingdone' && seen.delete(fn)) window.__fonts--; return remove(type, fn, opts); };
   });
-  await boot(page, { route: '#/kanban' });
-  await expect(page.locator('.card-task').first()).toBeVisible();
+  await boot(page, { route: '#/settings' });
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
   const fontsBefore = await page.evaluate(() => window.__fonts);
   await page.evaluate(() => { location.hash = '#/table'; });
   await expect(page.locator('.tbl-row').first()).toBeVisible();
-  // Kanban → Table swaps font listeners: the Kanban's phase strip (one overflowRow) unmounts
-  // and drops its listener; the Table's four chip-group overflowRows each add one.
-  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore - 1 + 4);
+  // Settings has no overflow row, so its count is the baseline; the Table adds four font listeners,
+  // one per chip-group overflowRow (Status, Priority, Epic, Area).
+  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore + 4);
   await group(page, 'Epic').locator('.overflow-more').click();
   await expect(page.getByRole('dialog', { name: 'More Epic' })).toBeVisible();
   // Live observers on the rail itself (the Table's own) and on each row's chips (overflowRow's).
@@ -213,8 +213,8 @@ test('leaving the Table, even with More open, leaves no observer or font listene
     return { rail: on('tbl-chips'), rows: on('chip-row__chips'), host: on('tbl-host') };
   });
   expect(await watching()).toEqual({ rail: 1, rows: 8, host: 1 });   // each row: a ResizeObserver and a MutationObserver
-  await page.evaluate(() => { location.hash = '#/kanban'; });
-  await expect(page.locator('.card-task').first()).toBeVisible();
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
   expect(await page.evaluate(() => window.__fonts)).toBe(fontsBefore);
   expect(await watching()).toEqual({ rail: 0, rows: 0, host: 0 });
   await expect(page.locator('.popover')).toHaveCount(0);
