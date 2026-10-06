@@ -11,6 +11,10 @@
 /* ── Board ──────────────────────────────────────────────────────────────── */
 .dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); align-items: start; }
 
+/* A refused note write, said in words across the whole board; hidden while there is nothing to say. */
+.dk-board-error { grid-column: 1 / -1; margin: 0; color: var(--foreground-bold); font-size: var(--size-narrator-small); }
+.dk-board-error:empty { display: none; }
+
 .dk-note {
   position: relative;
   background: var(--note-paper-user);
@@ -51,40 +55,53 @@
 
 /* ── Note head ──────────────────────────────────────────────────────────── */
 .dk-note__head {
-  display: flex; align-items: baseline; gap: var(--space-xs);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs);
   font-size: var(--size-technical-small); text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--note-ink-soft);
   margin-bottom: var(--space-sm);
 }
 .dk-note__who { font-weight: 600; }
-.dk-note__when { margin-right: auto; }
+.dk-note__who, .dk-note__when { white-space: nowrap; }
+.dk-note__tools { display: flex; align-items: center; gap: var(--space-micro); margin-left: auto; }
 
-.dk-note__pin, .dk-note__archive {
-  background: none; border: none; cursor: pointer; padding: 0 2px;
-  font-size: var(--size-technical-small); color: var(--note-ink-soft);
+/* The note's controls are ghost buttons in the paper's ink; they show on hover or focus, and always on a phone. */
+.dk-note__head .btn {
+  color: var(--note-ink-soft);
   opacity: 0;
-  transition: opacity var(--dur-micro) var(--ease-hourglass), color var(--dur-micro) var(--ease-hourglass);
+  transition: opacity var(--dur-micro) var(--ease-hourglass), color var(--dur-micro) var(--ease-hourglass),
+    border-color var(--dur-micro) var(--ease-hourglass);
 }
-.dk-note:hover .dk-note__pin,
-.dk-note:hover .dk-note__archive,
-.dk-note:focus-within .dk-note__pin,
-.dk-note:focus-within .dk-note__archive { opacity: 1; }
+.dk-note__head .btn:hover:not(:disabled) { color: var(--note-ink); background: transparent; border-color: var(--note-ink-soft); }
+.dk-note:hover .dk-note__head .btn,
+.dk-note:focus-within .dk-note__head .btn { opacity: 1; }
 
-/* Pinned note: pin button always visible and full colour. */
-.dk-note.is-pinned .dk-note__pin { opacity: 1; filter: none; }
-.dk-note__pin { filter: grayscale(1); }
-.dk-note__archive:hover { color: var(--note-ink); }
+/* Pinned note: its Unpin stays visible. */
+.dk-note.is-pinned .dk-note__pin { opacity: 1; }
 
 /* ── Note body + edit ───────────────────────────────────────────────────── */
-.dk-note__body { cursor: text; max-height: 16em; overflow: hidden; }
-.dk-note__body a { color: inherit; text-decoration: underline; }
+.dk-note__body { position: relative; cursor: text; max-height: 16em; overflow: hidden; }
+.dk-note.is-expanded .dk-note__body { max-height: none; }
+.dk-note__body a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
+
+/* A clamped body fades into its paper; the fade sits inside the body, so the body is its containing block. */
+.dk-note__fade { display: none; }
+.dk-note.is-clamped:not(.is-expanded) .dk-note__fade {
+  display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; pointer-events: none;
+  background: linear-gradient(transparent, var(--note-paper-user));
+}
+.dk-note--claude.is-clamped:not(.is-expanded) .dk-note__fade { background: linear-gradient(transparent, var(--note-paper-claude)); }
+
+/* Show more / Show less, in the paper's ink. Doubled class: button.css loads after this file. */
+.dk-note .dk-note__more { margin-top: var(--space-xs); color: var(--note-ink); border-color: var(--note-ink-soft); }
+.dk-note .dk-note__more:hover:not(:disabled) { color: var(--note-ink); background: transparent; border-color: var(--note-ink); }
+.dk-note.is-editing .dk-note__more { display: none; }
 .dk-note__body code {
   background: color-mix(in srgb, var(--note-ink) 8%, transparent); padding: 0 3px; border-radius: var(--radius-xs);
   font-family: var(--font-technical); font-size: var(--size-technical-small);
 }
 .dk-note__body p { margin: 0 0 var(--space-xs); }
 
-.dk-note__edit {
+.dk-note__editor {
   width: 100%; min-height: 8em; resize: vertical;
   background: transparent; color: var(--note-ink);
   border: 1px dashed var(--note-ink-soft); border-radius: var(--radius-xs);
@@ -128,6 +145,9 @@
 .dk-empty { color: var(--foreground-subtle); font-size: var(--size-narrator-small); padding: var(--space-md) 0; }
 
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: 44px; }
+}
 @media (max-width: 720px) {
   .dk-desk { padding: var(--space-md); }
   .dk-board { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }

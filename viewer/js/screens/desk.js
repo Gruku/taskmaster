@@ -6,6 +6,7 @@ import { renderBlock } from '../lib/xml-render.js';
 import { buildRails, sortNotes } from '../lib/desk.js';
 import { createNoteCard } from '../components/desk/note-card.js';
 import { createComposer } from '../components/desk/composer.js';
+import { describeWriteError } from '../components/edit/write-errors.js';
 
 export const meta = { title: 'Dashboard', icon: '◧', sidebarKey: 'dashboard' };
 
@@ -13,6 +14,8 @@ export const meta = { title: 'Dashboard', icon: '◧', sidebarKey: 'dashboard' }
 // uncapped list for the rail's entity type.
 const OLDER_TARGET = { resume: '#/sessions', review: '#/table', decide: '#/table', cleanup: '#/issues' };
 const RAIL_LABEL = { resume: 'Resume', review: 'Review', decide: 'Decide', cleanup: 'Clean-up' };
+// The note controls a board refresh puts focus back on.
+const NOTE_CONTROLS = ['dk-note__edit', 'dk-note__pin', 'dk-note__archive', 'dk-note__more'];
 
 export async function mount(root, { store, api }) {
   root.classList.add('dk-desk');
@@ -40,22 +43,57 @@ export async function mount(root, { store, api }) {
   }
 
   // ── Board (sticky notes) ─────────────────────────────────────────────────
-  const composer = createComposer({
-    onCreate: async (text) => { await api.createNote(text); await refreshBoard(); },
-  });
+  // A refused write is said here in words; the note or composer that made it keeps what was typed.
+  const errorEl = h('p', { class: 'dk-board-error', role: 'alert' });
 
+  // Every note write: resolves true once it went through (the board is refreshed), false when it was refused.
+  async function act(fn) {
+    try {
+      await fn();
+    } catch (e) {
+      errorEl.textContent = describeWriteError(e, { noun: 'note' });
+      return false;
+    }
+    errorEl.textContent = '';
+    await refreshBoard();
+    return true;
+  }
+
+  // Notes the person expanded stay expanded across redraws.
+  const expandedNotes = new Set();
+
+  const composer = createComposer({ onCreate: (text) => act(() => api.createNote(text)) });
+
+  // The error line and the composer stay in place across redraws, so the composer keeps its focus and its text.
+  // A focused note control is focused again on the redrawn note; when that note is gone, the composer takes focus.
   function renderBoard() {
-    boardEl.replaceChildren(composer.root);
+    const active = document.activeElement;
+    const focusedNote = boardEl.contains(active) ? active.closest('[data-note-id]')?.dataset.noteId : null;
+    const focusedControl = focusedNote ? NOTE_CONTROLS.find((c) => active.classList.contains(c)) : null;
+
+    for (const el of [...boardEl.children]) if (el !== errorEl && el !== composer.root) el.remove();
+    if (errorEl.parentNode !== boardEl || composer.root.parentNode !== boardEl) boardEl.prepend(errorEl, composer.root);
+    const cards = new Map();
     for (const note of sortNotes(notes)) {
       const card = createNoteCard({
         note,
-        onPin: async (n) => { await api.updateNote(n.id, { pinned: !n.pinned }); await refreshBoard(); },
-        onArchive: async (n) => { await api.archiveNote(n.id); await refreshBoard(); },
-        onSave: async (n, text) => { await api.updateNote(n.id, { text }); await refreshBoard(); },
+        onPin: (n) => act(() => api.updateNote(n.id, { pinned: !n.pinned })),
+        onArchive: (n) => act(() => api.archiveNote(n.id)),
+        onSave: (n, text) => act(() => api.updateNote(n.id, { text })),
+        expanded: expandedNotes.has(note.id),
+        onExpand: (open) => { if (open) expandedNotes.add(note.id); else expandedNotes.delete(note.id); },
       });
+      cards.set(note.id, card);
       boardEl.appendChild(card.root);
     }
+    // Measured now rather than a frame later, so a remembered "Show more" exists to take focus back.
+    for (const card of cards.values()) card.measure();
     if (notes.length === 0) boardEl.appendChild(h('p', { class: 'dk-empty' }, 'Your desk is clear.'));
+
+    if (!focusedNote) return;
+    const card = cards.get(focusedNote)?.root;
+    if (!card) { composer.focus(); return; }
+    (card.querySelector(`.${focusedControl}`) || card.querySelector('.dk-note__edit')).focus();
   }
   async function refreshBoard() { await loadNotes(); renderBoard(); }
 
@@ -165,7 +203,9 @@ export async function mount(root, { store, api }) {
   await Promise.all([loadNotes(), loadItems()]);
   renderBoard();
   await renderBand();
-  composer.focus();
 
-  return async () => {};
+  // Leaving with a note mid-edit: blurring its editor saves it, once, before the screen is torn down.
+  return async () => {
+    if (boardEl.contains(document.activeElement)) document.activeElement.blur();
+  };
 }
