@@ -27,6 +27,12 @@ test('filterRail: a named group whose clear button sits last, hidden', () => {
   assert.equal(clear.querySelector('svg.icon').getAttribute('width'), '14');
 });
 
+test('filterRail: no argument is fine', () => {
+  const rail = filterRail();
+  assert.equal(rail.el.getAttribute('aria-label'), 'Filters');
+  click(rail.el.querySelector('.list-filters__clear'));
+});
+
 test('filterRail: a custom label names the group', () => {
   assert.equal(filterRail({ label: 'Bug filters' }).el.getAttribute('aria-label'), 'Bug filters');
 });

@@ -68,19 +68,75 @@ test('keepFocus: the scope itself focused does not count', () => {
   assert.equal(document.activeElement, scope);
 });
 
-test('keepFocus: nothing matching after the redraw → false, nothing moved', () => {
+test('keepFocus: of several same-key elements, the one at the same position wins', () => {
+  const markup = '<a href="#/bug/B-1">title</a><a href="#/bug/B-1">open</a>';
+  const scope = setup(markup);
+  scope.querySelectorAll('a')[1].focus();
+  const restore = keepFocus(scope);
+  fresh(scope, markup);
+  assert.equal(restore(), true);
+  assert.equal(document.activeElement, scope.querySelectorAll('a')[1]);
+});
+
+test('keepFocus: fewer same-key elements after the redraw → the first of them', () => {
+  const scope = setup('<a href="#/bug/B-1">title</a><a href="#/bug/B-1">open</a>');
+  scope.querySelectorAll('a')[1].focus();
+  const restore = keepFocus(scope);
+  fresh(scope, '<a href="#/bug/B-1">title</a>');
+  assert.equal(restore(), true);
+  assert.equal(document.activeElement, scope.querySelector('a'));
+});
+
+test('keepFocus: nothing matching → false, focus goes to the scope (made focusable), not <body>', () => {
   const scope = setup('<button data-focus="gone">g</button>');
   scope.querySelector('button').focus();
   const restore = keepFocus(scope);
   fresh(scope, '<button data-focus="other">o</button>');
   assert.equal(restore(), false);
-  assert.equal(document.activeElement, document.body);
+  assert.equal(scope.getAttribute('tabindex'), '-1');
+  assert.equal(document.activeElement, scope);
 });
 
-test('keepFocus: a focused element with neither key → false', () => {
+test('keepFocus: a scope that is already focusable keeps its own tabindex', () => {
+  const scope = setup('<button data-focus="gone">g</button>');
+  scope.setAttribute('tabindex', '0');
+  scope.querySelector('button').focus();
+  const restore = keepFocus(scope);
+  fresh(scope, '');
+  assert.equal(restore(), false);
+  assert.equal(scope.getAttribute('tabindex'), '0');
+  assert.equal(document.activeElement, scope);
+});
+
+test('keepFocus: nothing matching → false, focus goes to the fallback (element or function)', () => {
+  for (const make of [(el) => el, (el) => () => el]) {
+    const scope = setup('<button data-focus="gone">g</button>');
+    const spare = document.createElement('button');
+    document.body.append(spare);
+    scope.querySelector('button').focus();
+    const restore = keepFocus(scope, { fallback: make(spare) });
+    fresh(scope, '');
+    assert.equal(restore(), false);
+    assert.equal(document.activeElement, spare);
+    assert.equal(scope.hasAttribute('tabindex'), false);
+  }
+});
+
+test('keepFocus: a focused element with neither key → false, focus goes to the scope once lost', () => {
   const scope = setup('<input>');
   scope.querySelector('input').focus();
   const restore = keepFocus(scope);
   fresh(scope, '<input>');
   assert.equal(restore(), false);
+  assert.equal(document.activeElement, scope);
+});
+
+test('keepFocus: focus that was not lost in the redraw is left alone', () => {
+  const scope = setup('<input>');
+  const input = scope.querySelector('input');
+  input.focus();
+  const restore = keepFocus(scope);
+  assert.equal(restore(), false);
+  assert.equal(document.activeElement, input);
+  assert.equal(scope.hasAttribute('tabindex'), false);
 });

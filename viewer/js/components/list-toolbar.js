@@ -5,7 +5,7 @@ import { icon } from './icon.js';
 
 let seq = 0;
 
-export function filterRail({ label = 'Filters', onClear }) {
+export function filterRail({ label = 'Filters', onClear } = {}) {
   const clear = h('button', { type: 'button', class: 'btn btn--ghost btn--sm list-filters__clear' },
     icon('dismiss', { size: 14 }), 'Clear filters');
   clear.hidden = true;
