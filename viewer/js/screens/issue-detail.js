@@ -136,7 +136,8 @@ export function mount(root, { params, store, prefs, subpath }) {
   if (!id) {
     root.replaceChildren(stateBlock({ state: 'empty', label: 'Issue', headline: 'No issue open', hint: 'Pick one from the Issues board.', action: TO_ISSUES }));
   } else {
-    root.replaceChildren();
+    // Said while the first read runs, so the page is never a blank mount.
+    root.replaceChildren(stateBlock({ headline: 'Loading…', busy: true }));
     void load();
   }
 

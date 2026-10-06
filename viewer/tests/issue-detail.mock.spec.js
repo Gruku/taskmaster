@@ -68,6 +68,10 @@ test('ISS-999 is not found in words, and a failed load says so without the serve
   await expect(missing.locator('.tm-empty__label')).toHaveText('ISS-999');
   await expect(missing.locator('.tm-empty__headline')).toHaveText('Issue not found');
   await expect(missing.getByRole('link', { name: 'Open Issues' })).toBeVisible();
+  // Writes are debounced: open a real issue and wait for its write, so a missing one's write would have landed by now.
+  await page.evaluate(() => { location.hash = '#/issue/ISS-012'; });
+  await expect(mount(page).locator('h1')).toHaveText(ISSUE.title);
+  await expect.poll(() => puts.some((b) => b.includes('ISS-012')), { timeout: 5000 }).toBe(true);
   expect(puts.filter((b) => b.includes('ISS-999'))).toEqual([]);
 
   const fresh = await context.newPage();
@@ -81,6 +85,9 @@ test('ISS-999 is not found in words, and a failed load says so without the serve
   const failed = mount(fresh).locator('.tm-empty[data-state="error"]');
   await expect(failed).toBeVisible();
   for (const word of ['Traceback', '500', '/api']) await expect(mount(fresh)).not.toContainText(word);
+  // A second failure after Try again lands focus on the new Try again, never <body>.
+  await failed.getByRole('button', { name: 'Try again' }).click();
+  await expect(mount(fresh).locator('.tm-empty[data-state="error"] button')).toBeFocused();
   await fresh.unroute('**/api/issues*', fail);
   await failed.getByRole('button', { name: 'Try again' }).click();
   await expect(mount(fresh).locator('h1')).toHaveText(ISSUE.title);
