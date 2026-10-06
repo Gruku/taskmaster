@@ -546,3 +546,46 @@ export const LONG_IDEAS = Array.from({ length: 31 }, (_, i) => ({
 // The table plan 4's a11y gate reuses for #/ideas; loaded when `.ideas__list .idea-row` is visible.
 export const ideasMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/ideas': { ideas: LIST_IDEAS }, '/api/board': BOARD, '/api/backlog': BOARD,
   '/api/task/T-111/detail': taskDetail({ ...DONE_TASK, id: 'T-111' }) });
+// ── Plan 3b: Table and Epics route tables (plan 4's gate calls each once per theme) ──
+// BOARD plus twelve epics "Epic A"…"Epic L"; every one but Epic L has a task, and the extra tasks carry areas so all
+// four chip groups are drawn.
+const TABLE_LETTERS = 'ABCDEFGHIJKL'.split('');
+const TABLE_STATUSES = ['todo', 'done', 'blocked', 'in-progress', 'in-review'];
+const TABLE_PRIORITIES = ['low', 'medium', 'high', 'critical'];
+const TABLE_AREAS = ['viewer-ui', 'store', 'docs'];
+export const TABLE_BOARD = {
+  ...BOARD,
+  epics: [...BOARD.epics, ...TABLE_LETTERS.map((l) => ({ id: `epic-${l.toLowerCase()}`, name: `Epic ${l}`, status: 'active', phase: 'P1' }))],
+  tasks: [...BOARD.tasks, ...TABLE_LETTERS.slice(0, 11).map((l, i) => ({
+    id: `T-${201 + i}`, title: `Extra task ${l}`, status: TABLE_STATUSES[i % 5], priority: TABLE_PRIORITIES[i % 4],
+    epic: `epic-${l.toLowerCase()}`, area: TABLE_AREAS[i % 3], phase: 'P1', depends_on: [],
+  }))],
+};
+
+// #/table; loaded when `table.tbl .tbl-row` is visible. `table` is the saved Table prefs (sort, columns, filters).
+export const tableMocks = ({ theme = 'dark', board = TABLE_BOARD, table } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...(table ? { table } : {}) },
+  '/api/board': board, '/api/backlog': board, '/api/bugs': [],
+  '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
+});
+
+// BOARD plus an epic with no tasks, one whose tasks are all closed, a planned one, an unknown status and a bare one.
+export const EPICS_BOARD = {
+  ...BOARD,
+  epics: [...BOARD.epics,
+    { id: 'empty', name: 'No tasks yet', status: 'active' },
+    { id: 'closed', name: 'All closed', status: 'active', done_when: 'Both tasks are done.' },
+    { id: 'later', name: 'Planned work', status: 'planned' },
+    { id: 'odd', name: 'Odd status', status: 'paused' },
+    { id: 'bare' }],
+  tasks: [...BOARD.tasks,
+    { id: 'T-301', title: 'Closed one', status: 'done', priority: 'low', epic: 'closed', phase: 'P1', depends_on: [] },
+    { id: 'T-302', title: 'Closed two', status: 'archived', priority: 'low', epic: 'closed', phase: 'P1', depends_on: [] }],
+};
+
+// #/epics; loaded when `.epic-row .link-row__link` is visible.
+export const epicsMocks = ({ theme = 'dark', board = EPICS_BOARD } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/board': board, '/api/backlog': board, '/api/bugs': [],
+  '/api/epic/viewer': epicPayload(board, 'viewer'),
+});

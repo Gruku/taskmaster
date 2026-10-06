@@ -5,36 +5,19 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, TABLE_BOARD, tableMocks } from './mock-fixtures.js';
 import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
-// BOARD plus twelve epics "Epic A"…"Epic L"; every one but Epic L has a task, and the extra tasks carry areas so all
-// four chip groups are drawn.
-const LETTERS = 'ABCDEFGHIJKL'.split('');
-const STATUSES = ['todo', 'done', 'blocked', 'in-progress', 'in-review'];
-const PRIORITIES = ['low', 'medium', 'high', 'critical'];
-const AREAS = ['viewer-ui', 'store', 'docs'];
-const TABLE_BOARD = {
-  ...BOARD,
-  epics: [...BOARD.epics, ...LETTERS.map((l) => ({ id: `epic-${l.toLowerCase()}`, name: `Epic ${l}`, status: 'active', phase: 'P1' }))],
-  tasks: [...BOARD.tasks, ...LETTERS.slice(0, 11).map((l, i) => ({
-    id: `T-${201 + i}`, title: `Extra task ${l}`, status: STATUSES[i % 5], priority: PRIORITIES[i % 4],
-    epic: `epic-${l.toLowerCase()}`, area: AREAS[i % 3], phase: 'P1', depends_on: [],
-  }))],
-};
+// TABLE_BOARD (mock-fixtures.js): BOARD plus twelve epics "Epic A"…"Epic L"; every one but Epic L has a task.
 
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/table', table, board = TABLE_BOARD } = {}) {
   await page.setViewportSize({ width, height });
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...(table ? { table } : {}) },
-    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
-    '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
-  });
+  await mockApi(page, tableMocks({ theme, board, table }));
   const puts = [];
   page.on('request', (r) => {
     if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/viewer/prefs') puts.push(JSON.parse(r.postData() || '{}'));
@@ -219,7 +202,9 @@ test('leaving the Table, even with More open, leaves no observer or font listene
   const fontsBefore = await page.evaluate(() => window.__fonts);
   await page.evaluate(() => { location.hash = '#/table'; });
   await expect(page.locator('.tbl-row').first()).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore + 4);
+  // Kanban → Table swaps font listeners: the Kanban's phase strip (one overflowRow) unmounts
+  // and drops its listener; the Table's four chip-group overflowRows each add one.
+  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore - 1 + 4);
   await group(page, 'Epic').locator('.overflow-more').click();
   await expect(page.getByRole('dialog', { name: 'More Epic' })).toBeVisible();
   // Live observers on the rail itself (the Table's own) and on each row's chips (overflowRow's).
@@ -560,6 +545,33 @@ test('at 390 with 230 long rows nothing scrolls sideways, no ID is cut, and the 
     return { top: b.top >= document.querySelector('.topbar').getBoundingClientRect().bottom, bottom: b.bottom <= innerHeight + 0.5 };
   });
   expect(last).toEqual({ top: true, bottom: true });
+  // The topbar is sticky, not merely scrolled off: part-way down the page it still sits flush with the top edge.
+  await page.evaluate(() => window.scrollTo(0, 3000));
+  const stuck = await page.evaluate(() => ({ scrolled: scrollY > 0, top: document.querySelector('.topbar').getBoundingClientRect().top }));
+  expect(stuck).toEqual({ scrolled: true, top: 0 });
+});
+
+// A saved sort naming a gone or unsortable column (or a bad direction) falls back to the default instead of leaving
+// the phone Sort select blank.
+for (const sort of [{ by: 'bogus', dir: 'asc' }, { by: 'branch', dir: 'asc' }, { by: 'title', dir: 'up' }]) {
+  test(`a stale saved sort ${sort.by}:${sort.dir} falls back to priority ascending`, async ({ page }) => {
+    await boot(page, { width: 390, height: 844, table: { sort } });
+    await expect(page.locator('#tbl-sort')).toHaveValue('priority:asc');
+  });
+}
+
+test('at 1440 a stale saved sort leaves the default column marked and the rows in default order', async ({ page }) => {
+  const read = () => page.evaluate(() => ({
+    marked: [...document.querySelectorAll('th[aria-sort]')].map((th) => `${th.dataset.key}:${th.getAttribute('aria-sort')}`),
+    rows: [...document.querySelectorAll('tbody tr')].slice(0, 8).map((tr) => tr.innerText.replace(/\s+/g, ' ').trim()),
+  }));
+  await boot(page, { width: 1440, height: 900 });
+  const fresh = await read();
+  await boot(page, { width: 1440, height: 900, table: { sort: { by: 'bogus', dir: 'asc' } } });
+  const stale = await read();
+  expect(fresh.marked).toEqual(['priority:ascending']);
+  expect(fresh.rows.length).toBeGreaterThan(1);
+  expect(stale).toEqual(fresh);
 });
 
 test('at 390 a redraw keeps the keyboard on the same card and the page where it was', async ({ page }) => {

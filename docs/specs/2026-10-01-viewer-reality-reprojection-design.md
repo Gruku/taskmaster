@@ -230,3 +230,7 @@ These override the sections they name.
 - **§5.3 chips (plan 2b).** A chip's `title` is its full label; the shift-click hint moves to the group label.
 - **§4 topbar row 2 (plan 2b).** Row 2 parks what does not fit behind "Filters", in order, and brings it back when room returns; the search field always stays in the row.
 - **§9 Table (plan 2b).** The Table adopts chips and sortable headers in plan 2b as the proving consumer of those components; its layout (§6 Table) stays in plan 3b.
+- **§5.6 / §6 Table (plan 3b).** Table rows stay `<tr>` (sortable `th` with `aria-sort` need table semantics, and a `<tr>` cannot hold a link as a direct child); each row's title is its one link and a click elsewhere on the row is forwarded to it. Rows open per the detail-view setting, like Kanban cards.
+- **§6 Table at ≤768px (plan 3b).** A card shows ID, priority, title (2 lines), status, size and epic; phase, area, branch and started are left to the detail. The header row gives way to a labelled Sort select.
+- **§5.1 epics (plan 3b).** The lifecycle map (`active` ◐, `planned` ○, `done` ●, `archived` ✕) lives in `lib/epic-format.js` beside the epic figures; a missing status reads "Active". The design status is a tag "Design · <word>" on Epic detail only.
+- **§6 Epic detail / §7 (plan 3b).** Every figure is counted from the task list the page draws (`epicStats(epic.tasks)`), not the server's `stats`; Done and Archived groups start collapsed.
