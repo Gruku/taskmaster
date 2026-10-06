@@ -120,6 +120,7 @@
   .issue-row > .link-row__link { min-height: 44px; }
   .issue-card__more,
   .issue-card__ref { display: inline-flex; align-items: center; }
-  .issue-row > .link-row__link { grid-template-columns: max-content max-content; }
+  /* Not max-content twice: the title spans both tracks and would size them to its whole line, pushing the severity out. */
+  .issue-row > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
   .issue-row__title { grid-column: 1 / -1; }
 }

@@ -1,20 +1,21 @@
-// Pure groupers for the Issues screen kanban views.
-// Status grouping mirrors the issue-lifecycle states; Severity grouping
-// mirrors the four severity labels used by the rest of the viewer.
+// Pure groupers for the Issues board's columns.
+// Status grouping has every issue-lifecycle state the server knows (duplicate included); Severity grouping uses the
+// lower-case severity keys of status.js, so a 'P2' and a 'Medium' land in the same column.
+import { issueSeverity } from './issues-filter.js';
 
 export function groupByStatus(issues) {
-  const out = { open: [], investigating: [], fixed: [], wontfix: [] };
-  for (const i of issues) {
-    if (i.status in out) out[i.status].push(i);
+  const out = { open: [], investigating: [], fixed: [], wontfix: [], duplicate: [] };
+  for (const i of issues ?? []) {
+    if (Object.hasOwn(out, i?.status)) out[i.status].push(i);
   }
   return out;
 }
 
 export function groupBySeverity(issues) {
-  const out = { Critical: [], High: [], Medium: [], Low: [] };
-  for (const i of issues) {
-    const lbl = i.severity_label;
-    if (lbl && lbl in out) out[lbl].push(i);
+  const out = { critical: [], high: [], medium: [], low: [] };
+  for (const i of issues ?? []) {
+    const key = issueSeverity(i);
+    if (key) out[key].push(i);
   }
   return out;
 }

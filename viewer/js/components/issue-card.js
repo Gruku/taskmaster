@@ -77,9 +77,11 @@ const evidenceId = (id) => `issue-evidence-${String(id ?? '').replace(/[^A-Za-z0
 /**
  * An open or investigating issue as a link-row card. The screen owns which cards are expanded: `onToggleEvidence(id)`
  * asks it to flip one and redraw. `showStatus` adds the status marker (for views that mix statuses in one list).
+ * `revealed`: the screen saw this card's evidence cut when it last drew it, so "Show all" shows at once — a redraw then
+ * neither blinks it out for a frame nor loses the focus that was on it.
  */
-export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = false, onToggleEvidence, showStatus = false,
-  now = Date.now() } = {}) {
+export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = false, revealed = false, onToggleEvidence,
+  showStatus = false, now = Date.now() } = {}) {
   const name = span('issue-card__name');
   const line = span('issue-card__line');
   line.append(span('issue-card__id', issue.id));
@@ -106,7 +108,8 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   if (text) {
     evidence = truncate(text, { lines: 3, tag: 'p', className: 'issue-card__evidence' });
     evidence.id = evidenceId(issue.id);
-    if (expanded) evidence.classList.remove('truncate--3');
+    // Both classes: `.truncate` alone is the one-line cut, so an expanded card showing all of it drops it too.
+    if (expanded) evidence.classList.remove('truncate', 'truncate--3');
     content.push(evidence);
 
     toggle = document.createElement('button');
@@ -116,7 +119,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
     toggle.setAttribute('aria-expanded', String(!!expanded));
     toggle.dataset.focus = `evidence:${issue.id}`;
     toggle.textContent = expanded ? 'Show less' : 'Show all';
-    toggle.hidden = !expanded;
+    toggle.hidden = !expanded && !revealed;
     toggle.addEventListener('click', () => onToggleEvidence?.(issue.id));
     controls.push(toggle);
   }
@@ -125,7 +128,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   const card = linkRow({ tag: 'article', className: 'issue-card', href: issueHref(issue.id), name, content, controls });
   card.dataset.issueId = issue.id;
   card.dataset.status = issue.status || 'open';
-  if (toggle && !expanded) revealWhenCut(card, evidence, toggle);
+  if (toggle?.hidden) revealWhenCut(card, evidence, toggle);
   return card;
 }
 
