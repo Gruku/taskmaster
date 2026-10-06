@@ -434,7 +434,7 @@ for (const theme of ['dark', 'light']) {
 
 // ── Review round 1 ────────────────────────────────────────────────────────────────────────────────────────────────
 
-const subcount = (page) => page.locator('.tm-subcount');
+const subcount = (page) => page.locator('#topbar-count');
 const searchBox = (page) => page.getByPlaceholder('Filter… (prefix ! to exclude)');
 
 test('the count says how many show only while a chip, the search or a ?status= link narrows the list', async ({ page }) => {
@@ -615,3 +615,51 @@ for (const theme of ['dark', 'light']) {
     expect(v.map((x) => `${x.id}: ${x.nodes.length}`)).toEqual([]);
   });
 }
+
+// Task 7: the Table's primary and its count live in topbar row 1; row 2 is the search (and the Filters button the
+// overflow row keeps there). The count names the whole list and adds " · m visible" only while a filter narrows it.
+for (const width of [1440, 390]) {
+  test(`at ${width}px Add task and the task count are in topbar row 1; row 2 is the search`, async ({ page }) => {
+    await boot(page, { width, height: width === 390 ? 844 : 900 });
+    await expect(page.locator('table.tbl')).toBeVisible();
+    const add = page.locator('#topbar-primary [aria-label="Add task"]');
+    await expect(add).toBeVisible();
+    await expect(add).toHaveClass(/\bbtn\b/);
+    await expect(add).toHaveClass(/\bbtn--primary\b/);
+    if (width === 390) {
+      const box = await add.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    const count = page.locator('#topbar-count');
+    const n = TABLE_BOARD.tasks.length;
+    await expect(count).toHaveText(`${n} tasks`);
+    await expect(count).toHaveAttribute('title', `${n} tasks`);
+    // At 390 each chip group is an overflow row of its own: Done may sit behind the Status group's More.
+    if (!(await chip(page, 'Status', 'done').isVisible())) await page.getByRole('button', { name: /^More Status/ }).click();
+    await chip(page, 'Status', 'done').click();
+    await expect(count).toHaveText(`${n} tasks · 3 visible`);
+    await page.keyboard.press('Escape');
+    const kids = await page.locator('#topbar-actions > *').evaluateAll((els) => els.map((el) => el.className));
+    expect(kids).toHaveLength(2);
+    expect(kids.some((c) => /\btm-search\b/.test(c))).toBe(true);
+    expect(kids.some((c) => /\boverflow-more\b/.test(c))).toBe(true);
+    await expect(page.locator('.tm-subcount')).toHaveCount(0);
+    if (width === 390) {
+      expect(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await add.click();
+    await expect(page.getByRole('dialog', { name: 'Create task' })).toBeVisible();
+  });
+}
+
+test('leaving the Table for Epics takes Add task out of row 1 and replaces the count', async ({ page }) => {
+  await boot(page);
+  await expect(page.locator('#topbar-primary [aria-label="Add task"]')).toBeVisible();
+  await expect(page.locator('#topbar-count')).toHaveText(`${TABLE_BOARD.tasks.length} tasks`);
+  await page.evaluate(() => { location.hash = '#/epics'; });
+  await expect(page.locator('#page-title')).toHaveText('Epics');
+  await expect(page.locator('#topbar-primary [aria-label="Add task"]')).toHaveCount(0);
+  await expect(page.locator('#topbar-primary')).toBeEmpty();
+  await expect(page.locator('#topbar-count')).toHaveText(`${TABLE_BOARD.epics.length} epics`);
+});

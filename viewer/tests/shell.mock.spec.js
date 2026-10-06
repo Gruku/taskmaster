@@ -537,23 +537,14 @@ test('row 2 never scrolls sideways or wraps, and a row holding only the hidden F
 test.describe('topbar row 2 at phone width', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('on the Table the search and Filters stay; the rest is in the Filters popover and works there', async ({ page }) => {
+  test('on the Table at 390 the primary is in row 1 and row 2 is the search alone', async ({ page }) => {
     await mockApi(page, withContent());
     await page.goto('/#/table');
-    const search = page.locator('#topbar-actions > .tm-search');
-    await expect(search).toBeVisible();
-    await expect(filters(page)).toBeVisible();
-    await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
-    // What did not fit is out of the row until Filters opens.
-    await expect(page.locator('#topbar-actions > [aria-label="Add task"]')).toHaveCount(0);
-    await filters(page).click();
-    const pop = filtersPopover(page);
-    await expect(pop).toBeVisible();
-    await expect(pop.locator('.tm-subcount')).toBeVisible();
-    const add = pop.locator('[aria-label="Add task"]');
+    const add = page.locator('#topbar-primary [aria-label="Add task"]');
     await expect(add).toBeVisible();
-    // The count parked first is no control: focus goes on to the first one that is.
-    await expect(add).toBeFocused();
+    await expect(page.locator('#topbar-actions > .tm-search')).toBeVisible();
+    await expect(filters(page)).toBeHidden();
+    await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
     await add.click();
     await expect(page.getByRole('dialog', { name: 'Create task' })).toBeVisible();
   });
@@ -594,18 +585,28 @@ test.describe('topbar row 2 at phone width', () => {
     page.on('pageerror', (e) => errors.push(String(e)));
     await mockApi(page, withContent());
     await page.goto('/#/table');
+    await expect(page.locator('#topbar-actions > .tm-search')).toBeVisible();
+    // Probes stand in for any screen's own controls, so this holds whatever a screen puts in row 2.
+    await page.evaluate(() => {
+      const row = document.getElementById('topbar-actions');
+      for (const n of [1, 2, 3]) {
+        const b = document.createElement('button');
+        b.className = 'probe-park';
+        b.setAttribute('style', 'flex-shrink: 0; width: 160px');
+        b.textContent = `Probe ${n}`;
+        row.append(b);
+      }
+    });
+    await expect(filters(page)).toBeVisible();
     await filters(page).click();
     await expect(filtersPopover(page)).toBeVisible();
     await page.evaluate(() => { location.hash = '#/kanban'; });
     await expect(page.locator('#page-title')).toHaveText('Kanban');
+    await expect(page.locator('.probe-park')).toHaveCount(0);
     await expect(page.locator('[placeholder="Filter… (prefix ! to exclude)"]')).toHaveCount(0);
     await expect(page.locator('.popover')).toHaveCount(0);
     await expect(page.locator('#topbar-actions > .tm-search input')).toBeVisible();
     await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
-    // Kanban's own controls were laid out afresh: what is parked is Kanban's, and Filters lists them.
-    await filters(page).click();
-    await expect(filtersPopover(page).locator('[aria-label="Add task"]')).toHaveCount(1);
-    await expect(filtersPopover(page).locator('.tm-subcount')).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 
@@ -678,11 +679,11 @@ test('at desktop width the Table parks nothing and Filters is hidden', async ({ 
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, withContent());
   await page.goto('/#/table');
-  await expect(page.locator('#topbar-actions [aria-label="Add task"]')).toBeVisible();
+  await expect(page.locator('#topbar-primary [aria-label="Add task"]')).toBeVisible();
+  await expect(page.locator('#topbar-count')).not.toBeEmpty();
   await expect(filters(page)).toHaveCount(1);
   await expect(filters(page)).toBeHidden();
   // Parked controls leave the document, so the row is checked from what stays: everything, and a count of none.
-  await expect(page.locator('#topbar-actions > .tm-subcount')).toBeVisible();
   await expect(filters(page).locator('.overflow-more__count')).toHaveText('0');
   expect(await rowFits(page)).toEqual({ overflow: 0, cut: [] });
 });
@@ -691,6 +692,16 @@ test('a topbar control that grows in place is laid out again', async ({ page }) 
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, withContent());
   await page.goto('/#/table');
+  await expect(filters(page)).toBeHidden();
+  // The Table has painted (its count is set), so no later mount clears the probe from the row.
+  await expect(page.locator('table.tbl')).toBeVisible();
+  await expect(page.locator('#topbar-count')).not.toBeEmpty();
+  await page.evaluate(() => {
+    const span = document.createElement('span');
+    span.className = 'tm-subcount';
+    span.textContent = 'x';
+    document.getElementById('topbar-actions').append(span);
+  });
   await expect(filters(page)).toBeHidden();
   // A count's new text changes its width without adding or removing anything from the row.
   await page.locator('#topbar-actions > .tm-subcount').evaluate((el) => { el.textContent = 'a very long count '.repeat(12); });

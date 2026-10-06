@@ -2,7 +2,7 @@
 // Reads /api/backlog (via store), renders a sortable+filterable table.
 // Persisted state lives under prefs.table.
 
-import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
+import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { formatAbsolute } from '../lib/time.js';
 import { stateBlock } from '../components/empty-state.js';
@@ -76,9 +76,8 @@ export async function mount(root, { store, api, prefs, params }) {
   const screen = document.createElement('section');
   screen.className = 'tbl-screen';
 
-  // ── Topbar (#topbar-actions) ─────────────────────────────────
+  // ── Topbar: Add task and the count in row 1, the search in row 2 ─
   const topbar = claimTopbar();
-  const subcount = tmSubcount('… tasks');
   const searchBuilt = tmSearch({
     placeholder: 'Filter… (prefix ! to exclude)',
     onInput: (v) => { state.search = v; paint(); persist(); },
@@ -88,9 +87,8 @@ export async function mount(root, { store, api, prefs, params }) {
     icon: 'plus', label: 'Task', variant: 'primary', title: 'Add task',
     onClick: () => openTaskCreateModal({ store, api }),
   });
-  topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(newTaskBtn);
+  claimTopbarPrimary()?.append(newTaskBtn);
 
   // ── Filter chip rail ──────────────────────────────────────────
   // One chipRow per group, made the first time the group has options and updated in place on every paint, so focus
@@ -424,7 +422,7 @@ export async function mount(root, { store, api, prefs, params }) {
     const sorted   = sortTasks(filtered);
 
     // "n tasks", and how many show only while a chip, the search or a ?status= link narrows the list.
-    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')}${hasFilters() ? ` · ${filtered.length} visible` : ''}`;
+    setTopbarCount(`${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')}${hasFilters() ? ` · ${filtered.length} visible` : ''}`);
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
     sortSelect.value = `${state.sort.by}:${state.sort.dir}`;
