@@ -116,6 +116,29 @@ test('keyboard: a session row opened with Enter gets focus back when Escape clos
   await expect(page.locator('#screen-mount [aria-controls]')).toHaveCount(0);
 });
 
+test('closing the rail cancels a detail still loading: it lands and the rail stays closed', async ({ page }) => {
+  await boot(page);
+  await sessionRow(page, 'team-relayout').click();
+  await expect(rail(page).locator('h2.rr-title')).toBeVisible();
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let asked;
+  const requested = new Promise((r) => { asked = r; });
+  await page.route('**/api/sessions/guard-hooks-polish', async (route) => { asked(); await held; await route.fallback(); });
+  await sessionRow(page, 'guard-hooks-polish').click();
+  await requested;
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+
+  const answered = page.waitForResponse('**/api/sessions/guard-hooks-polish');
+  release();
+  await answered;
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+  await expect(page.locator('#screen-mount [aria-current]')).toHaveCount(0);
+});
+
 test('the mark moves with the rail: a handover opened from a session\'s rail is the marked row', async ({ page }) => {
   await boot(page);
   await sessionRow(page, 'team-relayout').click();
