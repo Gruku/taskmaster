@@ -1,7 +1,7 @@
 /* User intent: the phone column switcher — at 768px and below a board shows one column at a time behind a row of
    tabs with counts that scrolls inside itself; above that, or with fewer than two columns, the row is gone. */
 
-.column-tabs { display: none; --column-tabs-fade: var(--surface-recessed); }
+.column-tabs { display: none; }
 
 @media (max-width: 768px) {
   .column-tabs:not([hidden]) {
