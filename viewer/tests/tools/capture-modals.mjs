@@ -249,7 +249,7 @@ const ALL_SCENES = [
   ['epic-detail-long', { open: openScreen('#/epic/epic-01', '.ed-head'), routes: longIdsBoard, fullPage: true, scope: '#screen-mount' }],
   ['epic-modal', { open: openScreen('#/epics', '.epic-row'), drive: async (p) => {
     await p.locator('.epic-row').filter({ hasText: 'Viewer re-skin' }).first().click();
-    await p.locator('[role="dialog"], [role="alertdialog"], dialog[open]').last().waitFor();
+    await p.getByRole('dialog').last().waitFor();
   } }],
   ['epic-missing', { open: openScreen('#/epic/nope', '.tm-empty'), scope: '#screen-mount',
     routes: (p) => p.route('**/api/epic/nope*', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'epic not found' } })) }],
