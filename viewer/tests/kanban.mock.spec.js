@@ -543,6 +543,18 @@ test('1440: row 1 has the count, row 2 parks nothing, Group and Sort are named s
   await expect(colLabels(page)).toContainText(['Viewer re-skin', 'Native store']);
 });
 
+test('row-1 count adds "· k visible" while a search narrows the board and drops it when cleared', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const count = page.locator('#topbar-count');
+  await expect(count).toHaveText('7 tasks');
+  await searchBox(page).fill('cutover checklist');
+  await expect(count).toHaveText('7 tasks · 1 visible');
+  await searchBox(page).fill('T-10');
+  await expect(count).toHaveText('7 tasks · 7 visible');
+  await page.locator('.kanban-clear').click();
+  await expect(count).toHaveText('7 tasks');
+});
+
 test('Clear filters keeps the chosen Group: columns stay epics and the select still says Epic', async ({ page }) => {
   await board(page, { viewport: { width: 1440, height: 900 } });
   const group = page.getByRole('combobox', { name: 'Group' });
