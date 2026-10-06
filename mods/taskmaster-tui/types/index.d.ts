@@ -56,6 +56,10 @@ export type TmSnapshot = {
   readonly fetchedAt: number
   readonly queue: readonly TmQueueItem[]
   readonly queueTotal: number
+  /**
+   * The last 5 open handovers, newest first (by `created`), superseded ones left out. Every producer (demo, the tm reader)
+   * keeps this rule: the pane draws the list as given. `handoversTotal` is the server's count of all open handovers.
+   */
   readonly handovers: readonly TmHandover[]
   readonly handoversTotal: number
   readonly bound: TmBound | null
