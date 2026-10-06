@@ -72,6 +72,14 @@ test('Show archived brings archived bugs in, marked', async ({ page }) => {
   await expect(page.locator('#topbar-count')).toHaveText('6 bugs · 2 visible');
 });
 
+test('a bug whose status is archived is reachable: Show archived brings it in with the default chips', async ({ page }) => {
+  await boot(page, { '/api/bugs': [...LIST_BUGS, { id: 'B-040', title: 'Retired bug', status: 'archived', discovered: '2026-01-01' }] });
+  await expect(row(page, 'B-040')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Show archived/ }).click();
+  await expect(row(page, 'B-040')).toBeVisible();
+  await expect(row(page, 'B-040')).toHaveClass(/bug-row--archived/);
+});
+
 test('a severity is a marker and an unset one is nothing', async ({ page }) => {
   await boot(page);
   await expect(row(page, 'B-031').locator('.bug-row__severity .marker__word')).toHaveText('High');
@@ -191,8 +199,11 @@ test('at 390 with 23 long bugs nothing scrolls sideways, every target is 44px an
       targets: [...tall('.bugs .chip'), ...tall('.bugs .overflow-more'), ...tall('.list-filters__clear:not([hidden])'),
         ...tall('.bug-row > .link-row__link'), ...tall('.bug-row__found-in')],
       ids,
+      height: Math.max(document.documentElement.scrollHeight, mount.scrollHeight),
     };
   });
+  // Bounded height: 23 long bugs stay a list a thumb can cross, never a wall.
+  expect(m.height).toBeLessThanOrEqual(8000);
   expect(m.doc).toBeLessThanOrEqual(m.inner);
   expect(m.mountScroll).toBeLessThanOrEqual(m.mountClient);
   expect(m.targets.length).toBeGreaterThan(23 * 2);

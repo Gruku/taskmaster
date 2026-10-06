@@ -63,6 +63,45 @@ test('rows are links with markers, tags and age; an idea with no status has no m
   await expect(rowOf(page, 'IDEA-1').locator('time.idea-row__age')).toBeVisible();
 });
 
+test('at 1440 with the pane open each row stacks: the title keeps at least 200px and its metadata goes under it', async ({ page }) => {
+  await boot(page);
+  await link(page, 'IDEA-1').click();
+  await expect(pane(page)).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  const rows = await page.locator('.ideas__list .idea-row').evaluateAll((els) => els.map((row) => {
+    const box = row.getBoundingClientRect();
+    const id = row.querySelector('.idea-row__id');
+    const title = row.querySelector('.idea-row__title');
+    const t = title.getBoundingClientRect();
+    const spill = [...row.querySelectorAll('*')].filter((el) => el.getClientRects().length).some((el) => {
+      const r = el.getBoundingClientRect();
+      return r.left < box.left - 0.5 || r.right > box.right + 0.5;
+    });
+    const lk = row.querySelector('.link-row__link').getBoundingClientRect();
+    const ct = row.querySelector('.link-row__content').getBoundingClientRect();
+    return { id: id.textContent, idCut: id.scrollWidth > id.clientWidth, titleW: t.width, metaBelow: ct.top >= lk.bottom - 1,
+      text: title.textContent.trim().length > 0 && t.height > 0, hasTitle: title.title === title.textContent, spill };
+  }));
+  expect(rows.length).toBeGreaterThan(3);
+  for (const r of rows) {
+    expect(r.titleW, r.id).toBeGreaterThanOrEqual(200);
+    expect(r, r.id).toMatchObject({ idCut: false, text: true, hasTitle: true, spill: false, metaBelow: true });
+  }
+});
+
+test('at 1440 with the pane closed each row keeps its title and metadata on one line', async ({ page }) => {
+  await boot(page);
+  await expect(pane(page)).toBeHidden();
+  await page.evaluate(() => document.fonts.ready);
+  const rows = await page.locator('.ideas__list .idea-row').evaluateAll((els) => els.map((row) => ({
+    id: row.querySelector('.idea-row__id').textContent,
+    dy: Math.abs(row.querySelector('.link-row__content').getBoundingClientRect().top
+      - row.querySelector('.link-row__link').getBoundingClientRect().top),
+  })));
+  expect(rows.length).toBeGreaterThan(3);
+  for (const r of rows) expect(r.dy, r.id).toBeLessThanOrEqual(4);
+});
+
 test('a click selects in place and the address follows', async ({ page, context }) => {
   const gets = await boot(page);
   const before = gets.count;
@@ -99,7 +138,8 @@ test('status chips, Tags and Show archived filter together', async ({ page }) =>
   await choice(page, 'ux').check();
   await expect.poll(() => rowIds(page)).toEqual(['IDEA-3', 'IDEA-1']);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: /^Show archived/ }).click();
+  await expect(tagDialog(page)).toBeHidden();
+  await expect(tagsButton(page)).toBeFocused();
   await page.getByRole('button', { name: /^Clear/ }).click();
   await page.getByRole('button', { name: /^Show archived/ }).click();
   // Show archived alone widens the list: no " · m visible", but Clear is still on offer.
@@ -170,11 +210,9 @@ test('keyboard walk: search, chips, Tags, Show archived, then rows newest first;
     seen.push(d);
     if (d === 'IDEA-2') break;
   }
-  const at = (x) => seen.indexOf(x);
-  for (const x of ['Exploring', 'Candidate', 'Tags', 'Show', 'IDEA-4', 'IDEA-3', 'IDEA-2']) expect(at(x), seen.join(',')).toBeGreaterThanOrEqual(0);
-  expect(at('Exploring')).toBeLessThan(at('Tags'));
-  expect(at('Tags')).toBeLessThan(at('Show'));
-  expect(seen.slice(at('Show') + 1)).toEqual(['IDEA-4', 'IDEA-3', 'IDEA-2']);
+  // The whole order, from the stop right after search: every status chip, then Tags, Show archived (Clear is hidden
+  // while nothing is narrowed), then the rows newest first.
+  expect(seen).toEqual(['Exploring', 'Candidate', 'Parking', 'Tags', 'Show', 'IDEA-4', 'IDEA-3', 'IDEA-2']);
   await page.keyboard.press('Enter');
   await expect(pane(page).getByRole('heading', { level: 2 })).toHaveText('Faster store writes');
   await expect(link(page, 'IDEA-2')).toBeFocused();

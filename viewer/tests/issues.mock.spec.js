@@ -305,6 +305,54 @@ test('at 390 the board is one column behind tabs with counts, and nothing scroll
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('at 390 the Status tab strip fades on the side that can still scroll, and the fade adds no width', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, '/api/issues': { issues: LONG_ISSUES } });
+  await pickView(page, 'Status');
+  const tablist = page.getByRole('tablist', { name: 'Issue columns' });
+  await expect(tablist.getByRole('tab')).toHaveCount(5);
+  const cue = () => tablist.evaluate((el) => ({
+    start: el.classList.contains('column-tabs--more-start') && getComputedStyle(el, '::before').opacity !== '0',
+    end: el.classList.contains('column-tabs--more-end') && getComputedStyle(el, '::after').opacity !== '0',
+    scrolls: el.scrollWidth > el.clientWidth,
+  }));
+  await expect.poll(cue).toMatchObject({ start: false, end: true, scrolls: true });
+  // The fades are overlays: switching them off moves no tab and changes neither a tab's size nor the scroll width.
+  const geometry = () => tablist.evaluate((el) => [el.scrollWidth,
+    ...[...el.children].map((t) => `${t.offsetLeft}:${t.offsetWidth}:${t.offsetHeight}`)]);
+  const withCue = await geometry();
+  await page.addStyleTag({ content: '.column-tabs::before, .column-tabs::after { display: none !important; }' });
+  expect(await geometry()).toEqual(withCue);
+  await page.evaluate(() => document.querySelector('style:last-of-type').remove());
+  await tablist.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect.poll(cue).toMatchObject({ start: true, end: false });
+  await page.setViewportSize({ width: 1200, height: 844 });
+  await expect(tablist).toBeHidden();
+});
+
+test('at 390 the tab names the column: its own heading is hidden on screen, the panel keeps its name, axe passes', async ({ page }) => {
+  await boot(page, { width: 390, height: 844 });
+  const panel = page.locator('.issues-col:visible');
+  await expect(panel).toHaveCount(1);
+  await expect(panel).toHaveAttribute('role', 'tabpanel');
+  const selected = page.getByRole('tablist', { name: 'Issue columns' }).getByRole('tab', { selected: true });
+  const label = await selected.locator('.column-tabs__label').textContent();
+  await expect(panel).toHaveAccessibleName(new RegExp(`^${label}`));
+  const head = await panel.locator('.issues-col__head').boundingBox();
+  expect(head.width <= 1 && head.height <= 1).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const wide = await page.locator('.issues-col__head').first().boundingBox();
+  expect(wide.height).toBeGreaterThan(10);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(axeSource);
+  const result = await page.evaluate(async () => {
+    const aria = window.axe.getRules().map((r) => r.ruleId).filter((id) => id.startsWith('aria-'));
+    const values = ['color-contrast', 'nested-interactive', 'scrollable-region-focusable', 'heading-order', ...aria];
+    return (await window.axe.run(document.getElementById('screen-mount'), { runOnly: { type: 'rule', values },
+      resultTypes: ['violations'] })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+  });
+  expect(result).toEqual([]);
+});
+
 test('at 1440 every column shows, each at least 280px wide', async ({ page }) => {
   await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
   await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Status' }).click();

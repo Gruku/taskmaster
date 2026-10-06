@@ -41,7 +41,8 @@ const haystack = (bug) => [bug.id, bug.title, ...(Array.isArray(bug.components) 
 export function filterBugs(bugs, { statuses = [], archived = false, search = '' } = {}) {
   const q = String(search ?? '').trim().toLowerCase();
   return (bugs ?? []).filter((b) => (archived || !isArchivedBug(b))
-    && (!statuses.length || statuses.includes(statusOf(b)))
+    // No chip is ever 'archived', so a bug whose status is archived is admitted by the toggle alone.
+    && (!statuses.length || statuses.includes(statusOf(b)) || (archived && statusOf(b) === 'archived'))
     && (!q || haystack(b).includes(q)));
 }
 

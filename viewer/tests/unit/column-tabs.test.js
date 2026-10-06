@@ -225,3 +225,22 @@ test('a label with markup is text', () => {
   assert.equal(lab.textContent, '<img src=x onerror=alert(1)>');
   assert.equal(el.querySelector('img'), null);
 });
+
+test('the scroll cue follows scroll events and destroy() drops it and stops listening', () => {
+  const { el, destroy } = mount();
+  const max = 300;
+  let at = 0;
+  Object.defineProperty(el, 'scrollWidth', { configurable: true, get: () => 400 });
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => 100 });
+  Object.defineProperty(el, 'scrollLeft', { configurable: true, get: () => at, set: (v) => { at = v; } });
+  el.dispatchEvent(new window.Event('scroll'));
+  assert.deepEqual([el.classList.contains('column-tabs--more-start'), el.classList.contains('column-tabs--more-end')], [false, true]);
+  at = max;
+  el.dispatchEvent(new window.Event('scroll'));
+  assert.deepEqual([el.classList.contains('column-tabs--more-start'), el.classList.contains('column-tabs--more-end')], [true, false]);
+  destroy();
+  assert.equal(el.classList.contains('column-tabs--more-start'), false);
+  at = 0;
+  el.dispatchEvent(new window.Event('scroll'));
+  assert.equal(el.classList.contains('column-tabs--more-end'), false);
+});

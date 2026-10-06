@@ -86,6 +86,7 @@
   --surface-raised: var(--ground-10);
   --surface-overlay: var(--ground-15);
   --surface-recessed: var(--ground-5);
+  --column-tabs-fade: var(--surface-recessed);
   --border-default: var(--ground-20);
   --border-subtle: var(--ground-15);
   --border-strong: var(--ground-30);

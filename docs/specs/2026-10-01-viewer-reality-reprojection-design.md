@@ -241,3 +241,13 @@ These override the sections they name.
 - **§6 Table at ≤768px (plan 3b).** A card shows ID, priority, title (2 lines), status, size and epic; phase, area, branch and started are left to the detail. The header row gives way to a labelled Sort select.
 - **§5.1 epics (plan 3b).** The lifecycle map (`active` ◐, `planned` ○, `done` ●, `archived` ✕) lives in `lib/epic-format.js` beside the epic figures; a missing status reads "Active". The design status is a tag "Design · <word>" on Epic detail only.
 - **§6 Epic detail / §7 (plan 3b).** Every figure is counted from the task list the page draws (`epicStats(epic.tasks)`), not the server's `stats`; Done and Archived groups start collapsed.
+- **§5.1 (plan 3d).** §6 Ideas "Toolbar: search · status chips · Tags popover · Show archived" and §4 "row 2 = search · view switcher · filters" are read together with the Table's 2b precedent: on Issues, Bugs and Ideas the filters are a rail at the top of the screen, and row 2 keeps the search and the one view control (Issues' View, Bugs' Sort).
+- **§6 Issues (plan 3d).** The card names ID, severity, title and evidence, and keeps status (in the Severity and List views), "blocks n", the stale tag, location and its task/bug links. Impact and repro steps stay on the issue's own page.
+- **§6 Issues (plan 3d).** Status `duplicate` exists server-side; it reads "Duplicate", counts as moved on (→), sits in the resolved shelf, and is a Status-view column whenever any exists.
+- **§6 Issues (plan 3d).** The stale tag shows only for open and investigating issues whose aging tier is Stale, as a warning marker ("stale 45d").
+- **§6 Issues (plan 3d).** Column taglines ("— actively under triage") are dropped; column heads are Technical labels with counts.
+- **§6 Bugs (plan 3d).** Every `BUG_STATUS` value but `archived` is a filter chip; archived bugs (the flag or the status) come in through a "Show archived" toggle, as on Ideas. The default is Open + Shelved pressed. A bug with no severity shows no severity marker.
+- **§6 Bugs (plan 3d).** No chip is ever "archived", so a bug whose status is archived is admitted by "Show archived" alone, whatever status chips are pressed; a bug flagged archived with another status still answers to the chips.
+- **§6 Ideas (plan 3d).** Rows are real links to `#/ideas/<id>`; a plain click selects in place and rewrites the hash with `history.replaceState`, so a new tab or a pasted link opens the same idea. An idea with no status shows no status marker.
+- **§6 Ideas (plan 3d).** The tag filter keeps today's AND semantics, compared case-insensitively. Escape closes the Tags popover and returns focus to the Tags button.
+- **§6 Ideas (plan 3d).** "New idea" is a row-1 action, not part of the filter rail.

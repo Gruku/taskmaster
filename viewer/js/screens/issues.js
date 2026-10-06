@@ -327,6 +327,7 @@ export function mount(root, { store, prefs }) {
     alive = false;
     for (const off of unsubscribe) off();
     mq?.removeEventListener?.('change', onMedia);
+    tabs.destroy();
     severityRow.destroy();
     componentRow.destroy();
   };
