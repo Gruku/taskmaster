@@ -462,3 +462,40 @@ export const LONG_ISSUES = Array.from({ length: 24 }, (_, i) => issue(`ISS-${120
 // The table plan 4's a11y gate reuses for #/issues; loaded when `.issues-col .issue-card` is visible.
 export const issuesMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/issues': { issues: LIST_ISSUES }, '/api/board': BOARD, '/api/backlog': BOARD,
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
+// ── Plan 3e: Sessions ──
+// The table plan 4's a11y gate reuses for #/sessions; loaded when `.ho-child[data-handover-id="2026-07-13-m1-shipped"]`
+// is visible.
+export const sessionsMocks = ({ theme = 'dark' } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/sessions': SESSIONS,
+  '/api/threads': THREADS,
+  ...Object.fromEntries(Object.entries(SESSION_DETAILS).map(([id, d]) => [`/api/sessions/${id}`, d])),
+  '/api/board': BOARD, '/api/backlog': BOARD,
+});
+
+// Review focus 1 for Sessions: `n` sessions a day apart, each id `thread-` + 70 slug characters + its index, a
+// 120-character tldr and two handovers. Deterministic — no Date.now().
+export function manySessions(n) {
+  const slug = 'long-slug-'.repeat(7);
+  const tldr = (lead) => `${lead} — the summary keeps going past the edge of a phone screen and then on again`.repeat(2).slice(0, 120);
+  const sessions = Array.from({ length: n }, (_, i) => {
+    const start = new Date(Date.UTC(2026, 7, 1, 9) + i * 86_400_000);
+    const day = start.toISOString().slice(0, 10);
+    const id = `thread-${slug}${i}`;
+    const handovers = ['a', 'b'].map((k, j) => ({
+      id: `${day}-${slug}${i}-${k}`, status: j ? 'closed' : 'open', viewer_kind: j ? 'checkpoint' : 'mid-task',
+      tldr: tldr(`Handover ${i}${k}`),
+    }));
+    return {
+      id, kind: 'thread', status: 'open', start: start.toISOString(), end: new Date(+start + 3_600_000).toISOString(),
+      duration: 3600, time_resolution: 'full', handover_ids: handovers.map((ho) => ho.id), handovers,
+      task_ids: [`T-${1234 + i}`], tldr: tldr(`Session ${i}`), next_action: '',
+    };
+  });
+  const details = Object.fromEntries(sessions.map((s) => [s.id, {
+    session: s,
+    handovers: s.handovers.map((ho) => sessionHandover(ho.id, ho.viewer_kind, ho.status, ho.tldr, s.start)),
+    task_ids: s.task_ids,
+  }]));
+  return { sessions, details };
+}
