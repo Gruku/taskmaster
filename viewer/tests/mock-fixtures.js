@@ -365,3 +365,21 @@ export const LONG_ISSUES = Array.from({ length: 24 }, (_, i) => issue(`ISS-${120
 // The table plan 4's a11y gate reuses for #/issues; loaded when `.issues-col .issue-card` is visible.
 export const issuesMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/issues': { issues: LIST_ISSUES }, '/api/board': BOARD, '/api/backlog': BOARD,
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
+
+// ── Ideas (3d Task 9) ──
+export const LIST_IDEAS = [
+  { id: 'IDEA-1', title: 'Board swimlanes by epic', status: 'exploring', tags: ['UX', 'board'], created: daysAgo(5),
+    body: 'Group the **board** by epic.\n\n- fold a lane\n- keep the counts', links: [{ type: 'relates_to', target: 'ISS-001' }] },
+  { id: 'IDEA-2', title: 'Faster store writes', status: 'candidate', tags: ['perf'], created: daysAgo(4) },
+  { id: 'IDEA-3', title: 'Phone layout for the table', status: 'parking-lot', tags: ['ux', 'mobile', 'table', 'layout', 'phone'], created: daysAgo(3) },
+  { id: 'IDEA-4', title: 'A note with no status yet', tags: [], created: daysAgo(2) },
+  { id: 'IDEA-5', title: 'Retire the JSON mirror', status: 'promoted', promoted_to: 'T-111', tags: ['store'], created: daysAgo(30), archived: true },
+];
+export const LONG_IDEAS = Array.from({ length: 31 }, (_, i) => ({
+  id: `IDEA-${1201 + i}`, title: longText(`Idea ${1201 + i}`, { unbroken: i === 2 }),
+  status: [undefined, 'exploring', 'candidate', 'parking-lot', 'promoted', 'dropped'][i % 6],
+  tags: Array.from({ length: (i % 5) + 1 }, (_, k) => `tag-${String(((i + k) % 40) + 1).padStart(2, '0')}`), created: daysAgo(i + 1),
+}));
+// The table plan 4's a11y gate reuses for #/ideas; loaded when `.ideas__list .idea-row` is visible.
+export const ideasMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/ideas': { ideas: LIST_IDEAS }, '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/task/T-111/detail': taskDetail({ ...DONE_TASK, id: 'T-111' }) });
