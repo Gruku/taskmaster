@@ -248,6 +248,16 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 
 Reviews are hybrid: the terminal keeps the band and the lean card above for quick sign-offs; the rich review experience (full RR typography and layout) is a review mode in the Taskmaster viewer, opened from the card with `v`. That viewer mode is its own design → spec → plan cycle (alongside the viewer RR re-skin's screens work) and is not part of this epic's tasks; until it ships, `v` opens the viewer at the task.
 
+### 6.6 Cache-cold handover guard (decided 2026-10-06)
+
+Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minutes re-writes its whole context to cache on the next turn, and may have no handover to resume from. The guard (`hooks/handover-guard.ts`) is **opt-in** (`userConfig.handoverGuard`, default off; `handoverGuardIdleMinutes` 55, capped at 57; `handoverGuardMinTokens` 200000).
+
+- **Arm:** each main-loop `turn.complete` (`e.agentId` unset) records `lastTurnEnd` and starts one `$.clock.after(idle)` timer, cancelling the previous one. `turn.start` and a user `prompt.submit` cancel it.
+- **Fire** only when all hold: enabled; `$.session.usage().context.tokens` ≥ the floor (unknown → no); under 58 min since `lastTurnEnd` (a later timer, e.g. after sleep, finds the cache cold already); the session's latch is `none`. It sets the latch to `fired` first, toasts, then `$.prompt.submit`s one plain-text prompt asking for a handover via `taskmaster:handover`.
+- **Latch** (`$.state` `taskmaster-tui.handoverGuard`): `none` → `fired`, or → `handover` when any `tool.call` of `…backlog_handover_create` returns a "Handover written:" receipt (tracked even while disabled). The guard's own handover turn re-arms and is blocked by the latch. `$.state` is per session, so `/clear` or a resume may earn one more; a reload keeps it.
+- Skips with a reason and the firing go to the debug log only; no status line.
+- **Known gap:** a hot reload cancels the pending timer, so a reload while idle disarms the guard until the next turn ends.
+
 ## 7. Failure handling
 
 - `tm` unreachable or timed out: status line `◆ tm offline`; band keeps the task row from the local binding but drops stage and needs-you lines; panes show "Taskmaster unreachable" with the reason.
