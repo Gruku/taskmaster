@@ -177,9 +177,14 @@ export function handoverCopyText(h: TmHandover): string {
   return [h.tldr.trim(), h.nextAction.trim() ? `Next: ${h.nextAction.trim()}` : '', h.path].filter(Boolean).join('\n\n')
 }
 
-/** `branch: X · tasks: a, b`, leaving out whichever is empty ('' when both are). */
+/**
+ * `branch: X · tasks: a, b`, leaving out whichever is empty ('' when both are). Either may be missing at run time (a reply
+ * without them, a snapshot older than the fields): missing reads as empty, never throws.
+ */
 export function handoverRefs(h: TmHandover): string {
-  return [h.branch ? `branch: ${h.branch}` : '', h.taskIds.length > 0 ? `tasks: ${h.taskIds.join(', ')}` : ''].filter(Boolean).join(' · ')
+  const branch = typeof h.branch === 'string' ? h.branch : ''
+  const tasks = Array.isArray(h.taskIds) ? h.taskIds.filter(id => typeof id === 'string' && id !== '') : []
+  return [branch ? `branch: ${branch}` : '', tasks.length > 0 ? `tasks: ${tasks.join(', ')}` : ''].filter(Boolean).join(' · ')
 }
 
 // ── The review card (redesigned 2026-10-06, spec §6.1) ─────────────────────────────────────────────────────────────

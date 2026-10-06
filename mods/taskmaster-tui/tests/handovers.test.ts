@@ -111,6 +111,36 @@ describe('handovers', () => {
     expect(await ui.find({ type: 'Text', text: /^branch: / })).toBeUndefined()
   })
 
+  test('the i toggle sits indented under the picked row, the summary under it; collapsed, Next stays under the list', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    const order = async () => {
+      const elements = elementsOf(await ui.drawn())
+      return {
+        elements,
+        key: (key: string) => elements.findIndex(e => e.props?.key === key),
+        text: (text: string) => elements.findIndex(e => e.type === 'Text' && textOf(e) === text),
+      }
+    }
+    const last = SAMPLE[SAMPLE.length - 1]!
+    let at = await order()
+    expect(at.key(`ho:${FIRST.id}-box`)).toBeLessThan(at.key('summary-box'))
+    expect(at.key('summary-box')).toBeLessThan(at.key(`ho:${SECOND.id}-box`))
+    expect(Number(at.elements[at.key('summary-box')]?.props?.paddingLeft ?? 0)).toBeGreaterThan(0)
+    expect(at.text(`Next: ${FIRST.nextAction}`)).toBeGreaterThan(at.key(`ho:${last.id}-box`))
+
+    await ui.press({ key: `ho:${SECOND.id}` })
+    at = await order()
+    expect(at.key(`ho:${SECOND.id}-box`)).toBeLessThan(at.key('summary-box'))
+    expect(at.key('summary-box')).toBeLessThan(at.key(`ho:${THIRD.id}-box`))
+
+    await ui.press({ key: 'summary' })
+    at = await order()
+    expect(at.key('summary-box')).toBeLessThan(at.text(SECOND.tldr))
+    expect(at.text(`Next: ${SECOND.nextAction}`)).toBeLessThan(at.key(`ho:${THIRD.id}-box`))
+  })
+
   test('an empty part is left out: no tasks drops "· tasks", no blockers drops the blocker lines', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
@@ -138,6 +168,31 @@ describe('handovers', () => {
     await ui.press({ key: `ho:${FIRST.id}` })
     expect((await ui.find({ type: 'Button', key: 'summary' }))?.props.label).toBe('▸ summary')
     expect(await ui.find({ type: 'Text', text: FIRST.tldr })).toBeUndefined()
+  })
+
+  test('a demo snapshot written before a reload (handovers without branch / taskIds) still draws, summary open', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const old = demoSnapshot(0)
+    // What the module before DEMO_SEED 2 left in $.state: reason 'demo', handovers without branch / taskIds, no summaries.
+    const stale = { ...old, reason: 'demo', handovers: old.handovers.map(({ branch: _b, taskIds: _t, ...rest }) => rest) }
+    stateOf(on, { [`${PLUGIN}.snapshot`]: stale, [`${PLUGIN}.summaryOpen`]: FIRST.id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    expect(await ui.find({ type: 'Text', text: 'HANDOVERS' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `branch: ${FIRST.branch} · tasks: ${FIRST.taskIds.join(', ')}` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `decision: ${DEMO_SUMMARIES[FIRST.id]!.decisions[0]}` })).toBeDefined()
+  })
+
+  test('a real handover with no branch or task_ids draws its summary without them', TM, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const { branch: _b, taskIds: _t, ...bare } = FIRST
+    const real = { ...demoSnapshot(0), reason: '', handovers: [bare] }
+    stateOf(on, { [`${PLUGIN}.snapshot`]: real, [`${PLUGIN}.summaryOpen`]: FIRST.id })
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    expect(await ui.find({ type: 'Text', text: 'HANDOVERS' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: FIRST.tldr })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^(branch|tasks): / })).toBeUndefined()
   })
 
   test('before decisions and blockers arrive the summary says "loading summary…"; the tldr wraps whole and every line fits', TM, async ($, on) => {

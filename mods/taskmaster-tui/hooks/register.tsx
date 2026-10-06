@@ -5,7 +5,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { TmBandMode, TmCursor, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { demoActions, pendingActions } from './actions'
-import { DEMO_DETAILS, DEMO_REASON, DEMO_SUMMARIES, demoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { onHandoverGuard } from './handover-guard'
@@ -138,13 +138,12 @@ function ensureFlows($: EngineInterface): TmFlows {
   return mod.flows
 }
 
-const isDemo = (s: TmSnapshot | null): boolean => s !== null && s.reason === DEMO_REASON
-
-// Demo mode keeps demo data in $.state (seeded once, then changed only by the flows); tm mode never shows demo data.
+// Demo mode keeps demo data in $.state (seeded once, then changed only by the flows); tm mode never shows demo data. A seed
+// of another version (an older module's, kept across a reload) is replaced whole: its shape may not be today's.
 async function ensureSeeded($: EngineInterface): Promise<void> {
-  if (mod.source !== 'demo' || isDemo(await read($, SNAPSHOT))) return
+  if (mod.source !== 'demo' || isCurrentDemo(await read($, SNAPSHOT))) return
   const now = await $.clock.now()
-  await update($, SNAPSHOT, s => (isDemo(s) ? s : demoSnapshot(now)))
+  await update($, SNAPSHOT, s => (isCurrentDemo(s) ? s : demoSnapshot(now)))
   await update($, DETAILS, () => DEMO_DETAILS)
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
 }
@@ -165,11 +164,11 @@ async function dataOf($: EngineInterface): Promise<{
   const details = await read($, DETAILS)
   const summaries = await read($, SUMMARIES)
   if (mod.source === 'demo') {
-    return isDemo(snapshot)
+    return isCurrentDemo(snapshot)
       ? { snapshot, details, summaries }
       : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
   }
-  return isDemo(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
+  return isDemoSnapshot(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
 }
 
 /** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */

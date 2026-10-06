@@ -3,8 +3,18 @@
 import type { TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
-/** The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. */
-export const DEMO_REASON = 'demo'
+/**
+ * The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. It carries
+ * the seed's version: bump DEMO_SEED whenever the demo data's shape changes, so a seed an older module left in $.state across
+ * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added).
+ */
+export const DEMO_SEED = 2
+export const DEMO_REASON = `demo:${DEMO_SEED}`
+
+/** Any demo seed, of any version (tm mode never draws one). */
+export const isDemoSnapshot = (s: TmSnapshot | null): boolean => s !== null && (s.reason === 'demo' || s.reason.startsWith('demo:'))
+/** A demo seed of this module's version: demo mode keeps it (the flows may have changed it); any other is rebuilt. */
+export const isCurrentDemo = (s: TmSnapshot | null): boolean => s !== null && s.reason === DEMO_REASON
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
 export const DEMO_REFUSING_ID = 'tm-audit-031'
 export const DEMO_REFUSAL =

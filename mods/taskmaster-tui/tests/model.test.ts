@@ -185,6 +185,9 @@ describe('text', () => {
     expect(handoverRefs({ ...H1, branch: 'main' })).toBe('branch: main')
     expect(handoverRefs({ ...H1, taskIds: ['a-001'] })).toBe('tasks: a-001')
     expect(handoverRefs(H1)).toBe('')
+    // A reply or an old snapshot without the fields reads as empty.
+    const { branch: _b, taskIds: _t, ...bare } = H1
+    expect(handoverRefs(bare as TmHandover)).toBe('')
   })
 })
 

@@ -618,11 +618,20 @@ export type HandoverHandlers = {
   toggleSummary: (h: TmHandover, open: boolean) => void
 }
 
-/** The picked handover expanded under its row: full tldr, branch and tasks, decisions and blockers (read on demand), Next. */
+// The picked handover reads as a card that opens in place: its `i` toggle indented under the row, the summary under that.
+const TOGGLE_INDENT = 2
+const SUMMARY_INDENT = 4
+
+/** The picked handover expanded under its toggle: full tldr, branch and tasks, decisions and blockers (read on demand), Next. */
 function handoverSummary(ui: Ui, t: RrTokens, h: TmHandover, summary: TmHandoverSummary | undefined, width: number): RenderNode[] {
-  const indent = 4
+  const indent = SUMMARY_INDENT
   const refs = handoverRefs(h)
-  const facts = summary === undefined ? [] : [...summary.decisions.map(d => `decision: ${d}`), ...summary.blockers.map(b => `blocker: ${b}`)]
+  // A reader's summary may lack a section: missing reads as empty.
+  const listOf = (items: readonly string[] | undefined): readonly string[] => (Array.isArray(items) ? items : [])
+  const facts =
+    summary === undefined
+      ? []
+      : [...listOf(summary.decisions).map(d => `decision: ${d}`), ...listOf(summary.blockers).map(b => `blocker: ${b}`)]
   return [
     ...lines(ui, t.fg.default, h.tldr, width, indent),
     ...(refs === '' ? [] : lines(ui, t.fg.subtle, refs, width, indent)),
@@ -649,6 +658,11 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
     chip(ui, rr, { id: 'copy', hotkey: 'c', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copy(picked, press.surface) }),
     chip(ui, rr, { id: 'resume', hotkey: 'r', label: 'resume', treatment: 'chip', tone: 'signature', onPress: () => on.resume(picked) }),
   ])
+  const toggle = (
+    <Box key="summary-box" flexDirection="row" paddingLeft={TOGGLE_INDENT}>
+      <Button key="summary" {...togglePress} label={`${open ? '▾' : '▸'} summary`} onPress={() => on.toggleSummary(picked, !open)} />
+    </Box>
+  )
   return paneRoot(ui, rr, [
     title,
     ...list.flatMap(entry => [
@@ -661,6 +675,7 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
           onPress={() => on.pick(entry.id)}
         />
       </Box>,
+      ...(entry.id === picked.id ? [toggle] : []),
       ...(open && entry.id === picked.id ? handoverSummary(ui, t, entry, v.summaries[entry.id], room) : []),
     ]),
     // Expanded, Next sits in the summary: never twice.
@@ -669,9 +684,6 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
         {`Next: ${oneLine(picked.nextAction) || '—'}`}
       </Text>
     ),
-    <Box key="summary-box" flexDirection="row">
-      <Button key="summary" {...togglePress} label={`${open ? '▾' : '▸'} summary`} onPress={() => on.toggleSummary(picked, !open)} />
-    </Box>,
     <Text color={t.fg.subtle}>{`${list.length} of ${v.snapshot.handoversTotal} · superseded hidden`}</Text>,
     chipRow(ui, fit([copy, resume, esc], room, 1)),
   ])
