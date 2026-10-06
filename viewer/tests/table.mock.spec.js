@@ -5,36 +5,19 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, TABLE_BOARD, tableMocks } from './mock-fixtures.js';
 import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
-// BOARD plus twelve epics "Epic A"…"Epic L"; every one but Epic L has a task, and the extra tasks carry areas so all
-// four chip groups are drawn.
-const LETTERS = 'ABCDEFGHIJKL'.split('');
-const STATUSES = ['todo', 'done', 'blocked', 'in-progress', 'in-review'];
-const PRIORITIES = ['low', 'medium', 'high', 'critical'];
-const AREAS = ['viewer-ui', 'store', 'docs'];
-const TABLE_BOARD = {
-  ...BOARD,
-  epics: [...BOARD.epics, ...LETTERS.map((l) => ({ id: `epic-${l.toLowerCase()}`, name: `Epic ${l}`, status: 'active', phase: 'P1' }))],
-  tasks: [...BOARD.tasks, ...LETTERS.slice(0, 11).map((l, i) => ({
-    id: `T-${201 + i}`, title: `Extra task ${l}`, status: STATUSES[i % 5], priority: PRIORITIES[i % 4],
-    epic: `epic-${l.toLowerCase()}`, area: AREAS[i % 3], phase: 'P1', depends_on: [],
-  }))],
-};
+// TABLE_BOARD (mock-fixtures.js): BOARD plus twelve epics "Epic A"…"Epic L"; every one but Epic L has a task.
 
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/table', table, board = TABLE_BOARD } = {}) {
   await page.setViewportSize({ width, height });
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...(table ? { table } : {}) },
-    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
-    '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
-  });
+  await mockApi(page, tableMocks({ theme, board, table }));
   const puts = [];
   page.on('request', (r) => {
     if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/viewer/prefs') puts.push(JSON.parse(r.postData() || '{}'));

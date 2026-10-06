@@ -4,34 +4,19 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC, epicPayload } from './mock-fixtures.js';
+import { BOARD, LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC, epicPayload, EPICS_BOARD, epicsMocks } from './mock-fixtures.js';
 import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
-// BOARD plus an epic with no tasks, one whose tasks are all closed, one planned and one in a status the map does not know.
-const EPICS_BOARD = {
-  ...BOARD,
-  epics: [...BOARD.epics,
-    { id: 'empty', name: 'No tasks yet', status: 'active' },
-    { id: 'closed', name: 'All closed', status: 'active', done_when: 'Both tasks are done.' },
-    { id: 'later', name: 'Planned work', status: 'planned' },
-    { id: 'odd', name: 'Odd status', status: 'paused' },
-    { id: 'bare' }],
-  tasks: [...BOARD.tasks,
-    { id: 'T-301', title: 'Closed one', status: 'done', priority: 'low', epic: 'closed', phase: 'P1', depends_on: [] },
-    { id: 'T-302', title: 'Closed two', status: 'archived', priority: 'low', epic: 'closed', phase: 'P1', depends_on: [] }],
-};
+// EPICS_BOARD (mock-fixtures.js): BOARD plus an epic with no tasks, one whose tasks are all closed, one planned, one in a
+// status the map does not know and a bare one.
 
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 async function boot(page, { theme = 'dark', width = 1440, height = 900, board = EPICS_BOARD } = {}) {
   await page.setViewportSize({ width, height });
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
-    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
-    '/api/epic/viewer': epicPayload(board, 'viewer'),
-  });
+  await mockApi(page, epicsMocks({ theme, board }));
   await page.goto('/#/epics');
   await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
   await expect(page.locator('.epic-row').first()).toBeVisible();
