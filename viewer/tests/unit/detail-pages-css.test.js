@@ -13,9 +13,9 @@ const walk = (d) => readdirSync(d).flatMap((n) => {
   return statSync(p).isDirectory() ? walk(p) : p.endsWith('.css') ? [p] : [];
 });
 
-const SELECTORS = ['.issue-detail', '.id-crumb', '.id-back', '.id-empty', '.id-head', '.id-meta', '.id-sev', '.id-status',
+const SELECTORS = ['.id-empty', '.id-head', '.id-meta', '.id-sev', '.id-status',
   '.id-title', '.id-location', '.id-grid', '.id-main', '.id-side', '.id-h', '.id-body', '.id-repro-list', '.id-side-block',
-  '.id-aging', '.id-dl', '.id-rel-pill', '.aging-bar', '.aging-bar__fill', '.bug-detail', '.bug-detail__sev',
+  '.id-aging', '.id-dl', '.id-rel-pill', '.bug-detail', '.bug-detail__sev',
   '.bug-detail__actions', '.bug-detail__action-btn'];
 const re = (s) => new RegExp('(^|[},\\s])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])');
 
