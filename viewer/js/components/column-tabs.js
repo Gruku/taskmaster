@@ -13,7 +13,10 @@ const MOVES = {
  * The phone column switcher: a tablist with one tab per column, shown at 768px and below with two or more columns.
  * @param {{ label: string, columns: Array<{ key: string, label: string, count: number, panelId: string }>,
  *   selected: string, onSelect: (key: string) => void }} opts
- * @returns {{ el: HTMLElement, update: (next: { columns?: object[], selected?: string }) => void }}
+ * @returns {{ el: HTMLElement, update: (next: { columns?: object[], selected?: string }) => void, destroy: () => void }}
+ *
+ * While the strip scrolls sideways it carries `column-tabs--more-start` / `--more-end` on the side(s) with tabs
+ * past the edge (kept current on scroll and resize); destroy() drops those listeners and classes.
  *
  * Tab ids are always `${panelId}-tab`, and update() repaints each key's existing button in place (focus stays on it).
  *
@@ -107,7 +110,19 @@ export function columnTabs({ label, columns = [], selected, onSelect }) {
     choose(all[move(all.indexOf(btn), all.length)].dataset.key, true);
   });
 
+  // A strip that scrolls sideways says so: a fade on each side that still has tabs past the edge.
+  function paintCue() {
+    const max = el.scrollWidth - el.clientWidth;
+    const at = Math.abs(el.scrollLeft);
+    el.classList.toggle('column-tabs--more-start', !el.hidden && max > 1 && at > 1);
+    el.classList.toggle('column-tabs--more-end', !el.hidden && max > 1 && at < max - 1);
+  }
+  el.addEventListener('scroll', paintCue, { passive: true });
+  const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(paintCue) : null;
+  resize?.observe(el);
+
   paint(columns);
+  paintCue();
 
   return {
     el,
@@ -116,6 +131,12 @@ export function columnTabs({ label, columns = [], selected, onSelect }) {
       current = sel;
       paint(cols);
       revealSelected();
+      paintCue();
+    },
+    destroy() {
+      el.removeEventListener('scroll', paintCue);
+      resize?.disconnect();
+      el.classList.remove('column-tabs--more-start', 'column-tabs--more-end');
     },
   };
 }

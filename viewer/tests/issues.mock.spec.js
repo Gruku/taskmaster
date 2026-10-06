@@ -305,6 +305,30 @@ test('at 390 the board is one column behind tabs with counts, and nothing scroll
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('at 390 the Status tab strip fades on the side that can still scroll, and the fade adds no width', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, '/api/issues': { issues: LONG_ISSUES } });
+  await pickView(page, 'Status');
+  const tablist = page.getByRole('tablist', { name: 'Issue columns' });
+  await expect(tablist.getByRole('tab')).toHaveCount(5);
+  const cue = () => tablist.evaluate((el) => ({
+    start: el.classList.contains('column-tabs--more-start') && getComputedStyle(el, '::before').opacity !== '0',
+    end: el.classList.contains('column-tabs--more-end') && getComputedStyle(el, '::after').opacity !== '0',
+    scrolls: el.scrollWidth > el.clientWidth,
+  }));
+  await expect.poll(cue).toMatchObject({ start: false, end: true, scrolls: true });
+  // The fades are overlays: switching them off moves no tab and changes neither a tab's size nor the scroll width.
+  const geometry = () => tablist.evaluate((el) => [el.scrollWidth,
+    ...[...el.children].map((t) => `${t.offsetLeft}:${t.offsetWidth}:${t.offsetHeight}`)]);
+  const withCue = await geometry();
+  await page.addStyleTag({ content: '.column-tabs::before, .column-tabs::after { display: none !important; }' });
+  expect(await geometry()).toEqual(withCue);
+  await page.evaluate(() => document.querySelector('style:last-of-type').remove());
+  await tablist.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect.poll(cue).toMatchObject({ start: true, end: false });
+  await page.setViewportSize({ width: 1200, height: 844 });
+  await expect(tablist).toBeHidden();
+});
+
 test('at 1440 every column shows, each at least 280px wide', async ({ page }) => {
   await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
   await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Status' }).click();
