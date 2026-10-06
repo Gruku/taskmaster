@@ -181,9 +181,9 @@ describe('text', () => {
   })
 
   test('the summary line of branch and tasks leaves out whichever is empty', () => {
-    expect(handoverRefs({ ...H1, branch: 'main', taskIds: ['a-001', 'b-002'] })).toBe('branch: main · tasks: a-001, b-002')
-    expect(handoverRefs({ ...H1, branch: 'main' })).toBe('branch: main')
-    expect(handoverRefs({ ...H1, taskIds: ['a-001'] })).toBe('tasks: a-001')
+    expect(handoverRefs({ ...H1, branch: 'main', taskIds: ['a-001', 'b-002'] })).toBe('main · a-001, b-002')
+    expect(handoverRefs({ ...H1, branch: 'main' })).toBe('main')
+    expect(handoverRefs({ ...H1, taskIds: ['a-001'] })).toBe('a-001')
     expect(handoverRefs(H1)).toBe('')
     // A reply or an old snapshot without the fields reads as empty.
     const { branch: _b, taskIds: _t, ...bare } = H1

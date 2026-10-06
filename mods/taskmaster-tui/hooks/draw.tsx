@@ -23,7 +23,7 @@ import {
   truncate,
   wrapText,
 } from './model'
-import type { Rr, RrNode, RrTokens, RrTone, RrTreatment } from './rr'
+import type { Rr, RrButtonProps, RrNode, RrTokens, RrTone, RrTreatment } from './rr'
 
 export type Ui = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Input'>
 
@@ -618,27 +618,78 @@ export type HandoverHandlers = {
   toggleSummary: (h: TmHandover, open: boolean) => void
 }
 
-// The picked handover reads as a card that opens in place: its `i` toggle indented under the row, the summary under that.
-const TOGGLE_INDENT = 2
-const SUMMARY_INDENT = 4
+/** The card's body indent: the refs, the sections and NEXT start where the head row's text does (after `→ `). */
+const CARD_INDENT = 2
 
-/** The picked handover expanded under its toggle: full tldr, branch and tasks, decisions and blockers (read on demand), Next. */
-function handoverSummary(ui: Ui, t: RrTokens, h: TmHandover, summary: TmHandoverSummary | undefined, width: number): RenderNode[] {
-  const indent = SUMMARY_INDENT
-  const refs = handoverRefs(h)
-  // A reader's summary may lack a section: missing reads as empty.
-  const listOf = (items: readonly string[] | undefined): readonly string[] => (Array.isArray(items) ? items : [])
-  const facts =
-    summary === undefined
-      ? []
-      : [...listOf(summary.decisions).map(d => `decision: ${d}`), ...listOf(summary.blockers).map(b => `blocker: ${b}`)]
-  return [
-    ...lines(ui, t.fg.default, h.tldr, width, indent),
-    ...(refs === '' ? [] : lines(ui, t.fg.subtle, refs, width, indent)),
-    ...(summary === undefined ? lines(ui, t.fg.subtle, 'loading summary…', width, indent) : []),
-    ...facts.flatMap(fact => lines(ui, t.fg.subtle, fact, width, indent)),
-    ...lines(ui, t.fg.default, `Next: ${oneLine(h.nextAction) || '—'}`, width, indent),
+/**
+ * The picked handover as a card (decided live 2026-10-06): the head row is the whole tldr, wrapped under itself, never cut;
+ * then, expanded, the dim refs and the DECISIONS / BLOCKERS sections (read on demand); then NEXT and the `i` toggle.
+ */
+async function handoverCard(
+  ui: Ui,
+  rr: Rr,
+  t: RrTokens,
+  ho: TmHandover,
+  open: boolean,
+  summary: TmHandoverSummary | undefined,
+  room: number,
+  press: { row: RrButtonProps; toggle: RrButtonProps },
+  on: HandoverHandlers,
+): Promise<RenderNode[]> {
+  const { Box, Text, Button } = ui
+  const body = room - CARD_INDENT
+  const prefix = `${dateOf(ho.created)}  `
+  const head = wrapText(ho.tldr, room - CARD_INDENT - prefix.length)
+  const nodes: RenderNode[] = [
+    <Box key={`ho:${ho.id}-box`} flexDirection="column">
+      <Box flexDirection="row" columnGap={1}>
+        <Text color={t.signatureText}>→</Text>
+        <Button key={`ho:${ho.id}`} {...press.row} label={`${prefix}${head[0] ?? ''}`.trimEnd()} onPress={() => on.pick(ho.id)} />
+      </Box>
+      {head.slice(1).map(line => (
+        <Box paddingLeft={CARD_INDENT + prefix.length}>
+          <Text color={t.fg.default}>{line}</Text>
+        </Box>
+      ))}
+    </Box>,
   ]
+  if (open) {
+    const refs = handoverRefs(ho)
+    if (refs !== '') nodes.push(...lines(ui, t.fg.subtle, refs, room, CARD_INDENT))
+    if (summary === undefined) {
+      nodes.push(
+        <Box flexDirection="column" marginTop={1} paddingLeft={CARD_INDENT}>
+          {lines(ui, t.fg.subtle, 'loading summary…', body)}
+        </Box>,
+      )
+    } else {
+      // A reader's summary may lack a section: missing reads as empty, and an empty section is left out.
+      const listOf = (items: readonly string[] | undefined): readonly string[] => (Array.isArray(items) ? items : [])
+      for (const [label, items] of [
+        ['decisions', listOf(summary.decisions)],
+        ['blockers', listOf(summary.blockers)],
+      ] as const) {
+        if (items.length === 0) continue
+        nodes.push(
+          <Box flexDirection="column" marginTop={1} paddingLeft={CARD_INDENT}>
+            {node(await rr.label({ text: label }))}
+            {items.flatMap(item => lines(ui, t.fg.default, item, body))}
+          </Box>,
+        )
+      }
+    }
+  }
+  const next = oneLine(ho.nextAction) || '—'
+  nodes.push(
+    <Box flexDirection="row" columnGap={2} paddingLeft={CARD_INDENT} {...(open ? { marginTop: 1 } : {})}>
+      {node(await rr.label({ text: 'next' }))}
+      <Box flexDirection="column">{lines(ui, t.fg.default, next, body - 'next'.length - 2)}</Box>
+    </Box>,
+    <Box key="summary-box" flexDirection="row">
+      <Button key="summary" {...press.toggle} label={`${open ? '▾' : '▸'} summary`} onPress={() => on.toggleSummary(ho, !open)} />
+    </Box>,
+  )
+  return nodes
 }
 
 export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: HandoverHandlers, width: number): Promise<RenderElement> {
@@ -649,8 +700,9 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
   const list = v.snapshot.handovers
   const picked = list.find(entry => entry.id === v.pick) ?? list[0]
   if (picked === undefined) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>No open handovers.</Text>])
-  const room = Math.max(10, width - 2)
-  const open = v.summaryOpen === picked.id
+  const inner = Math.max(10, width - 2)
+  const raised = await rr.surfaceProps({ level: 'raised' })
+  const room = Math.max(8, inner - 2 * (raised.paddingX ?? 0) - 2)
   const esc = escHint(ui, t)
   const [rowPress, togglePress, copy, resume] = await Promise.all([
     rr.buttonProps({}),
@@ -658,33 +710,28 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
     chip(ui, rr, { id: 'copy', hotkey: 'c', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copy(picked, press.surface) }),
     chip(ui, rr, { id: 'resume', hotkey: 'r', label: 'resume', treatment: 'chip', tone: 'signature', onPress: () => on.resume(picked) }),
   ])
-  const toggle = (
-    <Box key="summary-box" flexDirection="row" paddingLeft={TOGGLE_INDENT}>
-      <Button key="summary" {...togglePress} label={`${open ? '▾' : '▸'} summary`} onPress={() => on.toggleSummary(picked, !open)} />
-    </Box>
-  )
+  const open = v.summaryOpen === picked.id
+  const card = await handoverCard(ui, rr, t, picked, open, v.summaries[picked.id], room, { row: rowPress, toggle: togglePress }, on)
   return paneRoot(ui, rr, [
     title,
-    ...list.flatMap(entry => [
-      <Box key={`ho:${entry.id}-box`} flexDirection="row" columnGap={1}>
-        <Text color={entry.id === picked.id ? t.signatureText : t.fg.subtle}>{entry.id === picked.id ? '→' : ' '}</Text>
-        <Button
-          key={`ho:${entry.id}`}
-          {...rowPress}
-          label={truncate(`${dateOf(entry.created)}  ${oneLine(entry.tldr)}`, Math.max(10, width - 4))}
-          onPress={() => on.pick(entry.id)}
-        />
-      </Box>,
-      ...(entry.id === picked.id ? [toggle] : []),
-      ...(open && entry.id === picked.id ? handoverSummary(ui, t, entry, v.summaries[entry.id], room) : []),
-    ]),
-    // Expanded, Next sits in the summary: never twice.
-    open ? null : (
-      <Text color={t.fg.default} wrap="wrap">
-        {`Next: ${oneLine(picked.nextAction) || '—'}`}
-      </Text>
+    ...list.map(entry =>
+      entry.id === picked.id ? (
+        <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
+          {card}
+        </Box>
+      ) : (
+        <Box key={`ho:${entry.id}-box`} flexDirection="row" columnGap={1}>
+          <Text color={t.fg.subtle}> </Text>
+          <Button
+            key={`ho:${entry.id}`}
+            {...rowPress}
+            label={truncate(`${dateOf(entry.created)}  ${oneLine(entry.tldr)}`, Math.max(10, width - 4))}
+            onPress={() => on.pick(entry.id)}
+          />
+        </Box>
+      ),
     ),
     <Text color={t.fg.subtle}>{`${list.length} of ${v.snapshot.handoversTotal} · superseded hidden`}</Text>,
-    chipRow(ui, fit([copy, resume, esc], room, 1)),
+    chipRow(ui, fit([copy, resume, esc], inner, 1)),
   ])
 }

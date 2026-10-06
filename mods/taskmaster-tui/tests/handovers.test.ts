@@ -4,7 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { DEMO_SUMMARIES, demoSnapshot } from '../hooks/demo'
-import { handoverCopyText } from '../hooks/model'
+import { dateOf, handoverCopyText } from '../hooks/model'
 import type { TmHandover, TmSnapshot } from '../types'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { type Drawn, elementsOf, widthOf } from './fixtures/measure'
@@ -23,6 +23,15 @@ const textsOf = (tree: unknown): string[] =>
   elementsOf(tree)
     .filter(e => e.type === 'Text')
     .map(textOf)
+/** What a reader sees, top to bottom: every Text, and every Button's label. */
+const flatOf = (tree: unknown): string[] =>
+  elementsOf(tree).flatMap(e => (e.type === 'Text' ? [textOf(e)] : e.type === 'Button' ? [String(e.props?.label ?? '')] : []))
+/** The picked handover's card: the one round-bordered Box. */
+const cardOf = (tree: unknown): Drawn => {
+  const cards = elementsOf(tree).filter(e => e.type === 'Box' && e.props?.borderStyle === 'round')
+  expect(cards).toHaveLength(1)
+  return cards[0]!
+}
 
 describe('handovers', () => {
   test('/tm-handovers opens the handovers pane', DEMO, async ($, on) => {
@@ -71,77 +80,58 @@ describe('handovers', () => {
     expect(world.closed).toEqual([])
   })
 
-  test('i expands the picked handover under its row: full tldr, branch and tasks, decisions, blockers, Next; i collapses it', DEMO, async ($, on) => {
+  test('the picked handover is a raised round card: head row, NEXT, i toggle; the other rows stay plain, no Next line under the list', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    const tree = await ui.drawn()
+    const cards = elementsOf(tree).filter(e => e.type === 'Box' && e.props?.borderStyle === 'round')
+    expect(cards).toHaveLength(1)
+    const card = cards[0]!
+    expect(card.props?.borderColor).toBe('#4d4c48') // rr-stub's border.strong, as on the review card
+    const inCard = elementsOf(card)
+    const keysIn = inCard.map(e => e.props?.key)
+    expect(keysIn).toContain(`ho:${FIRST.id}`)
+    expect(keysIn).toContain('summary')
+    expect(keysIn).not.toContain(`ho:${SECOND.id}`)
+    expect(flatOf(card)).toEqual(['→', `${dateOf(FIRST.created)}  ${FIRST.tldr}`, 'NEXT', FIRST.nextAction, '▸ summary'])
+    // Other rows are plain list rows around the card, still buttons; nothing reads `Next:` any more.
+    const keys = elementsOf(tree).map(e => e.props?.key)
+    expect(keys.indexOf(`ho:${SECOND.id}`)).toBeGreaterThan(keys.indexOf('summary'))
+    expect(textsOf(tree).filter(t => t.startsWith('Next'))).toEqual([])
     expect((await ui.find({ type: 'Button', key: 'summary' }))?.props).toMatchObject({ hotkey: 'i', label: '▸ summary' })
-    expect(textsOf(await ui.drawn()).filter(t => t.startsWith('Next: '))).toEqual([`Next: ${FIRST.nextAction}`])
-    expect(await ui.find({ type: 'Text', text: /^branch: / })).toBeUndefined()
+  })
 
+  test('i expands the card: dim refs, DECISIONS and BLOCKERS labels with their items, then NEXT; the tldr is not repeated; i collapses it', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
     await ui.press({ key: 'summary' })
     expect((await ui.find({ type: 'Button', key: 'summary' }))?.props.label).toBe('▾ summary')
     const summary = DEMO_SUMMARIES[FIRST.id]!
     expect(summary.decisions.length).toBeGreaterThan(0)
     expect(summary.blockers.length).toBeGreaterThan(0)
-    const shown = [
-      FIRST.tldr,
-      `branch: ${FIRST.branch} · tasks: ${FIRST.taskIds.join(', ')}`,
-      ...summary.decisions.map(d => `decision: ${d}`),
-      ...summary.blockers.map(b => `blocker: ${b}`),
-      `Next: ${FIRST.nextAction}`,
-    ]
-    const tree = await ui.drawn()
-    const elements = elementsOf(tree)
-    const at = (text: string) => elements.findIndex(e => e.type === 'Text' && textOf(e) === text)
-    const keyAt = (key: string) => elements.findIndex(e => e.props?.key === key)
-    // In this order, under the picked row and above the next one; the standalone Next line is gone, so Next shows once.
-    const order = shown.map(at)
-    expect(order.every(i => i >= 0), JSON.stringify(textsOf(tree))).toBe(true)
-    expect([...order].sort((a, b) => a - b)).toEqual(order)
-    expect(keyAt(`ho:${FIRST.id}-box`)).toBeLessThan(at(FIRST.tldr))
-    expect(at(`Next: ${FIRST.nextAction}`)).toBeLessThan(keyAt(`ho:${SECOND.id}-box`))
-    expect(textsOf(tree).filter(t => t.startsWith('Next: '))).toHaveLength(1)
-    // Indented under the row.
-    const holder = elements.find(e => e.type === 'Box' && (e.children ?? []).some(c => (c as Drawn).type === 'Text' && textOf(c as Drawn) === FIRST.tldr))
-    expect(Number(holder?.props?.paddingLeft ?? 0)).toBeGreaterThan(0)
-
+    const card = cardOf(await ui.drawn())
+    expect(flatOf(card)).toEqual([
+      '→',
+      `${dateOf(FIRST.created)}  ${FIRST.tldr}`,
+      `${FIRST.branch} · ${FIRST.taskIds.join(', ')}`,
+      'DECISIONS',
+      ...summary.decisions,
+      'BLOCKERS',
+      ...summary.blockers,
+      'NEXT',
+      FIRST.nextAction,
+      '▾ summary',
+    ])
+    // A blank row before each section and before NEXT.
+    const tops = elementsOf(card).filter(e => e.props?.marginTop === 1).map(e => flatOf(e)[0])
+    expect(tops).toEqual(['DECISIONS', 'BLOCKERS', 'NEXT'])
     await ui.press({ key: 'summary' })
-    expect((await ui.find({ type: 'Button', key: 'summary' }))?.props.label).toBe('▸ summary')
-    expect(await ui.find({ type: 'Text', text: /^branch: / })).toBeUndefined()
+    expect(flatOf(cardOf(await ui.drawn()))).toEqual(['→', `${dateOf(FIRST.created)}  ${FIRST.tldr}`, 'NEXT', FIRST.nextAction, '▸ summary'])
   })
 
-  test('the i toggle sits indented under the picked row, the summary under it; collapsed, Next stays under the list', DEMO, async ($, on) => {
-    worldOf(on, mock.clock(on))
-    await $.session.start(SESSION)
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
-    const order = async () => {
-      const elements = elementsOf(await ui.drawn())
-      return {
-        elements,
-        key: (key: string) => elements.findIndex(e => e.props?.key === key),
-        text: (text: string) => elements.findIndex(e => e.type === 'Text' && textOf(e) === text),
-      }
-    }
-    const last = SAMPLE[SAMPLE.length - 1]!
-    let at = await order()
-    expect(at.key(`ho:${FIRST.id}-box`)).toBeLessThan(at.key('summary-box'))
-    expect(at.key('summary-box')).toBeLessThan(at.key(`ho:${SECOND.id}-box`))
-    expect(Number(at.elements[at.key('summary-box')]?.props?.paddingLeft ?? 0)).toBeGreaterThan(0)
-    expect(at.text(`Next: ${FIRST.nextAction}`)).toBeGreaterThan(at.key(`ho:${last.id}-box`))
-
-    await ui.press({ key: `ho:${SECOND.id}` })
-    at = await order()
-    expect(at.key(`ho:${SECOND.id}-box`)).toBeLessThan(at.key('summary-box'))
-    expect(at.key('summary-box')).toBeLessThan(at.key(`ho:${THIRD.id}-box`))
-
-    await ui.press({ key: 'summary' })
-    at = await order()
-    expect(at.key('summary-box')).toBeLessThan(at.text(SECOND.tldr))
-    expect(at.text(`Next: ${SECOND.nextAction}`)).toBeLessThan(at.key(`ho:${THIRD.id}-box`))
-  })
-
-  test('an empty part is left out: no tasks drops "· tasks", no blockers drops the blocker lines', DEMO, async ($, on) => {
+  test('an empty part is left out: no tasks leaves the branch alone, no blockers drops the BLOCKERS section', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     expect(THIRD.taskIds).toEqual([])
@@ -149,25 +139,22 @@ describe('handovers', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
     await ui.press({ key: `ho:${THIRD.id}` })
     await ui.press({ key: 'summary' })
-    expect(await ui.find({ type: 'Text', text: `branch: ${THIRD.branch}` })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /tasks:/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /^blocker: / })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /^decision: / })).toBeDefined()
+    const shown = flatOf(cardOf(await ui.drawn()))
+    expect(shown).toContain(THIRD.branch)
+    expect(shown).toContain('DECISIONS')
+    expect(shown).not.toContain('BLOCKERS')
   })
 
-  test('the toggle follows the pick: another row shows collapsed, and coming back finds it collapsed too', DEMO, async ($, on) => {
+  test('the card and the toggle follow the pick: another row is the card, collapsed, and coming back finds it collapsed too', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
     await ui.press({ key: 'summary' })
-    expect(await ui.find({ type: 'Text', text: FIRST.tldr })).toBeDefined()
+    expect(flatOf(cardOf(await ui.drawn()))).toContain('DECISIONS')
     await ui.press({ key: `ho:${SECOND.id}` })
-    expect((await ui.find({ type: 'Button', key: 'summary' }))?.props.label).toBe('▸ summary')
-    expect(await ui.find({ type: 'Text', text: /^branch: / })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: `Next: ${SECOND.nextAction}` })).toBeDefined()
+    expect(flatOf(cardOf(await ui.drawn()))).toEqual(['→', `${dateOf(SECOND.created)}  ${SECOND.tldr}`, 'NEXT', SECOND.nextAction, '▸ summary'])
     await ui.press({ key: `ho:${FIRST.id}` })
-    expect((await ui.find({ type: 'Button', key: 'summary' }))?.props.label).toBe('▸ summary')
-    expect(await ui.find({ type: 'Text', text: FIRST.tldr })).toBeUndefined()
+    expect(flatOf(cardOf(await ui.drawn()))).toEqual(['→', `${dateOf(FIRST.created)}  ${FIRST.tldr}`, 'NEXT', FIRST.nextAction, '▸ summary'])
   })
 
   test('a demo snapshot written before a reload (handovers without branch / taskIds) still draws, summary open', DEMO, async ($, on) => {
@@ -179,11 +166,12 @@ describe('handovers', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
     expect(await ui.find({ type: 'Text', text: 'HANDOVERS' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: `branch: ${FIRST.branch} · tasks: ${FIRST.taskIds.join(', ')}` })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: `decision: ${DEMO_SUMMARIES[FIRST.id]!.decisions[0]}` })).toBeDefined()
+    const shown = flatOf(cardOf(await ui.drawn()))
+    expect(shown).toContain(`${FIRST.branch} · ${FIRST.taskIds.join(', ')}`)
+    expect(shown).toContain(DEMO_SUMMARIES[FIRST.id]!.decisions[0])
   })
 
-  test('a real handover with no branch or task_ids draws its summary without them', TM, async ($, on) => {
+  test('a real handover with no branch or task_ids draws its card without a refs line', TM, async ($, on) => {
     worldOf(on, mock.clock(on))
     const { branch: _b, taskIds: _t, ...bare } = FIRST
     const real = { ...demoSnapshot(0), reason: '', handovers: [bare] }
@@ -191,27 +179,24 @@ describe('handovers', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
     expect(await ui.find({ type: 'Text', text: 'HANDOVERS' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: FIRST.tldr })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^(branch|tasks): / })).toBeUndefined()
+    expect(flatOf(cardOf(await ui.drawn())).slice(0, 3)).toEqual(['→', `${dateOf(FIRST.created)}  ${FIRST.tldr}`, 'loading summary…'])
   })
 
-  test('before decisions and blockers arrive the summary says "loading summary…"; the tldr wraps whole and every line fits', TM, async ($, on) => {
+  test('before decisions and blockers arrive the card says "loading summary…"; a long tldr wraps whole in the head and every line fits', TM, async ($, on) => {
     worldOf(on, mock.clock(on))
     const long = 'Store write hang root cause found and an incremental rebuild verified in scratch against the CodeMaestro backlog'
     const real: TmSnapshot = { ...demoSnapshot(0), reason: '', handovers: [{ ...FIRST, tldr: long }] }
     stateOf(on, { [`${PLUGIN}.snapshot`]: real, [`${PLUGIN}.summaryOpen`]: FIRST.id })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(40) })
-    expect(await ui.find({ type: 'Text', text: 'loading summary…' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^decision: / })).toBeUndefined()
     const tree = await ui.drawn()
-    const texts = textsOf(tree)
-    // The whole tldr is there, wrapped over several lines, none cut short.
-    const start = texts.findIndex(t => t !== '' && long.startsWith(t))
-    expect(start).toBeGreaterThanOrEqual(0)
-    let joined = ''
-    for (let i = start; joined.length < long.length && i < texts.length; i += 1) joined = joined === '' ? (texts[i] ?? '') : `${joined} ${texts[i]}`
-    expect(joined).toBe(long)
+    const shown = flatOf(cardOf(tree))
+    expect(shown).toContain('loading summary…')
+    expect(shown).not.toContain('DECISIONS')
+    // The head is the whole tldr, wrapped over several lines (the first is the row button), none cut short.
+    const head = shown.slice(1, shown.indexOf('loading summary…') - 1)
+    expect(head.length).toBeGreaterThan(1)
+    expect(head.join(' ')).toBe(`${dateOf(FIRST.created)}  ${long}`)
     expect(widthOf(tree)).toBeLessThanOrEqual(40)
   })
 })
