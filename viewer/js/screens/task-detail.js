@@ -89,7 +89,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     restore(root);
   }
   async function refresh() {
-    if (disposed || store.isEditing(id)) return;
+    // Nothing is painted on an early return, so a later store refresh must not pull focus to the h1.
+    if (disposed || store.isEditing(id)) { refocus = false; return; }
     const request = ++generation;
     try {
       const value = await getTaskDetailFull(id, {force: true});
