@@ -155,6 +155,42 @@ test('not found, a failure and Try again are state blocks with one action', asyn
   await expect(page.locator('#screen-mount .tm-empty').getByRole('link', { name: 'All epics' })).toHaveAttribute('href', '#/epics');
 });
 
+test('Try again keeps the keyboard: on the loading block while it retries, then on the new Try again or the title', async ({ page }) => {
+  await boot(page, { route: '#/epic/broken', ready: '.tm-empty[data-state="error"]' });
+  // Each retry's answer is held open until the test releases it.
+  let release;
+  await page.route('**/api/epic/broken', async (route) => {
+    const answer = await new Promise((resolve) => { release = resolve; });
+    await route.fulfill(answer);
+  });
+  const focused = () => page.evaluate(() => {
+    const a = document.activeElement;
+    if (!a || a === document.body) return 'body';
+    return a.matches('.tm-empty') ? `block:${a.dataset.state}` : `${a.localName}:${a.textContent.trim()}`;
+  });
+  const retry = page.locator('.tm-empty[data-state="error"]').getByRole('button', { name: 'Try again' });
+
+  await retry.focus();
+  await page.keyboard.press('Enter');
+  const loading = page.locator('#screen-mount .tm-empty[data-state="loading"]');
+  await expect(loading.locator('.tm-empty__headline')).toHaveText('Loading…');
+  await expect(loading).toHaveAttribute('aria-busy', 'true');
+  expect(await focused()).toBe('block:loading');
+  await expect.poll(() => typeof release).toBe('function');
+  release({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } });
+  await expect(retry).toBeVisible();
+  expect(await focused()).toBe('button:Try again');
+
+  release = undefined;
+  await page.keyboard.press('Enter');
+  await expect(loading).toBeVisible();
+  expect(await focused()).toBe('block:loading');
+  await expect.poll(() => typeof release).toBe('function');
+  release({ json: epicPayload(BOARD, 'viewer', { id: 'broken', name: 'Recovered' }) });
+  await expect(page.locator('h1.ed-title')).toHaveText('Recovered');
+  expect(await focused()).toBe('h1:Recovered');
+});
+
 test('leaving while the epic is still loading leaves nothing behind', async ({ page }) => {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -291,7 +327,8 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
 
     await page.evaluate(() => { location.hash = '#/epic/arch-test'; });
     await expect(page.locator('.ed-diagram .cd-block').first()).toBeVisible();
-    // The task cards inside the blocks are the Kanban's own (card.js, track 3a re-skins them); the map's blocks are ours.
+    // The task cards inside the blocks are the old Kanban card (card.js, owned by track 3a, whose re-skinned card is not
+    // merged into this branch yet); the map's blocks are ours. 3b Task 8 drops this exclusion once 3a's card merges.
     expect(await run('#screen-mount', ['.card-task']), 'architecture map').toEqual([]);
     expect(await page.locator('.cd-block').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).boxShadow))])).toEqual(['none']);
 
