@@ -84,8 +84,9 @@ test('the next screen mounts normally after a failed one', async ({ page }) => {
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('#topbar-actions [data-global-search]')).toBeVisible();
   await expect(page.locator('#screen-mount .stub')).toHaveCount(0);
-  await expect(page.locator('#topbar-count')).toHaveText('');
-  await expect(page.locator('#topbar-primary > *')).toHaveCount(0);
+  await expect(page.locator('#topbar-count')).toHaveText('0 tasks');
+  await expect(page.locator('#topbar-primary > *')).toHaveCount(1);
+  await expect(page.locator('#topbar-primary').getByRole('button', { name: /Add task/ })).toHaveCount(1);
 });
 
 test('every working screen starts from an empty top bar', async ({ page }) => {
