@@ -56,6 +56,20 @@
   color: var(--foreground-subtle);
 }
 
+/* Pane open at desktop width the list is narrow: the row stacks so the title never loses to its metadata —
+   line 1 id + title (one line, ellipsis, full text in its title), line 2 status, tags and age. */
+@media (min-width: 769px) {
+  .ideas__content--detail-open .idea-row { grid-template-columns: minmax(0, 1fr); }
+  .ideas__content--detail-open .idea-row__title {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow-wrap: normal;
+  }
+  .ideas__content--detail-open .idea-row > .link-row__content { flex-wrap: wrap; }
+}
+
 .ideas-detail {
   display: flex;
   flex-direction: column;

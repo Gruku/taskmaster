@@ -63,6 +63,30 @@ test('rows are links with markers, tags and age; an idea with no status has no m
   await expect(rowOf(page, 'IDEA-1').locator('time.idea-row__age')).toBeVisible();
 });
 
+test('at 1440 with the pane open each row stacks: the title keeps at least 200px and its metadata goes under it', async ({ page }) => {
+  await boot(page);
+  await link(page, 'IDEA-1').click();
+  await expect(pane(page)).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  const rows = await page.locator('.ideas__list .idea-row').evaluateAll((els) => els.map((row) => {
+    const box = row.getBoundingClientRect();
+    const id = row.querySelector('.idea-row__id');
+    const title = row.querySelector('.idea-row__title');
+    const t = title.getBoundingClientRect();
+    const spill = [...row.querySelectorAll('*')].filter((el) => el.getClientRects().length).some((el) => {
+      const r = el.getBoundingClientRect();
+      return r.left < box.left - 0.5 || r.right > box.right + 0.5;
+    });
+    return { id: id.textContent, idCut: id.scrollWidth > id.clientWidth, titleW: t.width,
+      text: title.textContent.trim().length > 0 && t.height > 0, hasTitle: title.title === title.textContent, spill };
+  }));
+  expect(rows.length).toBeGreaterThan(3);
+  for (const r of rows) {
+    expect(r.titleW, r.id).toBeGreaterThanOrEqual(200);
+    expect(r, r.id).toMatchObject({ idCut: false, text: true, hasTitle: true, spill: false });
+  }
+});
+
 test('a click selects in place and the address follows', async ({ page, context }) => {
   const gets = await boot(page);
   const before = gets.count;
