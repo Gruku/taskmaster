@@ -9,7 +9,7 @@ import { renderPhaseStepper }                from '../components/phase-stepper.j
 import { renderEpicChips }                   from '../components/epic-chips.js';
 import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles } from '../lib/filters.js';
 import { renderBundleFrame } from '../components/bundle-frame.js';
-import { assignEpicColors }                  from '../lib/epics.js';
+import { epicIndex }                         from '../lib/epics.js';
 import { countActiveTasksByEpic, rankEpics } from '../lib/epic-ranking.js';
 import { claimTopbar, tmAction, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
@@ -189,7 +189,7 @@ export async function mount(root, { store, api, prefs }) {
     const tasks   = Array.isArray(backlog.tasks) ? backlog.tasks : [];
     const epicsArr  = Array.isArray(backlog.epics) ? backlog.epics : [];
     const phasesArr = Array.isArray(backlog.phases) ? backlog.phases : [];
-    const epicColors = assignEpicColors(epicsArr);
+    const index = epicIndex(epicsArr);
 
     // Prune persisted/stale epic selections that don't apply to the active
     // phase scope. Catches initial mount with stale prefs as well as backlog
@@ -274,7 +274,7 @@ export async function mount(root, { store, api, prefs }) {
     const ranked = rankEpics(epicsVisible.map(ep => ({
       id: ep.id,
       name: ep.name || ep.id,
-      color: epicColors[ep.id],
+      color: index.get(ep.id)?.swatch,
       status: ep.status || 'active',
       last_referenced: ep.last_referenced,
       count: tasksInPhase.filter(t => t.epic === ep.id).length,
@@ -399,9 +399,9 @@ export async function mount(root, { store, api, prefs }) {
           if (item.type === 'bundle') {
             colBody.appendChild(renderBundleFrame(
               { slug: item.slug, tasks: item.tasks, total: bundleTotals[item.slug] },
-              { density: state.density, epicColors, groupBy: state.filters.group_by }));
+              { density: state.density, epicIndex: index, groupBy: state.filters.group_by }));
           } else {
-            colBody.appendChild(renderCard({ task: item.task, density: state.density, epicColors, groupBy: state.filters.group_by }));
+            colBody.appendChild(renderCard({ task: item.task, density: state.density, epicIndex: index, groupBy: state.filters.group_by }));
           }
         }
       }

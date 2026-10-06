@@ -34,7 +34,7 @@ async function board(page, { theme = 'dark', table = {} } = {}) {
   await expect(card(page, 'T-102')).toBeVisible();
 }
 
-const card = (page, id) => page.locator(`.card-task[data-task-id="${id}"]`);
+const card = (page, id) => page.locator(`.card-task[data-task-id="${id}"] > .link-row__link`);
 const detail = (page) => page.locator('.modal--detail');
 const titleOf = (dialog) => dialog.locator('.modal-title');
 
@@ -168,7 +168,7 @@ test('a card the board redrew while the dialog was open still gets focus back', 
     next.tasks.find((t) => t.id === 'T-104').title = 'Sessions timeline: renamed by another writer';
     store.setBoard(next);
   }));
-  await expect(page.locator('.card-task[data-before]')).toHaveCount(0);
+  await expect(page.locator('[data-before]')).toHaveCount(0);
   await expect(card(page, 'T-102')).toHaveCount(1);
 
   await page.keyboard.press('Escape');

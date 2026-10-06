@@ -110,6 +110,7 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
       fire();
     });
     block.addEventListener('keydown', (ev) => {
+      if (ev.target !== block) return;
       if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fire(); }
     });
   }

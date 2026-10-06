@@ -10,14 +10,17 @@ function makeTask(id, lane) {
   return { id, title: `Task ${id}`, status: 'todo', bundle: 'test-slug', lane: lane || null };
 }
 
-test('renders header with slug text and ⬢ glyph', () => {
+test('renders header with slug text and a swatch, no ⬢ glyph', () => {
   const el = renderBundleFrame(
     { slug: 'asset-ux', tasks: [makeTask('t-1')], total: 1 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   const head = el.querySelector('.bundle-frame-head');
   assert.ok(head, 'bundle-frame-head missing');
-  assert.match(head.textContent, /⬢/);
+  assert.ok(head.querySelector('.bundle-frame__swatch'), 'swatch missing');
+  const hue = [...el.classList].find((c) => c.startsWith('bh-')).slice(3);
+  assert.ok(head.querySelector(`.bundle-frame__swatch.card-swatch--cat-${hue}`), 'swatch takes the frame\'s hue');
+  assert.doesNotMatch(head.textContent, /⬢/);
   assert.match(head.textContent, /asset-ux/);
 });
 
@@ -25,7 +28,7 @@ test('tasks.length < total → "N of M here" count text', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2')];
   const el = renderBundleFrame(
     { slug: 'my-bundle', tasks, total: 4 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   assert.match(el.outerHTML, /2 of 4 here/);
 });
@@ -34,7 +37,7 @@ test('tasks.length === total → "N tasks" count text', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2'), makeTask('t-3'), makeTask('t-4')];
   const el = renderBundleFrame(
     { slug: 'my-bundle', tasks, total: 4 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   assert.match(el.outerHTML, /4 tasks/);
 });
@@ -43,7 +46,7 @@ test('total falsy → "N tasks" count text', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2')];
   const el = renderBundleFrame(
     { slug: 'my-bundle', tasks, total: 0 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   assert.match(el.outerHTML, /2 tasks/);
 });
@@ -55,7 +58,7 @@ test('strictest lane shown: [express, full] → FULL in header', () => {
   ];
   const el = renderBundleFrame(
     { slug: 'b', tasks, total: 2 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   const head = el.querySelector('.bundle-frame-head');
   assert.match(head.textContent, /FULL/);
@@ -65,7 +68,7 @@ test('no lane on any member → no lane element in header', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2')];
   const el = renderBundleFrame(
     { slug: 'b', tasks, total: 2 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   const laneEl = el.querySelector('.bundle-frame-head .lane');
   assert.equal(laneEl, null, 'lane element should not exist when no lane');
@@ -75,14 +78,14 @@ test('contains one .card-task per member task', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2'), makeTask('t-3')];
   const el = renderBundleFrame(
     { slug: 'b', tasks, total: 3 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
   const cards = el.querySelectorAll('.card-task');
   assert.equal(cards.length, 3);
 });
 
 test('same slug yields same bh- class across two calls (stable hue)', () => {
-  const opts = { density: 'full', epicColors: {}, groupBy: 'status' };
+  const opts = { density: 'full', epicIndex: new Map(), groupBy: 'status' };
   const el1 = renderBundleFrame({ slug: 'my-slug', tasks: [makeTask('t-1')], total: 1 }, opts);
   const el2 = renderBundleFrame({ slug: 'my-slug', tasks: [makeTask('t-2')], total: 1 }, opts);
   const bh1 = [...el1.classList].find(c => c.startsWith('bh-'));
@@ -92,18 +95,18 @@ test('same slug yields same bh- class across two calls (stable hue)', () => {
 });
 
 test('bh- class is in range bh-1..bh-6', () => {
-  const opts = { density: 'full', epicColors: {}, groupBy: 'status' };
+  const opts = { density: 'full', epicIndex: new Map(), groupBy: 'status' };
   const el = renderBundleFrame({ slug: 'test', tasks: [makeTask('t-1')], total: 1 }, opts);
   const bh = [...el.classList].find(c => c.startsWith('bh-'));
   assert.ok(/^bh-[1-6]$/.test(bh), `bh class out of range: ${bh}`);
 });
 
-test('cards inside bundle frame do NOT contain .card-bundle-chip (hideBundleChip propagated)', () => {
+test('cards inside bundle frame do NOT contain .card-bundle (hideBundleChip propagated)', () => {
   const tasks = [makeTask('t-1'), makeTask('t-2')];
   const el = renderBundleFrame(
     { slug: 'b', tasks, total: 2 },
-    { density: 'full', epicColors: {}, groupBy: 'status' }
+    { density: 'full', epicIndex: new Map(), groupBy: 'status' }
   );
-  const chips = el.querySelectorAll('.card-bundle-chip');
+  const chips = el.querySelectorAll('.card-bundle');
   assert.equal(chips.length, 0, 'bundle chips should be hidden inside bundle frame');
 });

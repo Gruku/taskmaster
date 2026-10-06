@@ -1,6 +1,8 @@
 // Pure-logic filter / sort / group for the kanban board.
 // No DOM. Tested via node --test.
 
+import { TASK_STATUS } from '../components/status.js';
+
 export const STATUS_ORDER = ['blocked', 'todo', 'in-progress', 'in-review', 'done'];
 
 const PRIORITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -126,13 +128,8 @@ export function groupTasks(tasks, by, phaseOrder) {
   return [{ key: 'all', label: 'All', tasks: tasks || [] }];
 }
 
-export const STATUS_LABELS = {
-  blocked: 'Blocked',
-  todo: 'Todo',
-  'in-progress': 'In Progress',
-  'in-review': 'Waiting on human',
-  done: 'Done',
-};
+// The column words are the status markers' words, so a column and a card never name one status two ways.
+export const STATUS_LABELS = Object.fromEntries(STATUS_ORDER.map((key) => [key, TASK_STATUS[key].label]));
 
 /**
  * Cluster tasks in a single column into an ordered list of render-items.

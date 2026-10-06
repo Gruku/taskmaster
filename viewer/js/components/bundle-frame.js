@@ -1,14 +1,14 @@
 // Bundle frame (Variant A) — groups tasks sharing a bundle slug into a framed block.
 //
 // Usage:
-//   const el = renderBundleFrame({ slug, tasks, total }, { density, epicColors, groupBy });
+//   const el = renderBundleFrame({ slug, tasks, total }, { density, epicIndex, groupBy });
 //
 // Inputs:
 //   slug        — bundle slug string
 //   tasks       — task objects in this column with this slug
 //   total       — total tasks across ALL columns with this slug (for "N of M here" text)
 //   density     — 'minimal' | 'full' (passed to renderCard)
-//   epicColors  — {epicId → hex}
+//   epicIndex   — Map epicId → { name, swatch } from lib/epics.js#epicIndex (passed to renderCard)
 //   groupBy     — 'status' | 'phase' | 'epic'
 
 import { renderCard } from './card.js';
@@ -49,21 +49,22 @@ function slugHue(slug) {
  * Renders a bundle frame containing the given tasks.
  *
  * @param {{ slug: string, tasks: object[], total: number }} bundle
- * @param {{ density?: string, epicColors?: object, groupBy?: string }} opts
+ * @param {{ density?: string, epicIndex?: Map, groupBy?: string }} opts
  * @returns {HTMLElement}
  */
-export function renderBundleFrame({ slug, tasks, total }, { density = 'full', epicColors = {}, groupBy = 'status' } = {}) {
+export function renderBundleFrame({ slug, tasks, total }, { density = 'full', epicIndex = new Map(), groupBy = 'status' } = {}) {
+  const hue = slugHue(slug);
   const frame = document.createElement('div');
-  frame.className = `bundle-frame bh-${slugHue(slug)}`;
+  frame.className = `bundle-frame bh-${hue}`;
 
   // ── Header ──
   const head = document.createElement('div');
   head.className = 'bundle-frame-head';
 
-  const hex = document.createElement('span');
-  hex.className = 'hex';
-  hex.textContent = '⬢';
-  head.appendChild(hex);
+  const swatch = document.createElement('span');
+  swatch.className = `bundle-frame__swatch card-swatch--cat-${hue}`;
+  swatch.setAttribute('aria-hidden', 'true');
+  head.appendChild(swatch);
 
   const slugEl = document.createElement('span');
   slugEl.className = 'slug';
@@ -94,7 +95,7 @@ export function renderBundleFrame({ slug, tasks, total }, { density = 'full', ep
 
   // ── Cards ──
   for (const task of tasks) {
-    frame.appendChild(renderCard({ task, density, epicColors, groupBy, hideBundleChip: true }));
+    frame.appendChild(renderCard({ task, density, epicIndex, groupBy, hideBundleChip: true }));
   }
 
   return frame;

@@ -1,0 +1,138 @@
+// User intent: in a real browser a Kanban card is a link — Enter opens the task and Escape hands focus back, a modified
+// click is the browser's, the copy button only copies — a long title stays in three lines with the id unbroken at
+// phone width, a recent card says "New" without a glow, and the cards pass axe in both themes.
+import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { mockApi, unmockedWrites } from './mock-api.js';
+import { BOARD, DETAIL_TASK, RICH_RELATED, taskDetail, longBoard } from './mock-fixtures.js';
+
+const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
+
+test.beforeEach(async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+});
+test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
+
+async function board(page, { theme = 'dark', board = BOARD, viewport } = {}) {
+  if (viewport) await page.setViewportSize(viewport);
+  await mockApi(page, {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
+    '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
+  });
+  await page.goto('/#/kanban');
+  await expect(page.locator('.card-task').first()).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+}
+
+const card = (page, id) => page.locator(`.card-task[data-task-id="${id}"]`);
+const linkOf = (page, id) => card(page, id).locator(':scope > .link-row__link');
+
+test('a card is a link: Enter opens the task, Escape hands focus back, Ctrl+click is the browser\'s', async ({ page }) => {
+  await board(page);
+  const link = linkOf(page, 'T-102');
+  await link.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.locator('.modal--detail');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.modal-eyebrow')).toHaveText('T-102');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(link).toBeFocused();
+
+  const opened = page.context().waitForEvent('page');
+  await link.click({ modifiers: ['Control'] });
+  const tab = await opened;
+  await expect(tab).toHaveURL(/#\/task\/T-102$/);
+  await tab.close();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/kanban$/);
+});
+
+test('the copy-id control copies and never opens the task', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t; } } });
+  });
+  await board(page);
+  await card(page, 'T-102').locator('.card-id').click();
+  await expect.poll(() => page.evaluate(() => window.__copied)).toBe('T-102');
+  // Give a wrongly opened dialog the time it takes a real one to load before saying there is none.
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+test('a 120-character title is clamped to three lines and the id never breaks', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const cards = await page.locator('.card-task').evaluateAll((els) => els.slice(0, 10).map((el) => {
+    const title = el.querySelector('.card-title');
+    const cs = getComputedStyle(title);
+    return {
+      id: el.dataset.taskId,
+      titleLength: title.title.length,
+      titleHeight: title.getBoundingClientRect().height,
+      lineHeight: parseFloat(cs.lineHeight),
+      idRects: el.querySelector('.card-id .truncate').getClientRects().length,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    };
+  }));
+  expect(cards).toHaveLength(10);
+  for (const c of cards) {
+    expect(c.titleLength, c.id).toBe(120);
+    expect(c.titleHeight, `${c.id} title height`).toBeLessThanOrEqual(3 * c.lineHeight + 1);
+    expect(c.idRects, `${c.id} id rects`).toBe(1);
+    expect(c.scrollWidth, `${c.id} overflows`).toBeLessThanOrEqual(c.clientWidth);
+  }
+});
+
+test('a recent card has a strong border and a New tag, and no glow', async ({ page }) => {
+  const recentBoard = structuredClone(BOARD);
+  recentBoard.tasks.find((t) => t.id === 'T-102').started = new Date(Date.now() - 3_600_000).toISOString();
+  await board(page, { board: recentBoard });
+  await page.mouse.move(0, 0);
+  const recent = card(page, 'T-102');
+  await expect(recent).toHaveClass(/\brecent\b/);
+  const tag = recent.locator('.card-new');
+  await expect(tag).toHaveText('New');
+  await expect(tag).toBeVisible();
+  const tagBox = await tag.boundingBox();
+  const idBox = await recent.locator('.card-id').boundingBox();
+  // Line 1: the tag's box and the id's box share a vertical band.
+  expect(tagBox.y).toBeLessThan(idBox.y + idBox.height);
+  expect(idBox.y).toBeLessThan(tagBox.y + tagBox.height);
+
+  const strong = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    probe.style.border = '1px solid var(--border-strong)';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).borderTopColor;
+    probe.remove();
+    return color;
+  });
+  const style = await recent.evaluate((el) => ({ border: getComputedStyle(el).borderTopColor, shadow: getComputedStyle(el).boxShadow }));
+  expect(style).toEqual({ border: strong, shadow: 'none' });
+  await expect(card(page, 'T-101').locator('.card-new')).toHaveCount(0);
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`axe (${theme}): cards have no contrast, nested-interactive or aria violation`, async ({ page }) => {
+    const full = structuredClone(BOARD);
+    Object.assign(full.tasks.find((t) => t.id === 'T-102'), {
+      started: new Date(Date.now() - 3_600_000).toISOString(), branch: 'feat/kanban-cards', docs: { spec: 'docs/spec.md' },
+      estimate: 'M', spec_review: 'warn', bundle: 'cards', lane: 'full', gate_state: 'review-gate:pending',
+    });
+    Object.assign(full.tasks.find((t) => t.id === 'T-103'), { bundle: 'cards' });
+    Object.assign(full.tasks.find((t) => t.id === 'T-107'), { human_action: 'Check the light theme by eye' });
+    Object.assign(full.tasks.find((t) => t.id === 'T-106'), { blockers_count: 1 });
+    await board(page, { theme, board: full });
+    await expect(page.locator('.bundle-frame')).toHaveCount(1);
+    await page.evaluate(axeSource);
+    const result = await page.evaluate(() => window.axe.run(document.querySelector('.kanban-board'), {
+      runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive', 'aria-allowed-attr', 'aria-valid-attr-value', 'link-name', 'button-name'] },
+      resultTypes: ['violations'],
+    }));
+    expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  });
+}
