@@ -151,12 +151,8 @@
   gap: var(--space-lg);
 }
 .dk-continuity:empty { display: none; }
-
-.dk-older {
-  display: block; padding: var(--space-xs) var(--space-sm);
-  color: var(--foreground-subtle); font-size: var(--size-technical-small); text-decoration: none;
-}
-.dk-older:hover { color: var(--foreground-default); }
+/* A band that could not be read says so across its whole width. */
+.dk-continuity > .tm-empty { grid-column: 1 / -1; }
 
 .dk-empty { color: var(--foreground-subtle); font-size: var(--size-narrator-small); padding: var(--space-md) 0; }
 

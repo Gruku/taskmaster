@@ -1,11 +1,14 @@
 // User intent: the Dashboard works in a real browser — it opens on four counts that are links and stay put while the board
 // redraws; a long note is clamped and opens from the keyboard; notes are pinned, archived and created by keyboard without
-// losing focus; and a refused note write is said in words while the typed text stays.
+// losing focus; a refused note write is said in words while the typed text stays; and the continuity band's rows open by
+// link or by disclosure, its decisions say when the server refuses, and its "+N older" is a control.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { NOTES, LONG_NOTE, deskMocks, summaryMocks } from './mock-fixtures.js';
+import {
+  NOTES, LONG_NOTE, BOARD, EMPTY_TASK, CONTINUITY, DECISION, deskMocks, summaryMocks, taskDetail,
+} from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -297,5 +300,224 @@ for (const theme of ['dark', 'light']) {
     await page.evaluate(axeSource);
     const result = await page.evaluate(() => window.axe.run(document.querySelector('.dk-board'), { resultTypes: ['violations'] }));
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  });
+}
+
+// ── Continuity band ─────────────────────────────────────────────────────────
+
+// The Dashboard with a full continuity band behind it; `extra` overrides any route.
+const bandMocks = ({ theme = 'dark', ...extra } = {}) => ({
+  ...deskMocks({ theme }),
+  '/api/continuity': CONTINUITY,
+  '/api/decisions/DEC-001': DECISION,
+  '/api/handover/2026-10-05-r1': { body: '<lc>Cards done</lc>' },
+  '/api/board': BOARD,
+  '/api/task/T-106/detail': taskDetail({ ...EMPTY_TASK, id: 'T-106' }),
+  ...extra,
+});
+
+const band = (page) => page.locator('.dk-continuity');
+const spine = (page, label) => band(page).locator('.co-spine')
+  .filter({ has: page.getByRole('heading', { name: label, exact: true }) });
+
+test('rails cap at five with a +n older link', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, bandMocks());
+  await page.goto('/#/dashboard');
+  const resume = spine(page, 'Resume');
+  await expect(resume.locator('.co-row')).toHaveCount(5);
+  await expect(resume.locator('.co-spine__count')).toHaveText('5');
+  const older = resume.locator('a.dk-older');
+  await expect(older).toHaveText('+2 older');
+  await expect(older).toHaveAttribute('href', '#/sessions');
+  await expect(older).toHaveAttribute('aria-label', '2 older resume items');
+  await expect(older).toHaveClass(/btn btn--ghost btn--sm/);
+  for (const label of ['Review', 'Decide', 'Clean-up']) await expect(spine(page, label)).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('clean-up rows are links', async ({ page }) => {
+  await openDesk(page, bandMocks());
+  await page.goto('/#/dashboard');
+  await spine(page, 'Clean-up').locator('a[href="#/issue/ISS-012"]').click();
+  await expect(page).toHaveURL(/#\/issue\/ISS-012$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/dashboard$/);
+  await spine(page, 'Clean-up').locator('a[href="#/task/T-106"]').click();
+  const dialog = page.locator('.modal--detail');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('T-106');
+  await expect(spine(page, 'Clean-up').locator('a[href="#/ideas"]')).toHaveText('Pin a handover to the desk');
+});
+
+test('a handover row expands from the keyboard', async ({ page }) => {
+  await openDesk(page, bandMocks());
+  await page.goto('/#/dashboard');
+  await expect(spine(page, 'Resume').locator('.co-row__toggle')).toHaveCount(5);
+  await page.locator('.dk-composer__input').focus();
+  await tabTo(page, '.co-row__toggle', 120);
+  const toggle = spine(page, 'Resume').locator('.co-row__toggle').first();
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toContainText('Cards done, columns next');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const region = page.getByRole('region', { name: 'Handover 2026-10-05-r1' });
+  await expect(region).toContainText('Cards done');
+  await expect(toggle).toHaveAttribute('aria-controls', await region.getAttribute('id'));
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(region).toHaveCount(0);
+});
+
+test('a handover body that cannot be read is said in words', async ({ page }) => {
+  await openDesk(page, bandMocks({ '/api/handover/2026-10-05-r2': { status: 500, json: { ok: false, error: 'locked' } } }));
+  await page.goto('/#/dashboard');
+  await spine(page, 'Resume').locator('.co-row__toggle').nth(1).click();
+  await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r2' }))
+    .toHaveText('This could not be loaded. Try again in a moment.');
+});
+
+test('a failed decision is said in words', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { status: 500, json: { ok: false, error: 'locked' } } }));
+  await page.goto('/#/dashboard');
+  const card = page.locator('.co-decision');
+  await expect(card.getByRole('button')).toHaveCount(5);
+  await expect(card.locator('button.co-decision__opt').nth(1)).toContainText('Recommended');
+  await card.getByRole('button', { name: 'Pick option 2' }).click();
+  await expect(card.getByRole('alert')).toHaveText('The server could not save this change. Try again in a moment.');
+  for (const b of await card.getByRole('button').all()) await expect(b).toBeEnabled();
+});
+
+test('a resolved decision leaves the band redrawn without it', async ({ page }) => {
+  const writes = [];
+  page.on('request', (req) => {
+    if (req.method() === 'POST') writes.push({ path: new URL(req.url()).pathname, body: req.postDataJSON() });
+  });
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  const left = { items: CONTINUITY.items.filter((i) => i.id !== 'DEC-001') };
+  await page.route('**/api/continuity', (route) => route.fulfill({ json: writes.length ? left : CONTINUITY }));
+  await page.goto('/#/dashboard');
+  await page.locator('.co-decision').getByRole('button', { name: /Push the MR/ }).click();
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect(spine(page, 'Decide')).toHaveCount(0);
+  expect(writes).toEqual([{ path: '/api/decisions/DEC-001/resolve', body: { resolved_with: 1, rationale: '' } }]);
+});
+
+// The band answers GET /api/continuity from `serve`, which is called with the number of decision writes so far.
+async function serveContinuity(page, serve) {
+  let wrote = 0;
+  page.on('request', (req) => { if (req.method() === 'POST' && /\/api\/decisions\//.test(req.url())) wrote += 1; });
+  await page.route('**/api/continuity', (route) => {
+    const reply = serve(wrote);
+    return reply.status ? route.fulfill(reply) : route.fulfill({ json: reply });
+  });
+}
+const withoutDecision = { items: CONTINUITY.items.filter((i) => i.id !== 'DEC-001') };
+const focusInBand = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  return { inBand: !!a && a !== document.body && !!a.closest('.dk-continuity'), cls: a?.className ?? null };
+});
+
+test('a decision settled from the keyboard leaves focus in the band', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect.poll(() => focusInBand(page).then((f) => f.inBand)).toBe(true);
+});
+
+test('a decision refused from the keyboard puts focus back on the pressed button', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/drop': { status: 500, json: { ok: false, error: 'locked' } } }));
+  await page.goto('/#/dashboard');
+  const drop = page.locator('.co-decision').getByRole('button', { name: 'Drop' });
+  await drop.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.co-decision').getByRole('alert')).toHaveText('The server could not save this change. Try again in a moment.');
+  await expect(drop).toBeEnabled();
+  await expect(drop).toBeFocused();
+});
+
+test('an open handover stays open when the band redraws', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  const toggle = spine(page, 'Resume').locator('.co-row__toggle').first();
+  await toggle.click();
+  await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r1' })).toContainText('Cards done');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).click();
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect(spine(page, 'Resume').locator('.co-row__toggle').first()).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r1' })).toContainText('Cards done');
+});
+
+test('a rail with only older items shows its link without saying it is empty', async ({ page }) => {
+  const old = CONTINUITY.items.slice(0, 2).map((i, n) => ({ ...i, age_days: 40 + n }));
+  await openDesk(page, bandMocks({ '/api/continuity': { items: old } }));
+  await page.goto('/#/dashboard');
+  const resume = spine(page, 'Resume');
+  await expect(resume.locator('a.dk-older')).toHaveText('+2 older');
+  await expect(resume.locator('.co-spine__count')).toHaveText('0');
+  await expect(resume.locator('.co-spine__empty')).toHaveCount(0);
+  await expect(resume).not.toContainText('Nothing here');
+});
+
+test('a band that cannot be re-read after a decision says so', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? { status: 500, json: { ok: false, error: 'locked' } } : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).focus();
+  await page.keyboard.press('Enter');
+  const block = band(page).locator('.tm-empty[data-state="error"]');
+  await expect(block).toBeVisible();
+  await expect(block).toContainText('Could not load what to pick up next');
+  await expect(band(page).locator('.co-spine')).toHaveCount(0);
+  const retry = block.getByRole('button', { name: 'Try again' });
+  await expect(retry).toBeFocused();
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+});
+
+test('leaving while a handover body loads draws nothing and throws nothing', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, bandMocks());
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.route('**/api/handover/2026-10-05-r3', async (route) => { await held; await route.fulfill({ json: { body: 'Late' } }); });
+  await page.goto('/#/dashboard');
+  await spine(page, 'Resume').locator('.co-row__toggle').nth(2).click();
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.locator('.dk-continuity')).toHaveCount(0);
+  release();
+  await page.waitForTimeout(300);
+  expect(errors).toEqual([]);
+});
+
+test('at 390px the band has 44px controls and nothing scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDesk(page, bandMocks());
+  await page.goto('/#/dashboard');
+  await expect(page.locator('.co-decision')).toBeVisible();
+  const heights = await band(page).locator('.co-row__toggle, .co-decision__opt, .co-decision .btn, .dk-older')
+    .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+  expect(heights.length).toBeGreaterThan(8);
+  for (const tall of heights) expect(tall).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}): the continuity band shows no violations`, async ({ page }) => {
+    await openDesk(page, bandMocks({ theme }));
+    await page.goto('/#/dashboard');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.co-decision')).toBeVisible();
+    await spine(page, 'Resume').locator('.co-row__toggle').first().click();
+    await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r1' })).toContainText('Cards done');
+    await page.evaluate(axeSource);
+    const result = await page.evaluate(() => window.axe.run(document.querySelector('.dk-continuity'), { resultTypes: ['violations'] }));
+    const found = result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+    expect(found.filter((v) => v.startsWith('nested-interactive'))).toEqual([]);
+    expect(found).toEqual([]);
   });
 }
