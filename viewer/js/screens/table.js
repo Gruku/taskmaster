@@ -71,6 +71,13 @@ const DEFAULT_STATE = {
   filters: { status: [], priority: [], epic: [], area: [] },
 };
 
+// A saved sort from an older build (or a hand-edited prefs file) may name a column that is gone or no longer sortable;
+// keeping it would leave the phone Sort select blank and the rows unsorted, so it falls back to the default.
+function validSort(saved) {
+  const ok = saved && COLUMNS.some(c => c.sortable && c.key === saved.by) && (saved.dir === 'asc' || saved.dir === 'desc');
+  return ok ? { by: saved.by, dir: saved.dir } : { ...DEFAULT_STATE.sort };
+}
+
 export async function mount(root, { store, api, prefs, params }) {
   root.replaceChildren();
   const screen = document.createElement('section');
@@ -178,7 +185,7 @@ export async function mount(root, { store, api, prefs, params }) {
   // Hydrate state from prefs
   const persisted = (store.getPrefs() || {}).table || {};
   const state = {
-    sort:    { ...DEFAULT_STATE.sort, ...(persisted.sort || {}) },
+    sort:    validSort(persisted.sort),
     search:  persisted.search || '',
     filters: {
       status:   [...(persisted.filters?.status   || [])],
