@@ -8,7 +8,7 @@
 // Either way a refused title save is said under the heading, never inside it: the heading names the dialog.
 
 import { railPanels } from './right-rail.js';
-import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, claimTopbarPrimary, tmSegmented, tmAction } from '../lib/topbar.js';
 import { formatAbsolute } from '../lib/time.js';
 import { assignEpicColors, epicColor, epicCssVar } from '../lib/epics.js';
 import { mountInlineField } from './edit/inline-field.js';
@@ -78,6 +78,7 @@ function h(tag, attrs = {}, children = []) {
 
 // The page's meta line: the id to copy, the way back to the tasks, the epic, the phase and when it was created.
 export function taskMeta(raw, { timers } = {}) {
+  raw ??= {};
   const epic = text(raw.epic);
   return detailMeta([
     copyId({ id: text(raw.id), noun: 'task', timers }),
@@ -88,7 +89,8 @@ export function taskMeta(raw, { timers } = {}) {
   ]);
 }
 
-// The Document / Graph switch and Edit, for the full page. `view` is the view actually on screen.
+// The full page's top bar: the Document / Graph switch alone in row 2, and Edit as the page's primary in row 1.
+// `view` is the view actually on screen.
 export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
   const topbar = claimTopbar();
   if (!topbar) return;
@@ -99,11 +101,11 @@ export function mountTaskTopbar({ view, onToggleVariant, onEdit }) {
     ],
     { value: view === 'B' ? 'B' : 'A', onChange: (v) => onToggleVariant?.(v) },
   );
-  const editBtn = tmAction({
-    icon: 'edit', label: 'Edit', title: 'Edit task',
+  topbar.append(seg);
+  claimTopbarPrimary()?.append(tmAction({
+    icon: 'edit', label: 'Edit', title: 'Edit task', variant: 'primary',
     onClick: () => onEdit?.(),
-  });
-  topbar.append(seg, editBtn);
+  }));
 }
 
 let editOpening = null;
@@ -124,10 +126,12 @@ const SHUT_TOGGLE = 'button[aria-expanded="false"][data-focus]:not([aria-haspopu
 // What the user had open, what a field was still saying about a refused save, and where focus sat inside `scope`, as
 // something a re-mounted document can find again. Returns a function that re-opens the same disclosures under `next`,
 // says the same refusals beside the same fields, puts focus on the same thing, and says whether focus could be restored.
+// A refusal is said again only while the field still holds the stored value it was refused against (`data-stored`):
+// once another writer has changed that field, the reason was about a value that is gone.
 export function rememberView(scope) {
   const open = scope ? [...scope.querySelectorAll(OPEN_TOGGLE)].map((b) => b.dataset.focus) : [];
   const said = scope ? [...scope.querySelectorAll('.if-wrap[data-key]')]
-    .map((w) => [w.dataset.key, w.refusal?.()]).filter(([, text]) => text) : [];
+    .map((w) => [w.dataset.key, w.refusal?.(), w.dataset.stored]).filter(([, text]) => text) : [];
   const active = scope?.ownerDocument.activeElement;
   const focused = !!active && scope.contains(active) && active !== scope;
   const key = focused ? active.closest('.if-wrap')?.dataset.key : null;
@@ -139,7 +143,9 @@ export function rememberView(scope) {
     for (const toggle of next.querySelectorAll(SHUT_TOGGLE)) {
       if (open.includes(toggle.dataset.focus)) toggle.click();
     }
-    for (const [field, text] of said) find('.if-wrap', (w) => w.dataset.key === field)?.sayRefusal?.(text);
+    for (const [field, text, stored] of said) {
+      find('.if-wrap', (w) => w.dataset.key === field && w.dataset.stored === stored)?.sayRefusal?.(text);
+    }
     if (!focused) return false;
     const target = (key && find('.if-wrap', (w) => w.dataset.key === key)?.querySelector('[tabindex="0"]'))
       || (key && find('[data-focus]', (e) => e.dataset.focus === `edit:${key}`))
@@ -184,6 +190,8 @@ export function mountTaskDetailDocument(root, ctx) {
     const handle = mountInlineField(host, { schema, fieldKey, entity: task, onSave: inlineSave(task.id, fieldKey, ctx), messageHost });
     fields.push(handle);
     const wrap = [...host.children].find((el) => el.classList.contains('if-wrap') && el.dataset.key === fieldKey);
+    // The value this field was drawn from, so a refusal carried across a re-mount can tell whether it still applies.
+    wrap.dataset.stored = JSON.stringify(task[fieldKey] ?? null);
     let editing = false;
     function dress() {
       const el = wrap.firstElementChild;
