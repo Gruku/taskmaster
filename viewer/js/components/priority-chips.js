@@ -1,3 +1,4 @@
+import { PRIORITY } from './status.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 
 const PRIORITIES = [
@@ -41,4 +42,14 @@ export function updatePriorityChips(el, { active }) {
   el.querySelectorAll('.kanban-pri-tog').forEach(btn => {
     btn.classList.toggle('on', el._active.has(btn.dataset.key));
   });
+}
+
+// Chip specs for the Priority chipRow: the full word, the open count, pressed while active.
+export function priorityChips(active = [], counts = new Map()) {
+  return ['critical', 'high', 'medium', 'low'].map((value) => ({
+    value,
+    label: PRIORITY[value].label,
+    pressed: active.includes(value),
+    count: counts.get(value) ?? 0,
+  }));
 }
