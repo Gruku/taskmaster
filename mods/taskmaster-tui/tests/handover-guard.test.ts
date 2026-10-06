@@ -2,6 +2,7 @@
 // session at 55 idle minutes over a big context; never when a handover was already written, never twice, never late.
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { MockClock } from 'claude-code/testing'
 
 import { GUARD_DEFAULTS, guardConfigOf, guardVerdict, isHandoverWritten } from '../hooks/handover-guard'
 import { PLUGIN } from './fixtures/inputs'
@@ -15,12 +16,16 @@ const TURN_END = { answer: 'ok', reason: 'answer', durationMs: 1, isAborted: fal
 const CREATE = 'mcp__plugin_taskmaster_tm__backlog_handover_create'
 const WRITTEN = 'Handover written: H-0042\n- File: .taskmaster/handovers/H-0042.md'
 
-type GuardWorld = { tokens: number | undefined; submits: string[]; reply: { text: string; isError?: boolean } }
+type GuardWorld = { tokens: number | undefined; submits: string[]; reply: { text: string; isError?: boolean }; stallMs: number }
 
-/** Beneath the plugins: the session's context fill, the prompt box's submissions, and the tm server's handover reply. */
-function guardWorld(on: On, tokens: number | undefined): GuardWorld {
-  const g: GuardWorld = { tokens, submits: [], reply: { text: WRITTEN } }
-  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: g.tokens, window: 1_000_000 }, rateLimits: [] } }) as never)
+/** Beneath the plugins: the session's context fill (answered `stallMs` late on the clock given), the prompt box's
+ *  submissions, and the tm server's handover reply. */
+function guardWorld(on: On, tokens: number | undefined, clock?: MockClock): GuardWorld {
+  const g: GuardWorld = { tokens, submits: [], reply: { text: WRITTEN }, stallMs: 0 }
+  on('session.usage', async () => {
+    if (clock !== undefined && g.stallMs > 0) await clock.sleep(g.stallMs)
+    return { value: { startedAt: 0, context: { tokens: g.tokens, window: 1_000_000 }, rateLimits: [] } } as never
+  })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('prompt.submit', ($, e) => {
     g.submits.push(e.text)
@@ -168,6 +173,37 @@ describe('handover guard: in a session', () => {
     await clock.advance(30 * MIN)
     await $.turn.start({ text: '', turnId: 't2' })
     await clock.advance(30 * MIN)
+    expect(guardPrompts(g)).toEqual([])
+  })
+
+  test('a turn that starts while the turn end is still arming is never fired into', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    worldOf(on, clock)
+    const g = guardWorld(on, 300_000)
+    await Promise.all([$.turn.complete(TURN_END), $.turn.start({ text: '', turnId: 't2' })])
+    await clock.advance(56 * MIN)
+    expect(guardPrompts(g)).toEqual([])
+  })
+
+  test('a check that runs late (the machine slept past 58 min) is skipped', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, 300_000, clock)
+    g.stallMs = 15 * MIN // the timer comes due at 55 min, but the check only reads the time at 70
+    await $.turn.complete(TURN_END)
+    await clock.advance(71 * MIN)
+    expect(guardPrompts(g)).toEqual([])
+    expect(world.logs.some(l => l.text.includes('late timer'))).toBe(true)
+  })
+
+  test("a session end (/clear, resume) cancels the old session's timer", ON, async ($, on) => {
+    const clock = mock.clock(on)
+    worldOf(on, clock)
+    on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+    const g = guardWorld(on, 300_000)
+    await $.turn.complete(TURN_END)
+    await $.session.end({ reason: 'clear', sessionId: 'sess-A' } as never)
+    await clock.advance(56 * MIN)
     expect(guardPrompts(g)).toEqual([])
   })
 

@@ -51,14 +51,20 @@ export const guardPrompt = (idleMinutes: number, tokens: number): string =>
   'prompt cache expires at 60 min. Write a handover now with the taskmaster:handover skill, then stop.'
 
 // The pending check of this module instance; a hot reload cancels it with the old environment, the latch stays in $.state.
-const guard: { cfg: GuardConfig; pending: Timer | null } = { cfg: GUARD_DEFAULTS, pending: null }
+// `epoch` moves on at every turn start, prompt and session end: an arm or a check begun before one of them is stale.
+const guard: { cfg: GuardConfig; pending: Timer | null; epoch: number } = { cfg: GUARD_DEFAULTS, pending: null, epoch: 0 }
 
 function disarm(): void {
   guard.pending?.cancel()
   guard.pending = null
 }
 
-async function check($: EngineInterface): Promise<void> {
+function interrupt(): void {
+  guard.epoch += 1
+  disarm()
+}
+
+async function check($: EngineInterface, epoch: number): Promise<void> {
   guard.pending = null
   const cfg = guard.cfg
   let tokens: number | undefined
@@ -68,6 +74,7 @@ async function check($: EngineInterface): Promise<void> {
     tokens = undefined
   }
   const verdict = guardVerdict(cfg, await read($, GUARD), await $.clock.now(), tokens)
+  if (epoch !== guard.epoch) return
   if (!verdict.fire) {
     if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-tui: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
     return
@@ -82,6 +89,10 @@ async function check($: EngineInterface): Promise<void> {
   const minutes = Math.round(cfg.idleMs / MIN)
   $.ui.log(`taskmaster-tui: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
   $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: asking for a handover before the cache goes cold`)
+  if (epoch !== guard.epoch) {
+    $.ui.log('taskmaster-tui: handover guard latched but not sent: the session moved on meanwhile', { to: 'debug' })
+    return
+  }
   try {
     await $.prompt.submit({ text: guardPrompt(minutes, verdict.tokens) })
   } catch (error) {
@@ -89,14 +100,16 @@ async function check($: EngineInterface): Promise<void> {
   }
 }
 
-async function arm($: EngineInterface): Promise<void> {
+async function arm($: EngineInterface, epoch: number): Promise<void> {
   disarm()
-  if (!guard.cfg.enabled) return
+  if (!guard.cfg.enabled || epoch !== guard.epoch) return
   const now = await $.clock.now()
   const held = await update($, GUARD, (g): TmHandoverGuard => (g.latch === 'none' ? { ...g, lastTurnEnd: now } : g))
-  if (held.latch !== 'none') return
+  // A turn that started while this one's end was being recorded must never have a timer running under it.
+  if (held.latch !== 'none' || epoch !== guard.epoch) return
+  disarm()
   guard.pending = $.clock.after(guard.cfg.idleMs, () => {
-    void check($).catch(() => undefined) // a check that cannot read the state now just does not ask
+    void check($, epoch).catch(() => undefined) // a check that cannot read the state now just does not ask
   })
 }
 
@@ -107,21 +120,33 @@ async function noteHandover($: EngineInterface): Promise<void> {
 
 export function onHandoverGuard(on: On, options: PluginOptions): void {
   guard.cfg = guardConfigOf(options)
-  disarm()
+  interrupt()
 
   on('turn.complete', async ($, e, next) => {
+    const epoch = guard.epoch
     const result = await next(e)
-    if (e.agentId === undefined) await arm($)
+    if (e.agentId !== undefined) return result
+    try {
+      await arm($, epoch)
+    } catch (error) {
+      $.ui.log(`taskmaster-tui: handover guard not armed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    }
     return result
   })
 
   on('turn.start', async ($, e, next) => {
-    disarm()
+    interrupt()
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
-    disarm()
+    interrupt()
+    return next(e)
+  })
+
+  // /clear and a resume end this session: a timer armed in it must never check (or prompt) the next one.
+  on('session.end', async ($, e, next) => {
+    interrupt()
     return next(e)
   })
 
