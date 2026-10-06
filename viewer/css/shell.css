@@ -366,6 +366,7 @@ body, .shell, .sidebar, .topbar, .main {
      keeps the sideways cut without making body a scroll container that never scrolls (the topbar's sticky would bind
      to it and scroll away with the page). */
   html, body {
+    overflow-x: hidden;
     overflow-x: clip;
     overflow-y: visible;
     height: auto;
@@ -454,6 +455,7 @@ body, .shell, .sidebar, .topbar, .main {
   .main {
     height: auto;
     min-height: 0;
+    overflow-x: hidden;
     overflow-x: clip;
     overflow-y: visible;
   }
