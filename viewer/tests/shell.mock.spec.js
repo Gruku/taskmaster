@@ -551,12 +551,34 @@ test.describe('topbar row 2 at phone width', () => {
 
   test('parked controls are a column in the Filters popover and any parked chip row wraps', async ({ page }) => {
     await mockApi(page, withContent());
-    // Ideas parks its status and tag chip rows in topbar row 2 (Kanban's chips moved into its own filter bar in 3a Task 6).
-    const idea = (n, status, tags) => ({ id: `I-${n}`, title: `Idea ${n}`, status, tags, created: '2026-10-01' });
-    await page.route('**/api/ideas**', (route) => route.fulfill({ json: { ideas: [
-      idea(1, 'new', ['ux', 'viewer']), idea(2, 'exploring', ['perf']), idea(3, 'parked', ['docs', 'store']),
-    ] } }));
-    await page.goto('/#/ideas');
+    await page.goto('/#/settings');
+    await expect(page.locator('#page-title')).toHaveText('Settings');
+    // Probes stand in for a screen's row 2, so this holds whatever screens park: two buttons and a chip row of long labels
+    // that cannot fit on one line at 390 and so must wrap once parked.
+    await page.evaluate(async () => {
+      const { claimTopbar } = await import('/js/lib/topbar.js');
+      const row = claimTopbar();
+      const more = row.querySelector(':scope > .overflow-more');
+      const btn = (n) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn--secondary probe';
+        b.textContent = `Probe control ${n}`;
+        b.style.width = '140px';
+        return b;
+      };
+      const chips = document.createElement('div');
+      chips.className = 'tm-chip-row probe-chips';
+      for (let i = 1; i <= 5; i++) {
+        const c = document.createElement('button');
+        c.type = 'button';
+        c.className = 'btn btn--secondary';
+        c.textContent = `Long chip label number ${i}`;
+        chips.append(c);
+      }
+      for (const el of [btn(1), chips, btn(2)]) row.insertBefore(el, more);
+    });
+    await rowSettled(page);
     await expect(filters(page)).toBeVisible();
     await filters(page).click();
     const pop = filtersPopover(page);
