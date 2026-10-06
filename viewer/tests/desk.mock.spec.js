@@ -610,3 +610,11 @@ test('review and clean-up rows say status and severity as a shape plus a word, n
   const text = await page.locator('.dk-continuity').innerText();
   for (const slug of ['in-review', 'in-progress', 'P2 · open']) expect(text).not.toContain(slug);
 });
+
+test('an idea row says its status once, as a shape plus a word', async ({ page }) => {
+  await mockApi(page, dashboardMocks({ theme: 'dark' }));
+  await page.goto('/#/dashboard');
+  const idea = page.locator('.dk-continuity [data-item-id="IDEA-7"]');
+  await expect(idea.locator('.co-row__next .marker__word')).toHaveText('Brainstorm', { timeout: 15_000 });
+  expect((await idea.innerText()).match(/brainstorm/gi)).toHaveLength(1);
+});
