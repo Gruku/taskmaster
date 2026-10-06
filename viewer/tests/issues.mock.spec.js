@@ -329,6 +329,30 @@ test('at 390 the Status tab strip fades on the side that can still scroll, and t
   await expect(tablist).toBeHidden();
 });
 
+test('at 390 the tab names the column: its own heading is hidden on screen, the panel keeps its name, axe passes', async ({ page }) => {
+  await boot(page, { width: 390, height: 844 });
+  const panel = page.locator('.issues-col:visible');
+  await expect(panel).toHaveCount(1);
+  await expect(panel).toHaveAttribute('role', 'tabpanel');
+  const selected = page.getByRole('tablist', { name: 'Issue columns' }).getByRole('tab', { selected: true });
+  const label = await selected.locator('.column-tabs__label').textContent();
+  await expect(panel).toHaveAccessibleName(new RegExp(`^${label}`));
+  const head = await panel.locator('.issues-col__head').boundingBox();
+  expect(head.width <= 1 && head.height <= 1).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const wide = await page.locator('.issues-col__head').first().boundingBox();
+  expect(wide.height).toBeGreaterThan(10);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(axeSource);
+  const result = await page.evaluate(async () => {
+    const aria = window.axe.getRules().map((r) => r.ruleId).filter((id) => id.startsWith('aria-'));
+    const values = ['color-contrast', 'nested-interactive', 'scrollable-region-focusable', 'heading-order', ...aria];
+    return (await window.axe.run(document.getElementById('screen-mount'), { runOnly: { type: 'rule', values },
+      resultTypes: ['violations'] })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+  });
+  expect(result).toEqual([]);
+});
+
 test('at 1440 every column shows, each at least 280px wide', async ({ page }) => {
   await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
   await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Status' }).click();
