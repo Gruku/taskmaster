@@ -65,6 +65,17 @@ test('tmSearch: the clear control is a real button with a drawn glyph, not a ×'
   assert.equal(el.classList.contains('tm-search--has-value'), false);
 });
 
+test('tmSearch: once the search has left the document, Clear dispatches no input event', () => {
+  const { el, input } = tmSearch({ placeholder: 'Find…' });
+  dom.window.document.body.appendChild(el);
+  input.value = 'abc';
+  let heard = 0;
+  input.addEventListener('input', () => { heard += 1; });
+  el.remove();
+  el.querySelector('.tm-search__clear').click();
+  assert.equal(heard, 0);
+});
+
 test('tmSegmented: pressing a segment moves aria-pressed to it', () => {
   const changes = [];
   const seg = tmSegmented([{ key: 'A', label: 'Document' }, { key: 'B', label: 'Graph' }], { value: 'A', onChange: (k) => changes.push(k) });
