@@ -28,6 +28,12 @@
 .kanban-filters__epic { flex: 1 1 240px; min-width: 240px; }
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
+/* One control height across the bar: More, Epic options and Clear filters match the chips (chips.css .chip). */
+.kanban-filters .overflow-more,
+.kanban-filters .epic-options-btn,
+.kanban-filters .kanban-clear { min-height: 28px; }
+/* .btn sets display, which would otherwise outrank the hidden attribute. */
+.kanban-filters .kanban-clear[hidden] { display: none; }
 
 /* ─────────── EPIC OPTIONS POPOVER (the epic hue is the swatch only; words stay foreground) ─────────── */
 .epic-options__body { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-xs); min-width: 0; }
@@ -124,6 +130,9 @@
   column-gap: var(--space-micro);
   row-gap: var(--space-micro);
 }
+/* Kept in the row whatever its width: at 390 it gives way (its name truncates) so More stays on screen. Two classes:
+   chips.css loads after this sheet and its .chip sets flex: 0 0 auto. */
+.phase-chip.phase-chip--current { flex-shrink: 1; min-width: 0; }
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
   display: block; height: 4px; overflow: hidden;

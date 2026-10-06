@@ -103,6 +103,7 @@ export async function mount(root, { store, api, prefs }) {
   // Group dropdown
   const group = document.createElement('select');
   group.className = 'kanban-select';
+  group.setAttribute('aria-label', 'Group by');
   for (const opt of [['status','Group: Status'],['phase','Group: Phase'],['epic','Group: Epic'],['area','Group: Area']]) {
     const o = document.createElement('option');
     o.value = opt[0]; o.textContent = opt[1];
@@ -115,6 +116,7 @@ export async function mount(root, { store, api, prefs }) {
   // Sort dropdown
   const sort = document.createElement('select');
   sort.className = 'kanban-select';
+  sort.setAttribute('aria-label', 'Sort by');
   const SORT_OPTS = [
     ['priority:desc', 'Sort: priority ↓'],
     ['priority:asc',  'Sort: priority ↑'],

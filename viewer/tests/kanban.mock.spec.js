@@ -275,3 +275,171 @@ for (const theme of ['dark', 'light']) {
     expect(await run('.popover[role="menu"]')).toEqual([]);
   });
 }
+
+// Task 6: the filter bar.
+const rowChips = (page, row) => page.locator(`.kanban-filters__${row} .chip-row__chips > .chip`);
+const priChip = (page, word) => rowChips(page, 'priority').filter({ has: page.locator('.chip__label', { hasText: new RegExp(`^${word}$`) }) });
+const epicOption = (page, id) => page.locator('.epic-option').filter({ has: page.locator(`a[href="#/epic/${id}"]`) });
+const searchBox = (page) => page.locator('.tm-search input');
+const bumpBoard = (page) => page.evaluate(() => import('/js/store.js').then(({ store }) => {
+  const next = structuredClone(store.getBacklog());
+  next.revision = `r-${Date.now()}`;
+  store.setBoard(next);
+}));
+const visibleTops = (loc) => loc.evaluateAll((els) => [...new Set(els.filter((e) => e.offsetParent).map((e) => e.offsetTop))]);
+
+test('the epic row is one line with More at 1440 and at 390', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.locator('.kanban-filters__epic .overflow-more')).toBeVisible();
+    expect(await visibleTops(rowChips(page, 'epic'))).toHaveLength(1);
+    expect(await visibleTops(rowChips(page, 'priority'))).toHaveLength(1);
+  }
+});
+
+test('an epic\'s count is the same on its chip and in Epic options, and the label says what it counts', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  // A chip that does not fit is parked in the Epic row's More list.
+  const chip = page.locator('.chip[data-value="epic-03"] .chip__count');
+  const parked = !(await chip.count());
+  if (parked) await page.locator('.kanban-filters__epic .overflow-more').click();
+  const onChip = await chip.textContent();
+  if (parked) await page.keyboard.press('Escape');
+  await page.locator('.epic-options-btn').click();
+  await expect(epicOption(page, 'epic-03').locator('.epic-option__count')).toHaveText(onChip);
+  expect(await page.locator('.kanban-filters__epic .chip-row__label').getAttribute('title')).toContain('open tasks');
+});
+
+test('priority chips are words and filter the board', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  expect(await rowChips(page, 'priority').locator('.chip__label').allTextContents()).toEqual(['Critical', 'High', 'Medium', 'Low']);
+  const words = () => page.locator('.card-task .card-pri .marker__word').allTextContents();
+  await priChip(page, 'High').click();
+  await expect.poll(async () => [...new Set(await words())]).toEqual(['High']);
+  await priChip(page, 'Critical').click({ modifiers: ['Shift'] });
+  await expect(priChip(page, 'Critical')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => [...new Set(await words())].sort()).toEqual(['Critical', 'High']);
+});
+
+test('no control sits inside a chip', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await expect(page.locator('.chip a, .chip button')).toHaveCount(0);
+  await page.evaluate(axeSource);
+  const v = await page.evaluate(() => window.axe.run(document.querySelector('.kanban-filterbar'),
+    { runOnly: { type: 'rule', values: ['nested-interactive'] }, resultTypes: ['violations'] }).then((r) => r.violations.length));
+  expect(v).toBe(0);
+});
+
+test('Clear filters appears with a filter and clears everything', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const clear = page.locator('.kanban-clear');
+  await expect(clear).toBeHidden();
+  await priChip(page, 'High').click();
+  await searchBox(page).fill('T-10');
+  await expect(clear).toBeVisible();
+  await clear.click();
+  expect(await page.locator('.kanban-filters .chip[aria-pressed="true"]').evaluateAll((els) => els.map((e) => e.dataset.value))).toEqual(['__all__']);
+  await expect(searchBox(page)).toHaveValue('');
+  await expect(clear).toBeHidden();
+  await expect(searchBox(page)).toBeFocused();
+});
+
+test('pinning an epic in Epic options puts it first and saves it', async ({ page }) => {
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/api/viewer/prefs')) puts.push(r.postDataJSON()); });
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  const pin = epicOption(page, 'epic-20').locator('.epic-option__pin');
+  await pin.click();
+  await expect(pin).toHaveAttribute('aria-pressed', 'true');
+  await expect(rowChips(page, 'epic').nth(1)).toHaveAttribute('data-value', 'epic-20');
+  await expect(rowChips(page, 'epic').nth(1).locator('.chip__label')).toHaveText(/^Epic 20/);
+  const pinned = (o) => (o && typeof o === 'object' ? (o.kanban?.pinnedEpics ?? Object.values(o).map(pinned).find(Boolean)) : undefined);
+  await expect.poll(() => pinned(puts.at(-1))).toEqual(['epic-20']);
+  await expect(page.locator('.epic-options')).toBeVisible();
+});
+
+test('a poll keeps focus on a pressed chip and keeps Epic options open', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const high = priChip(page, 'High');
+  await high.click();
+  await high.focus();
+  await bumpBoard(page);
+  await expect(high).toBeFocused();
+  await expect(high).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.epic-options-btn').click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+  await bumpBoard(page);
+  await page.waitForTimeout(200);
+  await expect(page.locator('.epic-options')).toBeVisible();
+});
+
+test('leaving the board with Epic options open leaves nothing behind', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+  await page.evaluate(() => { location.hash = '#/table'; });
+  await expect(page.locator('table.tbl')).toBeVisible();
+  await expect(page.locator('.popover')).toHaveCount(0);
+  expect(await page.evaluate(() => import('/js/components/popover.js').then((m) => m.openPopoverCount()))).toBe(0);
+  expect(errors).toEqual([]);
+  await page.evaluate(() => { location.hash = '#/kanban'; });
+  await expect(page.locator('.card-task').first()).toBeVisible();
+  const more = page.locator('.kanban-filters__epic .overflow-more');
+  await expect(more).toBeVisible();
+  const shown = await more.locator('.overflow-more__count').textContent();
+  await more.click();
+  await expect(page.locator('.popover .chip')).toHaveCount(Number(shown));
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`axe (${theme}): the filter bar and its popovers`, async ({ page }) => {
+    await board(page, { theme, board: longBoard(), viewport: { width: 1440, height: 900 } });
+    await page.evaluate(axeSource);
+    const rules = ['color-contrast', 'nested-interactive', 'aria-allowed-attr', 'aria-allowed-role', 'aria-command-name', 'aria-hidden-focus',
+      'aria-input-field-name', 'aria-prohibited-attr', 'aria-required-attr', 'aria-required-children', 'aria-required-parent', 'aria-roles',
+      'aria-toggle-field-name', 'aria-valid-attr', 'aria-valid-attr-value', 'label', 'select-name'];
+    const run = (sel) => page.evaluate(({ s, values }) => window.axe.run(document.querySelector(s), { runOnly: { type: 'rule', values }, resultTypes: ['violations'] })
+      .then((r) => r.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(' ')}`)), { s: sel, values: rules });
+    expect(await run('.kanban-filterbar')).toEqual([]);
+    await page.locator('.epic-options-btn').click();
+    await expect(page.locator('.epic-options')).toBeVisible();
+    expect(await run('body')).toEqual([]);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.epic-options')).toHaveCount(0);
+    await page.locator('.kanban-filters__epic .overflow-more').click();
+    await expect(page.locator('.popover')).toBeVisible();
+    expect(await run('body')).toEqual([]);
+  });
+}
+
+test('at 390x844 every chip, the options button and Clear filters are at least 44px tall', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await searchBox(page).fill('T-10');
+  await expect(page.locator('.kanban-clear')).toBeVisible();
+  const heights = await page.locator('.kanban-filters .chip, .epic-options-btn, .kanban-clear')
+    .evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => [e.dataset.value || e.className, e.getBoundingClientRect().height]));
+  expect(heights.length).toBeGreaterThan(3);
+  expect(heights.filter(([, hgt]) => hgt < 44)).toEqual([]);
+});
+
+test('at 390 the phase strip\'s More is inside the screen and its text is not cut', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const more = page.locator('.phase-strip .overflow-more');
+  await expect(more).toBeVisible();
+  const m = await more.evaluate((el) => ({ right: el.getBoundingClientRect().right, vw: innerWidth, sw: el.scrollWidth, cw: el.clientWidth }));
+  expect(m.right).toBeLessThanOrEqual(m.vw);
+  expect(m.sw).toBeLessThanOrEqual(m.cw);
+});
+
+test('at 1440 every control in the filter bar is the chip height', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await priChip(page, 'High').click();
+  await expect(page.locator('.kanban-clear')).toBeVisible();
+  const hs = await page.locator('.kanban-filters .chip, .kanban-filters .overflow-more, .epic-options-btn, .kanban-clear')
+    .evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().height)));
+  expect([...new Set(hs)]).toEqual([28]);
+});
