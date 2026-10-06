@@ -3,8 +3,9 @@
 // /epic/<id> page and in the detail modal alike. Pure of page chrome: it writes nothing outside `container`.
 import { mountMarkdown } from './markdown.js';
 import {
-  designBadge, epicStats, epicProgress, epicBreakdown, isCloseable, epicStatusMeta, STATUS_GROUPS,
+  designBadge, epicStats, epicProgress, epicBreakdown, isCloseable, epicStatusMeta, statusGroupOf, STATUS_GROUPS,
 } from '../lib/epic-format.js';
+import { epicSwatch } from '../lib/epics.js';
 import { marker, statusMeta, priorityMarker } from './status.js';
 import { linkRow } from './link-row.js';
 import { stateBlock } from './empty-state.js';
@@ -24,11 +25,7 @@ const ATTENTION = {
 };
 
 const groupMeta = (status) => (status === 'other' ? { ...OTHER } : statusMeta('task', status));
-// The bucket epicStats() counts a task in, so a group's rows and the breakdown's figure are the same tasks.
-const bucketOf = (t) => {
-  const s = t.status == null || t.status === '' ? 'todo' : t.status;
-  return STATUS_GROUPS.includes(s) ? s : 'other';
-};
+const swatchEl = (n) => (n ? h('span', { class: `epic-swatch epic-swatch--cat-${n}`, 'aria-hidden': 'true' }) : null);
 const words = (v) => (Array.isArray(v) ? v.filter(Boolean).join('; ') : v == null ? '' : String(v));
 const section = (cls, title, ...body) => h('section', { class: cls }, [h('h2', { class: 'ed-h' }, title), ...body]);
 
@@ -81,7 +78,7 @@ function taskRow(t) {
 function taskGroups(tasks) {
   const groups = h('div', { class: 'ed-groups' });
   for (const status of [...STATUS_GROUPS, 'other']) {
-    const list = tasks.filter((t) => bucketOf(t) === status);
+    const list = tasks.filter((t) => statusGroupOf(t) === status);
     if (!list.length) continue;
     const group = h('details', { class: 'ed-group', 'data-status': status }, [
       h('summary', { class: 'ed-group__head' },
@@ -117,7 +114,7 @@ function docsList(docs) {
 // Every task link is a real href: the page's detail interceptor and the modal's own link handler route them, so
 // onNavigate is accepted and unused. onComponentNav(componentKey) is handed to the architecture map.
 // Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on the same container — it is the
-// only handle that disconnects the architecture map's ResizeObserver.
+// only handle that disconnects the architecture map's ResizeObserver and the swatch's board subscription.
 export function mountEpicDetail(container, { epic, store, onNavigate, onComponentNav, chrome = 'page' } = {}) {
   container.classList.add('ed-root');
   container.replaceChildren();
@@ -129,6 +126,22 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
   const main = h('div', { class: 'ed-main' });
   const side = h('aside', { class: 'ed-side' });
   container.append(header(epic, stats, chrome), h('div', { class: 'ed-grid' }, [main, side]));
+
+  // The epic's swatch leads the marker row. It is read from the board, which can land after the epic (or reorder its
+  // epics), so it follows every board change; without a board, or for an epic the board does not list, there is none.
+  const markers = container.querySelector('.ed-markers');
+  let swatch = null;
+  let shown = null;
+  const paintSwatch = () => {
+    const n = epicSwatch(epic.id, store?.getBacklog?.()?.epics ?? []);
+    if (n === shown) return;
+    swatch?.remove();
+    shown = n;
+    swatch = swatchEl(n);
+    if (swatch) markers.prepend(swatch);
+  };
+  paintSwatch();
+  const unsubBoard = store?.subscribe?.('backlog', paintSwatch) ?? (() => {});
 
   const narrative = [epic.description, epic._body].filter(Boolean).join('\n\n');
   if (narrative) {
@@ -158,5 +171,5 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
   const docs = epic.docs && typeof epic.docs === 'object' ? epic.docs : {};
   if (Object.keys(docs).length) side.appendChild(docsList(docs));
 
-  return () => { disposeDiagram(); container.classList.remove('ed-root'); container.replaceChildren(); };
+  return () => { unsubBoard(); disposeDiagram(); container.classList.remove('ed-root'); container.replaceChildren(); };
 }

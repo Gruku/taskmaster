@@ -4,7 +4,8 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, ARCH_EPIC_FIXTURE, epicDetailMocks, epicPayload } from './mock-fixtures.js';
+import { BOARD, ARCH_EPIC_FIXTURE, LONG_IDS_BOARD, epicDetailMocks, epicPayload } from './mock-fixtures.js';
+import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -14,13 +15,25 @@ const EXPECTED_BLOCK_COUNT = 4;
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
-async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/epic/viewer', ready = 'h1.ed-title' } = {}) {
+// A real backlog's volume on the board, with this spec's `viewer` epic listed last so it has a swatch too.
+const LONG_WITH_VIEWER = { ...LONG_IDS_BOARD, epics: [...LONG_IDS_BOARD.epics, BOARD.epics.find((e) => e.id === 'viewer')] };
+
+async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/epic/viewer', ready = 'h1.ed-title', board, extra = {} } = {}) {
   await page.setViewportSize({ width, height });
-  await mockApi(page, epicDetailMocks({ theme }));
+  await mockApi(page, { ...epicDetailMocks({ theme }), ...(board ? { '/api/board': board, '/api/backlog': board } : {}), ...extra });
   await page.goto('/' + route);
   await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
   if (ready) await expect(page.locator(ready).first()).toBeVisible();
 }
+// The colour `var(--cat-N)` paints in the page's theme.
+const catColour = (page, n) => page.evaluate((n) => {
+  const probe = document.createElement('span');
+  probe.style.background = `var(--cat-${n})`;
+  document.body.append(probe);
+  const colour = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return colour;
+}, n);
 const mountState = (page) => page.locator('#screen-mount').evaluate((el) => [el.className, el.getAttribute('style')]);
 const taskRow = (scope, id) => scope.locator('.ed-task').filter({ has: scope.page().locator('.t-id', { hasText: id }) });
 // A real click on the row's own content: the link's hit area covers the row, so the pointer lands on the link.
@@ -44,6 +57,47 @@ test('the header reads id · Epics, the name, the lifecycle marker and the desig
   expect(text).not.toContain('🔒');
   await expect(page.getByText('Exploring')).toHaveCount(0);
   expect(await mountState(page)).toEqual(['screen-mount', null]);
+});
+
+test('the epic swatch is its categorical colour', async ({ page }) => {
+  const extra = { '/api/epic/epic-01': epicPayload(LONG_IDS_BOARD, 'epic-01'), '/api/epic/epic-07': epicPayload(LONG_IDS_BOARD, 'epic-07') };
+  await boot(page, { route: '#/epic/epic-01', board: LONG_IDS_BOARD, extra });
+  const markers = page.locator('.ed-markers');
+  const swatches = (scope) => scope.locator('.epic-swatch').evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+  const first = await catColour(page, epicSwatch('epic-01', LONG_IDS_BOARD.epics));
+  // The board may land after the epic: the swatch follows it.
+  await expect(markers.locator('.epic-swatch')).toHaveCount(1);
+  expect(await swatches(markers)).toEqual([first]);
+  await expect(markers.locator(':scope > :first-child')).toHaveClass(/\bepic-swatch\b/);
+
+  // Six swatches, then round again: the 7th epic is the 1st one's colour.
+  await page.evaluate(() => { location.hash = '#/epic/epic-07'; });
+  await expect(page.locator('h1.ed-title')).toHaveText(LONG_IDS_BOARD.epics[6].name);
+  await expect(markers.locator('.epic-swatch')).toHaveCount(1);
+  expect(epicSwatch('epic-07', LONG_IDS_BOARD.epics)).toBe(1);
+  expect(await swatches(markers)).toEqual([first]);
+
+  // The same swatch in the detail modal.
+  await page.evaluate(() => import('/js/lib/open-detail.js').then((m) => m.openDetail('epic', 'epic-07')));
+  const dialog = page.getByRole('dialog', { name: LONG_IDS_BOARD.epics[6].name });
+  await expect(dialog.locator('.ed-markers .epic-swatch')).toHaveCount(1);
+  expect(await swatches(dialog.locator('.ed-markers'))).toEqual([first]);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // An epic the board does not list: no swatch, and its id and name are still there.
+  await page.evaluate(() => { location.hash = '#/epic/viewer'; });
+  await expect(page.locator('h1.ed-title')).toHaveText('Viewer re-skin');
+  await expect(page.locator('.ed-id')).toHaveText('viewer');
+  await expect(markers.locator('.marker__word').first()).toHaveText('Active');
+  await expect(page.locator('.epic-swatch')).toHaveCount(0);
+
+  // The next poll brings a board that lists it: the open page takes its swatch without a reload.
+  const next = { ...LONG_WITH_VIEWER, revision: 'r-long-2' };
+  await mockApi(page, { ...epicDetailMocks(), ...extra, '/api/board': next, '/api/backlog': next });
+  await expect(markers.locator('.epic-swatch')).toHaveCount(1, { timeout: 10_000 });
+  expect(await swatches(markers)).toEqual([await catColour(page, epicSwatch('viewer', LONG_WITH_VIEWER.epics))]);
+  await expect(markers.locator(':scope > :first-child')).toHaveClass(/\bepic-swatch\b/);
 });
 
 test('progress says closed/total and the breakdown and legend agree with the task list', async ({ page }) => {
@@ -319,7 +373,8 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
         .violations.map((x) => `${x.id}: ${x.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
     }, [selector, exclude]);
 
-    await boot(page, { theme, width: w, height: h });
+    await boot(page, { theme, width: w, height: h, board: LONG_WITH_VIEWER });
+    await expect(page.locator('.ed-markers .epic-swatch')).toHaveCount(1);
     await page.evaluate(axeSource);
     // Done is closed by default; open it so its rows are checked too.
     await page.locator('.ed-group[data-status="done"]').evaluate((el) => { el.open = true; });
@@ -327,9 +382,8 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
 
     await page.evaluate(() => { location.hash = '#/epic/arch-test'; });
     await expect(page.locator('.ed-diagram .cd-block').first()).toBeVisible();
-    // The task cards inside the blocks are the old Kanban card (card.js, owned by track 3a, whose re-skinned card is not
-    // merged into this branch yet); the map's blocks are ours. 3b Task 8 drops this exclusion once 3a's card merges.
-    expect(await run('#screen-mount', ['.card-task']), 'architecture map').toEqual([]);
+    // The map's blocks and 3a's re-skinned Kanban cards inside them.
+    expect(await run('#screen-mount'), 'architecture map').toEqual([]);
     expect(await page.locator('.cd-block').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).boxShadow))])).toEqual(['none']);
 
     await page.evaluate(() => import('/js/lib/open-detail.js').then((m) => m.openDetail('epic', 'viewer')));

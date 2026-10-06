@@ -76,6 +76,15 @@ table.tbl {
 }
 code.t-tech { background: transparent; padding: 0; }
 .t-none { color: var(--foreground-subtle); }
+/* An epic cell: the epic's categorical swatch (a hue only, never text) beside its name. */
+.t-epic-cell { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.epic-swatch { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.epic-swatch--cat-1 { background: var(--cat-1); }
+.epic-swatch--cat-2 { background: var(--cat-2); }
+.epic-swatch--cat-3 { background: var(--cat-3); }
+.epic-swatch--cat-4 { background: var(--cat-4); }
+.epic-swatch--cat-5 { background: var(--cat-5); }
+.epic-swatch--cat-6 { background: var(--cat-6); }
 /* The block's width is the host's visible width (set from table.js) and it sticks to the left edge, so a table wider
    than the frame never pushes it, or its one action, out of view. */
 .tbl-empty { padding: var(--space-2xl) 0; white-space: normal; }

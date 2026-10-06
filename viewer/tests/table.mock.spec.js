@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
 import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -44,6 +45,15 @@ async function boot(page, { theme = 'dark', width = 1440, height = 900, route = 
   return puts;
 }
 
+// The colour `var(--cat-N)` paints in the page's theme.
+const catColour = (page, n) => page.evaluate((n) => {
+  const probe = document.createElement('span');
+  probe.style.background = `var(--cat-${n})`;
+  document.body.append(probe);
+  const colour = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return colour;
+}, n);
 const group = (page, name) => page.getByRole('group', { name });
 const chip = (page, name, value) => group(page, name).locator(`.chip[data-value="${value}"]`);
 const statusCells = (page) => page.locator('.tbl-row .tbl-cell--status .marker__word').allTextContents();
@@ -252,6 +262,37 @@ const otherWriter = (page, id, patch) => page.evaluate(([id, patch]) => import('
   next.revision = `r-${Date.now()}`;
   store.setBoard(next);
 }), [id, patch]);
+
+test('the epic swatch is its categorical colour', async ({ page }) => {
+  // One more task, in an epic the board does not list.
+  const stray = { id: 'T-9999', title: 'Stray task', status: 'todo', priority: 'low', epic: 'ghost-epic', phase: 'P1', depends_on: [] };
+  const board = { ...LONG_IDS_BOARD, tasks: [...LONG_IDS_BOARD.tasks, stray] };
+  await boot(page, { board });
+  await expect(page.locator('.tbl-row')).toHaveCount(board.tasks.length);
+  const cats = [];
+  for (const n of [1, 2, 3, 4, 5, 6]) cats.push(await catColour(page, n));
+  const cells = await page.locator('.tbl-row').evaluateAll((els) => els.map((el) => {
+    const cell = el.querySelector('.tbl-cell--epic');
+    const inner = cell.querySelector(':scope > .t-epic-cell');
+    return {
+      id: el.dataset.taskId,
+      swatches: [...cell.querySelectorAll('.epic-swatch')].map((s) => getComputedStyle(s).backgroundColor),
+      first: inner?.firstElementChild?.classList.contains('epic-swatch') ?? false,
+      text: cell.textContent,
+      title: cell.querySelector('.truncate')?.title ?? null,
+    };
+  }));
+  const names = new Map(LONG_IDS_BOARD.epics.map((e) => [e.id, e.name]));
+  const want = (t) => (names.has(t.epic)
+    ? { id: t.id, swatches: [cats[epicSwatch(t.epic, LONG_IDS_BOARD.epics) - 1]], first: true, text: names.get(t.epic), title: names.get(t.epic) }
+    : { id: t.id, swatches: [], first: false, text: t.epic, title: t.epic });
+  const byId = new Map(cells.map((c) => [c.id, c]));
+  expect(board.tasks.map((t) => byId.get(t.id))).toEqual(board.tasks.map(want));
+  // Six swatches, then round again: a task in the 7th epic shows the 1st one's colour.
+  const inEpic = (id) => byId.get(board.tasks.find((t) => t.epic === id).id).swatches;
+  expect(inEpic('epic-07')).toEqual(inEpic('epic-01'));
+  expect(inEpic('epic-01')).toEqual([cats[0]]);
+});
 
 test('cells are markers and plain words — no pills, no "···"', async ({ page }) => {
   await boot(page);

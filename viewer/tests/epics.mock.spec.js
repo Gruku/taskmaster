@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
 import { BOARD, LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC, epicPayload } from './mock-fixtures.js';
+import { epicSwatch } from '../js/lib/epics.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 // BOARD plus an epic with no tasks, one whose tasks are all closed, one planned and one in a status the map does not know.
@@ -36,6 +37,15 @@ async function boot(page, { theme = 'dark', width = 1440, height = 900, board = 
   await expect(page.locator('.epic-row').first()).toBeVisible();
 }
 const row = (page, id) => page.locator(`.epic-row[data-epic-id="${id}"]`);
+// The colour `var(--cat-N)` paints in the page's theme.
+const catColour = (page, n) => page.evaluate((n) => {
+  const probe = document.createElement('span');
+  probe.style.background = `var(--cat-${n})`;
+  document.body.append(probe);
+  const colour = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return colour;
+}, n);
 
 test('each epic is one link row with its lifecycle word, a bar and closed/total', async ({ page }) => {
   await boot(page);
@@ -65,6 +75,29 @@ test('on a real backlog\'s volume the one closeable epic says so, and no other r
   await expect(row(page, LONG_CLOSEABLE_EPIC).locator('.epic-tag')).toHaveText('Closeable');
   await expect(row(page, LONG_CLOSEABLE_EPIC).locator('.epic-row__fill')).toHaveAttribute('style', 'width: 100%;');
   await expect(page.locator('.epic-tag')).toHaveCount(1);
+});
+
+test('the epic swatch is its categorical colour', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  const cats = [];
+  for (const n of [1, 2, 3, 4, 5, 6]) cats.push(await catColour(page, n));
+  const rows = await page.locator('.epic-row').evaluateAll((els) => els.map((el) => {
+    const name = el.querySelector('.epic-row__name');
+    return {
+      id: el.dataset.epicId,
+      swatches: [...el.querySelectorAll('.epic-swatch')].map((s) => getComputedStyle(s).backgroundColor),
+      first: name.firstElementChild?.classList.contains('epic-swatch') ?? false,
+      name: name.textContent,
+    };
+  }));
+  expect(rows).toEqual(LONG_IDS_BOARD.epics.map((ep) => ({
+    id: ep.id, swatches: [cats[epicSwatch(ep.id, LONG_IDS_BOARD.epics) - 1]], first: true, name: ep.name,
+  })));
+  // Six swatches, then round again: the 7th epic is the 1st one's colour.
+  expect(rows[6].swatches).toEqual(rows[0].swatches);
+  expect(rows[6].swatches).toEqual([cats[0]]);
+  // Decorative: the link's name is still the epic's name alone.
+  await expect(row(page, 'epic-07').getByRole('link')).toHaveAccessibleName(LONG_IDS_BOARD.epics[6].name);
 });
 
 test('the root keeps no class or style, and rows carry no colour', async ({ page }) => {
