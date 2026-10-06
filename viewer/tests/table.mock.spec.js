@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD } from './mock-fixtures.js';
+import { BOARD, LONG_IDS_BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -27,11 +27,12 @@ const TABLE_BOARD = {
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); });
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
-async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/table', table } = {}) {
+async function boot(page, { theme = 'dark', width = 1440, height = 900, route = '#/table', table, board = TABLE_BOARD } = {}) {
   await page.setViewportSize({ width, height });
   await mockApi(page, {
     '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...(table ? { table } : {}) },
-    '/api/board': TABLE_BOARD, '/api/backlog': TABLE_BOARD, '/api/bugs': [],
+    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
+    '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
   });
   const puts = [];
   page.on('request', (r) => {
@@ -39,13 +40,13 @@ async function boot(page, { theme = 'dark', width = 1440, height = 900, route = 
   });
   await page.goto('/' + route);
   await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-  if (route === '#/table') await expect(page.locator('table.tbl')).toBeVisible();
+  if (route.startsWith('#/table')) await expect(page.locator('table.tbl')).toBeVisible();
   return puts;
 }
 
 const group = (page, name) => page.getByRole('group', { name });
 const chip = (page, name, value) => group(page, name).locator(`.chip[data-value="${value}"]`);
-const statusCells = (page) => page.locator('.tbl-row .tbl-cell--status').allTextContents();
+const statusCells = (page) => page.locator('.tbl-row .tbl-cell--status .marker__word').allTextContents();
 
 test('every chip is a toggle button and every group with options is a row', async ({ page }) => {
   await boot(page);
@@ -214,13 +215,13 @@ test('leaving the Table, even with More open, leaves no observer or font listene
   // Live observers on the rail itself (the Table's own) and on each row's chips (overflowRow's).
   const watching = () => page.evaluate(() => {
     const on = (cls) => [...window.__live].filter((o) => o.__targets.some((t) => t.classList?.contains(cls))).length;
-    return { rail: on('tbl-chips'), rows: on('chip-row__chips') };
+    return { rail: on('tbl-chips'), rows: on('chip-row__chips'), host: on('tbl-host') };
   });
-  expect(await watching()).toEqual({ rail: 1, rows: 8 });   // each row: a ResizeObserver and a MutationObserver
+  expect(await watching()).toEqual({ rail: 1, rows: 8, host: 1 });   // each row: a ResizeObserver and a MutationObserver
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('.card-task').first()).toBeVisible();
   expect(await page.evaluate(() => window.__fonts)).toBe(fontsBefore);
-  expect(await watching()).toEqual({ rail: 0, rows: 0 });
+  expect(await watching()).toEqual({ rail: 0, rows: 0, host: 0 });
   await expect(page.locator('.popover')).toHaveCount(0);
   await expect(page.locator('.chip-row')).toHaveCount(0);
 });
@@ -232,15 +233,263 @@ for (const theme of ['dark', 'light']) {
     await chip(page, 'Status', 'todo').click({ modifiers: ['Shift'] });
     await expect(page.getByRole('button', { name: 'Clear filters' })).toBeVisible();
     await page.evaluate(axeSource);
-    // The body cells' status, priority and epic markers are plan 3b's (still the legacy hex pastels, unreadable in the
-    // light theme); contrast is checked on everything this task draws: the chip rail and the header row.
     const result = await page.evaluate(async () => {
       const aria = window.axe.getRules().map((r) => r.ruleId).filter((id) => id.startsWith('aria-'));
       const opts = (values) => ({ runOnly: { type: 'rule', values }, resultTypes: ['violations'] });
       const all = await window.axe.run(document.getElementById('screen-mount'), opts(['nested-interactive', ...aria]));
-      const ink = await window.axe.run({ include: [['#screen-mount']], exclude: [['#screen-mount .tbl-row']] }, opts(['color-contrast']));
+      const ink = await window.axe.run({ include: [['#screen-mount']] }, opts(['color-contrast']));
       return [...all.violations, ...ink.violations];
     });
     expect(result.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+const host = (page) => page.locator('.tbl-host');
+// Another writer's change, as the poll would deliver it: the store gets a new board revision and every screen redraws.
+const otherWriter = (page, id, patch) => page.evaluate(([id, patch]) => import('/js/store.js').then(({ store }) => {
+  const next = structuredClone(store.getBacklog());
+  Object.assign(next.tasks.find((t) => t.id === id), patch);
+  next.revision = `r-${Date.now()}`;
+  store.setBoard(next);
+}), [id, patch]);
+
+test('cells are markers and plain words — no pills, no "···"', async ({ page }) => {
+  await boot(page);
+  const row = page.locator('.tbl-row[data-task-id="T-102"]');
+  await expect(row.locator('.tbl-cell--status .marker__word')).toHaveText('In progress');
+  await expect(row.locator('.tbl-cell--priority .marker__word')).toHaveText('Critical');
+  await expect(row.locator('.tbl-cell--epic')).toHaveText('Viewer re-skin');
+  await expect(page.locator('.t-status, .t-pri, .t-epic, .t-area')).toHaveCount(0);
+  const cut = await page.locator('.tbl-cell--status, .tbl-cell--priority').evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
+  expect(cut).toBe(0);
+  await expect(page.locator('.tbl-row[tabindex]')).toHaveCount(0);
+});
+
+test('at 1440 with 230 long rows the ID column fits its longest ID and ID and title stay put while the rest scrolls', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-row')).toHaveCount(230);
+  const ids = await page.locator('.tbl-cell--id').evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent));
+  expect(ids).toEqual([]);
+  expect(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-more-end', '');
+  await expect(page.locator('.tbl-fade')).toHaveCSS('opacity', '1');
+  const titles = await page.locator('.tbl-cell--title .truncate').evaluateAll((els) => els.filter((el) => el.title !== el.textContent).length);
+  expect(titles).toBe(0);
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-scrolled', '');
+  await expect(page.locator('.tbl-frame')).not.toHaveAttribute('data-more-end', '');
+  const at = await page.evaluate(() => {
+    const h = document.querySelector('.tbl-host').getBoundingClientRect().left;
+    const id = document.querySelector('.tbl-row .tbl-cell--id').getBoundingClientRect();
+    const title = document.querySelector('.tbl-row .tbl-cell--title').getBoundingClientRect().left;
+    return { id: Math.round(id.left - h), title: Math.round(title - id.right) };
+  });
+  expect(Math.abs(at.id)).toBeLessThanOrEqual(1);
+  expect(Math.abs(at.title)).toBeLessThanOrEqual(1);
+});
+
+test('a click on a row opens its task; Ctrl+click on its link is the browser\'s', async ({ page }) => {
+  await boot(page);
+  await page.locator('.tbl-row[data-task-id="T-102"] .tbl-cell--status').click();
+  await expect(page.getByRole('dialog', { name: DETAIL_TASK.title })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal')).toHaveCount(0);
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.locator('.tbl-row[data-task-id="T-102"] .tbl-link').click({ modifiers: ['Control'] }),
+  ]);
+  await popup.close();
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+test('a keyboard user opens a row and comes back to it', async ({ page }) => {
+  await boot(page);
+  // After the last header button, Tab goes to the first row's link: rows are not tab stops of their own.
+  await page.locator('th[data-key="started"] button.sort-header').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.tbl-row').first().locator('.tbl-link')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.tbl-row').nth(1).locator('.tbl-link')).toBeFocused();
+  const link = page.locator('.tbl-row[data-task-id="T-102"] .tbl-link');
+  await link.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog', { name: DETAIL_TASK.title })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(link).toBeFocused();
+});
+
+test('a redraw keeps the keyboard on the same task and the frame where it was', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await host(page).evaluate((el) => { el.scrollTop = 900; el.scrollLeft = 200; });
+  const link = page.locator('.tbl-row[data-task-id="T-1040"] .tbl-link');
+  await link.evaluate((a) => a.focus({ preventScroll: true }));
+  const where = await host(page).evaluate((el) => [el.scrollTop, el.scrollLeft]);
+  expect(where[0]).toBeGreaterThan(0);
+  await otherWriter(page, 'T-1040', { title: 'Renamed by another writer' });
+  await expect(link).toHaveText('Renamed by another writer');
+  await expect(link).toBeFocused();
+  expect(await host(page).evaluate((el) => [el.scrollTop, el.scrollLeft])).toEqual(where);
+  // The focused task leaves the filtered set: the row now at its place takes the keyboard, never <body>.
+  await chip(page, 'Status', 'todo').click();
+  const ids = await page.locator('.tbl-row').evaluateAll((rows) => rows.map((r) => r.dataset.taskId));
+  const at = 3;
+  await page.locator(`.tbl-row[data-task-id="${ids[at]}"] .tbl-link`).focus();
+  await otherWriter(page, ids[at], { status: 'done' });
+  await expect(page.locator('.tbl-row')).toHaveCount(ids.length - 1);
+  const now = page.locator('.tbl-row .tbl-link:focus');
+  await expect(now).toHaveCount(1);
+  expect(await now.evaluate((a) => a.closest('tr').dataset.taskId)).toBe(ids[at + 1]);
+});
+
+test('a link with ?status= opens the Table with those chips pressed, without saving them', async ({ page }) => {
+  const puts = await boot(page, { route: '#/table?status=in-progress', table: { filters: { epic: [] } } });
+  await expect(chip(page, 'Status', 'in-progress')).toHaveAttribute('aria-pressed', 'true');
+  const ip = TABLE_BOARD.tasks.filter((t) => t.status === 'in-progress').length;
+  await expect.poll(() => statusCells(page)).toEqual(Array(ip).fill('In progress'));
+  await expect(page.locator('.sidebar-link[data-key="table"]')).toHaveClass(/active/);
+  expect(puts.filter((b) => b.table)).toEqual([]);
+});
+
+test('?status= takes a comma list, ignores unknown values, and an all-unknown value changes nothing', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await boot(page, { route: '#/table?status=in-review,blocked,bogus,in-review' });
+  await expect(page.locator('.tbl-chips .chip[aria-pressed="true"]')).toHaveCount(2);
+  await expect.poll(async () => new Set(await statusCells(page))).toEqual(new Set(['In review', 'Blocked']));
+  await page.evaluate(() => { location.hash = '#/table?status=bogus'; });
+  await expect(page.locator('.tbl-row')).toHaveCount(TABLE_BOARD.tasks.length);
+  await expect(page.locator('.tbl-chips .chip[aria-pressed="true"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('no tasks is a state block', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const empty = { ...BOARD, tasks: [] };
+  await mockApi(page, { '/api/board': empty, '/api/backlog': empty, '/api/bugs': [] });
+  await page.goto('/#/table');
+  await expect(page.locator('.tbl-empty .tm-empty__headline')).toHaveText('No tasks yet.');
+  await expect(page.locator('.tbl-empty .tm-empty__label')).toHaveText('Table');
+});
+
+test('no match is a state block whose one action clears the filters', async ({ page }) => {
+  await boot(page);
+  await page.getByPlaceholder('Filter… (prefix ! to exclude)').fill('nothing-matches-this');
+  const block = page.locator('.tbl-empty .tm-empty');
+  await expect(block.locator('.tm-empty__label')).toHaveText('No match');
+  await expect(block.locator('.tm-empty__headline')).toHaveText(`0 of ${TABLE_BOARD.tasks.length} tasks match.`);
+  await block.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(page.locator('.tbl-row')).toHaveCount(TABLE_BOARD.tasks.length);
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}, 1440): every table cell passes contrast`, async ({ page }) => {
+    await boot(page, { theme, board: LONG_IDS_BOARD });
+    await page.evaluate(axeSource);
+    const v = await page.evaluate(async () => (await window.axe.run(document.getElementById('screen-mount'),
+      { runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive'] }, resultTypes: ['violations'] })).violations);
+    expect(v.map((x) => `${x.id}: ${x.nodes.length} — ${x.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  });
+}
+
+// ── Review round 1 ────────────────────────────────────────────────────────────────────────────────────────────────
+
+const subcount = (page) => page.locator('.tm-subcount');
+const searchBox = (page) => page.getByPlaceholder('Filter… (prefix ! to exclude)');
+
+test('the count says how many show only while a chip, the search or a ?status= link narrows the list', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(subcount(page)).toHaveText('230 tasks');
+  await chip(page, 'Status', 'todo').click();
+  const todo = LONG_IDS_BOARD.tasks.filter((t) => t.status === 'todo').length;
+  await expect(subcount(page)).toHaveText(`230 tasks · ${todo} visible`);
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(subcount(page)).toHaveText('230 tasks');
+  await searchBox(page).fill('T-100');
+  const hits = LONG_IDS_BOARD.tasks.filter((t) => `${t.id} ${t.title || ''} ${t.branch || ''}`.toLowerCase().includes('t-100')).length;
+  await expect(subcount(page)).toHaveText(`230 tasks · ${hits} visible`);
+  await searchBox(page).fill('');
+  await expect(subcount(page)).toHaveText('230 tasks');
+});
+
+test('a ?status= link counts as narrowing; ?status=archived is no chip and changes nothing', async ({ page }) => {
+  await boot(page, { route: '#/table?status=in-progress' });
+  const ip = TABLE_BOARD.tasks.filter((t) => t.status === 'in-progress').length;
+  await expect(subcount(page)).toHaveText(`${TABLE_BOARD.tasks.length} tasks · ${ip} visible`);
+  await page.evaluate(() => { location.hash = '#/table?status=archived'; });
+  await expect(page.locator('.tbl-row')).toHaveCount(TABLE_BOARD.tasks.length);
+  await expect(page.locator('.tbl-chips .chip[aria-pressed="true"]')).toHaveCount(0);
+  await expect(subcount(page)).toHaveText(`${TABLE_BOARD.tasks.length} tasks`);
+});
+
+test('at 900 wide the no-match block and its action stay inside the frame, wherever it is scrolled', async ({ page }) => {
+  await boot(page, { width: 900, height: 800 });
+  await searchBox(page).fill('nothing-matches-this');
+  await expect(page.locator('.tbl-empty .tm-empty')).toBeVisible();
+  const inView = () => page.evaluate(() => {
+    const host = document.querySelector('.tbl-host');
+    const r = host.getBoundingClientRect();
+    const right = r.left + host.clientWidth;
+    const inside = (el) => { const b = el.getBoundingClientRect(); return b.left >= r.left - 0.5 && b.right <= right + 0.5; };
+    return { scrolls: host.scrollWidth > host.clientWidth, block: inside(host.querySelector('.tbl-empty .tm-empty')), action: inside(host.querySelector('.tbl-empty .tm-empty button')) };
+  });
+  expect(await inView()).toEqual({ scrolls: true, block: true, action: true });
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-scrolled', '');
+  expect(await inView()).toEqual({ scrolls: true, block: true, action: true });
+});
+
+test('the fade stops at classic scrollbars, and the header height is the host\'s scroll padding', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  // Headless Chromium hides scrollbars, even styled ones; a 15px right and bottom border takes the same room a classic
+  // Windows scrollbar does (offsetWidth - clientWidth counts both alike), so the arithmetic is what is checked.
+  await page.addStyleTag({ content: '.tbl-host { border-right: 15px solid transparent; border-bottom: 15px solid transparent; }' });
+  await expect.poll(() => host(page).evaluate((el) => [el.offsetWidth - el.clientWidth, el.offsetHeight - el.clientHeight])).toEqual([15, 15]);
+  await expect(page.locator('.tbl-fade')).toHaveCSS('right', '15px');
+  await expect(page.locator('.tbl-fade')).toHaveCSS('bottom', '15px');
+  const head = await page.locator('table.tbl thead').evaluate((el) => `${el.offsetHeight}px`);
+  await expect(host(page)).toHaveCSS('scroll-padding-top', head);
+});
+
+test('at 800 wide a long ID lets the title scroll away, so the other columns come into view beside a fixed ID', async ({ page }) => {
+  await boot(page, { width: 800, height: 800, board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-title-loose', '');
+  const seen = await host(page).evaluate((el) => {
+    const id = el.querySelector('.tbl-row .tbl-cell--id');
+    const status = el.querySelector('.tbl-row .tbl-cell--status');
+    el.scrollLeft = status.offsetLeft - id.offsetWidth;
+    const b = status.getBoundingClientRect();
+    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    return { status: status.contains(hit), id: Math.round(id.getBoundingClientRect().left - el.getBoundingClientRect().left) };
+  });
+  expect(seen.status).toBe(true);
+  expect(Math.abs(seen.id)).toBeLessThanOrEqual(1);
+});
+
+test('at 1440 the same long IDs keep the title fixed beside the ID', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).not.toHaveAttribute('data-title-loose', '');
+});
+
+test('with very short IDs the ID header and its sort arrow are not cut', async ({ page }) => {
+  const short = { ...TABLE_BOARD, tasks: TABLE_BOARD.tasks.slice(0, 3).map((t, i) => ({ ...t, id: `T-${i + 1}` })) };
+  await boot(page, { board: short });
+  const th = await page.locator('th[data-key="id"]').evaluate((el) => [el.scrollWidth, el.clientWidth]);
+  expect(th[0]).toBeLessThanOrEqual(th[1]);
+});
+
+test('a Shift-click on a row, or the end of a text selection in it, opens nothing', async ({ page }) => {
+  await boot(page);
+  const row = page.locator('.tbl-row[data-task-id="T-102"]');
+  await row.locator('.tbl-cell--status').click({ modifiers: ['Shift'] });
+  await page.evaluate(() => getSelection().removeAllRanges());
+  const b = await row.locator('.tbl-cell--epic > span').boundingBox();
+  await page.mouse.move(b.x + 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2, { steps: 5 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => String(getSelection()))).not.toBe('');
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal')).toHaveCount(0);
+  expect(page.context().pages()).toHaveLength(1);
+  expect(await page.evaluate(() => location.hash)).toBe('#/table');
+});
