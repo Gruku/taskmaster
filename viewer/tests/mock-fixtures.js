@@ -382,3 +382,59 @@ export const DECISION = {
 export const settingsMocks = ({ theme = 'dark', ...prefs } = {}) => ({
   '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...prefs },
 });
+
+// ---- 3b Task 5: Epic detail ------------------------------------------------------------------------------------------
+
+// Fixture epic used for architecture-map e2e tests (copied verbatim from epic-detail.spec.js).
+// Three components with two edges: ingest→thumb, thumb→cdn.
+// One unassigned task so the trailing _unassigned bucket is also rendered.
+export const ARCH_EPIC_FIXTURE = {
+  id: 'arch-test',
+  name: 'Architecture Test Epic',
+  status: 'active',
+  design_status: 'exploring',
+  description: 'Fixture epic for architecture-map e2e tests.',
+  docs: {},
+  stats: { total: 4, done: 1 },
+  components: {
+    ingest: { title: 'Ingest', after: [] },
+    thumb:  { title: 'Thumbnailer', after: ['ingest'] },
+    cdn:    { title: 'CDN', after: ['thumb'] },
+  },
+  component_rollup: {
+    ingest: { status: 'done',        total: 1, done: 1 },
+    thumb:  { status: 'in-progress', total: 2, done: 0 },
+    cdn:    { status: 'todo',        total: 0, done: 0 },
+    _unassigned: { status: 'todo', total: 1, done: 0 },
+  },
+  attention: [],
+  tasks: [
+    { id: 'ING-1', title: 'Decode frames', status: 'done',    component: 'ingest', priority: 'high' },
+    { id: 'THM-1', title: 'Resize',        status: 'todo',    component: 'thumb',  priority: 'medium' },
+    { id: 'THM-2', title: 'Watermark',     status: 'todo',    component: 'thumb',  priority: 'low' },
+    { id: 'X-1',   title: 'Loose task',    status: 'todo',    component: null,     priority: 'low' },
+  ],
+};
+
+// The Epic detail route table: a full epic (`viewer`), the architecture map (`arch-test`), no tasks (`empty`), a real
+// backlog's volume (`big`), a 404 (`nope`) and a server failure whose raw text must never reach the page (`broken`).
+export function epicDetailMocks({ theme = 'dark' } = {}) {
+  return {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
+    '/api/epic/viewer': epicPayload(BOARD, 'viewer', {
+      design_status: 'locked',
+      description: 'Every screen takes the **Reality Reprojection** system.',
+      done_when: 'All screens pass the audit.',
+      docs: { spec: 'docs/specs/viewer.md' },
+      attention: [{ id: 'T-102', title: 'Re-skin the Kanban cards and columns', blocked: false, why: 'critical and in progress' }],
+    }),
+    '/api/task/T-102/detail': taskDetail(DETAIL_TASK),
+    '/api/epic/arch-test': ARCH_EPIC_FIXTURE,
+    '/api/epic/empty': epicPayload(BOARD, 'empty', { id: 'empty', name: 'Empty' }),
+    '/api/epic/nope': { status: 404, json: { ok: false, error: 'epic not found' } },
+    '/api/epic/broken': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
+    '/api/epic/big': epicPayload({ ...LONG_IDS_BOARD, epics: [{ id: 'big', name: 'Big epic', status: 'active' }],
+      tasks: LONG_IDS_BOARD.tasks.slice(0, 60).map((t) => ({ ...t, epic: 'big' })) }, 'big'),
+  };
+}

@@ -62,7 +62,7 @@ test('empty component renders a "no tasks yet" stub', () => {
   });
   const block = host.querySelector('.cd-block[data-id="cdn"]');
   assert.ok(block.querySelector('.cd-block__empty'), 'empty stub present');
-  assert.match(block.textContent, /no tasks yet/i);
+  assert.match(block.querySelector('.cd-block__empty').textContent, /^No tasks yet$/);
 });
 
 test('block visual-state class derives from rollup status', () => {
@@ -79,7 +79,7 @@ test('block summary surfaces blocked count for in-progress rollup', () => {
     rollup: { a: { status: 'in-progress', total: 4, done: 1, blocked: 2 } },
     tasks: [],
   });
-  assert.match(host.querySelector('.cd-block[data-id="a"] .cd-block__summary').textContent, /in-progress · 2 blocked/);
+  assert.match(host.querySelector('.cd-block[data-id="a"] .cd-block__summary').textContent, /^In progress · 2 blocked$/);
 });
 
 test('connector overlay has one cd-edge path per after-edge', () => {
