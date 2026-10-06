@@ -72,10 +72,10 @@ function headline(id, sentence) {
 }
 
 // One side of a difference: its tag ("Yours", "Saved") over the value, cut to three lines with the full text kept.
-function side(tag, value, which) {
+function side(tag, value, which, text = conflictValueText) {
   return h('div', { class: `cb-side cb-side-${which}` }, [
     h('span', { class: 'cb-tag' }, tag),
-    truncate(conflictValueText(value), { lines: 3, tag: 'div', className: `cb-val cb-val-${which}` }),
+    truncate(text(value), { lines: 3, tag: 'div', className: `cb-val cb-val-${which}` }),
   ]);
 }
 
@@ -86,14 +86,14 @@ const sentenceCase = (key) => capitalise(String(key).replace(/[_-]+/g, ' ').trim
 export function showFieldConflict({
   entityKind, entityId, fieldKey, fieldLabel,
   localValue, currentValue, currentEtag,
-  onKeepMine, onUseServer,
+  onKeepMine, onUseServer, text = conflictValueText,
 }) {
   const id = `cb-${++seq}`;
   const banner = h('div', { class: 'cb-banner cb-field', role: 'region', 'aria-labelledby': `${id}-headline` }, [
     headline(`${id}-headline`, `"${fieldLabel}" on ${entityKind} ${entityId} was changed by someone else`),
     h('div', { class: 'cb-diff' }, [
-      side('Yours', localValue, 'mine'),
-      side('Saved', currentValue, 'server'),
+      side('Yours', localValue, 'mine', text),
+      side('Saved', currentValue, 'server', text),
     ]),
     h('div', { class: 'cb-actions' }, [
       h('button', { type: 'button', class: 'cb-use-server btn btn--secondary',
@@ -109,7 +109,7 @@ export function showFieldConflict({
 }
 
 export function showFullConflict({
-  entityKind, entityId, localDraft, currentValue, currentEtag, labels = {}, onResolve, onDismiss,
+  entityKind, entityId, localDraft, currentValue, currentEtag, labels = {}, texts = {}, onResolve, onDismiss,
 }) {
   const id = `cb-${++seq}`;
   // Compute per-field diffs.
@@ -123,10 +123,11 @@ export function showFullConflict({
   for (const k of Object.keys(decisions)) {
     const keyId = `${id}-key-${k}`;
     const name = `${id}-${k}`;
+    const text = Object.hasOwn(texts, k) ? texts[k] : conflictValueText;
     const row = h('div', { class: 'cb-multi-row' }, [
       h('div', { class: 'cb-key', id: keyId }, Object.hasOwn(labels, k) ? labels[k] : sentenceCase(k)),
-      side('Yours', localDraft[k], 'mine'),
-      side('Saved', currentValue[k], 'server'),
+      side('Yours', localDraft[k], 'mine', text),
+      side('Saved', currentValue[k], 'server', text),
       h('div', { class: 'cb-multi-actions', role: 'radiogroup', 'aria-labelledby': keyId }, [
         _radio(name, 'mine', 'Keep mine', decisions[k] === 'mine',
                () => { decisions[k] = 'mine'; }),
@@ -171,6 +172,17 @@ export function conflictValueText(v) {
     return entries.map(([k, x]) => `${k}: ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n');
   }
   return String(v);
+}
+
+// A choice field's value as the form words it: the matching option's label, so a lost race on Status reads
+// "In progress", not "in-progress". Options are read per call because some specs compute them with a getter.
+export function optionText(spec) {
+  const one = (v) => {
+    const opts = spec?.options;
+    const hit = Array.isArray(opts) ? opts.find((o) => o?.value === v) : undefined;
+    return hit && hit.label != null ? String(hit.label) : conflictValueText(v);
+  };
+  return (v) => (Array.isArray(v) ? (v.length ? v.map(one).join(', ') : conflictValueText(v)) : one(v));
 }
 
 function _radio(name, value, label, checked, onChange) {
