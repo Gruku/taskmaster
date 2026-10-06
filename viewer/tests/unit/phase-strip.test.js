@@ -121,6 +121,18 @@ test('phase strip: the archived menu checks the active archived phase and pickin
   s.destroy();
 });
 
+test('phase strip: a second press on Archived closes its menu and keeps focus on the button', () => {
+  const { el, s } = mount('P0');
+  const btn = el.querySelector('.phase-archived');
+  btn.click();
+  assert.equal(openPopoverCount(), 1);
+  btn.click();
+  assert.equal(openPopoverCount(), 0);
+  assert.notEqual(btn.getAttribute('aria-expanded'), 'true');
+  assert.equal(document.activeElement, btn);
+  s.destroy();
+});
+
 test('phase strip: no archived phase means no Archived button', () => {
   const { el, s } = mount('__all__', rows().filter((p) => p.status !== 'archived'));
   assert.equal(el.querySelector('.phase-archived'), null);

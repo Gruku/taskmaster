@@ -95,7 +95,7 @@
   grid-template-rows: auto auto;
   align-items: center;
   column-gap: var(--space-micro);
-  row-gap: 2px;
+  row-gap: var(--space-micro);
 }
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {

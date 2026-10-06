@@ -63,7 +63,10 @@ export function phaseStrip({ onSelect }) {
     return b;
   };
 
+  let menu = null;
   function openArchived(anchor) {
+    // A second press on Archived closes its menu rather than reopening it.
+    if (menu?.isOpen()) { menu.close('toggle', { returnFocus: true }); menu = null; return; }
     // The items exist before the popover opens: it picks the item to focus (the checked one, else the first) at open.
     const list = h('div', { class: 'phase-archived__menu' });
     let handle = null;
@@ -84,6 +87,7 @@ export function phaseStrip({ onSelect }) {
     handle = openPopover({
       anchor, content: list, role: 'menu', label: 'Archived phases', focus: 'checked',
     });
+    menu = handle;
   }
 
   function archivedButton() {
