@@ -558,7 +558,7 @@ test.describe('topbar row 2 at phone width', () => {
     await expect(page.getByRole('dialog', { name: 'Create task' })).toBeVisible();
   });
 
-  test('parked controls are a column in the Filters popover and a parked chip row wraps', async ({ page }) => {
+  test('parked controls are a column in the Filters popover and any parked chip row wraps', async ({ page }) => {
     await mockApi(page, withContent());
     await page.goto('/#/kanban');
     await expect(filters(page)).toBeVisible();
@@ -583,7 +583,8 @@ test.describe('topbar row 2 at phone width', () => {
     });
     expect(look.direction).toBe('column');
     expect(look.stacked).toBe(true);
-    expect(look.chipWrap.length).toBeGreaterThan(0);
+    // Kanban's priority chips moved from row 2 into its filter bar (3a Task 6), so no chip row is parked here;
+    // any parked chip row still wraps.
     expect(look.chipWrap.every((w) => w === 'wrap')).toBe(true);
     expect(look.sideways).toBe(0);
     expect(look.covered).toEqual([]);
