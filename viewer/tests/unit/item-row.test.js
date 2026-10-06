@@ -108,3 +108,14 @@ test('the type tag is the word, with no per-type class', () => {
     assert.equal(chip.className, 'co-chip');
   }
 });
+
+test('an empty rail says "Nothing here." only when nothing older was left out', async () => {
+  const { createSpine } = await import('../../js/components/continuity/spine.js');
+  assert.equal(createSpine({ label: 'Resume', items: [] }).root.querySelector('.co-spine__empty').textContent, 'Nothing here.');
+  const older = createSpine({ label: 'Resume', items: [], olderCount: 2 }).root;
+  assert.equal(older.querySelector('.co-spine__empty'), null);
+  assert.equal(older.querySelector('h2.co-spine__label').textContent, 'Resume');
+  const full = createSpine({ label: 'Resume', items: [{ ...base, type: 'handover', id: 'h9' }] });
+  assert.equal(full.rows.length, 1);
+  assert.equal(full.rows[0].row.root.dataset.itemId, 'h9');
+});

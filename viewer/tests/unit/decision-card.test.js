@@ -62,6 +62,19 @@ test('a refused resolve disables every button while it runs, then says why in wo
   assert.equal(err.textContent, 'The server could not save this change. Try again in a moment.');
 });
 
+test('a refusal hands focus back to the pressed button', async () => {
+  const card = createDecisionCard({
+    item, decision,
+    onResolve: () => Promise.reject(Object.assign(new Error('POST → 500'), { code: 500 })),
+  });
+  document.body.appendChild(card.root);
+  const opt = card.root.querySelectorAll('.co-decision__opt')[2];
+  opt.focus();
+  opt.click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(document.activeElement, opt);
+});
+
 test('a refused drop is said on the card with the decision noun', async () => {
   const card = createDecisionCard({
     item, decision,

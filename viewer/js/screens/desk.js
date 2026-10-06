@@ -10,6 +10,7 @@ import { createComposer } from '../components/desk/composer.js';
 import { describeWriteError } from '../components/edit/write-errors.js';
 import { createSummaryStrip, summaryCounts } from '../components/desk/summary-strip.js';
 import { getIssues, listBugs } from '../api.js';
+import { stateBlock } from '../components/empty-state.js';
 
 export const meta = { title: 'Dashboard', icon: '◧', sidebarKey: 'dashboard' };
 
@@ -55,9 +56,11 @@ export async function mount(root, { store, api }) {
     try { notes = (await api.notes())?.notes || []; }
     catch (e) { console.error('[desk] notes fetch failed', e); notes = []; }
   }
+  // A failed read is remembered so the band can say so, rather than show every rail as empty.
+  let itemsFailed = false;
   async function loadItems() {
-    try { items = (await api.get('/api/continuity'))?.items || []; }
-    catch (e) { console.error('[desk] continuity fetch failed', e); items = []; }
+    try { items = (await api.get('/api/continuity'))?.items || []; itemsFailed = false; }
+    catch (e) { console.error('[desk] continuity fetch failed', e); items = []; itemsFailed = true; }
   }
 
   // ── Board (sticky notes) ─────────────────────────────────────────────────
@@ -121,6 +124,57 @@ export async function mount(root, { store, api }) {
   const bandLive = () => bandEl.isConnected;
   let bandGeneration = 0;
 
+  // Handovers the person opened stay open across redraws; the body they last read is shown again at once.
+  const openRows = new Set();
+  const bodies = new Map();
+
+  // The band control focus was last on. A write disables the pressed button, which can drop focus to <body> before the
+  // redraw; this remembers that it was in the band. Focus moved somewhere else on the page forgets it.
+  let bandFocus = null;
+  bandEl.addEventListener('focusin', (e) => { bandFocus = e.target; });
+  bandEl.addEventListener('focusout', (e) => { if (e.relatedTarget && !bandEl.contains(e.relatedTarget)) bandFocus = null; });
+
+  const CONTROLS = 'a[href], button';
+  // Where focus was, in terms that survive a redraw: the item, the rail, the control's place in its item.
+  function focusPlace() {
+    const active = document.activeElement;
+    const el = bandEl.contains(active) ? active : (!active || active === document.body) ? bandFocus : null;
+    if (!el) return null;
+    const holder = el.closest('[data-item-id]');
+    const railEl = el.closest('[data-rail]');
+    return {
+      id: holder?.dataset.itemId ?? null,
+      control: holder ? [...holder.querySelectorAll(CONTROLS)].indexOf(el) : -1,
+      rail: railEl?.dataset.rail ?? null,
+      index: holder && railEl ? [...railEl.querySelectorAll('[data-item-id]')].indexOf(holder) : -1,
+      older: el.classList.contains('dk-older'),
+    };
+  }
+  // The same control when it is still there; else the next decision (or the Decide heading) for a settled decision;
+  // else the band's first control; else the composer — never <body>.
+  function restoreFocus(place) {
+    const byId = place.id && bandEl.querySelector(`[data-item-id="${CSS.escape(place.id)}"]`);
+    if (byId) {
+      const controls = [...byId.querySelectorAll(CONTROLS)];
+      const target = controls[place.control] || controls[0];
+      if (target) { target.focus(); return; }
+    }
+    const railEl = place.rail && bandEl.querySelector(`[data-rail="${place.rail}"]`);
+    if (railEl && place.older) { railEl.querySelector('.dk-older')?.focus(); if (bandEl.contains(document.activeElement)) return; }
+    if (railEl && place.rail === 'decide') {
+      const held = [...railEl.querySelectorAll('[data-item-id]')];
+      const next = held[Math.min(Math.max(place.index, 0), held.length - 1)]?.querySelector(CONTROLS);
+      if (next) { next.focus(); return; }
+      const heading = railEl.querySelector('.co-spine__label');
+      heading.tabIndex = -1;
+      heading.focus();
+      return;
+    }
+    const first = bandEl.querySelector(CONTROLS);
+    if (first) first.focus();
+    else composer.focus();
+  }
+
   async function fetchDecision(id) {
     try { return await api.get(`/api/decisions/${encodeURIComponent(id)}`); }
     catch { return null; }
@@ -143,31 +197,48 @@ export async function mount(root, { store, api }) {
     const decisions = await Promise.all(rail.items.map((item) => fetchDecision(item.id)));
     const railEl = h('section', { class: 'co-spine' }, createSpineHead({ label: RAIL_LABEL.decide, count: rail.items.length }));
     const list = h('div', { class: 'co-spine__list' });
+    const rows = [];
     rail.items.forEach((item, i) => {
       const decision = decisions[i];
-      list.appendChild(decision
-        ? createDecisionCard({
+      if (decision) {
+        list.appendChild(createDecisionCard({
           item,
           decision,
           onResolve: (idx) => resolveDecision(item.id, idx),
           onDrop: (id) => dropDecision(id),
-        }).root
-        : createItemRow({ item, onToggle: toggleRow }).root);
+        }).root);
+        return;
+      }
+      const row = createItemRow({ item, onToggle: toggleRow });
+      rows.push({ item, row });
+      list.appendChild(row.root);
     });
     railEl.appendChild(list);
-    return railEl;
+    return { root: railEl, rows };
+  }
+
+  function bandError() {
+    return stateBlock({
+      state: 'error', label: 'Continuity', headline: 'Could not load what to pick up next.',
+      action: { label: 'Try again', onClick: () => refreshBand() },
+    });
   }
 
   async function renderBand() {
     const generation = ++bandGeneration;
     const rails = buildRails(items);
     const railEls = [];
+    const rows = [];
     for (const key of ['resume', 'review', 'decide', 'cleanup']) {
+      if (itemsFailed) break;
       const rail = rails[key];
       if (rail.items.length === 0 && rail.older === 0) continue;
-      const railEl = key === 'decide' && rail.items.length > 0
+      const built = key === 'decide' && rail.items.length > 0
         ? await renderDecideRail(rail)
-        : createSpine({ label: RAIL_LABEL[key], items: rail.items, onToggle: toggleRow }).root;
+        : createSpine({ label: RAIL_LABEL[key], items: rail.items, onToggle: toggleRow, olderCount: rail.older });
+      const railEl = built.root;
+      railEl.dataset.rail = key;
+      rows.push(...built.rows);
       if (rail.older > 0) {
         railEl.appendChild(h('a', {
           class: 'dk-older btn btn--ghost btn--sm',
@@ -178,7 +249,22 @@ export async function mount(root, { store, api }) {
       railEls.push(railEl);
     }
     if (generation !== bandGeneration || !bandLive()) return;
-    bandEl.replaceChildren(...railEls);
+
+    // Open rows open again: from the body already read when there is one, else fetched as a fresh open. A row that left
+    // the band is forgotten; a failed read forgets nothing, so a retry that works shows them open again.
+    const shown = new Set(rows.map((r) => r.item.id));
+    if (!itemsFailed) for (const id of [...openRows]) if (!shown.has(id)) { openRows.delete(id); bodies.delete(id); }
+    const refetch = [];
+    for (const { item, row } of rows) {
+      if (!openRows.has(item.id) || !row.setExpanded) continue;
+      if (bodies.has(item.id)) row.setExpanded(buildExpandedNode(item, bodies.get(item.id)));
+      else refetch.push({ item, row });
+    }
+
+    const place = focusPlace();
+    bandEl.replaceChildren(...(itemsFailed ? [bandError()] : railEls));
+    if (place) restoreFocus(place);
+    for (const { item, row } of refetch) toggleRow(item, row);
   }
 
   async function refreshBand() {
@@ -215,15 +301,19 @@ export async function mount(root, { store, api }) {
   async function toggleRow(item, controller) {
     if (controller.isExpanded()) {
       pendingBody.delete(controller);
+      openRows.delete(item.id);
+      bodies.delete(item.id);
       controller.clearExpanded();
       return;
     }
     const request = {};
     pendingBody.set(controller, request);
+    openRows.add(item.id);
     controller.setLoading();
     const doc = await fetchBody(item);
     if (pendingBody.get(controller) !== request || !controller.root.isConnected) return;
     pendingBody.delete(controller);
+    if (doc) bodies.set(item.id, doc);
     controller.setExpanded(buildExpandedNode(item, doc));
   }
 

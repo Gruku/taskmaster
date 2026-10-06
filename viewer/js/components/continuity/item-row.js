@@ -54,12 +54,13 @@ export function createItemRow({ item, onToggle }) {
 
   if (route) {
     const root = linkRow({ href: route(item.id), name: p.title, content: [p.chip, p.when, p.next, p.where], className: 'co-row' });
+    root.dataset.itemId = item.id;
     return { root };
   }
 
   const words = [h('span', { class: 'co-row__line1' }, p.chip, p.title, p.when), p.next, p.where];
   if (!DISCLOSES.has(item.type) || !item.id) {
-    return { root: h('div', { class: 'co-row' }, words) };
+    return { root: h('div', { class: 'co-row', 'data-item-id': item.id }, words) };
   }
 
   const regionId = `co-row-${++seq}-body`;
@@ -67,7 +68,7 @@ export function createItemRow({ item, onToggle }) {
     type: 'button', class: 'co-row__toggle', 'aria-expanded': 'false',
     on: { click: () => onToggle?.(item, controller) },
   }, words);
-  const root = h('div', { class: 'co-row' }, toggle);
+  const root = h('div', { class: 'co-row', 'data-item-id': item.id }, toggle);
 
   // Expansion controller — the caller fills the region with setExpanded(node) or
   // empties it with clearExpanded(). State is per-row, so several rows can be open.

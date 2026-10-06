@@ -404,6 +404,81 @@ test('a resolved decision leaves the band redrawn without it', async ({ page }) 
   expect(writes).toEqual([{ path: '/api/decisions/DEC-001/resolve', body: { resolved_with: 1, rationale: '' } }]);
 });
 
+// The band answers GET /api/continuity from `serve`, which is called with the number of decision writes so far.
+async function serveContinuity(page, serve) {
+  let wrote = 0;
+  page.on('request', (req) => { if (req.method() === 'POST' && /\/api\/decisions\//.test(req.url())) wrote += 1; });
+  await page.route('**/api/continuity', (route) => {
+    const reply = serve(wrote);
+    return reply.status ? route.fulfill(reply) : route.fulfill({ json: reply });
+  });
+}
+const withoutDecision = { items: CONTINUITY.items.filter((i) => i.id !== 'DEC-001') };
+const focusInBand = (page) => page.evaluate(() => {
+  const a = document.activeElement;
+  return { inBand: !!a && a !== document.body && !!a.closest('.dk-continuity'), cls: a?.className ?? null };
+});
+
+test('a decision settled from the keyboard leaves focus in the band', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect.poll(() => focusInBand(page).then((f) => f.inBand)).toBe(true);
+});
+
+test('a decision refused from the keyboard puts focus back on the pressed button', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/drop': { status: 500, json: { ok: false, error: 'locked' } } }));
+  await page.goto('/#/dashboard');
+  const drop = page.locator('.co-decision').getByRole('button', { name: 'Drop' });
+  await drop.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.co-decision').getByRole('alert')).toHaveText('The server could not save this change. Try again in a moment.');
+  await expect(drop).toBeEnabled();
+  await expect(drop).toBeFocused();
+});
+
+test('an open handover stays open when the band redraws', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  const toggle = spine(page, 'Resume').locator('.co-row__toggle').first();
+  await toggle.click();
+  await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r1' })).toContainText('Cards done');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).click();
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect(spine(page, 'Resume').locator('.co-row__toggle').first()).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('region', { name: 'Handover 2026-10-05-r1' })).toContainText('Cards done');
+});
+
+test('a rail with only older items shows its link without saying it is empty', async ({ page }) => {
+  const old = CONTINUITY.items.slice(0, 2).map((i, n) => ({ ...i, age_days: 40 + n }));
+  await openDesk(page, bandMocks({ '/api/continuity': { items: old } }));
+  await page.goto('/#/dashboard');
+  const resume = spine(page, 'Resume');
+  await expect(resume.locator('a.dk-older')).toHaveText('+2 older');
+  await expect(resume.locator('.co-spine__count')).toHaveText('0');
+  await expect(resume.locator('.co-spine__empty')).toHaveCount(0);
+  await expect(resume).not.toContainText('Nothing here');
+});
+
+test('a band that cannot be re-read after a decision says so', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? { status: 500, json: { ok: false, error: 'locked' } } : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).focus();
+  await page.keyboard.press('Enter');
+  const block = band(page).locator('.tm-empty[data-state="error"]');
+  await expect(block).toBeVisible();
+  await expect(block).toContainText('Could not load what to pick up next');
+  await expect(band(page).locator('.co-spine')).toHaveCount(0);
+  const retry = block.getByRole('button', { name: 'Try again' });
+  await expect(retry).toBeFocused();
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+});
+
 test('leaving while a handover body loads draws nothing and throws nothing', async ({ page }) => {
   const { errors } = watch(page);
   await openDesk(page, bandMocks());
