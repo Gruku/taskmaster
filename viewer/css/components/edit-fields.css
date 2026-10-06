@@ -285,4 +285,6 @@
   .ef-chip-input { min-width: 0; }
   .ef-chip-dd-row { box-sizing: border-box; align-items: center; min-height: 44px; }
   .ef-kv-key { flex-basis: 96px; }
+  /* A one-line field is a touch target at phone width, like every action beside it. */
+  :is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-chip-input-text, .ef-estimate-days-input) { min-height: 44px; }
 }

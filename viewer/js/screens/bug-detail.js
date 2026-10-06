@@ -1,8 +1,10 @@
 // User intent: the bug page reads as the shared detail template — its summary and location finally shown, status and
 // severity as markers, where it was found and went in the rail — and a missing or failed load is said in words, never
-// with the server's text. Task 9 brings the actions back as forms.
+// with the server's text. Its actions are in-app forms: Mark fixed leads in topbar row 1, refusals are said in words.
 import * as api from '../api.js';
-import { claimTopbar } from '../lib/topbar.js';
+import { claimTopbar, claimTopbarPrimary, tmAction } from '../lib/topbar.js';
+import { openModalCount, topModal } from '../components/modal.js';
+import { openMarkFixed, openAdopt, openPromote, shelveBug } from '../components/edit/bug-actions.js';
 import { h } from '../util/h.js';
 import { statusMarker, severityMarker } from '../components/status.js';
 import { linkRoute } from '../components/link-pills.js';
@@ -16,6 +18,7 @@ export const meta = { title: 'Bug', icon: '⊘', sidebarKey: 'bugs' };
 
 const ROOT_CLASSES = ['td-doc', 'td-doc--page', 'td-page', 'dp-page', 'dp-page--bug'];
 const TO_BUGS = { label: 'Open Bugs', href: '#/bugs' };
+const ACTIONABLE = new Set(['open', 'shelved']);
 
 const hasText = (v) => typeof v === 'string' && v.trim() !== '';
 const textList = (v) => (Array.isArray(v) ? v : hasText(v) ? [v] : []).filter(hasText);
@@ -78,7 +81,22 @@ function rail(bug, tasks) {
   return groups.length ? [railPanel({ name: 'relations', label: 'Relations', children: groups })] : [];
 }
 
-function page(bug, { tasks, timers }) {
+// The secondary actions; Mark fixed is topbar row 1. `act(name, button)` runs one.
+function actionRow(bug, act) {
+  const button = (name, label) => {
+    const el = h('button', { type: 'button', class: 'btn btn--secondary', 'data-action': name }, label);
+    el.addEventListener('click', () => act(name, el));
+    return el;
+  };
+  return h('div', { class: 'dp-actions', role: 'group', 'aria-label': 'Bug actions' }, [
+    (bug.status || 'open') === 'open' ? button('shelve', 'Shelve') : null,
+    button('adopt', 'Adopt into task'),
+    button('promote', 'Promote to issue'),
+    h('div', { class: 'dp-actions__message', role: 'alert' }),
+  ]);
+}
+
+function page(bug, { tasks, timers, act }) {
   const head = detailHead({
     meta: detailMeta([
       copyId({ id: bug.id, noun: 'bug', timers }),
@@ -88,15 +106,36 @@ function page(bug, { tasks, timers }) {
       hasText(bug.discovered_by) ? h('span', {}, `reported by ${bug.discovered_by}`) : null,
     ].filter(Boolean)),
     title: detailTitle(bug.title),
-    after: [markers(bug, timers)],
+    after: [markers(bug, timers), act && ACTIONABLE.has(bug.status || 'open') ? actionRow(bug, act) : null].filter(Boolean),
   });
   return [head, detailGrid({ body: body(bug), panels: rail(bug, tasks) })];
+}
+
+// Promote moves to the new issue and the button that had focus goes with this page: focus follows to the next
+// page's title (or its settled empty state) rather than falling to <body>, unless the user has already moved it
+// anywhere (the sidebar included) — only focus left on <body> is taken.
+function focusNextPage(root) {
+  const old = root.querySelector('h1');
+  let obs = null;
+  const stop = () => { obs?.disconnect(); clearTimeout(timer); };
+  const timer = setTimeout(stop, 5000);
+  obs = new MutationObserver(() => {
+    const target = [...root.querySelectorAll('h1, .tm-empty:not([aria-busy="true"])')].find((el) => el !== old);
+    if (!target) return;
+    stop();
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus();
+  });
+  obs.observe(root, { childList: true, subtree: true });
 }
 
 export function mount(root, { params, subpath, store }) {
   const id = subpath?.[0] || params?.id || null;
   const timers = new Set();
   let disposed = false;
+  let shelving = false;
   root.classList.add(...ROOT_CLASSES);
   claimTopbar();
 
@@ -114,6 +153,7 @@ export function mount(root, { params, subpath, store }) {
     const loading = stateBlock({ headline: 'Loading…', busy: true });
     loading.setAttribute('tabindex', '-1');
     root.replaceChildren(loading);
+    claimTopbarPrimary();
     return loading;
   }
 
@@ -121,6 +161,61 @@ export function mount(root, { params, subpath, store }) {
     showLoading().focus();
     refocus = true;
     void load();
+  }
+
+  // After a write: re-read and repaint, focus on the heading. Row 1's Mark fixed is bound to the bug as it was,
+  // so it goes now and comes back only if the re-read paints a bug that can still be marked fixed.
+  function done() {
+    if (disposed) return;
+    claimTopbarPrimary();
+    refocus = true;
+    void load();
+  }
+
+  function paintPrimary(bug) {
+    const slot = claimTopbarPrimary();
+    if (!slot || !ACTIONABLE.has(bug.status || 'open')) return;
+    slot.appendChild(tmAction({
+      icon: 'check', label: 'Mark fixed', variant: 'primary', title: 'Mark this bug fixed',
+      onClick: () => openMarkFixed({ bug, onDone: done }),
+    }));
+  }
+
+  async function act(name, el, bug) {
+    if (name === 'adopt') openAdopt({ bug, getBacklog: () => store?.getBacklog?.(), onDone: done });
+    else if (name === 'promote') {
+      openPromote({ bug, onDone: (issueId) => {
+        if (disposed) return;
+        if (!issueId) { done(); return; }
+        focusNextPage(root);
+        location.hash = `#/issue/${encodeURIComponent(issueId)}`;
+      } });
+    } else if (name === 'shelve') {
+      // One shelve at a time: from the confirm until the answer the row is busy and its buttons are off.
+      if (shelving) return;
+      shelving = true;
+      const row = el.closest('.dp-actions');
+      const msg = row?.querySelector('.dp-actions__message');
+      if (msg) msg.textContent = '';
+      const setBusy = (busy) => {
+        if (!row) return;
+        if (busy) row.setAttribute('aria-busy', 'true');
+        else row.removeAttribute('aria-busy');
+        row.querySelectorAll('button').forEach((b) => { b.disabled = busy; });
+      };
+      let answer;
+      try {
+        answer = await shelveBug({ bug, onConfirm: () => setBusy(true) });
+      } finally {
+        shelving = false;
+      }
+      if (disposed) return;
+      if (answer?.error || answer?.cancelled) {
+        setBusy(false);
+        if (answer.error && msg) msg.textContent = answer.error;
+        el.focus();
+      } else done();
+    }
   }
 
   async function load() {
@@ -134,6 +229,7 @@ export function mount(root, { params, subpath, store }) {
           state: 'error', label: id, headline: 'Could not load this bug',
           hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: retry },
         }));
+        claimTopbarPrimary();
         takeFocus(root.querySelector('.tm-empty button'));
         return;
       }
@@ -144,12 +240,14 @@ export function mount(root, { params, subpath, store }) {
       root.replaceChildren(stateBlock({
         state: 'missing', label: id, headline: 'Bug not found', hint: 'It may have been archived or renamed.', action: TO_BUGS,
       }));
+      claimTopbarPrimary();
       takeFocus(root.querySelector('.tm-empty a[href]'));
       return;
     }
     const backlog = store?.getBacklog?.();
     const tasks = Array.isArray(backlog?.tasks) ? backlog.tasks : [];
-    root.replaceChildren(...page(bug, { tasks, timers }));
+    root.replaceChildren(...page(bug, { tasks, timers, act: (name, el) => act(name, el, bug) }));
+    paintPrimary(bug);
     takeFocus(root.querySelector('h1'));
   }
 
@@ -162,6 +260,9 @@ export function mount(root, { params, subpath, store }) {
 
   return () => {
     disposed = true;
+    claimTopbarPrimary();
+    // An action form left open is asked to close once: a clean one goes, a typed one asks to discard.
+    if (openModalCount() > 0) topModal()?.requestClose();
     timers.forEach(clearTimeout);
     timers.clear();
     root.classList.remove(...ROOT_CLASSES);

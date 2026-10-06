@@ -317,7 +317,8 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
   return handle;
 }
 
-export function confirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', tone = 'default' } = {}) {
+// `alert`: a question that interrupts to ask before a change (not a destructive one) is still an alert dialog.
+export function confirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', tone = 'default', alert = false } = {}) {
   return new Promise((resolve) => {
     const critical = tone === 'critical';
     let confirmed = false;
@@ -330,7 +331,7 @@ export function confirmDialog({ title, message, confirmLabel = 'Confirm', cancel
     const messageId = `modal-message-${++seq}`;
     modal.body.appendChild(h('p', { class: 'modal-message', id: messageId }, message ?? ''));
     modal.dialog.setAttribute('aria-describedby', messageId);
-    if (critical) modal.dialog.setAttribute('role', 'alertdialog');
+    if (critical || alert) modal.dialog.setAttribute('role', 'alertdialog');
     modal.footer.append(cancel, confirm);
     cancel.addEventListener('click', () => modal.close());
     confirm.addEventListener('click', () => { confirmed = true; modal.close(); });

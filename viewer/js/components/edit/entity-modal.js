@@ -28,7 +28,8 @@ function contentHint(value) {
 // It answers nothing on success (the form closes) or an object to stay open: `error` is shown in the footer, and
 // `wait` (a promise of the next answer) holds the form disabled until something outside it — the conflict banner —
 // has been dealt with. A throw, or a `wait` that rejects, is worded by describeWriteError.
-export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel, onClose }) {
+export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel, onClose,
+                                 title, eyebrow, saveLabel = 'Save' }) {
   const initial = initialEntity || {};
   const create = mode === 'create';
   const uid = `eform-${++seq}`;
@@ -41,8 +42,8 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   let focusBack = null;
 
   const modal = openModal({
-    title: `${create ? 'Create' : 'Edit'} ${noun}`,
-    eyebrow: create ? '' : initial.id,
+    title: title ?? `${create ? 'Create' : 'Edit'} ${noun}`,
+    eyebrow: eyebrow ?? (create ? '' : initial.id),
     className: 'modal--form',
     initialFocus: () => controlOf(fields[0]),
     onRequestClose: () => {
@@ -134,7 +135,7 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   const summary = h('div', { class: 'eform-summary ef-error', role: 'status' });
   const alert = h('div', { class: 'eform-summary ef-error', role: 'alert' });
   const cancelBtn = h('button', { type: 'button', class: 'btn btn--secondary', 'data-cancel': '' }, 'Cancel');
-  const saveBtn = h('button', { type: 'button', class: 'btn btn--primary', 'data-save': '', disabled: '' }, 'Save');
+  const saveBtn = h('button', { type: 'button', class: 'btn btn--primary', 'data-save': '', disabled: '' }, saveLabel);
   modal.footer.append(h('div', { class: 'eform-messages' }, [summary, alert]), h('div', { class: 'eform-actions' }, [cancelBtn, saveBtn]));
   cancelBtn.addEventListener('click', () => { modal.requestClose(); });
   saveBtn.addEventListener('click', () => { save(); });
@@ -252,7 +253,7 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
     saveBtn.textContent = 'Saving…';
     let answer;
     try { answer = await onSave(...payload); } catch (err) { answer = { error: describeWriteError(err, { noun }) }; }
-    saveBtn.textContent = 'Save';
+    saveBtn.textContent = saveLabel;
     while (answer && typeof answer === 'object') {
       alert.textContent = answer.error || '';
       if (!answer.wait) { setBusy(false); return; }

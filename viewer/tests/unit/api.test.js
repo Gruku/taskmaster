@@ -79,3 +79,21 @@ test('createIdea posts through the shared client, so a refusal carries its code 
     assert.equal(e.reason, 'title is required');
   });
 });
+
+test('bug writes go through the shared client: a refusal carries code and reason, promote answers the issue id', async () => {
+  await withFetch(() => json(400, { ok: false, error: 'Error: status=fixed requires fix_commit to be set' }), async () => {
+    const e = await api.updateBug('B-1', { status: 'fixed' }).catch((err) => err);
+    assert.equal(e.code, 400);
+    assert.equal(e.reason, 'Error: status=fixed requires fix_commit to be set');
+  });
+  await withFetch(() => json(200, { ok: true, id: 'B-1', status: 'fixed' }), async (seen) => {
+    assert.deepEqual(await api.updateBug('B-1', { status: 'fixed', fix_commit: 'abc' }), { ok: true, id: 'B-1', status: 'fixed' });
+    assert.equal(seen[0].path, '/api/bugs/B-1');
+    assert.equal(seen[0].init.method, 'POST');
+  });
+  await withFetch(() => json(201, { ok: true, issue_id: 'ISS-030' }), async (seen) => {
+    assert.deepEqual(await api.promoteBugs({ bug_ids: ['B-1'], title: 't', severity: 'P1', evidence_text: 'e' }), { ok: true, issue_id: 'ISS-030' });
+    assert.equal(seen[0].path, '/api/bugs/promote');
+    assert.equal(seen[0].init.method, 'POST');
+  });
+});
