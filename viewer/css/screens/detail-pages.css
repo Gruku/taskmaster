@@ -2,25 +2,6 @@
 
 /* ─── Issue detail (full-screen) ─── */
 
-.issue-detail {
-  padding: 14px 28px 28px;
-  display: flex; flex-direction: column; gap: 14px;
-}
-
-.id-crumb {
-  display: flex; align-items: center; gap: 8px;
-  font-size: var(--text-sm);
-  color: var(--ink-3);
-}
-.id-back {
-  color: var(--ink-3);
-  text-decoration: none;
-  cursor: pointer;
-}
-.id-back:hover { color: var(--ink); }
-.id-crumb-sep { opacity: 0.5; }
-.id-crumb-status { color: var(--ink-2); }
-
 .id-empty {
   padding: 40px;
   color: var(--ink-3);
@@ -174,20 +155,6 @@
 .id-rel-pill--issue { color: var(--red, #d66b5f); background: rgba(214, 107, 95, 0.08); }
 .id-rel-pill--issue:hover { border-color: var(--red, #d66b5f); }
 
-/* aging bar */
-.aging-bar { display: flex; align-items: center; gap: 8px; }
-.aging-bar__track {
-  flex: 1; height: 4px; background: var(--bg-deep); border-radius: 2px; overflow: hidden;
-}
-.aging-bar__fill { height: 100%; transition: width 200ms ease; }
-.aging-bar--fresh .aging-bar__fill { background: var(--accent-green, #5fcdb8); }
-.aging-bar--aging .aging-bar__fill { background: var(--sev-high); }
-.aging-bar--stale .aging-bar__fill { background: var(--sev-critical); }
-.aging-bar__chip { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-.aging-bar__chip--fresh { color: var(--accent-green, #5fcdb8); }
-.aging-bar__chip--aging { color: var(--sev-high); }
-.aging-bar__chip--stale { color: var(--sev-critical); }
-
 /* ─── Bug detail screen ─────────────────────────────────────────────────────── */
 
 .bug-detail {
@@ -277,3 +244,34 @@
     justify-content: center;
   }
 }
+
+/* ─── Detail template additions (plan 3c Task 7) ───
+   User intent: the issue and bug pages' few facts the shared template has no rule for — keys a screen reader hears
+   beside a marker, numbered steps and file paths that wrap inside a phone's width. */
+.dp-key {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dp-steps,
+.dp-paths {
+  margin: 0;
+  padding-left: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
+}
+.dp-paths { padding-left: 0; list-style: none; }
+.dp-paths code {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
+}
+.dp-page .td-title { word-break: break-word; }

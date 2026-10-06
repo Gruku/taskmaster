@@ -499,3 +499,8 @@ export function manySessions(n) {
   }]));
   return { sessions, details };
 }
+
+// The issue detail page (plan 3c Task 7): one rich issue, a fixed one it duplicates, and one too long for a phone.
+export const ISSUE = { id: 'ISS-012', title: 'Card edge vanishes on the light page ground', severity: 'P1', severity_label: 'High', status: 'investigating', discovered: '2026-08-01T09:00:00Z', evidence: 'Seen on **three** laptops in light theme.', repro: ['Open the board in light', 'Look at a card edge'], impact: 'Cards blur into the column; `--card-bg` sits too close to `--col-bg`.', summary: '## Notes\n\nTracked in T-102.', location: ['viewer/css/screens/kanban.css:87', 'viewer/css/tokens.css'], links: [{ type: 'relates_to', target: 'T-102' }, { type: 'duplicate_of', target: 'ISS-009' }] };
+export const ISSUES = { issues: [ISSUE, { id: 'ISS-009', title: 'Light card edge', severity: 'P2', status: 'fixed', discovered: '2026-07-01T09:00:00Z', resolved: '2026-07-10T09:00:00Z' }] };
+export const LONG_ISSUE = { ...ISSUE, id: 'ISS-1234', title: 'x'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
