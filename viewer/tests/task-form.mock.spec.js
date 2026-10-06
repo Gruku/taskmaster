@@ -31,12 +31,9 @@ const base = (theme, table) => ({
 async function openCreate(page, { theme = 'dark', table = {} } = {}) {
   await mockApi(page, base(theme, table));
   await page.goto('/#/kanban');
-  // Once the fonts have settled the row, Add task is in it or behind Filters (row 2 too narrow for it).
+  // Add task is row 1's primary at every width.
   await expect(page.locator('#topbar-actions [data-global-search]')).toBeVisible();
-  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
-  const filters = page.locator('#topbar-actions > .overflow-more');
-  if (await filters.isVisible()) await filters.click();
-  await page.locator('#topbar-actions [aria-label="Add task"]').click();
+  await page.locator('#topbar-primary [aria-label="Add task"]').click();
   const dialog = page.getByRole('dialog', { name: 'Create task' });
   await expect(dialog).toBeVisible();
   await expect(ctl(dialog, 'title')).toBeFocused();
@@ -75,8 +72,8 @@ test('an untouched Create form closes on Escape with no dialog of any kind', asy
   await expect(dialog.locator('[aria-invalid="true"]')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.locator('.modal')).toHaveCount(0);
-  // Back on Add task, or on Filters when Add task is parked behind it.
-  await expect(page.locator('#topbar-actions > [aria-label="Add task"], #topbar-actions > :not(.overflow-more) [aria-label="Add task"], #topbar-actions > .overflow-more:not([hidden])').first()).toBeFocused();
+  // Back on Add task, row 1's primary.
+  await expect(page.locator('#topbar-primary [aria-label="Add task"]')).toBeFocused();
 });
 
 test('a typed title is guarded: Escape asks in-app, "Keep editing" returns to the title, "Discard" closes', async ({ page }) => {

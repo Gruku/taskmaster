@@ -78,7 +78,7 @@ export function sortTasks(tasks, sort) {
 }
 
 /** Returns array of {key, label, tasks} preserving spec order. */
-export function groupTasks(tasks, by, phaseOrder) {
+export function groupTasks(tasks, by, phaseOrder, epics) {
   if (by === 'status') {
     return STATUS_ORDER.map(key => ({
       key,
@@ -107,9 +107,10 @@ export function groupTasks(tasks, by, phaseOrder) {
       if (!seen.has(k)) seen.set(k, []);
       seen.get(k).push(t);
     }
+    const names = new Map((Array.isArray(epics) ? epics : []).map(e => [e.id, e.name]));
     return [...seen.entries()].map(([key, ts]) => ({
       key,
-      label: key === '__none__' ? '— no epic —' : key,
+      label: key === '__none__' ? '— no epic —' : (names.get(key) || key),
       tasks: ts,
     }));
   }

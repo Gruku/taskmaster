@@ -89,6 +89,16 @@ test('tmSegmented: pressing a segment moves aria-pressed to it', () => {
   assert.deepEqual(changes, ['B']);
 });
 
+test('tmSegmented: aria-pressed is the only pressed state, no dead .on class before or after a press', () => {
+  const seg = tmSegmented([{ key: 'A', label: 'Document' }, { key: 'B', label: 'Graph' }], { value: 'A' });
+  const [a, b] = seg.querySelectorAll('button');
+  assert.equal(seg.querySelectorAll('.on').length, 0);
+  b.click();
+  assert.equal(b.getAttribute('aria-pressed'), 'true');
+  assert.equal(seg.querySelectorAll('.on').length, 0);
+  assert.equal(a.className, '');
+});
+
 test('no screen offers a "coming soon" control', () => {
   for (const f of ['screens/issues.js', 'screens/sessions.js']) {
     assert.doesNotMatch(readFileSync(join(JS_DIR, f), 'utf8'), /coming soon/i, f);

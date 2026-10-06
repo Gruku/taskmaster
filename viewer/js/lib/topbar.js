@@ -156,17 +156,10 @@ export function tmSegmented(options, { value, onChange, icon = false } = {}) {
     b.textContent = opt.label;
     if (opt.title) b.title = opt.title;
     b.setAttribute('aria-label', opt.ariaLabel || opt.title || opt.label);
-    if (opt.key === value) {
-      b.classList.add('on');
-      b.setAttribute('aria-pressed', 'true');
-    } else {
-      b.setAttribute('aria-pressed', 'false');
-    }
+    b.setAttribute('aria-pressed', String(opt.key === value));
     b.addEventListener('click', () => {
       for (const x of wrap.querySelectorAll('button')) {
-        const isOn = x.dataset.key === opt.key;
-        x.classList.toggle('on', isOn);
-        x.setAttribute('aria-pressed', String(isOn));
+        x.setAttribute('aria-pressed', String(x.dataset.key === opt.key));
       }
       onChange?.(opt.key);
     });

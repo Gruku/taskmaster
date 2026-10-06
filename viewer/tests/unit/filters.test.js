@@ -101,6 +101,15 @@ test('groupTasks — by epic with __none__ bucket for missing epic', () => {
   assert.deepEqual(none.tasks.map(t => t.id), ['v3-004']);
 });
 
+test('groupTasks — by epic labels each column with the epic name, falling back to the id', () => {
+  const epics = [{ id: 'viewer-redesign', name: 'Viewer redesign <b>' }];
+  const groups = groupTasks(TASKS, 'epic', undefined, epics);
+  const label = (k) => groups.find(g => g.key === k).label;
+  assert.equal(label('viewer-redesign'), 'Viewer redesign <b>');
+  assert.equal(label('narrative-continuity'), 'narrative-continuity');
+  assert.equal(label('__none__'), '— no epic —');
+});
+
 test('groupTasks — by phase keeps phase order from input list', () => {
   const groups = groupTasks(TASKS, 'phase', ['P-01', 'P-02', 'P-03']);
   assert.deepEqual(groups.map(g => g.key), ['P-01', 'P-02', 'P-03', '__orphans__']);

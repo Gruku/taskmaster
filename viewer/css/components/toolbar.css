@@ -80,10 +80,8 @@
 /* A neutral structural divider between segments. */
 .tm-segmented > button + button { border-left: 1px solid var(--border-strong); }
 .tm-segmented > button:hover { background: var(--ground-15); color: var(--foreground-bold); }
-/* After :hover so the pressed segment keeps its fill under the pointer. Kanban's density toggle still marks its
-   state with .on (plan 3a moves it onto tmSegmented). */
-.tm-segmented > button[aria-pressed="true"],
-.tm-segmented > button.on { background: var(--signature-fill); color: var(--on-accent-fill); }
+/* After :hover so the pressed segment keeps its fill under the pointer. */
+.tm-segmented > button[aria-pressed="true"] { background: var(--signature-fill); color: var(--on-accent-fill); }
 /* Glyph-only segments are square; the glyph reads at body size. */
 .tm-segmented--icon > button { min-width: 32px; padding: 0; font-size: var(--size-narrator-default); }
 

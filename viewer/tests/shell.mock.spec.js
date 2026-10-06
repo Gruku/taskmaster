@@ -237,7 +237,7 @@ test('the search ring belongs to the input; the clear button shows its own', asy
 
 test('Ctrl+K leaves focus alone while a modal is open', async ({ page }) => {
   await page.goto('/#/kanban');
-  await (await topbarControl(page, '[aria-label="Add task"]')).click();
+  await page.locator('#topbar-primary [aria-label="Add task"]').click();
   const modal = page.locator('[aria-modal="true"]');
   const field = modal.locator('input, textarea').first();
   await field.focus();
@@ -283,7 +283,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page, withContent());
     await page.goto('/#/kanban');
-    const add = await topbarControl(page, '[aria-label="Add task"]');
+    const add = page.locator('#topbar-primary [aria-label="Add task"]');
     await expect(add).toBeVisible();
     await expect(add).toHaveClass(/(^|\s)btn(\s|$)/);
     await expect(add).toHaveClass(/(^|\s)btn--primary(\s|$)/);
@@ -594,6 +594,7 @@ test.describe('topbar row 2 at phone width', () => {
         sideways: el.scrollWidth - el.clientWidth,
         // Over the board's sticky column headers, not under them: each parked control takes a press at its centre.
         covered: [...list.querySelectorAll('button, select')].filter((c) => {
+          c.scrollIntoView({ block: 'nearest' });
           const b = c.getBoundingClientRect();
           return !c.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2));
         }).map((c) => c.getAttribute('aria-label') || c.className),
@@ -635,6 +636,9 @@ test.describe('topbar row 2 at phone width', () => {
     await expect(page.locator('.popover')).toHaveCount(0);
     await expect(page.locator('#topbar-actions > .tm-search input')).toBeVisible();
     await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
+    // Kanban's own controls were laid out afresh: what is parked is Kanban's, and Filters lists them.
+    await filters(page).click();
+    await expect(filtersPopover(page).getByRole('combobox', { name: 'Sort' })).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 

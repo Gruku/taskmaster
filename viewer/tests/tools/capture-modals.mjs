@@ -125,7 +125,8 @@ const topbarControl = async (page, selector) => {
 };
 const openCreate = async (page) => {
   await page.goto(`${BASE}/#/kanban`);
-  await (await topbarControl(page, '[aria-label="Add task"]')).click();
+  await settleRow(page);
+  await page.locator('#topbar-primary [aria-label="Add task"]').click();
   await page.locator('.modal--form').waitFor();
 };
 const openPage = (id) => async (page) => {
