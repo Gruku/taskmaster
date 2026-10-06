@@ -32,8 +32,8 @@ test.describe('Sessions screen', () => {
     await page.goto('/v3#/sessions');
     const segs = page.locator('.tm-segmented button');
     await segs.nth(1).click();
-    await expect(segs.nth(1)).toHaveClass(/\bon\b/);
-    await expect(segs.nth(0)).not.toHaveClass(/\bon\b/);
+    await expect(segs.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    await expect(segs.nth(0)).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('kind chips toggle visibility', async ({ page }) => {
