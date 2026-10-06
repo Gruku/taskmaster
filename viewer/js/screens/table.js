@@ -114,6 +114,20 @@ export async function mount(root, { store, api, prefs, params }) {
   }) : null;
   railObserver?.observe(chipRail);
 
+  // ── Sort bar ──────────────────────────────────────────────────
+  // At phone width the header row is gone, so the sort is this one select (CSS shows it only there).
+  const sortSelect = h('select', { id: 'tbl-sort', class: 'ef-enum-select' },
+    COLUMNS.filter(c => c.sortable).flatMap(c => ['asc', 'desc'].map(dir =>
+      h('option', { value: `${c.key}:${dir}` }, `${c.label} — ${dir === 'asc' ? 'ascending' : 'descending'}`))));
+  sortSelect.addEventListener('change', () => {
+    const [by, dir] = sortSelect.value.split(':');
+    state.sort = { by, dir };
+    paint(); persist();
+  });
+  screen.appendChild(h('div', { class: 'tbl-sortbar' },
+    h('label', { class: 'tbl-sortbar__label', for: 'tbl-sort' }, 'Sort'),
+    h('span', { class: 'ef-select' }, sortSelect, icon('chevron', { size: 16 }))));
+
   // ── Table frame ───────────────────────────────────────────────
   // The host scrolls both ways inside the frame; the frame says whether there is more to the right (the fade) and
   // whether the user has scrolled sideways (a stronger edge on the title column).
@@ -408,6 +422,7 @@ export async function mount(root, { store, api, prefs, params }) {
     subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')}${hasFilters() ? ` · ${filtered.length} visible` : ''}`;
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
+    sortSelect.value = `${state.sort.by}:${state.sort.dir}`;
     renderChipRail(backlog);
     const epicName = new Map((backlog.epics || []).filter(e => e && e.id).map(e => [e.id, e.name || e.id]));
     renderTable(sorted, tasks.length, { epicName });
