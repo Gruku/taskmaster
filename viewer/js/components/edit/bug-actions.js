@@ -26,7 +26,8 @@ function openAction({ bug, title, saveLabel, fields, initialEntity = {}, write, 
       } catch (e) {
         return { error: describeWriteError(e, { noun: 'bug' }) };
       }
-      await Promise.resolve().then(() => onDone?.(result)).catch(() => {});
+      // The write landed: a fault in the page's follow-up must not reopen the form as a refusal, but it is not hidden.
+      await Promise.resolve().then(() => onDone?.(result)).catch((e) => { console.error('bug action: after the write', e); });
     },
     onCancel: () => {},
     onClose,

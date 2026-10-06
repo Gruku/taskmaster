@@ -105,3 +105,22 @@ test('no browser dialog anywhere in the bug actions or the Bug page', () => {
     assert.doesNotMatch(src, /\b(prompt|confirm|alert)\(/, rel);
   }
 });
+
+test('a fault in the page after a landed write is logged, not swallowed, and the form still closes', async () => {
+  const logged = [];
+  const original = console.error;
+  console.error = (...a) => { logged.push(a); };
+  const boom = new Error('repaint failed');
+  try {
+    openMarkFixed({ bug: BUG, onDone: () => { throw boom; } });
+    type('fix_commit', 'abc1234');
+    saveBtn().click();
+    await tick(10);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(openModalCount(), 0);
+  assert.equal(logged.length, 1);
+  assert.ok(logged[0].includes(boom));
+});
