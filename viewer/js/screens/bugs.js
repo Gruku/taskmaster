@@ -81,6 +81,8 @@ export function mount(root, { store, prefs }) {
   }
 
   function paint() {
+    // A debounced search (or Clear's own input event) can fire after the screen is gone; the topbar is the next screen's.
+    if (!alive) return;
     // Focus in the list, the state block or the rail is put back, or handed on, never dropped to <body>.
     const spare = () => list.querySelector('a[href]') ?? stateHost.querySelector('button') ?? searchInput;
     const restore = [keepFocus(list, { fallback: spare }), keepFocus(stateHost, { fallback: spare }),

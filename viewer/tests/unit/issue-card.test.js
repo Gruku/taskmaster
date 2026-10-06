@@ -139,6 +139,8 @@ test('an expanded card keeps its evidence unclamped and says so', () => {
   const ev = open.querySelector('.issue-card__evidence');
   const more = open.querySelector('.issue-card__more');
   assert.ok(!ev.classList.contains('truncate--3'));
+  // `.truncate` alone is the one-line cut (nowrap): an expanded card must not keep it either.
+  assert.ok(!ev.classList.contains('truncate'));
   assert.equal(more.hidden, false);
   assert.equal(more.getAttribute('aria-expanded'), 'true');
   assert.equal(more.textContent, 'Show less');
@@ -148,6 +150,23 @@ test('an expanded card keeps its evidence unclamped and says so', () => {
   assert.equal(shut.querySelector('.issue-card__more').hidden, true);
   assert.equal(shut.querySelector('.issue-card__more').getAttribute('aria-expanded'), 'false');
   assert.equal(shut.querySelector('.issue-card__more').textContent, 'Show all');
+});
+
+test('a card the screen already saw cut shows "Show all" at once, collapsed and clamped', () => {
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  try {
+    const el = issueCard(fixture(), { revealed: true, now });
+    const more = el.querySelector('.issue-card__more');
+    assert.equal(more.hidden, false);
+    assert.equal(more.getAttribute('aria-expanded'), 'false');
+    assert.equal(more.textContent, 'Show all');
+    assert.ok(el.querySelector('.issue-card__evidence').classList.contains('truncate--3'));
+    // Nothing left to measure: no reveal is scheduled for it.
+    assert.equal(frames.length, 0);
+  } finally {
+    delete globalThis.requestAnimationFrame;
+  }
 });
 
 test('a click on the toggle hands the issue id to the screen', () => {
@@ -214,6 +233,12 @@ test('issueRow: a won\'t-fix issue is a link row to the issue with its status wo
   assert.equal(when.textContent, '1d ago');
   assert.ok(when.title);
   assert.ok(link.title.includes('Old thing'), 'the cut title reaches the link');
+});
+
+test('issueRow: narrow adds its modifier, and only then', () => {
+  const issue = { id: 'ISS-004', title: 'In a column', status: 'fixed' };
+  assert.ok(issueRow(issue, { now, narrow: true }).classList.contains('issue-row--narrow'));
+  assert.ok(!issueRow(issue, { now }).classList.contains('issue-row--narrow'));
 });
 
 test('issueRow: no severity → no marker; no resolved or updated date → no time', () => {

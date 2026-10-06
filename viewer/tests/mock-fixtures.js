@@ -438,3 +438,27 @@ export function epicDetailMocks({ theme = 'dark' } = {}) {
       tasks: LONG_IDS_BOARD.tasks.slice(0, 60).map((t) => ({ ...t, epic: 'big' })) }, 'big'),
   };
 }
+
+// GET /api/issues: the server adds severity_label and aging.
+const issue = (id, title, status, severity, extra = {}) => ({ id, title, status, severity,
+  severity_label: { P0: 'Critical', P1: 'High', P2: 'Medium', P3: 'Low' }[severity], aging: { percent: 10, tier: 'Fresh' }, ...extra });
+export const LIST_ISSUES = [
+  issue('ISS-001', 'Board poll redraws every card on a quiet tick', 'investigating', 'P1', { component: 'viewer',
+    location: ['viewer/js/main.js:121'], related_tasks: ['T-102'], discovered: daysAgo(50), aging: { percent: 90, tier: 'Stale' },
+    evidence: Array.from({ length: 8 }, (_, i) => `Line ${i + 1}: the poll answered 200 with an unchanged revision and the board still repainted.`).join(' ') }),
+  issue('ISS-002', 'Writer mutex waits without a bound', 'open', 'P0', { component: 'store', related_tasks: ['T-105', 'T-106'],
+    promoted_from: ['B-029'], evidence: 'Six seconds per write on a large backlog.', discovered: daysAgo(10) }),
+  issue('ISS-003', 'Light theme pills fail contrast', 'open', 'P2', { component: 'viewer', evidence: 'axe: 33 nodes.', discovered: daysAgo(4) }),
+  issue('ISS-004', 'Inbox triage skips archived items', 'open', 'P3', { discovered: daysAgo(3) }),
+  issue('ISS-005', 'Legacy mirror written after cutover', 'fixed', 'P1', { resolved: daysAgo(6) }),
+  issue('ISS-006', 'Search hint shows the Mac glyph on Windows', 'wontfix', 'P3', { resolved: daysAgo(12) }),
+  issue('ISS-007', 'Duplicate of the poll repaint', 'duplicate', 'P2', { resolved: daysAgo(1) }),
+];
+const ISSUE_STATUSES = ['investigating', 'open', 'open', 'open', 'fixed', 'wontfix', 'duplicate', 'investigating'];
+export const LONG_ISSUES = Array.from({ length: 24 }, (_, i) => issue(`ISS-${1201 + i}`, longText(`Issue ${1201 + i}`, { unbroken: i === 3 }),
+  ISSUE_STATUSES[i % 8], `P${i % 4}`, { component: ['viewer', 'store', 'sync'][i % 3], related_tasks: [`T-${1234 + i}`],
+    location: [`viewer/js/screens/a-rather-long-module-name-${i}.js:${100 + i}`], evidence: longText(`Evidence ${i}`).repeat(3),
+    discovered: daysAgo(5 + i), resolved: ISSUE_STATUSES[i % 8] === 'open' || ISSUE_STATUSES[i % 8] === 'investigating' ? undefined : daysAgo(i) }));
+// The table plan 4's a11y gate reuses for #/issues; loaded when `.issues-col .issue-card` is visible.
+export const issuesMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/issues': { issues: LIST_ISSUES }, '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
