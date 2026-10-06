@@ -206,3 +206,17 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
     expect(v.map((x) => `${x.id}: ${x.nodes.length}`)).toEqual([]);
   });
 }
+
+// Task 7: the epic count lives in topbar row 1 and adds " · m visible" only while the search narrows the list.
+test('the epic count is in topbar row 1 and says how many the search leaves; Epics has no primary', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  await expect(count).toHaveText('7 epics');
+  await expect(count).toHaveAttribute('title', '7 epics');
+  await expect(page.locator('#topbar-primary')).toBeEmpty();
+  await page.getByPlaceholder('Filter epics…').fill('store');
+  await expect(page.locator('.epic-row')).toHaveCount(1);
+  await expect(count).toHaveText('7 epics · 1 visible');
+  await page.getByPlaceholder('Filter epics…').fill('');
+  await expect(count).toHaveText('7 epics');
+});

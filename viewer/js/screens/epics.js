@@ -1,5 +1,6 @@
 // User intent: the Epics list — every epic as one link row with its real lifecycle and its progress counted from its tasks, in columns that line up, filterable from the topbar.
-import { claimTopbar, tmSearch } from '../lib/topbar.js';
+import { claimTopbar, setTopbarCount, tmSearch } from '../lib/topbar.js';
+import { pluralize } from '../util/pluralize.js';
 import { epicStats, epicProgress, isCloseable, epicStatusMeta } from '../lib/epic-format.js';
 import { epicIndex } from '../lib/epics.js';
 import { marker } from '../components/status.js';
@@ -62,6 +63,7 @@ export async function mount(root, { store }) {
     const shown = needle
       ? epics.filter((ep) => `${ep.name ?? ''}\n${ep.id ?? ''}`.toLowerCase().includes(needle))
       : epics;
+    setTopbarCount(`${epics.length} ${pluralize(epics.length, 'epic', 'epics')}${needle ? ` · ${shown.length} visible` : ''}`);
 
     if (!epics.length) {
       screen.replaceChildren(stateBlock({ label: 'Epics', headline: 'No epics yet.', hint: 'An epic groups tasks toward one outcome.' }));
