@@ -87,6 +87,7 @@ const TABLE = {
   '/api/task/T-103/detail': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
   '/api/epic/viewer': F.epicPayload(BOARD, 'viewer', { design_status: 'locked', done_when: 'All screens pass the audit in both themes.', description: F.EPIC.description }),
   '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
+  '/api/issues': { issues: F.LIST_ISSUES },
 };
 const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
 
@@ -149,6 +150,27 @@ const openTable = async (page) => {
 const openScreen = (hash, ready) => async (page) => {
   await page.goto(`${BASE}/${hash}`);
   await page.locator(ready).first().waitFor();
+};
+// Plan 3d: a list GET answered with the scene's own data (registered after bugsByTask, so it wins); POSTs fall through.
+const listRoute = (name, list, key) => (p) => p.route(`**/api/${name}*`, (r) => (r.request().method() === 'GET'
+  ? r.fulfill({ json: key ? { [key]: list } : list }) : r.fallback()));
+const openIssues = () => async (page) => {
+  await page.goto(`${BASE}/#/issues`);
+  await page.locator('.issues-col .issue-card').first().waitFor();
+  await settleRow(page);
+};
+// At 390 the View group is parked behind Filters: open it, pick, and close it again for the shot.
+const issuesView = (name) => async (p) => {
+  if (!(await p.locator('#topbar-actions').getByRole('group', { name: 'View' }).isVisible())) {
+    await filters(p).click();
+    await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+  }
+  await p.getByRole('group', { name: 'View' }).getByRole('button', { name }).click();
+  if (await p.getByRole('dialog', { name: 'Filters' }).isVisible()) await p.keyboard.press('Escape');
+};
+const openShelf = async (p) => {
+  const t = p.locator('.issues-shelf__toggle');
+  if ((await t.getAttribute('aria-expanded')) !== 'true') await t.click();
 };
 
 // [name, { open, drive?, routes?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default).
@@ -253,6 +275,24 @@ const ALL_SCENES = [
   } }],
   ['epic-missing', { open: openScreen('#/epic/nope', '.tm-empty'), scope: '#screen-mount',
     routes: (p) => p.route('**/api/epic/nope*', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'epic not found' } })) }],
+  // Plan 3d — Issues, Bugs, Ideas.
+  ['issues-board', { open: openIssues(), drive: openShelf, scope: '#screen-mount' }],
+  ['issues-status', { open: openIssues(), drive: issuesView('Status'), scope: '#screen-mount' }],
+  ['issues-list', { open: openIssues(), drive: issuesView('List'), scope: '#screen-mount' }],
+  ['issues-evidence', { open: openIssues(), scope: '#screen-mount', drive: async (p) => {
+    await p.locator('.issue-card[data-issue-id="ISS-001"] .issue-card__more, .issue-card:has-text("ISS-001") .issue-card__more').first().click();
+  } }],
+  ['issues-long', { open: openIssues(), routes: listRoute('issues', F.LONG_ISSUES, 'issues'), fullPage: true, scope: '#screen-mount' }],
+  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LIST_BUGS), scope: '#screen-mount',
+    drive: (p) => p.getByRole('button', { name: /^Show archived/ }).click() }],
+  ['bugs-long', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LONG_BUGS), fullPage: true, scope: '#screen-mount' }],
+  ['ideas-list', { open: openScreen('#/ideas/IDEA-1', '.ideas :text("IDEA-1"):visible'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: '#screen-mount' }],
+  ['ideas-tags', { open: openScreen('#/ideas', '.ideas__list .idea-row'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: 'body',
+    drive: async (p) => {
+      await p.locator('.ideas button.tag-filter').click();
+      await p.locator('.tag-filter__list input[type="checkbox"][value="ux"]').check();
+    } }],
+  ['ideas-long', { open: openScreen('#/ideas', '.ideas__list .idea-row'), routes: listRoute('ideas', F.LONG_IDEAS, 'ideas'), fullPage: true, scope: '#screen-mount' }],
 ];
 const ONLY = flag('only');
 const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));
