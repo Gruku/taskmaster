@@ -63,5 +63,7 @@
 
 @media (max-width: 768px) {
   .arch-row { flex-wrap: wrap; min-height: 44px; }
+  /* The link is the control: it takes the 44px itself, not just the row around it. */
+  .arch-row > .link-row__link { display: flex; align-items: center; min-height: 44px; }
   .arch-row > .link-row__content { flex-basis: 100%; }
 }

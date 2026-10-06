@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
 import {
-  NOTES, LONG_NOTE, BOARD, EMPTY_TASK, CONTINUITY, DECISION, deskMocks, summaryMocks, taskDetail,
+  NOTES, LONG_NOTE, BOARD, EMPTY_TASK, CONTINUITY, DECISION, deskMocks, summaryMocks, taskDetail, dashboardMocks,
 } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
@@ -341,9 +341,15 @@ test('clean-up rows are links', async ({ page }) => {
   await page.goto('/#/dashboard');
   await spine(page, 'Clean-up').locator('a[href="#/issue/ISS-012"]').click();
   await expect(page).toHaveURL(/#\/issue\/ISS-012$/);
+  // Going back re-mounts the band; wait for its fetch to land and the row to paint, so the click does not race
+  // the redraw on a loaded machine.
+  const remounted = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/continuity');
   await page.goBack();
   await expect(page).toHaveURL(/#\/dashboard$/);
-  await spine(page, 'Clean-up').locator('a[href="#/task/T-106"]').click();
+  await remounted;
+  const task = spine(page, 'Clean-up').locator('a[href="#/task/T-106"]');
+  await expect(task).toBeVisible({ timeout: 15_000 });
+  await task.click({ timeout: 15_000 });
   const dialog = page.locator('.modal--detail');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('T-106');
@@ -519,5 +525,16 @@ for (const theme of ['dark', 'light']) {
     const found = result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
     expect(found.filter((v) => v.startsWith('nested-interactive'))).toEqual([]);
     expect(found).toEqual([]);
+  });
+}
+
+// Plan 4's accessibility gate reuses dashboardMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`dashboard loads its content from dashboardMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, dashboardMocks({ theme }));
+    await page.goto('/#/dashboard');
+    await expect(page.locator('.dk-note[data-note-id="NOTE-001"] .dk-note__body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
   });
 }

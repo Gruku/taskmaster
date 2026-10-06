@@ -349,3 +349,14 @@ for (const theme of ['dark', 'light']) {
     expect(await axe(page, '#topbar')).toEqual([]);
   });
 }
+
+// Plan 4's accessibility gate reuses sessionsMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`sessions loads its content from sessionsMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, sessionsMocks({ theme }));
+    await page.goto('/#/sessions');
+    await expect(page.locator('.ho-child[data-handover-id="2026-07-13-m1-shipped"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
+  });
+}

@@ -119,15 +119,26 @@ test('forty archived tasks with long titles stay inside a phone screen', async (
   const report = await page.evaluate(() => ({
     idsCut: [...document.querySelectorAll('.arch-id')].filter((el) => el.scrollWidth > el.clientWidth).length,
     titlesWithoutWords: [...document.querySelectorAll('.arch-title')].filter((el) => el.title !== el.textContent).length,
-    shortRows: [...document.querySelectorAll('.arch-row')].filter((el) => el.getBoundingClientRect().height < 44).length,
+    shortLinks: [...document.querySelectorAll('.arch-row > .link-row__link')].filter((el) => el.getBoundingClientRect().height < 44).length,
     rows: document.querySelectorAll('.arch-row').length,
   }));
-  expect(report).toEqual({ idsCut: 0, titlesWithoutWords: 0, shortRows: 0, rows: 40 });
+  expect(report).toEqual({ idsCut: 0, titlesWithoutWords: 0, shortLinks: 0, rows: 40 });
 });
 
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the screen`, async ({ page }) => {
     await boot(page, { theme });
     expect(await axe(page, '#screen-mount')).toEqual([]);
+  });
+}
+
+// Plan 4's accessibility gate reuses archivedMocks() once per theme; this pins that it loads real content, not a state block.
+for (const theme of ['dark', 'light']) {
+  test(`archived loads its content from archivedMocks() in ${theme}`, async ({ page }) => {
+    await mockApi(page, archivedMocks({ theme }));
+    await page.goto('/#/archived');
+    await expect(page.locator('.arch-row[data-task-id="T-1001"] .link-row__link')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
   });
 }
