@@ -19,11 +19,12 @@ test.afterEach(async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-async function open(page, hash, { theme = 'dark', issues = ISSUES } = {}) {
+async function open(page, hash, { theme = 'dark', issues = ISSUES, before } = {}) {
   await mockApi(page, {
     '/api/viewer/prefs': { theme, ui: {}, screens: {}, issues: { aging: { High: 30 } } },
     '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [], '/api/issues': issues,
   });
+  if (before) await before();
   await page.goto(`/${hash}`);
 }
 
@@ -68,24 +69,53 @@ test('ISS-999 is not found in words, and a failed load says so without the serve
   await expect(missing.locator('.tm-empty__label')).toHaveText('ISS-999');
   await expect(missing.locator('.tm-empty__headline')).toHaveText('Issue not found');
   await expect(missing.getByRole('link', { name: 'Open Issues' })).toBeVisible();
+  // Writes are debounced (400 ms) and merged per window: wait it out here, so a write for the missing id cannot be
+  // overwritten by the next issue's patch.
+  await page.waitForTimeout(700);
+  expect(puts).toEqual([]);
+  await page.evaluate(() => { location.hash = '#/issue/ISS-012'; });
+  await expect(mount(page).locator('h1')).toHaveText(ISSUE.title);
+  await expect.poll(() => puts.some((b) => b.includes('ISS-012')), { timeout: 5000 }).toBe(true);
   expect(puts.filter((b) => b.includes('ISS-999'))).toEqual([]);
 
   const fresh = await context.newPage();
   fresh.on('pageerror', (e) => errors.push(e.message));
   await open(fresh, '#/issue/ISS-012', { issues: ISSUES });
   // Registered after mockApi, so it wins until unrouted.
-  const fail = (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Traceback: KeyError severity' }) });
+  let hold = null; // set before the last Try again, so its Loading state can be seen
+  const fail = async (route) => {
+    if (hold) { await hold; await route.fallback(); return; }
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Traceback: KeyError severity' }) });
+  };
   await fresh.route('**/api/issues*', fail);
   await fresh.goto('about:blank');
   await fresh.goto('/#/issue/ISS-012');
   const failed = mount(fresh).locator('.tm-empty[data-state="error"]');
   await expect(failed).toBeVisible();
   for (const word of ['Traceback', '500', '/api']) await expect(mount(fresh)).not.toContainText(word);
-  await fresh.unroute('**/api/issues*', fail);
+  // A second failure after Try again lands focus on the new Try again, never <body>.
   await failed.getByRole('button', { name: 'Try again' }).click();
+  await expect(mount(fresh).locator('.tm-empty[data-state="error"] button')).toBeFocused();
+  let release;
+  hold = new Promise((r) => { release = r; });
+  await failed.getByRole('button', { name: 'Try again' }).click();
+  const busy = mount(fresh).locator('.tm-empty[aria-busy="true"]');
+  await expect(busy).toBeVisible();
+  await expect(busy).toBeFocused();
+  release();
   await expect(mount(fresh).locator('h1')).toHaveText(ISSUE.title);
   await expect(mount(fresh).locator('h1')).toBeFocused();
   expect(unmockedWrites(fresh)).toEqual([]);
+});
+
+test('the first fetch shows a Loading state, not a blank page', async ({ page }) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  // Registered after mockApi (via before), so it wins.
+  await open(page, '#/issue/ISS-012', { before: () => page.route('**/api/issues*', async (route) => { await gate; await route.fallback(); }) });
+  await expect(mount(page).locator('.tm-empty[aria-busy="true"]')).toBeVisible();
+  release();
+  await expect(mount(page).locator('h1')).toHaveText(ISSUE.title);
 });
 
 test('an issue made after the list was cached is still found', async ({ page }) => {

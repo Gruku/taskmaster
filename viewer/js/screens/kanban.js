@@ -1,11 +1,11 @@
 // Kanban screen — full implementation.
-// Mounts the page-head, phase stepper, epic chips, board surface.
+// Mounts the page-head, phase strip, epic chips, board surface.
 // Subscribes to store(backlog) and store(prefs); all writes go through prefs.patch(...).
 
 import { renderCard }                        from '../components/card.js';
 import { renderPriorityChips,
          updatePriorityChips }               from '../components/priority-chips.js';
-import { renderPhaseStepper }                from '../components/phase-stepper.js';
+import { phaseStrip }                        from '../components/phase-strip.js';
 import { renderEpicChips }                   from '../components/epic-chips.js';
 import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles } from '../lib/filters.js';
 import { renderBundleFrame } from '../components/bundle-frame.js';
@@ -45,8 +45,6 @@ export async function mount(root, { store, api, prefs }) {
   state.pinnedEpics = Array.isArray(persistedKan.pinnedEpics) ? persistedKan.pinnedEpics.slice() : [];
   state.epicSort    = (typeof persistedKan.epicSort === 'string') ? persistedKan.epicSort : 'count';
 
-  // Carousel offsets that survive re-renders (filter changes, backlog refresh).
-  const stepperViewState = { pastOffset: 0, futureOffset: 0 };
 
   // Layout
   const page = document.createElement('div');
@@ -161,9 +159,18 @@ export async function mount(root, { store, api, prefs }) {
   const filterBar = document.createElement('div');
   filterBar.className = 'kanban-filterbar';
 
-  const stepperHost = document.createElement('div');
-  stepperHost.className = 'kanban-filterbar-row phase';
-  filterBar.appendChild(stepperHost);
+  // Built once at mount so focus and an open More survive every paint; paint only updates it.
+  // Picking the active value again returns to all phases; paint() prunes epics that don't apply.
+  const strip = phaseStrip({
+    onSelect: (key) => {
+      state.filters.phase = (state.filters.phase === key) ? '__all__' : key;
+      paint(); savePrefs();
+    },
+  });
+  const phaseHost = document.createElement('div');
+  phaseHost.className = 'kanban-filterbar-row phase';
+  phaseHost.appendChild(strip.el);
+  filterBar.appendChild(phaseHost);
 
   const epicHost = document.createElement('div');
   epicHost.className = 'kanban-filterbar-row epic';
@@ -218,8 +225,8 @@ export async function mount(root, { store, api, prefs }) {
     // 2) Subcount
     subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
 
-    // 3) Phase stepper data — sort by order so non-sequential insertion in
-    // the YAML (e.g. phase "1.5" added after "2") doesn't scramble the stepper.
+    // 3) Phase strip data — sort by order so non-sequential insertion in
+    // the YAML (e.g. phase "1.5" added after "2") doesn't scramble the strip.
     const phasesOrdered = phasesArr.slice().sort((a, b) => {
       const oa = a.order != null ? a.order : 999;
       const ob = b.order != null ? b.order : 999;
@@ -230,20 +237,9 @@ export async function mount(root, { store, api, prefs }) {
       const done  = tasks.filter(t => t.phase === ph.id && t.status === 'done').length;
       let stat = (ph.status || '').toLowerCase();
       if (!stat) stat = (done >= total && total > 0) ? 'done' : (done > 0 ? 'active' : 'future');
-      return { id: ph.id, name: ph.name || ph.id, status: stat, done, total };
+      return { id: ph.id, name: ph.name || ph.id, status: stat, done, total, archived_reason: ph.archived_reason };
     });
-    stepperHost.replaceChildren(renderPhaseStepper({
-      phases: phaseRows,
-      active: state.filters.phase,
-      viewState: stepperViewState,
-      // Clicking the currently-selected phase clears the filter back to all-phases.
-      // paint() will prune any selected epics that don't apply to the new phase.
-      onSelect: (key) => {
-        const next = (state.filters.phase === key) ? '__all__' : key;
-        state.filters.phase = next;
-        paint(); savePrefs();
-      },
-    }));
+    strip.update({ phases: phaseRows, active: state.filters.phase });
 
     // 4) Epic chips data — when a phase is active, scope to epics that have tasks in that phase.
     const tasksInPhase = phaseScoped
@@ -478,6 +474,7 @@ export async function mount(root, { store, api, prefs }) {
   return () => {
     unsubBacklog();
     resizeObs.disconnect();
+    strip.destroy();
   };
 }
 

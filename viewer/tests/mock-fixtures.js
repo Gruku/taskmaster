@@ -504,3 +504,27 @@ export function manySessions(n) {
 export const ISSUE = { id: 'ISS-012', title: 'Card edge vanishes on the light page ground', severity: 'P1', severity_label: 'High', status: 'investigating', discovered: '2026-08-01T09:00:00Z', evidence: 'Seen on **three** laptops in light theme.', repro: ['Open the board in light', 'Look at a card edge'], impact: 'Cards blur into the column; `--card-bg` sits too close to `--col-bg`.', summary: '## Notes\n\nTracked in T-102.', location: ['viewer/css/screens/kanban.css:87', 'viewer/css/tokens.css'], links: [{ type: 'relates_to', target: 'T-102' }, { type: 'duplicate_of', target: 'ISS-009' }] };
 export const ISSUES = { issues: [ISSUE, { id: 'ISS-009', title: 'Light card edge', severity: 'P2', status: 'fixed', discovered: '2026-07-01T09:00:00Z', resolved: '2026-07-10T09:00:00Z' }] };
 export const LONG_ISSUE = { ...ISSUE, id: 'ISS-1234', title: 'x'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
+// ── Plan 3e: Archived ──
+// BOARD plus `n` archived tasks T-1001… spread over the two fixture epics, an epic the board does not list (`legacy`)
+// and no epic; every fifth title is 120 characters long; T-1002 was superseded, T-1003 is a duplicate. Deterministic.
+export function archivedBoard(n) {
+  const epics = ['viewer', 'store', 'legacy', undefined];
+  const long = (i) => `Archived task ${i} whose title runs well past the edge of a phone screen and keeps on going until it `.repeat(2).slice(0, 120);
+  const reasons = { 1: 'superseded by T-140', 2: 'duplicate' };
+  const archived = Array.from({ length: n }, (_, i) => task(`T-${1001 + i}`,
+    i % 5 === 4 ? long(1001 + i) : `Archived task ${1001 + i}`, 'archived', 'medium', epics[i % 4],
+    reasons[i] ? { archived_reason: reasons[i] } : {}));
+  return { ...BOARD, tasks: [...BOARD.tasks, ...archived] };
+}
+
+// The table plan 4's a11y gate reuses for #/archived; loaded when `.arch-row[data-task-id="T-1001"]` is visible.
+export const archivedMocks = ({ theme = 'dark' } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/board': archivedBoard(40), '/api/backlog': archivedBoard(40),
+  '/api/task/T-1001/detail': taskDetail({ ...EMPTY_TASK, id: 'T-1001', title: 'Archived task 1001', status: 'archived' }),
+});
+
+// The bug detail page (plan 3c Task 8): one open bug found in a board task, a fixed one that went somewhere, and one too long for a phone.
+export const BUG = { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P2', found_in: 'T-102', discovered: '2026-09-30T10:00:00Z', discovered_by: 'user', components: ['viewer'], location: ['viewer/css/screens/kanban.css:87'], summary: 'The card border uses `--border-subtle`.\n\n1. Light theme\n2. Laptop screen' };
+export const BUG_FIXED = { ...BUG, id: 'B-030', status: 'fixed', severity: null, fix_commit: 'abfb1b9c0ffee', adopted_into: 'T-101', promoted_to: 'ISS-012' };
+export const LONG_BUG = { ...BUG, id: 'B-1234', title: 'y'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
