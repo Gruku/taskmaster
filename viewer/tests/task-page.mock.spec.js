@@ -6,15 +6,11 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail, taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
-const TABLE = {
-  '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
-  [DETAIL]: taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
-  'PUT /api/viewer/prefs': {},
-};
+const TABLE = taskPageMocks();
 
 let errors;
 let patches;
@@ -98,6 +94,10 @@ test('Edit sits in row 1 as the page\'s primary and the switch alone in row 2', 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(edit).toBeVisible();
   expect((await edit.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  // At 390 the primary shows its icon only, and still says "Edit" to a screen reader.
+  await expect(edit.locator('> .icon')).toBeVisible();
+  await expect(edit.locator('> span')).toBeHidden();
+  await expect(page.locator('#topbar-primary').getByRole('button', { name: /Edit/ })).toHaveCount(1);
 });
 
 test('another writer\'s change waits while a section is edited on the page, then shows', async ({ page }) => {

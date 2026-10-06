@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
+import { taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -10,9 +11,7 @@ const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 test('missing task shows not-found and clears the topbar', async ({ page }) => {
-  await mockApi(page, {
-    '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } },
-  });
+  await mockApi(page, taskPageMocks());
   await page.goto('/#/task/NOPE-999');
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('Task not found');
   await expect(page.locator('#screen-mount .tm-empty__label')).toHaveText('NOPE-999');
@@ -23,11 +22,10 @@ test('missing task shows not-found and clears the topbar', async ({ page }) => {
 });
 
 test('the not-found state offers one way on, a link styled as a button', async ({ page }) => {
-  const missing = { '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } } };
   const link = page.locator('#screen-mount .tm-empty a.btn');
 
   for (const theme of ['dark', 'light']) {
-    await mockApi(page, { ...missing, '/api/viewer/prefs': { theme, ui: {}, screens: {} } });
+    await mockApi(page, taskPageMocks({ theme }));
     await page.goto('/#/task/NOPE-999');
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);

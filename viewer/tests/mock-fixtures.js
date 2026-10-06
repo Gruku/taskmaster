@@ -589,3 +589,35 @@ export const epicsMocks = ({ theme = 'dark', board = EPICS_BOARD } = {}) => ({
   '/api/board': board, '/api/backlog': board, '/api/bugs': [],
   '/api/epic/viewer': epicPayload(board, 'viewer'),
 });
+
+// The task page's routes: T-102 rich (document and ?view=B), T-101 done, T-105 long, NOPE-999 missing.
+// Loaded: `.td-page-A h1.td-title` (document), `.td-page-B h1.td-title` (graph), `.tm-empty[data-state="missing"]` (NOPE-999).
+export function taskPageMocks({ theme = 'dark' } = {}) {
+  return {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} }, 'PUT /api/viewer/prefs': {},
+    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
+    '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
+    '/api/task/T-101/detail': taskDetail(DONE_TASK),
+    '/api/task/T-105/detail': taskDetail(LONG_TASK, 't1:fixture', LONG_RELATED),
+    '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } },
+  };
+}
+// The issue page's routes: ISS-012 stale, ISS-009 fixed, ISS-1234 long; ISS-999 is absent from the list.
+// Loaded: `.dp-page--issue h1.td-title`, or `.tm-empty[data-state="missing"]` for ISS-999.
+export function issueDetailMocks({ theme = 'dark' } = {}) {
+  return {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {}, issues: { aging: { High: 30 } } }, 'PUT /api/viewer/prefs': {},
+    '/api/board': BOARD, '/api/backlog': BOARD,
+    '/api/issues': { issues: [...ISSUES.issues, LONG_ISSUE] },
+  };
+}
+// The bug page's routes: B-031 open, B-030 fixed, B-1234 long, B-999 missing.
+// Loaded: `.dp-page--bug h1.td-title`, or `.tm-empty[data-state="missing"]` for B-999.
+export function bugDetailMocks({ theme = 'dark' } = {}) {
+  return {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} }, 'PUT /api/viewer/prefs': {},
+    '/api/board': BOARD, '/api/backlog': BOARD,
+    '/api/bugs/B-031': BUG, '/api/bugs/B-030': BUG_FIXED, '/api/bugs/B-1234': LONG_BUG,
+    '/api/bugs/B-999': { status: 404, json: { ok: false, error: 'unknown bug B-999' } },
+  };
+}
