@@ -362,10 +362,12 @@ body, .shell, .sidebar, .topbar, .main {
    Sidebar becomes a slide-in drawer triggered by a hamburger button.
    Desktop layout (≥ 768px) is completely unchanged. */
 @media (max-width: 768px) {
-  /* Allow page-level scroll (body/html locked overflow is the main blocker on mobile) */
+  /* Allow page-level scroll (body/html locked overflow is the main blocker on mobile). The viewport scrolls; `clip`
+     keeps the sideways cut without making body a scroll container that never scrolls (the topbar's sticky would bind
+     to it and scroll away with the page). */
   html, body {
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow-x: clip;
+    overflow-y: visible;
     height: auto;
     min-height: 100%;
   }
@@ -447,11 +449,12 @@ body, .shell, .sidebar, .topbar, .main {
   .topbar-primary .btn:has(> .icon) { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
   .topbar-primary .btn:has(> .icon) > span { display: none; }
 
-  /* Main: natural height, vertical scroll */
+  /* Main: natural height; the page scrolls, not .main. `clip`, not `hidden`: hidden would compute overflow-y to auto
+     and make .main — which never scrolls — the topbar's sticky container, so the topbar would scroll away. */
   .main {
     height: auto;
     min-height: 0;
-    overflow-x: hidden;
+    overflow-x: clip;
     overflow-y: visible;
   }
 

@@ -1,0 +1,9 @@
+/* User intent: the task detail modal keeps what the user must see in view and draws the task at one size — a refused
+   title's reason sits under the header, outside the scrolling body, and the marker row matches the full page from the
+   first frame. */
+
+/* Lifted out of the body by detail-modal.js: under the header, aligned with the header's own padding at every width. */
+.modal--detail > .td-title-message { flex: 0 0 auto; padding: var(--space-sm) var(--space-lg) 0; }
+
+/* The row would otherwise inherit the modal's smaller size for the first frames after opening (14px, then 16px). */
+.modal--detail .td-markers { font-size: var(--size-narrator-default); }
