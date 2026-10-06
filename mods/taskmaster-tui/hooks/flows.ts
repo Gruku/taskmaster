@@ -2,7 +2,7 @@
 // pane can never disagree and every write goes through one explicit confirmation and at most one write per task at a time.
 import type { RenderSurface } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
 import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW, TICKS_PREFIX, ticksOf, toggleTick } from './model'
@@ -15,6 +15,10 @@ export type TmWriter = {
   details: (change: (d: Readonly<Record<string, TmTaskDetail>>) => Readonly<Record<string, TmTaskDetail>>) => Promise<void>
   ticks: (change: (t: Readonly<Record<string, readonly string[]>>) => Readonly<Record<string, readonly string[]>>) => Promise<void>
   detailsOpen: (change: (open: boolean) => boolean) => Promise<void>
+  summaries: (
+    change: (s: Readonly<Record<string, TmHandoverSummary>>) => Readonly<Record<string, TmHandoverSummary>>,
+  ) => Promise<void>
+  summaryOpen: (change: (id: string) => string) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -24,6 +28,11 @@ export type TmFlowDeps = {
   afterWrite: (taskId: string, outcome: 'done' | 'sent-back') => void
   /** Which data the flows act on: demo never reaches the tm server (the viewer is only announced). Default tm. */
   source?: 'tm' | 'demo'
+  /**
+   * Reads a handover's decisions and blockers (Task 3b: backlog_handover_get with sections decisions + blockers), or null
+   * when it cannot. Absent in demo, whose summaries are seeded like the task details.
+   */
+  summary?: (handoverId: string) => Promise<TmHandoverSummary | null>
 }
 
 export type TmFlows = ReturnType<typeof createFlows>
@@ -32,6 +41,7 @@ const PROMPT_REFUSED = 'taskmaster-tui: the prompt did not take the text; close 
 
 export function createFlows(d: TmFlowDeps) {
   const busy = new Set<string>()
+  const summaryAsked = new Set<string>()
   const once = async (id: string, work: () => Promise<void>): Promise<void> => {
     if (busy.has(id)) return
     busy.add(id)
@@ -56,6 +66,7 @@ export function createFlows(d: TmFlowDeps) {
     },
     openHandovers: async (): Promise<void> => {
       await d.write.pick('')
+      await d.write.summaryOpen(() => '')
       await open(HANDOVERS, 'Handovers')
     },
     askDone: async (id: string): Promise<void> => {
@@ -116,6 +127,7 @@ export function createFlows(d: TmFlowDeps) {
       }),
     pick: async (id: string): Promise<void> => {
       await d.write.pick(id)
+      await d.write.summaryOpen(open => (open === id ? open : ''))
     },
     copyHandover: async (h: TmHandover, surface: RenderSurface | undefined): Promise<void> => {
       const r = await d.host.copy(handoverCopyText(h), surface)
@@ -123,6 +135,15 @@ export function createFlows(d: TmFlowDeps) {
     },
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
+    },
+    // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once.
+    toggleSummary: async (h: TmHandover, open: boolean): Promise<void> => {
+      await d.write.summaryOpen(() => (open ? h.id : ''))
+      if (!open || d.summary === undefined || summaryAsked.has(h.id)) return
+      summaryAsked.add(h.id)
+      const summary = await d.summary(h.id)
+      if (summary === null) summaryAsked.delete(h.id)
+      else await d.write.summaries(all => ({ ...all, [h.id]: summary }))
     },
     // Ticks are local UI state: read the stored set first (another session may have ticked), toggle, write it back, then
     // mirror it into $.state so the card redraws. Never sent to Taskmaster.

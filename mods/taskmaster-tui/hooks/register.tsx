@@ -3,9 +3,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBandMode, TmCursor, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { demoActions, pendingActions } from './actions'
-import { DEMO_DETAILS, DEMO_REASON, demoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_REASON, DEMO_SUMMARIES, demoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import type { TmHost } from './host'
@@ -18,6 +18,8 @@ const DETAILS = atom({ plugin: 'taskmaster-tui', key: 'details' } as const, {} a
 const PICK = atom({ plugin: 'taskmaster-tui', key: 'pick' } as const, '')
 const TICKS = atom({ plugin: 'taskmaster-tui', key: 'ticks' } as const, {} as Readonly<Record<string, readonly string[]>>)
 const DETAILS_OPEN = atom({ plugin: 'taskmaster-tui', key: 'detailsOpen' } as const, false)
+const SUMMARIES = atom({ plugin: 'taskmaster-tui', key: 'summaries' } as const, {} as Readonly<Record<string, TmHandoverSummary>>)
+const SUMMARY_OPEN = atom({ plugin: 'taskmaster-tui', key: 'summaryOpen' } as const, '')
 const BAND = atom({ plugin: 'taskmaster-tui', key: 'band' } as const, { confirmingId: '', refusal: '' } as TmBandMode)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
@@ -108,6 +110,12 @@ function writerOf($: EngineInterface): TmWriter {
     detailsOpen: async change => {
       await update($, DETAILS_OPEN, change)
     },
+    summaries: async change => {
+      await update($, SUMMARIES, change)
+    },
+    summaryOpen: async change => {
+      await update($, SUMMARY_OPEN, change)
+    },
   }
 }
 
@@ -123,6 +131,8 @@ function ensureFlows($: EngineInterface): TmFlows {
     actions: mod.source === 'demo' ? demoActions() : pendingActions(),
     afterWrite: () => undefined,
     source: mod.source,
+    // No `summary` reader yet: Task 3b adds one for tm (backlog_handover_get, sections decisions + blockers); demo seeds
+    // DEMO_SUMMARIES instead, as it does the task details.
   })
   return mod.flows
 }
@@ -135,6 +145,7 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   await update($, SNAPSHOT, s => (isDemo(s) ? s : demoSnapshot(now)))
   await update($, DETAILS, () => DEMO_DETAILS)
+  await update($, SUMMARIES, () => DEMO_SUMMARIES)
 }
 
 async function ready($: EngineInterface): Promise<TmFlows> {
@@ -144,11 +155,20 @@ async function ready($: EngineInterface): Promise<TmFlows> {
 }
 
 /** What the surfaces draw: $.state, or in demo mode before the seed lands, the demo data itself (a render writes nothing). */
-async function dataOf($: EngineInterface): Promise<{ snapshot: TmSnapshot | null; details: Readonly<Record<string, TmTaskDetail>> }> {
+async function dataOf($: EngineInterface): Promise<{
+  snapshot: TmSnapshot | null
+  details: Readonly<Record<string, TmTaskDetail>>
+  summaries: Readonly<Record<string, TmHandoverSummary>>
+}> {
   const snapshot = await read($, SNAPSHOT)
   const details = await read($, DETAILS)
-  if (mod.source === 'demo') return isDemo(snapshot) ? { snapshot, details } : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS }
-  return isDemo(snapshot) ? { snapshot: null, details: {} } : { snapshot, details }
+  const summaries = await read($, SUMMARIES)
+  if (mod.source === 'demo') {
+    return isDemo(snapshot)
+      ? { snapshot, details, summaries }
+      : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
+  }
+  return isDemo(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
 }
 
 /** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */
@@ -242,9 +262,10 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the review queue in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
-    const data = await dataOf($)
+    const { snapshot, details } = await dataOf($)
     const view = {
-      ...data,
+      snapshot,
+      details,
       cursor: await read($, CURSOR),
       now: await $.clock.now(),
       ticks: (taskId: string) => ticksFor($, taskId),
@@ -275,7 +296,8 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
-    const view = { snapshot: (await dataOf($)).snapshot, pick: await read($, PICK) }
+    const { snapshot, summaries } = await dataOf($)
+    const view = { snapshot, pick: await read($, PICK), summaries, summaryOpen: await read($, SUMMARY_OPEN) }
     return handoversPaneTree(
       $.ui.resolve(e) as unknown as Ui,
       rrOf($),
@@ -284,6 +306,7 @@ export const register: Register = (on, options) => {
         pick: id => act(f => f.pick(id)),
         copy: (handover, surface) => act(f => f.copyHandover(handover, surface)),
         resume: handover => act(f => f.resumeHandover(handover)),
+        toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
       },
       e.props.bodyColumns,
     )
@@ -292,7 +315,11 @@ export const register: Register = (on, options) => {
   on('ui.focus', { requestId: 'tm-handovers' }, async ($, e, next) => {
     const moved = await next(e)
     const element = e.element
-    if (element !== undefined && element.startsWith('ho:')) await update($, PICK, () => element.slice(3))
+    if (element !== undefined && element.startsWith('ho:')) {
+      const id = element.slice(3)
+      await update($, PICK, () => id)
+      await update($, SUMMARY_OPEN, open => (open === id ? open : '')) // another row shows collapsed, and so does this one later
+    }
     return moved
   }).catch(($, e, next) => next(e)) // a failed pick write never holds the focus move up: replay what the chain beneath settled
 }

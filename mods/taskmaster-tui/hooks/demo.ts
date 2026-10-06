@@ -1,6 +1,6 @@
 // User intent: built-in sample data so taskmaster-tui can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
-import type { TmHandover, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 /** The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. */
@@ -49,14 +49,34 @@ export const DEMO_DETAILS: Readonly<Record<string, TmTaskDetail>> = {
   },
 }
 
+/** Decisions and blockers per demo handover, seeded like DEMO_DETAILS (tm mode reads them when a summary is expanded). */
+export const DEMO_SUMMARIES: Readonly<Record<string, TmHandoverSummary>> = {
+  '2026-10-05-shipped-unified-chat-022': {
+    decisions: ['The cookbook owns the build order, not the pre-build'],
+    blockers: ['Needs unifiedChatGenerate + unifiedChatBuild on dev'],
+  },
+  '2026-10-04-audit-fixes-landed': {
+    decisions: ['Audit fixes ride the native branch; no backport to master'],
+    blockers: ['tm-audit-030 merge not recorded yet'],
+  },
+  '2026-10-03-viewer-reskin-2a': { decisions: ['Plan 2b re-skins the board before the detail drawer'], blockers: [] },
+  '2026-10-02-store-read-hang': {
+    decisions: ['Fix quarantined-row scans before the mutex split'],
+    blockers: ['Needs a CodeMaestro-sized store to measure'],
+  },
+  '2026-10-01-release-7-0-0': { decisions: [], blockers: [] },
+}
+
 export function demoSnapshot(now: number): TmSnapshot {
   const ago = (hours: number) => new Date(now - hours * HOUR).toISOString()
-  const handover = (id: string, hours: number, tldr: string, nextAction: string): TmHandover => ({
+  const handover = (id: string, hours: number, tldr: string, nextAction: string, branch: string, taskIds: readonly string[]): TmHandover => ({
     id,
     created: ago(hours),
     tldr,
     nextAction,
     path: handoverPath(DEMO_ROOT, id),
+    branch,
+    taskIds,
   })
   const task = (id: string, hours: number) => {
     const d = DEMO_DETAILS[id]!
@@ -75,11 +95,16 @@ export function demoSnapshot(now: number): TmSnapshot {
     ],
     queueTotal: 5,
     handovers: [
-      handover('2026-10-05-shipped-unified-chat-022', 2, 'Shipped unified-chat-022 to dev', 'Live check, then sign off in the review queue'),
-      handover('2026-10-04-audit-fixes-landed', 20, 'Audit fixes landed on the native branch', 'Record the merge for tm-audit-030'),
-      handover('2026-10-03-viewer-reskin-2a', 44, 'Viewer RR re-skin plan 2a closed', 'Start plan 2b'),
-      handover('2026-10-02-store-read-hang', 70, 'Store read hang root cause found', 'Fix quarantined-row scans first'),
-      handover('2026-10-01-release-7-0-0', 96, 'Released 7.0.0', 'Watch for adoption reports'),
+      handover('2026-10-05-shipped-unified-chat-022', 2, 'Shipped unified-chat-022 to dev', 'Live check, then sign off in the review queue', 'main', [
+        'unified-chat-022',
+      ]),
+      handover('2026-10-04-audit-fixes-landed', 20, 'Audit fixes landed on the native branch', 'Record the merge for tm-audit-030', 'feat/database-native-foundation', [
+        'tm-audit-030',
+        'tm-audit-031',
+      ]),
+      handover('2026-10-03-viewer-reskin-2a', 44, 'Viewer RR re-skin plan 2a closed', 'Start plan 2b', 'feat/viewer-reskin', []),
+      handover('2026-10-02-store-read-hang', 70, 'Store read hang root cause found', 'Fix quarantined-row scans first', '', ['B-082']),
+      handover('2026-10-01-release-7-0-0', 96, 'Released 7.0.0', 'Watch for adoption reports', 'master', []),
     ],
     handoversTotal: 6,
     bound: {

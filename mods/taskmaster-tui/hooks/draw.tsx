@@ -3,7 +3,7 @@
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { Elements, RenderChildren, RenderElement, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 import {
   ageLabel,
   type BandModel,
@@ -12,6 +12,7 @@ import {
   cardPosition,
   dateOf,
   gateSignal,
+  handoverRefs,
   oneLine,
   PRIORITY_GLYPH,
   PRIORITY_TONE,
@@ -602,12 +603,33 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   ])
 }
 
-export type HandoversView = { snapshot: TmSnapshot | null; pick: string }
+export type HandoversView = {
+  snapshot: TmSnapshot | null
+  pick: string
+  summaries: Readonly<Record<string, TmHandoverSummary>>
+  /** The handover whose summary is expanded; it shows only while that handover is the picked one. */
+  summaryOpen: string
+}
 
 export type HandoverHandlers = {
   pick: (id: string) => void
   copy: (h: TmHandover, surface: RenderSurface) => void
   resume: (h: TmHandover) => void
+  toggleSummary: (h: TmHandover, open: boolean) => void
+}
+
+/** The picked handover expanded under its row: full tldr, branch and tasks, decisions and blockers (read on demand), Next. */
+function handoverSummary(ui: Ui, t: RrTokens, h: TmHandover, summary: TmHandoverSummary | undefined, width: number): RenderNode[] {
+  const indent = 4
+  const refs = handoverRefs(h)
+  const facts = summary === undefined ? [] : [...summary.decisions.map(d => `decision: ${d}`), ...summary.blockers.map(b => `blocker: ${b}`)]
+  return [
+    ...lines(ui, t.fg.default, h.tldr, width, indent),
+    ...(refs === '' ? [] : lines(ui, t.fg.subtle, refs, width, indent)),
+    ...(summary === undefined ? lines(ui, t.fg.subtle, 'loading summary…', width, indent) : []),
+    ...facts.flatMap(fact => lines(ui, t.fg.subtle, fact, width, indent)),
+    ...lines(ui, t.fg.default, `Next: ${oneLine(h.nextAction) || '—'}`, width, indent),
+  ]
 }
 
 export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: HandoverHandlers, width: number): Promise<RenderElement> {
@@ -618,15 +640,18 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
   const list = v.snapshot.handovers
   const picked = list.find(entry => entry.id === v.pick) ?? list[0]
   if (picked === undefined) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>No open handovers.</Text>])
+  const room = Math.max(10, width - 2)
+  const open = v.summaryOpen === picked.id
   const esc = escHint(ui, t)
-  const [rowPress, copy, resume] = await Promise.all([
+  const [rowPress, togglePress, copy, resume] = await Promise.all([
     rr.buttonProps({}),
+    rr.buttonProps({ key: 'i' }),
     chip(ui, rr, { id: 'copy', hotkey: 'c', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copy(picked, press.surface) }),
     chip(ui, rr, { id: 'resume', hotkey: 'r', label: 'resume', treatment: 'chip', tone: 'signature', onPress: () => on.resume(picked) }),
   ])
   return paneRoot(ui, rr, [
     title,
-    ...list.map(entry => (
+    ...list.flatMap(entry => [
       <Box key={`ho:${entry.id}-box`} flexDirection="row" columnGap={1}>
         <Text color={entry.id === picked.id ? t.signatureText : t.fg.subtle}>{entry.id === picked.id ? '→' : ' '}</Text>
         <Button
@@ -635,12 +660,19 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
           label={truncate(`${dateOf(entry.created)}  ${oneLine(entry.tldr)}`, Math.max(10, width - 4))}
           onPress={() => on.pick(entry.id)}
         />
-      </Box>
-    )),
-    <Text color={t.fg.default} wrap="wrap">
-      {`Next: ${oneLine(picked.nextAction) || '—'}`}
-    </Text>,
+      </Box>,
+      ...(open && entry.id === picked.id ? handoverSummary(ui, t, entry, v.summaries[entry.id], room) : []),
+    ]),
+    // Expanded, Next sits in the summary: never twice.
+    open ? null : (
+      <Text color={t.fg.default} wrap="wrap">
+        {`Next: ${oneLine(picked.nextAction) || '—'}`}
+      </Text>
+    ),
+    <Box key="summary-box" flexDirection="row">
+      <Button key="summary" {...togglePress} label={`${open ? '▾' : '▸'} summary`} onPress={() => on.toggleSummary(picked, !open)} />
+    </Box>,
     <Text color={t.fg.subtle}>{`${list.length} of ${v.snapshot.handoversTotal} · superseded hidden`}</Text>,
-    chipRow(ui, fit([copy, resume, esc], Math.max(10, width - 2), 1)),
+    chipRow(ui, fit([copy, resume, esc], room, 1)),
   ])
 }

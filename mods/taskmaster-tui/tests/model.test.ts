@@ -12,6 +12,7 @@ import {
   gateSignal,
   handoverCopyText,
   handoverPath,
+  handoverRefs,
   oneLine,
   isStaleTicks,
   orderQueue,
@@ -25,7 +26,9 @@ import {
   wrapText,
 } from '../hooks/model'
 import { DEMO_DETAILS } from '../hooks/demo'
-import type { TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+
+const H1: TmHandover = { id: 'h1', created: '', tldr: 'Shipped it', nextAction: '', path: '/p/h1.md', branch: '', taskIds: [] }
 
 const task = (id: string, priority: 'critical' | 'high' | 'medium' | 'low'): TmQueueItem => ({
   kind: 'task',
@@ -174,9 +177,14 @@ describe('text', () => {
       'C:\\Users\\gruku\\Files\\Claude\\claude-tools\\.taskmaster\\handovers\\2026-10-05-x.md',
     )
     expect(handoverPath('/home/me/proj', 'h1')).toBe('/home/me/proj/.taskmaster/handovers/h1.md')
-    expect(handoverCopyText({ id: 'h1', created: '', tldr: 'Shipped it', nextAction: 'Record merge', path: '/p/h1.md' })).toBe(
-      'Shipped it\n\nNext: Record merge\n\n/p/h1.md',
-    )
+    expect(handoverCopyText({ ...H1, nextAction: 'Record merge' })).toBe('Shipped it\n\nNext: Record merge\n\n/p/h1.md')
+  })
+
+  test('the summary line of branch and tasks leaves out whichever is empty', () => {
+    expect(handoverRefs({ ...H1, branch: 'main', taskIds: ['a-001', 'b-002'] })).toBe('branch: main · tasks: a-001, b-002')
+    expect(handoverRefs({ ...H1, branch: 'main' })).toBe('branch: main')
+    expect(handoverRefs({ ...H1, taskIds: ['a-001'] })).toBe('tasks: a-001')
+    expect(handoverRefs(H1)).toBe('')
   })
 })
 

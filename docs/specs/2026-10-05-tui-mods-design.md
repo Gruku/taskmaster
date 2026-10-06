@@ -141,6 +141,7 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 - 2026-10-05: `classic.SessionStart` can fire before a session is bound (`$.config.list` unavailable); it never throws and leaves the publish to `session.start`.
 - 2026-10-05: Verified live: under `auto`, `/theme` → light switches the gallery to light.
 - 2026-10-06 (Task 2 live look): the user approved the lean review card as built, judged from the dark-polarity `/tm-review` screenshots: the critical card with checklist and collapsed details, and the high card with details open and a `refused` banner. No visual changes.
+- 2026-10-06 (Task 2 live look, handovers): the picked handover now expands on `i` (`▸ summary` / `▾ summary`, mirroring the review card's details) into its full tldr, branch and tasks, decisions and blockers, and `Next:` (§6.1).
 
 ## 6. `taskmaster-tui`
 
@@ -209,6 +210,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 
 **Handover-written notice (band).** When this session's main agent writes a handover — its own `tool.call` hook sees `backlog_handover_create` succeed after `await next(e)` (`e.agentId` unset) — the band shows one row: `HANDOVER  <tldr, truncated>   3: copy   2: handovers`. `3` (digit hotkey, works from an empty prompt) copies the same three-line block and toasts; the row clears on copy, when a newer handover replaces it, or on `/clear`. Nothing is copied without a keypress. The handover id and path come from the call's result (the reply names the created id); tldr, thread and next action from its input. Stored in `$.state` (`taskmaster-tui.handoverNotice`).
 - `r` resume → `$.prompt.fill("Resume from handover <id> (<path>)")`; the pane stays open.
+- `i` summary (added 2026-10-06) → expands the picked handover under its row, indented: the full tldr wrapped, `branch: X · tasks: a, b` (an empty part left out), then decisions and blockers (read lazily with `backlog_handover_get` sections `decisions` and `blockers` on expand; `loading summary…` until they arrive; an empty section left out), then `Next: …`, which replaces the standalone `Next:` line. The toggle follows the pick: another row shows collapsed.
 
 ### 6.2 Actions and their safety
 

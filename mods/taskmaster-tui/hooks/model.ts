@@ -177,6 +177,11 @@ export function handoverCopyText(h: TmHandover): string {
   return [h.tldr.trim(), h.nextAction.trim() ? `Next: ${h.nextAction.trim()}` : '', h.path].filter(Boolean).join('\n\n')
 }
 
+/** `branch: X · tasks: a, b`, leaving out whichever is empty ('' when both are). */
+export function handoverRefs(h: TmHandover): string {
+  return [h.branch ? `branch: ${h.branch}` : '', h.taskIds.length > 0 ? `tasks: ${h.taskIds.join(', ')}` : ''].filter(Boolean).join(' · ')
+}
+
 // ── The review card (redesigned 2026-10-06, spec §6.1) ─────────────────────────────────────────────────────────────
 
 /** A human_action split into the card's checklist: an optional section label (with its dim detail) and the items. */

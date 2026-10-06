@@ -38,7 +38,12 @@ export type TmHandover = {
   readonly tldr: string
   readonly nextAction: string
   readonly path: string
+  /** The list reply's `branch` and `task_ids`: the expanded summary's `branch: X · tasks: a, b`. */
+  readonly branch: string
+  readonly taskIds: readonly string[]
 }
+/** A handover's body sections for the expanded summary (backlog_handover_get, sections decisions + blockers), one entry per item. */
+export type TmHandoverSummary = { readonly decisions: readonly string[]; readonly blockers: readonly string[] }
 export type TmBound = {
   readonly taskId: string
   readonly inferred: boolean
@@ -80,6 +85,10 @@ declare module 'claude-code' {
       /** Ticked check items per task id: a mirror of `$.store` `ticks:<id>` that redraws the card; never sent to Taskmaster. */
       ticks: Readonly<Record<string, readonly string[]>>
       detailsOpen: boolean
+      /** Decisions and blockers per handover id, read only when its summary is expanded. */
+      summaries: Readonly<Record<string, TmHandoverSummary>>
+      /** The handover whose summary is expanded ('' none); it shows only while that handover is the picked one. */
+      summaryOpen: string
     }
   }
 }
