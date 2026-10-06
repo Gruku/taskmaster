@@ -190,3 +190,19 @@ export const SESSION_DETAILS = Object.fromEntries(SESSIONS.map((s) => [s.id, {
     `${ho.id.slice(0, 10)}T10:00:00+00:00`)),
   task_ids: s.task_ids,
 }]));
+
+// ── Dashboard ──
+// A Claude note eight paragraphs long, ending in a 300-character link, so the clamp, the fade and "Show more" show.
+export const LONG_NOTE = {
+  id: 'NOTE-099', author: 'claude', pinned: false, created: ago(2),
+  body: Array.from({ length: 8 }, (_, i) => `Paragraph ${i + 1}: `
+    + 'The cutover moves every row into the native store and checks the counts. '.repeat(7)).join('\n\n')
+    + '\n\nhttps://example.com/' + 'a'.repeat(300),
+};
+
+// The Dashboard with notes and an empty continuity band.
+export const deskMocks = ({ theme = 'dark', notes = NOTES } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/notes': notes,
+  '/api/continuity': { items: [] },
+});
