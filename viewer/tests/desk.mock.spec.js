@@ -1,11 +1,11 @@
-// User intent: the Dashboard's notes work in a real browser — a long note is clamped and opens from the keyboard, notes
-// are pinned, archived and created by keyboard without losing focus, and a refused note write is said in words while
-// the typed text stays.
+// User intent: the Dashboard works in a real browser — it opens on four counts that are links and stay put while the board
+// redraws; a long note is clamped and opens from the keyboard; notes are pinned, archived and created by keyboard without
+// losing focus; and a refused note write is said in words while the typed text stays.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { NOTES, LONG_NOTE, deskMocks } from './mock-fixtures.js';
+import { NOTES, LONG_NOTE, deskMocks, summaryMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -44,6 +44,83 @@ async function tabTo(page, selector, max = 40) {
 }
 
 const note = (page, id) => page.locator(`.dk-note[data-note-id="${id}"]`);
+
+const summary = (page) => page.getByRole('navigation', { name: 'Project summary' });
+
+test('the strip counts from the board, issues and bugs, and each count is a link', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  const strip = summary(page);
+  await expect(page.locator('.dk-desk > :first-child')).toHaveClass(/dk-summary/);
+  await expect(strip.getByRole('link', { name: '2 In progress' })).toHaveAttribute('href', '#/table?status=in-progress');
+  await expect(strip.getByRole('link', { name: '1 Waiting on you' })).toHaveAttribute('href', '#/table?status=in-review');
+  await expect(strip.getByRole('link', { name: '3 Open issues' })).toHaveAttribute('href', '#/issues');
+  await expect(strip.getByRole('link', { name: '2 Open bugs' })).toHaveAttribute('href', '#/bugs');
+  await expect(strip.getByRole('link')).toHaveCount(4);
+  await strip.getByRole('link', { name: /Open issues/ }).click();
+  await expect(page).toHaveURL(/#\/issues$/);
+  await expect(page.locator('.dk-summary')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a read that fails leaves the other counts', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, summaryMocks({ '/api/issues': { status: 500, json: {} } }));
+  await page.goto('/#/dashboard');
+  const strip = summary(page);
+  await expect(strip.getByRole('link', { name: '2 In progress' })).toBeVisible();
+  const issues = strip.getByRole('link', { name: /Open issues/ });
+  await expect(issues.locator('.dk-stat__n')).toHaveText('—');
+  await expect(issues).toHaveAttribute('title', 'Not loaded');
+  await expect(strip.getByRole('link', { name: '1 Waiting on you' })).toBeVisible();
+  await expect(strip.getByRole('link', { name: '2 Open bugs' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a board redraw updates the counts in place and keeps focus', async ({ page }) => {
+  const { errors } = watch(page);
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  const link = summary(page).getByRole('link', { name: /In progress/ });
+  await expect(link).toHaveText('2 In progress');
+  await link.focus();
+  await page.evaluate(() => import('/js/store.js').then(({ store }) => {
+    const next = structuredClone(store.getBacklog());
+    next.revision = 'r2';
+    next.tasks = next.tasks.map((t) => (t.id === 'T-104' ? { ...t, status: 'in-progress' } : t));
+    store.setBoard(next);
+  }));
+  await expect(link).toHaveText('3 In progress');
+  await expect(link).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('at 390px the strip is two columns of tall links and nothing scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  const links = summary(page).getByRole('link');
+  await expect(links).toHaveCount(4);
+  await expect(links.first()).toHaveText('2 In progress');
+  const boxes = await links.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON()));
+  expect(new Set(boxes.map((b) => Math.round(b.left))).size).toBe(2);
+  for (const b of boxes) expect(b.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(page.locator('#topbar-actions > *:visible')).toHaveCount(0);
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}): the summary strip shows no violations`, async ({ page }) => {
+    await openDesk(page, summaryMocks({ theme }));
+    await page.goto('/#/dashboard');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(summary(page).getByRole('link', { name: '3 Open issues' })).toBeVisible();
+    await page.evaluate(axeSource);
+    const result = await page.evaluate(() => window.axe.run(document.querySelector('.dk-summary'), { resultTypes: ['violations'] }));
+    expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+  });
+}
 
 test('the board mounts with no error, no focused composer, and marked loaded locally', async ({ page }) => {
   const { errors } = watch(page);

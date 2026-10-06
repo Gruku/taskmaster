@@ -5,8 +5,24 @@
 
 .dk-desk { display: flex; flex-direction: column; gap: var(--space-lg); padding: var(--space-lg); }
 
-/* Project label in the topbar slot — muted, low-emphasis. */
-.dk-proj { color: var(--foreground-subtle); font-size: var(--size-narrator-small); }
+/* ── Summary strip: four counts, each a link to where they are ─────────────── */
+.dk-summary > ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-sm); margin: 0; padding: 0; list-style: none; }
+.dk-stat {
+  display: flex; flex-direction: column; gap: var(--space-micro);
+  min-height: 44px; padding: var(--space-sm) var(--space-md);
+  background: var(--card-bg); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  color: var(--foreground-default); text-decoration: none;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
+}
+.dk-stat:hover { background: var(--card-bg-hover); border-color: var(--border-strong); }
+.dk-stat__n {
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight);
+  font-size: var(--size-declaration-h4); color: var(--foreground-bold);
+}
+.dk-stat__label {
+  font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra); text-transform: uppercase; color: var(--foreground-subtle);
+}
 
 /* ── Board ──────────────────────────────────────────────────────────────── */
 .dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); align-items: start; }
@@ -146,6 +162,7 @@
 
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  .dk-summary > ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: 44px; }
 }
 @media (max-width: 720px) {
