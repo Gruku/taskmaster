@@ -10,7 +10,7 @@ import { openEpicOptions }                   from '../components/epic-dropdown.j
 import { chipRow }                           from '../components/chips.js';
 import { icon }                              from '../components/icon.js';
 import { chipClickNext }                     from '../util/chip-toggle.js';
-import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles, countOpen, OPEN_COUNT_HINT } from '../lib/filters.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, clusterBundles, countOpen, OPEN_COUNT_HINT } from '../lib/filters.js';
 import { renderBundleFrame } from '../components/bundle-frame.js';
 import { epicIndex }                         from '../lib/epics.js';
 import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmAction, tmSearch, tmSegmented } from '../lib/topbar.js';
@@ -329,7 +329,7 @@ export async function mount(root, { store, api, prefs }) {
 
     // 5) Group + render columns — use phasesOrdered so swimlanes respect logical order
     const groupKeyArg = state.filters.group_by === 'phase' ? phasesOrdered.map(p => p.id) : undefined;
-    const groups = groupTasks(sorted, state.filters.group_by, groupKeyArg);
+    const groups = groupTasks(sorted, state.filters.group_by, groupKeyArg, epicsArr);
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
     boardGrid.replaceChildren();
 
@@ -343,8 +343,15 @@ export async function mount(root, { store, api, prefs }) {
       col.className = 'kanban-col';
       const head = document.createElement('div');
       head.className = 'kanban-col-head ' + (state.filters.group_by === 'status' ? g.key : '');
-      head.innerHTML = `<span class="dot"></span><span class="lbl">${escapeHtml(state.filters.group_by === 'status' ? STATUS_LABELS[g.key]
-        : state.filters.group_by === 'epic' ? (epicsArr.find((e) => e.id === g.key)?.name || g.label) : g.label)}</span><span class="tnum">${g.tasks.length}</span>`;
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = g.label;
+      const num = document.createElement('span');
+      num.className = 'tnum';
+      num.textContent = String(g.tasks.length);
+      head.append(dot, lbl, num);
       const toggleBtn = document.createElement('button');
       toggleBtn.type = 'button';
       toggleBtn.className = 'kanban-col-toggle';
@@ -490,8 +497,4 @@ export async function mount(root, { store, api, prefs }) {
     epicRow.destroy();
     epicOptions?.close?.();
   };
-}
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
