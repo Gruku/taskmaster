@@ -90,7 +90,8 @@ test('a 120-character title is clamped to three lines and the id never breaks', 
 test('a recent card has a strong border and a New tag, and no glow', async ({ page }) => {
   const recentBoard = structuredClone(BOARD);
   recentBoard.tasks.find((t) => t.id === 'T-102').started = new Date(Date.now() - 3_600_000).toISOString();
-  await board(page, { board: recentBoard });
+  // A card wide enough for all of line 1; in a narrow column "New" wraps below the id (next test).
+  await board(page, { board: recentBoard, viewport: { width: 390, height: 844 } });
   await page.mouse.move(0, 0);
   const recent = card(page, 'T-102');
   await expect(recent).toHaveClass(/\brecent\b/);
@@ -116,17 +117,74 @@ test('a recent card has a strong border and a New tag, and no glow', async ({ pa
   await expect(card(page, 'T-101').locator('.card-new')).toHaveCount(0);
 });
 
+// The fixture board with every card part in use: a recent card, a bundle of two, a note, a blocker, a branch and a doc.
+function richBoard() {
+  const full = structuredClone(BOARD);
+  Object.assign(full.tasks.find((t) => t.id === 'T-102'), {
+    started: new Date(Date.now() - 3_600_000).toISOString(), branch: 'feat/kanban-cards', docs: { spec: 'docs/spec.md' },
+    estimate: 'M', spec_review: 'warn', bundle: 'cards', lane: 'full', gate_state: 'review-gate:pending',
+  });
+  Object.assign(full.tasks.find((t) => t.id === 'T-103'), { bundle: 'cards', created: new Date(Date.now() - 11 * 86_400_000).toISOString() });
+  Object.assign(full.tasks.find((t) => t.id === 'T-107'), { human_action: 'Check the light theme by eye', started: new Date(Date.now() - 8 * 86_400_000).toISOString() });
+  Object.assign(full.tasks.find((t) => t.id === 'T-106'), { blockers_count: 1 });
+  return full;
+}
+
+// Per card: is the id cut, and does any element of the card reach past the card's own box?
+const measureCards = (page) => page.locator('.card-task').evaluateAll((cards) => cards.map((card) => {
+  const box = card.getBoundingClientRect();
+  const id = card.querySelector('.card-id');
+  const idText = id.querySelector('.truncate');
+  const outside = [...card.querySelectorAll('*')].filter((el) => {
+    if (el.closest('.card-sr') || !el.getClientRects().length) return false;
+    const r = el.getBoundingClientRect();
+    return r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5;
+  }).map((el) => `${el.localName}.${String(el.getAttribute('class') || '').trim().split(/\s+/).join('.')}`);
+  return {
+    id: card.dataset.taskId,
+    inBundle: !!card.closest('.bundle-frame'),
+    idCut: idText.scrollWidth > idText.clientWidth || id.scrollWidth > id.clientWidth,
+    priOffLine: (() => {
+      const pri = card.querySelector('.card-pri');
+      if (!pri) return false;
+      const a = id.getBoundingClientRect();
+      const b = pri.getBoundingClientRect();
+      return Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) >= 4;
+    })(),
+    overflow: card.scrollWidth > card.clientWidth,
+    outside,
+  };
+}));
+
+for (const [name, make] of [['the fixture board', richBoard], ['the long board', longBoard]]) {
+  test(`1440, five columns, ${name}: no card's id is cut and nothing leaves its card, in a bundle frame too`, async ({ page }) => {
+    await board(page, { board: make(), viewport: { width: 1440, height: 900 } });
+    await expect(page.locator('.kanban-col')).toHaveCount(5);
+    const cards = await measureCards(page);
+    expect(cards.length).toBeGreaterThan(name === 'the long board' ? 200 : 6);
+    expect(cards.some((c) => c.inBundle), 'a bundle frame is measured').toBe(true);
+    for (const c of cards) {
+      expect(c.idCut, `${c.id}: id cut`).toBe(false);
+      expect(c.priOffLine, `${c.id}: priority not beside the id`).toBe(false);
+      expect(c.overflow, `${c.id}: card scrolls sideways`).toBe(false);
+      expect(c.outside, `${c.id}: past the card`).toEqual([]);
+    }
+  });
+}
+
+test('in a narrow card "New" and the age give way: they wrap below the id, which keeps its priority beside it', async ({ page }) => {
+  await board(page, { board: richBoard(), viewport: { width: 1440, height: 900 } });
+  const recent = card(page, 'T-102');
+  const [id, pri, tag, title] = await Promise.all(['.card-id', '.card-pri', '.card-new', '.card-title']
+    .map((s) => recent.locator(s).boundingBox()));
+  expect(Math.abs(pri.y + pri.height / 2 - (id.y + id.height / 2)), 'priority on the id\'s line').toBeLessThan(4);
+  expect(tag.y, '"New" on a line below the id').toBeGreaterThanOrEqual(id.y + id.height - 1);
+  expect(tag.y + tag.height, '"New" above the title').toBeLessThanOrEqual(title.y + 1);
+});
+
 for (const theme of ['light', 'dark']) {
   test(`axe (${theme}): cards have no contrast, nested-interactive or aria violation`, async ({ page }) => {
-    const full = structuredClone(BOARD);
-    Object.assign(full.tasks.find((t) => t.id === 'T-102'), {
-      started: new Date(Date.now() - 3_600_000).toISOString(), branch: 'feat/kanban-cards', docs: { spec: 'docs/spec.md' },
-      estimate: 'M', spec_review: 'warn', bundle: 'cards', lane: 'full', gate_state: 'review-gate:pending',
-    });
-    Object.assign(full.tasks.find((t) => t.id === 'T-103'), { bundle: 'cards' });
-    Object.assign(full.tasks.find((t) => t.id === 'T-107'), { human_action: 'Check the light theme by eye' });
-    Object.assign(full.tasks.find((t) => t.id === 'T-106'), { blockers_count: 1 });
-    await board(page, { theme, board: full });
+    await board(page, { theme, board: richBoard() });
     await expect(page.locator('.bundle-frame')).toHaveCount(1);
     await page.evaluate(axeSource);
     const result = await page.evaluate(() => window.axe.run(document.querySelector('.kanban-board'), {

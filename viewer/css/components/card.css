@@ -1,14 +1,16 @@
-/* User intent: a Kanban card is one link laid out on a grid — id, "New", priority and age on line 1, the title in up
-   to three lines, then the tags, branch and note — with its copy and doc buttons lifted over the link; hue only on
-   swatches, markers and borders, never on text, and no glow, shadow or hover motion. */
+/* User intent: a Kanban card is one link — id and priority on line 1 with "New" and the age after them, the title in
+   up to three lines, then the tags, branch and note — with its copy and doc buttons lifted over the link. The id is the
+   card's identity and is never cut: when line 1 is too narrow, "New" and the age wrap below it first, and nothing ever
+   leaves the card. Hue only on swatches, markers and borders, never on text; no glow, shadow or hover motion. */
 
+/* A wrapping flex row ordered by `order`, not a grid: line 1 can then give way item by item, and every later part
+   takes a full line of its own (flex-basis 100%). */
 .card-task {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  grid-template-areas: "id new pri age" "title title title title" "tags tags tags tags" "branch branch branch docs" "note note note note";
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  column-gap: var(--space-xs);
-  padding: var(--space-sm) var(--space-md);
+  column-gap: var(--space-micro);
+  padding: var(--space-sm);
   margin-bottom: var(--space-xs);
   background: var(--card-bg);
   border: 1px solid var(--border-default);
@@ -19,7 +21,7 @@
 .card-task:hover, .card-task.recent { border-color: var(--border-strong); }
 .card-task > :is(.link-row__content, .link-row__controls) { display: contents; }
 .card-task .link-row__controls > * { position: relative; z-index: 1; }
-.card-task > .link-row__link { grid-area: title; margin-top: var(--space-xs); min-width: 0; color: var(--foreground-bold); text-decoration: none; }
+.card-task > .link-row__link { order: 5; flex: 1 1 100%; margin-top: var(--space-xs); min-width: 0; color: var(--foreground-bold); text-decoration: none; }
 .card-title { font-family: var(--font-narrator); font-weight: var(--font-narrator-weight); font-size: var(--size-narrator-small); line-height: var(--leading-heading); overflow-wrap: anywhere; }
 .card-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -30,9 +32,16 @@
   font-size: var(--size-technical-small);
 }
 
+/* Line 1: id, priority, then "New" and the age pushed to the end. */
+.card-id { order: 1; flex: none; }
+.card-pri { order: 2; flex: none; display: inline-flex; }
+.card-new { order: 3; margin-left: auto; }
+.card-age { order: 4; margin-left: auto; color: var(--foreground-subtle); white-space: nowrap; }
+.card-new ~ .card-age { margin-left: 0; }
+.card-age--stale { color: var(--foreground-bold); }
+
 /* A neutral tag: the strong border already marks the card, the word says why. */
 .card-new {
-  grid-area: new;
   color: var(--foreground-default);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -40,18 +49,17 @@
   white-space: nowrap;
 }
 
-/* Copy buttons: plain text until hovered, then a border; the id never wraps, it is cut with its title. */
+/* Copy buttons: plain text until hovered, then a border. The id keeps its full width (flex: none); only an id longer
+   than the whole card is cut, with its title, and the button clips rather than paints over its neighbours. */
 .card-id, .card-branch {
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: var(--space-micro);
-  justify-self: start;
   max-width: 100%;
   min-width: 0;
-  /* Line 1 gives the id what the tags beside it leave; squeezed, it is clipped rather than painted over them. */
   overflow: hidden;
-  padding: 0 var(--space-micro);
+  padding: 0;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -60,20 +68,21 @@
   cursor: copy;
   transition: color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
 }
-.card-id { grid-area: id; }
-.card-branch { grid-area: branch; margin-top: var(--space-xs); }
-.card-id:hover, .card-branch:hover { color: var(--foreground-bold); border-color: var(--border-default); }
+/* Basis 0: the branch shrinks (cut, with its title) before the doc button would wrap off its line. */
+.card-branch { order: 7; flex: 1 1 0; margin-top: var(--space-xs); }
+/* No padding to spare in a narrow column, so hover underlines the text instead of drawing a border round it. */
+.card-id:hover, .card-branch:hover { color: var(--foreground-bold); }
+.card-id:hover .truncate, .card-branch:hover .truncate { text-decoration: underline; }
 .card-id .icon, .card-branch .icon { flex: none; }
 .card-task .is-copied { border-color: var(--tone-success); }
 
-.card-pri { grid-area: pri; display: inline-flex; }
-.card-age { grid-area: age; color: var(--foreground-subtle); white-space: nowrap; }
-.card-age--stale { color: var(--foreground-bold); }
-.card-docs { grid-area: docs; justify-self: end; margin-top: var(--space-xs); }
+.card-docs { order: 8; margin-left: auto; margin-top: var(--space-xs); }
 
 /* ── Tags: epic swatch + name, estimate, spec state, tracker, deps, bundle, lane, gate, merge dots, status ── */
 .card-tags {
-  grid-area: tags;
+  order: 6;
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -105,7 +114,9 @@
 
 /* ── Note: what the human must do, or what blocks the task ── */
 .card-note {
-  grid-area: note;
+  order: 9;
+  flex: 1 1 100%;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -122,7 +133,7 @@
 .bundle-frame {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: var(--space-xs);
+  padding: var(--space-micro);
   margin-bottom: var(--space-xs);
 }
 .bundle-frame.bh-1 { border-color: var(--cat-1); }
