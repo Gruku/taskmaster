@@ -297,6 +297,26 @@ test('a refused reason goes when another writer changes that field, and stays wh
   await expect(status.locator('.if-error'), 'the field itself changed: the reason is gone').toHaveText('');
 });
 
+test('a lost race on Status names both statuses in words', async ({ page }) => {
+  let patches = 0;
+  page.on('request', (r) => { if (r.method() === 'PATCH' && r.url().includes('/api/tasks/T-102')) patches += 1; });
+  await open(page, '#/task/T-102', { 'PATCH /api/tasks/T-102': { status: 409, json: {
+    ok: false, error: 'stale', current: { ...DETAIL_TASK, status: 'in-review' }, current_etag: 't1:fresh',
+  } } });
+  await expect(doc(page)).toBeVisible();
+  const status = page.locator('#screen-mount [data-field="status"]');
+  await status.locator('.ef-editable').click();
+  await status.locator('select').selectOption('done');
+  const banner = page.locator('#conflict-banner-host .cb-banner');
+  await expect(banner.locator('.cb-val-mine')).toHaveText('Done');
+  await expect(banner.locator('.cb-val-server')).toHaveText('In review');
+  expect(await banner.textContent()).not.toContain('in-review');
+  expect(patches).toBe(1);
+  await banner.locator('.cb-use-server').click();
+  await expect(banner).toHaveCount(0);
+  expect(patches, 'Use server writes nothing').toBe(1);
+});
+
 // ── Graph view ──
 const GRAPH = '#/task/T-102?view=B';
 const graph = (page) => page.locator('#screen-mount.td-page-B');

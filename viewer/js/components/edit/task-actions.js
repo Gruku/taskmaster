@@ -42,7 +42,7 @@ export function openTaskEditModal({ store, api, task }) {
   // server's; the form is held until that is answered. Resolves to the form's next state: nothing (saved — close),
   // {} (dismissed — back to editing) or { error }.
   async function resolveConflict(e, changes) {
-    const { showFullConflict } = await import('./conflict-banner.js');
+    const { showFullConflict, optionText } = await import('./conflict-banner.js');
     const current = e.current || {};
     return new Promise((done) => {
       showFullConflict({
@@ -52,6 +52,8 @@ export function openTaskEditModal({ store, api, task }) {
         currentEtag: e.current_etag,
         // Each field is named as the form names it, never by its stored key.
         labels: Object.fromEntries(schema.fields.map((f) => [f.key, f.label])),
+        // ...and each choice field's values in the words its picker shows.
+        texts: Object.fromEntries(schema.fields.filter((f) => f.options).map((f) => [f.key, optionText(f)])),
         onResolve: async (merged) => {
           const patch = Object.fromEntries(Object.keys(changes)
             .filter((k) => !sameValue(merged[k], current[k])).map((k) => [k, merged[k]]));

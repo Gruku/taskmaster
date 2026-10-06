@@ -191,7 +191,7 @@ export function mountInlineField(parent, {
         // Stale write — surface conflict banner.
         conflicted = true;
         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-        const { showFieldConflict } = await import('./conflict-banner.js');
+        const { showFieldConflict, optionText } = await import('./conflict-banner.js');
         if (disposed) return false;
         dismissConflict = showFieldConflict({
           entityKind: schema.entity || 'entity',
@@ -200,6 +200,7 @@ export function mountInlineField(parent, {
           localValue: pendingValue,
           currentValue: e.current?.[fieldKey],
           currentEtag: e.current_etag,
+          text: optionText(fieldSpec),
           onKeepMine: async () => {
             if (disposed) return;
             // Drain the current draft, including typing during either save;

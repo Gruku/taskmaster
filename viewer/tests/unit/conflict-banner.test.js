@@ -214,3 +214,51 @@ test('while a banner is shown the page knows its height, and forgets it when the
   document.querySelector('.cb-use-server').click();
   assert.equal(height(), '');
 });
+
+test('optionText words a value as its option label, and falls back to the plain value text', async () => {
+  const { optionText } = await import('../../js/components/edit/conflict-banner.js');
+  const text = optionText({ options: [{ value: 'in-progress', label: 'In progress' }, { value: 'done', label: 'Done' }] });
+  assert.equal(text('in-progress'), 'In progress');
+  assert.equal(text('weird'), 'weird');
+  assert.equal(text(null), '—');
+  assert.equal(text(['done', 'odd']), 'Done, odd');
+  assert.equal(optionText({ key: 'title' })('plain'), 'plain');
+  let opts = [{ value: 'e1', label: 'Old name' }];
+  const spec = { get options() { return opts; } };
+  const late = optionText(spec);
+  opts = [{ value: 'e1', label: 'New name' }];
+  assert.equal(late('e1'), 'New name', 'options are read when the value is worded, not when optionText is called');
+});
+
+const STATUS_SPEC = { key: 'status', options: [
+  { value: 'in-progress', label: 'In progress' }, { value: 'in-review', label: 'In review' }, { value: 'done', label: 'Done' },
+] };
+
+test('a field conflict words both sides through the text it is given', async () => {
+  const { optionText } = await import('../../js/components/edit/conflict-banner.js');
+  const close = showFieldConflict({
+    entityKind: 'task', entityId: 'T-102', fieldKey: 'status', fieldLabel: 'Status',
+    localValue: 'done', currentValue: 'in-review', currentEtag: 'x',
+    text: optionText(STATUS_SPEC), onKeepMine: async () => {}, onUseServer: () => {},
+  });
+  assert.equal(document.querySelector('.cb-val-mine').textContent, 'Done');
+  assert.equal(document.querySelector('.cb-val-server').textContent, 'In review');
+  close();
+});
+
+test('a full conflict words a row through its texts entry and leaves other rows as plain text', async () => {
+  const { showFullConflict, optionText } = await import('../../js/components/edit/conflict-banner.js');
+  const close = showFullConflict({
+    entityKind: 'task', entityId: 'T-102',
+    localDraft: { title: 'in-progress', status: 'done' }, currentValue: { title: 'in-review', status: 'in-progress' },
+    currentEtag: 'x', labels: { title: 'Title', status: 'Status' }, texts: { status: optionText(STATUS_SPEC) },
+    onResolve: async () => {}, onDismiss: () => {},
+  });
+  const row = (label) => [...document.querySelectorAll('.cb-multi-row')]
+    .find((r) => r.querySelector('.cb-key').textContent === label);
+  assert.equal(row('Status').querySelector('.cb-val-mine').textContent, 'Done');
+  assert.equal(row('Status').querySelector('.cb-val-server').textContent, 'In progress');
+  assert.equal(row('Title').querySelector('.cb-val-mine').textContent, 'in-progress');
+  assert.equal(row('Title').querySelector('.cb-val-server').textContent, 'in-review');
+  close();
+});
