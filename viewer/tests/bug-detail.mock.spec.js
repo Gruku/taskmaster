@@ -84,9 +84,15 @@ test('B-999 is not found in words; a 500 says so without the server\'s text; no 
   await expect(m.locator('button')).toHaveCount(0);
 
   let fails = 2;
-  await page.route('**/api/bugs/B-031', (route) => (fails-- > 0
-    ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Traceback: KeyError found_in' }) })
-    : route.fallback()));
+  let hold = null; // set before the last Try again, so its Loading state can be seen
+  await page.route('**/api/bugs/B-031', async (route) => {
+    if (fails-- > 0) {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Traceback: KeyError found_in' }) });
+      return;
+    }
+    if (hold) await hold;
+    await route.fallback();
+  });
   await page.evaluate(() => { location.hash = '#/bug/B-031'; });
   const failed = m.locator('.tm-empty[data-state="error"]');
   await expect(failed).toBeVisible();
@@ -94,7 +100,13 @@ test('B-999 is not found in words; a 500 says so without the server\'s text; no 
   // A second failure after Try again lands focus on the new Try again, never <body>.
   await failed.getByRole('button', { name: 'Try again' }).click();
   await expect(m.locator('.tm-empty[data-state="error"] button')).toBeFocused();
+  let release;
+  hold = new Promise((r) => { release = r; });
   await m.getByRole('button', { name: 'Try again' }).click();
+  const busy = m.locator('.tm-empty[aria-busy="true"]');
+  await expect(busy).toBeVisible();
+  await expect(busy).toBeFocused();
+  release();
   await expect(m.locator('h1')).toHaveText(BUG.title);
   await expect(m.locator('h1')).toBeFocused();
 });

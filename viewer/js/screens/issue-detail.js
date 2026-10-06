@@ -91,11 +91,15 @@ export function mount(root, { params, store, prefs, subpath }) {
     el.focus();
   }
 
-  function retry() {
+  function showLoading() {
     const loading = stateBlock({ headline: 'Loading…', busy: true });
     loading.setAttribute('tabindex', '-1');
     root.replaceChildren(loading);
-    loading.focus();
+    return loading;
+  }
+
+  function retry() {
+    showLoading().focus();
     refocus = true;
     void load(true);
   }
@@ -137,7 +141,7 @@ export function mount(root, { params, store, prefs, subpath }) {
     root.replaceChildren(stateBlock({ state: 'empty', label: 'Issue', headline: 'No issue open', hint: 'Pick one from the Issues board.', action: TO_ISSUES }));
   } else {
     // Said while the first read runs, so the page is never a blank mount.
-    root.replaceChildren(stateBlock({ headline: 'Loading…', busy: true }));
+    showLoading();
     void load();
   }
 
