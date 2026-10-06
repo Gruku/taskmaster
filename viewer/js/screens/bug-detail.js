@@ -134,6 +134,7 @@ export function mount(root, { params, subpath, store }) {
   const id = subpath?.[0] || params?.id || null;
   const timers = new Set();
   let disposed = false;
+  let shelving = false;
   root.classList.add(...ROOT_CLASSES);
   claimTopbar();
 
@@ -189,13 +190,30 @@ export function mount(root, { params, subpath, store }) {
         location.hash = `#/issue/${encodeURIComponent(issueId)}`;
       } });
     } else if (name === 'shelve') {
-      const msg = root.querySelector('.dp-actions__message');
+      // One shelve at a time: from the confirm until the answer the row is busy and its buttons are off.
+      if (shelving) return;
+      shelving = true;
+      const row = el.closest('.dp-actions');
+      const msg = row?.querySelector('.dp-actions__message');
       if (msg) msg.textContent = '';
-      const answer = await shelveBug({ bug });
+      const setBusy = (busy) => {
+        if (!row) return;
+        if (busy) row.setAttribute('aria-busy', 'true');
+        else row.removeAttribute('aria-busy');
+        row.querySelectorAll('button').forEach((b) => { b.disabled = busy; });
+      };
+      let answer;
+      try {
+        answer = await shelveBug({ bug, onConfirm: () => setBusy(true) });
+      } finally {
+        shelving = false;
+      }
       if (disposed) return;
-      if (answer?.error) { if (msg) msg.textContent = answer.error; el.focus(); }
-      else if (answer?.cancelled) el.focus();
-      else done();
+      if (answer?.error || answer?.cancelled) {
+        setBusy(false);
+        if (answer.error && msg) msg.textContent = answer.error;
+        el.focus();
+      } else done();
     }
   }
 

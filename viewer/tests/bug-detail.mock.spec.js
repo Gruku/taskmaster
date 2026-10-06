@@ -260,6 +260,35 @@ test('Adopt refuses a task that is not on the board, then adopts', async ({ page
   expect(await focusIsSensible(page)).toBe(true);
 });
 
+test('while a Shelve is being saved the row is busy and a second Shelve sends nothing', async ({ page }) => {
+  const posts = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let current = BUG;
+  await open(page, '#/bug/B-031', { before: () => page.route('**/api/bugs/B-031', async (route) => {
+    const req = route.request();
+    if (req.method() === 'GET') { await route.fulfill({ json: current }); return; }
+    posts.push(req.postDataJSON());
+    await gate;
+    current = { ...BUG, status: 'shelved' };
+    await route.fulfill({ json: { ok: true, id: 'B-031' } });
+  }) });
+  const row = mount(page).getByRole('group', { name: 'Bug actions' });
+  const shelve = row.getByRole('button', { name: 'Shelve' });
+  await shelve.click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  await expect(row).toHaveAttribute('aria-busy', 'true');
+  for (const b of await row.getByRole('button').all()) await expect(b).toBeDisabled();
+  await shelve.click({ force: true });
+  await shelve.evaluate((b) => b.click());
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  release();
+  await expect(statusWord(page)).toHaveText('Shelved');
+  expect(posts).toEqual([{ status: 'shelved' }]);
+  expect(await focusIsSensible(page)).toBe(true);
+});
+
 for (const status of [500, 404]) {
   test(`after a Shelve, a re-read that answers ${status} leaves no Mark fixed in row 1`, async ({ page }) => {
     const posts = [];

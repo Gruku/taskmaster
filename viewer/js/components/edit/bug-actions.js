@@ -75,13 +75,15 @@ export function openPromote({ bug, onDone, onClose }) {
 }
 
 // undefined = shelved; { cancelled: true } = kept open; { error } = refused, in words.
-export async function shelveBug({ bug }) {
+// onConfirm runs once the user says Shelve, before the write goes out.
+export async function shelveBug({ bug, onConfirm }) {
   const ok = await confirmDialog({
     title: `Shelve ${bug.id}?`,
     message: 'It leaves the open list. It can still be marked fixed, adopted or promoted later.',
     confirmLabel: 'Shelve', cancelLabel: 'Keep open', alert: true,
   });
   if (!ok) return { cancelled: true };
+  onConfirm?.();
   try {
     await updateBug(bug.id, { status: 'shelved' });
   } catch (e) {
