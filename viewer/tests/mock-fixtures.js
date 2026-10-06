@@ -376,3 +376,9 @@ export const CONTINUITY = {
 export const DECISION = {
   id: 'DEC-001', title: 'Land the cutover', options: ['Push the MR', 'Merge develop first', 'Hold'], recommendation: 2, body: '',
 };
+
+// Settings: the prefs alone; `prefs` merges any other stored values (card_density, ui.detail_view_mode) into them.
+// Its content is loaded when `.set-control[role="group"] .tm-segmented > button[data-key="system"]` is on the page.
+export const settingsMocks = ({ theme = 'dark', ...prefs } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {}, ...prefs },
+});
