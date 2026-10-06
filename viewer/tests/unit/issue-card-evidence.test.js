@@ -7,15 +7,19 @@ globalThis.document = window.document;
 
 import { issueCard } from '../../js/components/issue-card.js';
 
+const evidenceOf = (el) => el.querySelector('.issue-card__evidence')?.textContent;
+
 test('issue card shows evidence when only evidence is set', () => {
   const el = issueCard({ id: 'ISS-1', title: 'T', severity: 'P1', status: 'open', evidence: 'stack trace here' });
-  assert.match(el.outerHTML, /stack trace here/);
+  assert.equal(evidenceOf(el), 'stack trace here');
 });
 test('issue card still shows legacy symptom', () => {
   const el = issueCard({ id: 'ISS-2', title: 'T', severity: 'P1', status: 'open', symptom: 'old symptom' });
-  assert.match(el.outerHTML, /old symptom/);
+  assert.equal(evidenceOf(el), 'old symptom');
 });
 test('issue card shows evidence exactly once', () => {
-  const el = issueCard({ id: 'ISS-3', title: 'T', severity: 'P1', status: 'open', evidence: 'unique-evidence-text' });
-  assert.equal(el.outerHTML.split('unique-evidence-text').length - 1, 1);
+  const el = issueCard({ id: 'ISS-3', title: 'T', severity: 'P1', status: 'open', evidence: 'unique-evidence-text', symptom: 'legacy-symptom-text' });
+  assert.equal(el.querySelectorAll('.issue-card__evidence').length, 1);
+  assert.equal(evidenceOf(el), 'unique-evidence-text');
+  assert.ok(!el.textContent.includes('legacy-symptom-text'), 'the symptom is not shown beside the evidence');
 });

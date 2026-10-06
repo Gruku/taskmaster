@@ -1,5 +1,5 @@
-// User intent: an issue shows "stale Nd" only while it is still open and past the aging window for its severity — a
-// resolved issue, a fresh one or one with no discovery date never carries the tag.
+// User intent: an issue shows "stale Nd" only while it is still open and in the stale range for its severity — a
+// resolved issue, a fresh one, one discovered in the future or one with no discovery date never carries the tag.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
@@ -24,7 +24,7 @@ test('an open issue the server marks Stale carries "stale Nd" as a warning marke
   assert.equal(el.querySelector('.marker__shape').dataset.shape, 'triangle');
   assert.equal(el.querySelector('.marker__shape').getAttribute('aria-hidden'), 'true');
   assert.ok(el.title.includes('45 days'), el.title);
-  assert.equal(el.title, 'Open 45 days — past the aging window for its severity');
+  assert.equal(el.title, 'Open 45 days — in the stale range for its severity');
 });
 
 test('an investigating issue that is Stale carries the tag too', () => {
@@ -66,4 +66,9 @@ test('staleDays counts whole days since discovery, falling back to created', () 
   assert.equal(staleDays({}, now), null);
   assert.equal(staleDays(null, now), null);
   assert.equal(staleDays({ discovered: 'garbage' }, now), null);
+});
+
+test('a discovery date in the future never shows a negative count, whatever the tier says', () => {
+  assert.equal(staleTag(issue({ discovered: '2026-10-09', aging: { tier: 'Stale' } }), {}, now), null);
+  assert.ok(staleTag(issue({ discovered: '2026-10-06', aging: { tier: 'Stale' } }), {}, now), 'day 0 is still a count');
 });
