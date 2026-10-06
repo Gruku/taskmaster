@@ -219,7 +219,9 @@ test('leaving the Table, even with More open, leaves no observer or font listene
   const fontsBefore = await page.evaluate(() => window.__fonts);
   await page.evaluate(() => { location.hash = '#/table'; });
   await expect(page.locator('.tbl-row').first()).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore + 4);
+  // Kanban → Table swaps font listeners: the Kanban's phase strip (one overflowRow) unmounts
+  // and drops its listener; the Table's four chip-group overflowRows each add one.
+  await expect.poll(() => page.evaluate(() => window.__fonts)).toBe(fontsBefore - 1 + 4);
   await group(page, 'Epic').locator('.overflow-more').click();
   await expect(page.getByRole('dialog', { name: 'More Epic' })).toBeVisible();
   // Live observers on the rail itself (the Table's own) and on each row's chips (overflowRow's).
