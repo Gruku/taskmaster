@@ -323,3 +323,26 @@ export const summaryMocks = ({ theme = 'dark', ...extra } = {}) => ({
   '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
   ...extra,
 });
+
+// ── Plan 3d: list screens ──
+const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+// 120 characters with spaces in them, so a title wraps; `unbroken` gives one long word that must not push the page wide.
+const longText = (lead, { unbroken = false } = {}) =>
+  (unbroken ? lead + '-' + 'x'.repeat(120) : `${lead} — the words keep going past the edge of a phone screen and on again`.repeat(2)).slice(0, 120);
+// GET /api/bugs?include_archive=1: every bug, the archived ones flagged.
+export const LIST_BUGS = [
+  { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P1', found_in: 'T-102', components: ['viewer'], discovered: daysAgo(2) },
+  { id: 'B-030', title: 'Phase strip clips the current phase name', status: 'open', found_in: 'T-102', discovered: daysAgo(3) },
+  { id: 'B-029', title: 'Store write hangs for six seconds on a large backlog', status: 'fixed', severity: 'P0', components: ['store'], discovered: daysAgo(16) },
+  { id: 'B-028', title: 'Handover quote loses its heading', status: 'shelved', severity: 'P3', discovered: daysAgo(18) },
+  { id: 'B-027', title: 'Inbox message archived twice', status: 'adopted', severity: 'P2', adopted_into: 'T-118', discovered: daysAgo(21) },
+  { id: 'B-026', title: 'Legacy mirror written after cutover', status: 'fixed', archived: true, discovered: daysAgo(35) },
+];
+const BUG_STATUSES = ['open', 'open', 'shelved', 'fixed', 'adopted', 'promoted'];
+export const LONG_BUGS = Array.from({ length: 23 }, (_, i) => ({
+  id: `B-${1201 + i}`, title: longText(`Bug ${1201 + i}`, { unbroken: i === 4 }), status: BUG_STATUSES[i % 6],
+  severity: i % 5 === 4 ? undefined : `P${i % 4}`, found_in: `T-${1234 + i}`, components: ['viewer', 'store'], discovered: daysAgo(i + 1),
+}));
+// The table plan 4's a11y gate reuses for #/bugs; loaded when `.bugs__list .bug-row` is visible.
+export const bugsMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/bugs': LIST_BUGS, '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
