@@ -543,6 +543,17 @@ test('1440: row 1 has the count, row 2 parks nothing, Group and Sort are named s
   await expect(colLabels(page)).toContainText(['Viewer re-skin', 'Native store']);
 });
 
+test('Clear filters keeps the chosen Group: columns stay epics and the select still says Epic', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const group = page.getByRole('combobox', { name: 'Group' });
+  await group.selectOption({ label: 'Epic' });
+  await searchBox(page).fill('cutover checklist');
+  await expect(colLabels(page)).toHaveText(['Native store']);
+  await page.locator('.kanban-clear').click();
+  await expect(colLabels(page)).toHaveText(['Viewer re-skin', 'Native store']);
+  await expect(group).toHaveValue('epic');
+});
+
 test('390: Add task is a 44px row-1 button that opens Create; Group works from the Filters popover', async ({ page }) => {
   await board(page, { viewport: { width: 390, height: 844 } });
   const add = page.locator('#topbar-primary [aria-label="Add task"]');

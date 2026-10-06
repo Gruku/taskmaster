@@ -210,7 +210,7 @@ export async function mount(root, { store, api, prefs }) {
   filterBar.appendChild(filters);
 
   function clearAllFilters() {
-    state.filters = { ...DEFAULT_FILTERS };
+    state.filters = { ...DEFAULT_FILTERS, group_by: state.filters.group_by, sort: state.filters.sort };
     state.collapsed = new Set();
     resetSearchField();
     prefs.patch({ kanban: { collapsed_columns: [] } });
