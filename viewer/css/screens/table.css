@@ -80,3 +80,41 @@ code.t-tech { background: transparent; padding: 0; }
    than the frame never pushes it, or its one action, out of view. */
 .tbl-empty { padding: var(--space-2xl) 0; white-space: normal; }
 .tbl-empty > .tm-empty { position: sticky; left: 0; box-sizing: border-box; }
+
+/* At phone width the header row gives way to a Sort select and every row is a card whose whole face is its link. */
+.tbl-sortbar { display: none; }
+@media (max-width: 768px) {
+  .tbl-sortbar { display: flex; align-items: center; gap: var(--space-xs); flex: 0 0 auto; }
+  .tbl-sortbar__label {
+    font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);
+    letter-spacing: var(--tracking-ultra); text-transform: uppercase; color: var(--foreground-subtle);
+  }
+  .tbl-sortbar .ef-enum-select { min-height: 44px; }
+  .tbl-fade { display: none; }
+  /* The measured desktop geometry (inline min-width, title left) does not apply to cards. */
+  table.tbl { display: block; min-width: 0 !important; }
+  .tbl colgroup, .tbl thead { display: none; }
+  .tbl tbody { display: block; }
+  .tbl-row {
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "id priority" "title title" "status size" "epic epic";
+    gap: var(--space-micro) var(--space-sm); min-height: 44px; padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
+  }
+  .tbl-row:hover { background: var(--card-bg-hover); }
+  .tbl-row > .tbl-cell, .tbl-row:hover > .tbl-cell { position: static; display: block; min-width: 0; padding: 0; border: 0; background: transparent; }
+  .tbl-cell--id { grid-area: id; }
+  /* A card has no columns to divide: the narrow frame's ID edge (data-title-loose) is drawn on the desktop table only. */
+  .tbl-frame[data-title-loose] .tbl-row > .tbl-cell--id { border-right: 0; }
+  .tbl-cell--priority { grid-area: priority; justify-self: end; }
+  /* The cell has no padding here, so it must not clip the link's focus ring; .truncate still cuts the words. */
+  .tbl-row > .tbl-cell--title { overflow: visible; }
+  .tbl-cell--title { grid-area: title; white-space: normal; }
+  .tbl-cell--title .truncate { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
+  .tbl-cell--status { grid-area: status; }
+  .tbl-cell--estimate { grid-area: size; justify-self: end; }
+  .tbl-cell--epic { grid-area: epic; }
+  .tbl-row > :is(.tbl-cell--phase, .tbl-cell--area, .tbl-cell--branch, .tbl-cell--started) { display: none; }
+  .tbl-link::after { content: ''; position: absolute; inset: 0; }
+  .tbl-empty { display: block; }
+}

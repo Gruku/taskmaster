@@ -493,3 +493,84 @@ test('a Shift-click on a row, or the end of a text selection in it, opens nothin
   expect(page.context().pages()).toHaveLength(1);
   expect(await page.evaluate(() => location.hash)).toBe('#/table');
 });
+
+// At phone width the page is the one scroller (the shell's choice): a box scrolling inside a scrolling page would trap
+// the thumb, so the frame grows with its cards and the sticky topbar stays put above them.
+test('at 390 with 230 long rows nothing scrolls sideways, no ID is cut, and the page — not the frame — scrolls to the last card', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-row')).toHaveCount(230);
+  const look = await page.evaluate(() => {
+    const host = document.querySelector('.tbl-host');
+    return {
+      pageX: document.scrollingElement.scrollWidth - innerWidth,
+      hostX: host.scrollWidth - host.clientWidth,
+      hostScrolls: host.scrollHeight > host.clientHeight + 1,
+      cutIds: [...document.querySelectorAll('.tbl-cell--id .t-id')].filter((el) => el.getBoundingClientRect().right > el.closest('.tbl-row').getBoundingClientRect().right + 0.5 || el.closest('td').scrollWidth > el.closest('td').clientWidth).length,
+      lostWords: [...document.querySelectorAll('.tbl-cell--title .truncate')].filter((el) => el.title !== el.textContent).length,
+      head: getComputedStyle(document.querySelector('.tbl thead')).display,
+      short: [...document.querySelectorAll('.tbl-row')].filter((r) => r.getBoundingClientRect().height < 44).length,
+    };
+  });
+  expect(look).toEqual({ pageX: 0, hostX: 0, hostScrolls: false, cutIds: 0, lostWords: 0, head: 'none', short: 0 });
+  await page.evaluate(() => window.scrollTo(0, document.scrollingElement.scrollHeight));
+  expect(await page.evaluate(() => scrollY)).toBeGreaterThan(0);
+  const last = await page.locator('.tbl-row').last().evaluate((r) => {
+    const b = r.getBoundingClientRect();
+    return { top: b.top >= document.querySelector('.topbar').getBoundingClientRect().bottom, bottom: b.bottom <= innerHeight + 0.5 };
+  });
+  expect(last).toEqual({ top: true, bottom: true });
+});
+
+test('at 390 a redraw keeps the keyboard on the same card and the page where it was', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, board: LONG_IDS_BOARD });
+  const link = page.locator('.tbl-row[data-task-id="T-1040"] .tbl-link');
+  await link.scrollIntoViewIfNeeded();
+  await link.focus();
+  const y = await page.evaluate(() => scrollY);
+  expect(y).toBeGreaterThan(0);
+  await otherWriter(page, 'T-1040', { title: 'Renamed by another writer' });
+  await expect(link).toHaveText('Renamed by another writer');
+  await expect(link).toBeFocused();
+  expect(await page.evaluate(() => scrollY)).toBe(y);
+});
+
+test('at 390 a card reads ID · priority, title, status · size, epic — and the whole card opens its task', async ({ page }) => {
+  await boot(page, { width: 390, height: 844 });
+  const card = page.locator('.tbl-row[data-task-id="T-102"]');
+  const box = async (sel) => card.locator(sel).boundingBox();
+  const id = await box('.tbl-cell--id'); const pri = await box('.tbl-cell--priority');
+  const title = await box('.tbl-cell--title'); const status = await box('.tbl-cell--status'); const epic = await box('.tbl-cell--epic');
+  expect(Math.abs(id.y - pri.y)).toBeLessThanOrEqual(2);
+  expect(title.y).toBeGreaterThan(id.y);
+  expect(status.y).toBeGreaterThan(title.y);
+  expect(epic.y).toBeGreaterThan(status.y);
+  for (const hidden of ['phase', 'area', 'branch', 'started']) await expect(card.locator(`.tbl-cell--${hidden}`)).toBeHidden();
+  // No column divider inside a card, and nothing clips the title link's focus ring.
+  await expect(card.locator('.tbl-cell--id')).toHaveCSS('border-right-width', '0px');
+  await expect(card.locator('.tbl-cell--title')).toHaveCSS('overflow', 'visible');
+  await card.click({ position: { x: 4, y: 4 } });
+  await expect(page.getByRole('dialog', { name: DETAIL_TASK.title })).toBeVisible();
+});
+
+test('at 390 the Sort select sorts, says the current sort and is saved; at 1440 it is not shown', async ({ page }) => {
+  const puts = await boot(page, { width: 390, height: 844 });
+  const sort = page.getByLabel('Sort');
+  await expect(sort).toHaveValue('priority:asc');
+  await sort.selectOption('title:desc');
+  const titles = TABLE_BOARD.tasks.map((t) => t.title.toLowerCase()).sort();
+  await expect(page.locator('.tbl-row .tbl-cell--title').first()).toHaveText(new RegExp(`^${titles.at(-1)}$`, 'i'));
+  await expect.poll(() => puts.filter((b) => b.table?.sort).at(-1)?.table.sort).toEqual({ by: 'title', dir: 'desc' });
+  expect(await sort.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator('.tbl-sortbar')).toBeHidden();
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}, 390): every card passes contrast and nothing is nested`, async ({ page }) => {
+    await boot(page, { theme, width: 390, height: 844, board: LONG_IDS_BOARD });
+    await page.evaluate(axeSource);
+    const v = await page.evaluate(async () => (await window.axe.run(document.getElementById('screen-mount'),
+      { runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive', 'label', 'select-name'] }, resultTypes: ['violations'] })).violations);
+    expect(v.map((x) => `${x.id}: ${x.nodes.length}`)).toEqual([]);
+  });
+}
