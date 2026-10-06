@@ -435,6 +435,21 @@ test('a decision settled from the keyboard leaves focus in the band', async ({ p
   await expect.poll(() => focusInBand(page).then((f) => f.inBand)).toBe(true);
 });
 
+test('focus let go onto blank space is not pulled back into the band by a later redraw', async ({ page }) => {
+  await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/resolve': { ok: true } }));
+  await serveContinuity(page, (wrote) => (wrote ? withoutDecision : CONTINUITY));
+  await page.goto('/#/dashboard');
+  await spine(page, 'Resume').locator('.co-row__toggle').first().focus();
+  // A click on blank space: the toggle loses focus to <body> while it is still there and enabled.
+  await page.evaluate(() => document.activeElement.blur());
+  // A redraw that does not come from a focused control (a programmatic click moves no focus).
+  await page.locator('.co-decision').getByRole('button', { name: 'Pick option 2' }).dispatchEvent('click');
+  await expect(page.locator('.co-decision')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.waitForTimeout(150);
+  expect(await focusInBand(page).then((f) => f.inBand)).toBe(false);
+});
+
 test('a decision refused from the keyboard puts focus back on the pressed button', async ({ page }) => {
   await openDesk(page, bandMocks({ 'POST /api/decisions/DEC-001/drop': { status: 500, json: { ok: false, error: 'locked' } } }));
   await page.goto('/#/dashboard');
