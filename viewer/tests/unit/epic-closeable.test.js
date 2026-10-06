@@ -1,23 +1,27 @@
 // plugins/taskmaster/viewer/tests/unit/epic-closeable.test.js
-// Epic B task 5: closeableBadge helper + area filter/group axis.
+// Epic B task 5: the closeable rule (isCloseable) + area filter/group axis.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { closeableBadge } from '../../js/lib/epic-format.js';
+import * as epicFormat from '../../js/lib/epic-format.js';
 import { applyFilters, groupTasks } from '../../js/lib/filters.js';
 
-test('closeableBadge — returns markup when total>0 and done+archived===total', () => {
-  const html = closeableBadge({ total: 3, done: 2, archived: 1 });
-  assert.ok(html, 'expected non-empty markup for a closeable epic');
-  assert.match(html, /closeable/i);
+const { isCloseable } = epicFormat;
+
+test('isCloseable — true when total>0 and done+archived===total', () => {
+  assert.equal(isCloseable({ total: 3, done: 2, archived: 1 }), true);
 });
 
-test('closeableBadge — empty string when not closeable', () => {
-  assert.equal(closeableBadge({ total: 3, done: 1, archived: 0 }), '');
+test('isCloseable — false when not closeable', () => {
+  assert.equal(isCloseable({ total: 3, done: 1, archived: 0 }), false);
 });
 
-test('closeableBadge — empty string when total is 0', () => {
-  assert.equal(closeableBadge({ total: 0, done: 0, archived: 0 }), '');
-  assert.equal(closeableBadge(undefined), '');
+test('isCloseable — false when total is 0', () => {
+  assert.equal(isCloseable({ total: 0, done: 0, archived: 0 }), false);
+  assert.equal(isCloseable(undefined), false);
+});
+
+test('the HTML-string closeableBadge is gone: screens draw "Closeable" as a node from isCloseable', () => {
+  assert.equal('closeableBadge' in epicFormat, false);
 });
 
 const AREA_TASKS = [
@@ -50,6 +54,6 @@ test('groupTasks — by area with "No area" bucket for missing area', () => {
   assert.deepEqual(desktop.tasks.map(t => t.id), ['a-1', 'a-2']);
 });
 
-test('closeableBadge — stale counters (done+archived > total) still show the badge', () => {
-  assert.match(closeableBadge({ total: 3, done: 3, archived: 2 }), /closeable/i);
+test('isCloseable — stale counters (done+archived > total) still count as closeable', () => {
+  assert.equal(isCloseable({ total: 3, done: 3, archived: 2 }), true);
 });

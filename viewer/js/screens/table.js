@@ -12,7 +12,7 @@ import { chipRow } from '../components/chips.js';
 import { sortHeader } from '../components/sort-header.js';
 import { icon } from '../components/icon.js';
 import { TASK_STATUS, PRIORITY, statusMarker, priorityMarker } from '../components/status.js';
-import { epicSwatch } from '../lib/epics.js';
+import { epicIndex } from '../lib/epics.js';
 import { truncate } from '../lib/text.js';
 import { h } from '../util/h.js';
 
@@ -20,6 +20,12 @@ export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
 const none = () => h('span', { class: 't-none' }, '—');
 const tech = (v) => (v ? truncate(v, { className: 't-tech' }) : none());
+const swatchEl = (n) => (n ? h('span', { class: `epic-swatch epic-swatch--cat-${n}`, 'aria-hidden': 'true' }) : null);
+// An epic the board does not list keeps its id and has no swatch.
+const epicCell = (id, epics) => {
+  const ep = epics.get(id);
+  return h('span', { class: 't-epic-cell' }, [swatchEl(ep?.swatch), truncate(ep?.name ?? id)]);
+};
 
 // Widths in rem are fixed; the ID column is measured to its longest ID and the title takes the rest.
 const COLUMNS = [
@@ -35,7 +41,7 @@ const COLUMNS = [
   { key: 'phase',     label: 'Phase',    width: 7,    sortable: true,
     get: t => t.phase || '', cell: t => tech(t.phase) },
   { key: 'epic',      label: 'Epic',     width: 12.5, sortable: true,
-    get: t => t.epic || '', cell: (t, ctx) => (t.epic ? truncate(ctx.epicName.get(t.epic) || t.epic) : none()) },
+    get: t => t.epic || '', cell: (t, ctx) => (t.epic ? epicCell(t.epic, ctx.epics) : none()) },
   { key: 'area',      label: 'Area',     width: 9,    sortable: true,
     get: t => t.area || '', cell: t => tech(t.area) },
   { key: 'estimate',  label: 'Size',     width: 4.5,  sortable: true,
@@ -227,12 +233,11 @@ export async function mount(root, { store, api, prefs, params }) {
 
   function renderChipRail(backlog) {
     const tasks = backlog.tasks || [];
-    const epics = backlog.epics || [];
-    const epicName = new Map(epics.filter(e => e && e.id).map(e => [e.id, e.name || e.id]));
+    const epics = epicIndex(backlog.epics);
     const groups = [
       { kind: 'status',   label: 'Status',   options: Object.keys(TASK_STATUS).filter(k => k !== 'archived'), pretty: prettyStatus, of: t => t.status },
       { kind: 'priority', label: 'Priority', options: Object.keys(PRIORITY), pretty: prettyPriority, of: t => (t.priority || '').toLowerCase() },
-      { kind: 'epic',     label: 'Epic',     options: [...epicName.keys()], pretty: s => epicName.get(s) || s, of: t => t.epic },
+      { kind: 'epic',     label: 'Epic',     options: [...epics.keys()], pretty: s => epics.get(s)?.name ?? s, of: t => t.epic },
       { kind: 'area',     label: 'Area',     options: [...new Set(tasks.map(t => t.area).filter(Boolean))].sort(), pretty: s => s, of: t => t.area },
     ];
     for (const [i, g] of groups.entries()) {
@@ -249,7 +254,7 @@ export async function mount(root, { store, api, prefs, params }) {
         label: g.pretty(value),
         pressed: active.includes(value),
         count: tasks.filter(t => g.of(t) === value).length,
-        swatch: g.kind === 'epic' ? epicSwatch(value, epics) : undefined,
+        swatch: g.kind === 'epic' ? (epics.get(value)?.swatch ?? null) : undefined,
       }));
       if (entry) {
         entry.chips = chips;
@@ -424,8 +429,7 @@ export async function mount(root, { store, api, prefs, params }) {
     if (search.value !== state.search) search.value = state.search;
     sortSelect.value = `${state.sort.by}:${state.sort.dir}`;
     renderChipRail(backlog);
-    const epicName = new Map((backlog.epics || []).filter(e => e && e.id).map(e => [e.id, e.name || e.id]));
-    renderTable(sorted, tasks.length, { epicName });
+    renderTable(sorted, tasks.length, { epics: epicIndex(backlog.epics) });
   }
 
   paint();

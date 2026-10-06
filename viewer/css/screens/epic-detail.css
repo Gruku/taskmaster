@@ -12,6 +12,14 @@
 .ed-title { margin: 0; max-width: 80ch; color: var(--foreground-bold); font-family: var(--font-narrator); font-weight: 700;
   font-size: var(--size-narrator-large); line-height: var(--leading-heading); overflow-wrap: anywhere; }
 .ed-markers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+/* The epic's categorical swatch leads the markers: a hue only, never text. */
+.epic-swatch { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.epic-swatch--cat-1 { background: var(--cat-1); }
+.epic-swatch--cat-2 { background: var(--cat-2); }
+.epic-swatch--cat-3 { background: var(--cat-3); }
+.epic-swatch--cat-4 { background: var(--cat-4); }
+.epic-swatch--cat-5 { background: var(--cat-5); }
+.epic-swatch--cat-6 { background: var(--cat-6); }
 .ed-tag { padding: 0 var(--space-xs); border: 1px solid var(--border-default); border-radius: var(--radius-sm); color: var(--foreground-default);
   font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); white-space: nowrap; }
 .ed-done-when { margin: 0; max-width: 80ch; color: var(--foreground-default); font-family: var(--font-narrator); font-size: var(--size-narrator-small); }

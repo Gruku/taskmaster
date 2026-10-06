@@ -1,6 +1,7 @@
 // User intent: the Epics list — every epic as one link row with its real lifecycle and its progress counted from its tasks, in columns that line up, filterable from the topbar.
 import { claimTopbar, tmSearch } from '../lib/topbar.js';
 import { epicStats, epicProgress, isCloseable, epicStatusMeta } from '../lib/epic-format.js';
+import { epicIndex } from '../lib/epics.js';
 import { marker } from '../components/status.js';
 import { linkRow } from '../components/link-row.js';
 import { stateBlock } from '../components/empty-state.js';
@@ -11,8 +12,9 @@ export const meta = { title: 'Epics', icon: '⬡', sidebarKey: 'epics' };
 
 // "Closeable" is a nudge to close an epic that is still open; a done or archived one needs none.
 const OPEN_STATUSES = new Set(['active', 'planned']);
+const swatchEl = (n) => (n ? h('span', { class: `epic-swatch epic-swatch--cat-${n}`, 'aria-hidden': 'true' }) : null);
 
-function epicRow(ep, tasks) {
+function epicRow(ep, tasks, index) {
   const stats = epicStats(tasks.filter((t) => t.epic === ep.id));
   const prog = epicProgress(stats);
   const label = ep.name || ep.id;
@@ -23,7 +25,7 @@ function epicRow(ep, tasks) {
     tag: 'li',
     className: 'epic-row',
     href: `#/epic/${encodeURIComponent(ep.id)}`,
-    name: h('span', { class: 'epic-row__name' }, truncate(label, { lines: 2 })),
+    name: h('span', { class: 'epic-row__name' }, [swatchEl(index.get(ep.id)?.swatch), truncate(label, { lines: 2 })]),
     content: [
       h('span', { class: 'epic-row__status' }, marker(epicStatusMeta(ep.status))),
       h('span', { class: 'epic-row__bar', 'aria-hidden': 'true' }, fill),
@@ -70,7 +72,9 @@ export async function mount(root, { store }) {
         action: { label: 'Clear search', onClick: clearSearch },
       }));
     } else {
-      screen.replaceChildren(h('ul', { class: 'epics-list' }, shown.map((ep) => epicRow(ep, tasks))));
+      // Swatches come from the whole list, so a search never recolours an epic.
+      const index = epicIndex(epics);
+      screen.replaceChildren(h('ul', { class: 'epics-list' }, shown.map((ep) => epicRow(ep, tasks, index))));
     }
 
     if (wasId == null) return;

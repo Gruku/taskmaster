@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   designBadge, componentGlyph, progressPercent, epicProgress, tasksForComponent,
-  epicStats, isCloseable, epicBreakdown, EPIC_STATUS, epicStatusMeta, STATUS_GROUPS,
+  epicStats, isCloseable, epicBreakdown, EPIC_STATUS, epicStatusMeta, STATUS_GROUPS, statusGroupOf,
 } from '../../js/lib/epic-format.js';
 import { LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC, epicPayload } from '../mock-fixtures.js';
 
@@ -78,6 +78,18 @@ test('epicStats — counts each status, missing as todo, unknown as other; total
 test('epicStats — an empty or null status counts as todo, like a missing one', () => {
   assert.deepEqual(epicStats([{ status: '' }, { status: null }, {}]),
     { total: 3, todo: 3, 'in-progress': 0, 'in-review': 0, blocked: 0, done: 0, archived: 0, other: 0 });
+});
+
+test('statusGroupOf — the group epicStats counts a task in: empty or null is todo, unknown is other', () => {
+  assert.equal(statusGroupOf({}), 'todo');
+  assert.equal(statusGroupOf({ status: '' }), 'todo');
+  assert.equal(statusGroupOf({ status: null }), 'todo');
+  assert.equal(statusGroupOf({ status: 'paused' }), 'other');
+  for (const s of STATUS_GROUPS) assert.equal(statusGroupOf({ status: s }), s);
+  // Epic detail groups its rows with this and draws its breakdown from epicStats: the two can never disagree.
+  const tasks = [...STATUS_GROUPS, 'paused', '', null, undefined, 'done', 'todo'].map((status) => ({ status }));
+  const stats = epicStats(tasks);
+  for (const g of [...STATUS_GROUPS, 'other']) assert.equal(tasks.filter((t) => statusGroupOf(t) === g).length, stats[g], g);
 });
 
 test('epicStats feeds epicProgress — the spec example reads "35/55 closed · 25 done · 10 archived"', () => {

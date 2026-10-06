@@ -15,6 +15,14 @@
   font-family: var(--font-narrator); font-weight: var(--font-narrator-weight-semi); font-size: var(--size-narrator-small);
 }
 .epic-row__name { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+/* The epic's categorical swatch, beside its name: a hue only, never text. */
+.epic-swatch { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.epic-swatch--cat-1 { background: var(--cat-1); }
+.epic-swatch--cat-2 { background: var(--cat-2); }
+.epic-swatch--cat-3 { background: var(--cat-3); }
+.epic-swatch--cat-4 { background: var(--cat-4); }
+.epic-swatch--cat-5 { background: var(--cat-5); }
+.epic-swatch--cat-6 { background: var(--cat-6); }
 .epic-row__status { grid-area: status; }
 .epic-row__bar { grid-area: bar; display: block; height: var(--space-micro); border-radius: var(--radius-full); background: var(--bg-recessed); border: 1px solid var(--border-subtle); overflow: hidden; }
 .epic-row__fill { display: block; height: 100%; background: var(--signature-fill); }

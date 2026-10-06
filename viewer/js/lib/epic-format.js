@@ -21,12 +21,18 @@ export function componentGlyph(status) {
 export const STATUS_GROUPS = Object.freeze(['in-progress', 'in-review', 'blocked', 'todo', 'done', 'archived']);
 const BUCKETS = [...STATUS_GROUPS, 'other'];
 
+// The group a task is counted in: a missing or empty status is todo, one outside STATUS_GROUPS is 'other'. Epic detail
+// groups its rows with this same rule, so a group's rows and the breakdown's figure are always the same tasks.
+export function statusGroupOf(task) {
+  const s = task?.status == null || task.status === '' ? 'todo' : task.status;
+  return STATUS_GROUPS.includes(s) ? s : 'other';
+}
+
 export function epicStats(tasks) {
   const out = { total: 0, todo: 0, 'in-progress': 0, 'in-review': 0, blocked: 0, done: 0, archived: 0, other: 0 };
   for (const t of Array.isArray(tasks) ? tasks : []) {
     if (!t || typeof t !== 'object') continue;
-    const s = t.status == null || t.status === '' ? 'todo' : t.status;
-    out[STATUS_GROUPS.includes(s) ? s : 'other'] += 1;
+    out[statusGroupOf(t)] += 1;
     out.total += 1;
   }
   return out;
@@ -50,6 +56,8 @@ export function progressPercent(stats) {
   return epicProgress(stats).pct;
 }
 
+// Closeable = every task in the epic is done or archived, derived from stats (the same formula as the progress) and
+// never stored; nothing auto-archives an epic.
 export function isCloseable(stats) {
   const p = epicProgress(stats);
   return p.total > 0 && p.closed === p.total;
@@ -65,15 +73,6 @@ export function epicBreakdown(stats) {
   const order = exact.map((x, i) => [x - Math.floor(x), i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
   for (const [, i] of order) { if (!left) break; pct[i] += 1; left -= 1; }
   return rows.map((r, i) => ({ ...r, pct: pct[i] }));
-}
-
-// Closeable = every task in the epic is done or archived. Derived client-side
-// from stats (same formula as progressPercent) so it's testable without a
-// server round-trip; never stored, never auto-archives (see epic B task 4).
-export function closeableBadge(stats) {
-  const p = epicProgress(stats);
-  if (!p.total || p.closed !== p.total) return '';
-  return `<span class="epic-closeable" title="All tasks done or archived">Closeable</span>`;
 }
 
 export function tasksForComponent(tasks, key) {
