@@ -384,6 +384,8 @@ export async function mount(root, { store, api, prefs }) {
       title.id = titleId;
       if (state.filters.group_by === 'status') title.appendChild(statusMarker('task', g.key));
       else title.textContent = label;
+      // A cut title keeps its words: the full group label is the heading's tooltip.
+      title.title = label;
       head.appendChild(title);
       if (state.filters.group_by === 'status' && g.key === 'in-review') {
         const whisper = document.createElement('span');

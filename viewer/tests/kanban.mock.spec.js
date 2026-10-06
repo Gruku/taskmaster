@@ -805,3 +805,14 @@ test('the In review whisper is never cut: hidden when its head is too narrow, wh
   expect([roomy.whisperCut, roomy.headingCut]).toEqual([false, false]);
   await expect(h2).toHaveAccessibleName(/waiting on you/);
 });
+
+test('a cut column title keeps its words: every heading\'s title is its full label (Group: Epic, the long board)', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const group = page.getByRole('combobox', { name: 'Group' });
+  await group.selectOption({ label: 'Epic' });
+  await expect(group).toHaveValue('epic');
+  await expect.poll(() => colLabels(page).count()).toBeGreaterThan(1);
+  const heads = await colLabels(page).evaluateAll((ts) => ts.map((t) => ({ text: t.textContent, title: t.title, cut: t.scrollWidth > t.clientWidth })));
+  console.log(`epic headings cut: ${heads.filter((h) => h.cut).length} of ${heads.length}`);
+  for (const h of heads) expect(h.title).toBe(h.text);
+});
