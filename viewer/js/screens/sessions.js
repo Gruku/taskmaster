@@ -170,6 +170,12 @@ export function mount(root, { params, subpath, store, prefs }) {
         action: { label: 'Clear search', onClick: clearSearch },
       }));
     }
+    if (!shown.length) {
+      return list.replaceChildren(stateBlock({
+        label: 'Filters', headline: 'The Show filters hide every session',
+        action: { label: 'Show everything', onClick: showEverything },
+      }));
+    }
     renderTimeline(list, {
       sessions: shown.map((s) => ({
         ...s,
@@ -185,6 +191,13 @@ export function mount(root, { params, subpath, store, prefs }) {
     search.input.value = '';
     search.input.dispatchEvent(new Event('input', { bubbles: true }));
     search.input.focus();
+  }
+
+  // The empty state's button goes with the redraw, so focus lands on the first Show chip.
+  function showEverything() {
+    state.kinds = { session: true, handover: true };
+    render();
+    kindRow.el.querySelector('button')?.focus();
   }
 
   function renderBoard() {
@@ -287,10 +300,14 @@ function threadCard(t) {
 
 // Exported for the unit tests. A screen left while the detail loads opens nothing (the rail's host is gone).
 // `state.onRailOpen` / `state.onRailClose`, when the screen sets them, hear which row the rail shows.
+// Only the latest open is applied: a slow fetch for an earlier click must not open over a later one.
+const nextOpen = (state) => (state.openSeq = (state.openSeq || 0) + 1);
+
 export async function openSessionDetail(rail, sid, state, opener = null) {
+  const seq = nextOpen(state);
   const detail = state.detailCache.get(sid) || await getSessionDetail(sid);
   state.detailCache.set(sid, detail);
-  if (!rail.host.isConnected || !detail?.session) return;
+  if (seq !== state.openSeq || !rail.host.isConnected || !detail?.session) return;
   const s = detail.session;
   const el = rail.open({
     kind: 'session',
@@ -307,9 +324,10 @@ export async function openHandoverDetail(rail, hid, state, opener = null) {
   // Locate the session containing this handover, then pull its detail.
   const owner = state.sessions.find(s => (s.handover_ids || []).includes(hid));
   if (!owner) return;
+  const seq = nextOpen(state);
   const detail = state.detailCache.get(owner.id) || await getSessionDetail(owner.id);
   state.detailCache.set(owner.id, detail);
-  if (!rail.host.isConnected) return;
+  if (seq !== state.openSeq || !rail.host.isConnected) return;
   const ho = (detail?.handovers || []).find(x => x.id === hid);
   if (!ho) return;
   const el = rail.open({

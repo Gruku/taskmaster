@@ -131,6 +131,64 @@ test('the mark moves with the rail: a handover opened from a session\'s rail is 
   expect(await page.locator('.tl').evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
 });
 
+// The opener and the screen's fallback must point at different rows, or the test cannot tell them apart: the handover
+// rail inherits the session row as its opener, while the fallback would focus the handover's own row.
+test('Escape on a handover opened from a session\'s rail gives focus to the session row, not the handover row', async ({ page }) => {
+  await boot(page);
+  const row = sessionRow(page, 'team-relayout');
+  await row.click();
+  await rail(page).locator(`button.rr-ho[data-handover-id="${M1}"]`).click();
+  await expect(rail(page).locator('h2.rr-title')).toHaveText('M1 shipped');
+  await expect(hoRow(page, M1)).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+  await expect(row).toBeFocused();
+  await expect(hoRow(page, M1)).not.toBeFocused();
+});
+
+test('a late detail for an earlier click does not open over the row clicked after it', async ({ page }) => {
+  await boot(page);
+  const later = sessionRow(page, 'team-relayout');
+  const earlier = sessionRow(page, 'guard-hooks-polish');
+  await later.click(); // its detail is now cached
+  await expect(rail(page).locator('h2.rr-title')).toHaveText('M1 shipped');
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let asked;
+  const requested = new Promise((r) => { asked = r; });
+  await page.route('**/api/sessions/guard-hooks-polish', async (route) => { asked(); await held; await route.fallback(); });
+  await earlier.click();
+  await requested;
+  await later.click();
+  await expect(later).toHaveAttribute('aria-current', 'true');
+
+  const answered = page.waitForResponse('**/api/sessions/guard-hooks-polish');
+  release();
+  await answered;
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
+  await expect(rail(page).locator('h2.rr-title')).toHaveText('M1 shipped');
+  await expect(later).toHaveAttribute('aria-current', 'true');
+  await expect(earlier).not.toHaveAttribute('aria-current', /.*/);
+});
+
+test('Show chips that hide every session say so in words, with one way back', async ({ page }) => {
+  await boot(page);
+  await chip(page, 'Show', 'Handovers').click();
+  await chip(page, 'Show', 'Threads').click();
+  const empty = page.locator('.sessions-mount > .tm-empty');
+  await expect(empty.locator('.tm-empty__label')).toHaveText('Filters');
+  await expect(empty.locator('.tm-empty__headline')).toHaveText('The Show filters hide every session');
+  await expect(empty.getByRole('button')).toHaveCount(1);
+  await expect(page.locator('.sessions-mount .tl')).toHaveCount(0);
+
+  await empty.getByRole('button', { name: 'Show everything' }).click();
+  await expect(chip(page, 'Show', 'Threads')).toHaveAttribute('aria-pressed', 'true');
+  await expect(chip(page, 'Show', 'Handovers')).toHaveAttribute('aria-pressed', 'true');
+  await expect(chip(page, 'Show', 'Threads')).toBeFocused();
+  await expect(hoRow(page, M1)).toBeVisible();
+});
+
 test('the sessions rail says a failed status change in words', async ({ page }) => {
   await boot(page, { [`POST /api/handover/${M1}/status`]: { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } } });
   await hoRow(page, M1).click();
