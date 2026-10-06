@@ -5,7 +5,7 @@ import {
   designBadge, componentGlyph, progressPercent, epicProgress, tasksForComponent,
   epicStats, isCloseable, epicBreakdown, EPIC_STATUS, epicStatusMeta, STATUS_GROUPS,
 } from '../../js/lib/epic-format.js';
-import { LONG_IDS_BOARD, epicPayload } from '../mock-fixtures.js';
+import { LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC, epicPayload } from '../mock-fixtures.js';
 
 test('designBadge — locked carries a lock flag and label', () => {
   const b = designBadge('locked');
@@ -75,6 +75,11 @@ test('epicStats — counts each status, missing as todo, unknown as other; total
   assert.deepEqual(epicStats(undefined), { total: 0, todo: 0, 'in-progress': 0, 'in-review': 0, blocked: 0, done: 0, archived: 0, other: 0 });
 });
 
+test('epicStats — an empty or null status counts as todo, like a missing one', () => {
+  assert.deepEqual(epicStats([{ status: '' }, { status: null }, {}]),
+    { total: 3, todo: 3, 'in-progress': 0, 'in-review': 0, blocked: 0, done: 0, archived: 0, other: 0 });
+});
+
 test('epicStats feeds epicProgress — the spec example reads "35/55 closed · 25 done · 10 archived"', () => {
   const tasks = [
     ...Array(25).fill({ status: 'done' }), ...Array(10).fill({ status: 'archived' }), ...Array(20).fill({ status: 'todo' }),
@@ -139,4 +144,30 @@ test('epicPayload — the server shape: stats from the epic\'s tasks, closeable,
   assert.deepEqual(Object.keys(p.tasks[0]).sort(), ['component', 'design_change', 'id', 'phase', 'priority', 'status', 'title']);
   assert.equal(p.done_when, 'x');
   assert.equal(p.design_status, 'exploring');
+});
+
+test('LONG_IDS_BOARD — one active epic is closeable, on the server shape and through isCloseable', () => {
+  const ep = LONG_IDS_BOARD.epics.find((e) => e.id === LONG_CLOSEABLE_EPIC);
+  assert.equal(ep.status, 'active');
+  const mine = LONG_IDS_BOARD.tasks.filter((t) => t.epic === LONG_CLOSEABLE_EPIC);
+  assert.ok(mine.some((t) => t.status === 'done') && mine.some((t) => t.status === 'archived'));
+  assert.equal(epicPayload(LONG_IDS_BOARD, LONG_CLOSEABLE_EPIC).closeable, true);
+  assert.equal(isCloseable(epicStats(mine)), true);
+  // The only one: every other epic still has open work.
+  const closeable = LONG_IDS_BOARD.epics.filter((e) => epicPayload(LONG_IDS_BOARD, e.id).closeable).map((e) => e.id);
+  assert.deepEqual(closeable, [LONG_CLOSEABLE_EPIC]);
+});
+
+test('epicPayload — attention lists blocked tasks and tasks with blockers (blocked: false), in task order', () => {
+  const board = { epics: [{ id: 'e' }], tasks: [
+    { id: 'a', title: 'A', status: 'todo', epic: 'e', blockers: 'waits on review' },
+    { id: 'b', title: 'B', status: 'blocked', epic: 'e' },
+    { id: 'c', title: 'C', status: 'todo', epic: 'e' },
+    { id: 'd', title: 'D', status: 'blocked', epic: 'e', blockers: 'needs T-1' },
+  ] };
+  assert.deepEqual(epicPayload(board, 'e').attention, [
+    { id: 'a', title: 'A', blocked: false, why: 'waits on review' },
+    { id: 'b', title: 'B', blocked: true, why: '' },
+    { id: 'd', title: 'D', blocked: true, why: 'needs T-1' },
+  ]);
 });
