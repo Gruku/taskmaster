@@ -143,6 +143,7 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 - 2026-10-06 (Task 2 live look): the user approved the lean review card as built, judged from the dark-polarity `/tm-review` screenshots: the critical card with checklist and collapsed details, and the high card with details open and a `refused` banner. No visual changes.
 - 2026-10-06 (Task 2 live look, handovers): the picked handover now expands on `i` (`▸ summary` / `▾ summary`, mirroring the review card's details) into its full tldr, branch and tasks, decisions and blockers, and `Next:` (§6.1).
 - 2026-10-06 (handovers card): the user picked a card look from a mock. The picked handover is a raised round card like the review card: the head row is the full tldr, `NEXT` sits in the card, and the summary sections get `rr.label` labels (`DECISIONS`, `BLOCKERS`). The refs line drops its `branch:` / `tasks:` prefixes, and the `Next:` line under the list is gone.
+- 2026-10-06 (Task 2 closed): the user approved the handovers card live (dark polarity, summary expanded on `unified-chat-022`), and said the rest of the live look checked out too. Task 2 is done; next is Task 3a.
 
 ## 6. `taskmaster-tui`
 
