@@ -6,9 +6,10 @@ import { handoverPath } from './model'
 /**
  * The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. It carries
  * the seed's version: bump DEMO_SEED whenever the demo data's shape changes, so a seed an older module left in $.state across
- * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added).
+ * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added; 3: handovers gained
+ * thread, for the copy block's Resume line).
  */
-export const DEMO_SEED = 2
+export const DEMO_SEED = 3
 export const DEMO_REASON = `demo:${DEMO_SEED}`
 
 /** Any demo seed, of any version (tm mode never draws one). */
@@ -79,7 +80,15 @@ export const DEMO_SUMMARIES: Readonly<Record<string, TmHandoverSummary>> = {
 
 export function demoSnapshot(now: number): TmSnapshot {
   const ago = (hours: number) => new Date(now - hours * HOUR).toISOString()
-  const handover = (id: string, hours: number, tldr: string, nextAction: string, branch: string, taskIds: readonly string[]): TmHandover => ({
+  const handover = (
+    id: string,
+    hours: number,
+    tldr: string,
+    nextAction: string,
+    branch: string,
+    taskIds: readonly string[],
+    thread: string,
+  ): TmHandover => ({
     id,
     created: ago(hours),
     tldr,
@@ -87,6 +96,7 @@ export function demoSnapshot(now: number): TmSnapshot {
     path: handoverPath(DEMO_ROOT, id),
     branch,
     taskIds,
+    thread,
   })
   const task = (id: string, hours: number) => {
     const d = DEMO_DETAILS[id]!
@@ -105,16 +115,27 @@ export function demoSnapshot(now: number): TmSnapshot {
     ],
     queueTotal: 5,
     handovers: [
-      handover('2026-10-05-shipped-unified-chat-022', 2, 'Shipped unified-chat-022 to dev', 'Live check, then sign off in the review queue', 'main', [
-        'unified-chat-022',
-      ]),
-      handover('2026-10-04-audit-fixes-landed', 20, 'Audit fixes landed on the native branch', 'Record the merge for tm-audit-030', 'feat/database-native-foundation', [
-        'tm-audit-030',
-        'tm-audit-031',
-      ]),
-      handover('2026-10-03-viewer-reskin-2a', 44, 'Viewer RR re-skin plan 2a closed', 'Start plan 2b', 'feat/viewer-reskin', []),
-      handover('2026-10-02-store-read-hang', 70, 'Store read hang root cause found', 'Fix quarantined-row scans first', '', ['B-082']),
-      handover('2026-10-01-release-7-0-0', 96, 'Released 7.0.0', 'Watch for adoption reports', 'master', []),
+      handover(
+        '2026-10-05-shipped-unified-chat-022',
+        2,
+        'Shipped unified-chat-022 to dev',
+        'Live check, then sign off in the review queue',
+        'main',
+        ['unified-chat-022'],
+        'unified-chat',
+      ),
+      handover(
+        '2026-10-04-audit-fixes-landed',
+        20,
+        'Audit fixes landed on the native branch',
+        'Record the merge for tm-audit-030',
+        'feat/database-native-foundation',
+        ['tm-audit-030', 'tm-audit-031'],
+        'tm-audit',
+      ),
+      handover('2026-10-03-viewer-reskin-2a', 44, 'Viewer RR re-skin plan 2a closed', 'Start plan 2b', 'feat/viewer-reskin', [], 'viewer-reskin'),
+      handover('2026-10-02-store-read-hang', 70, 'Store read hang root cause found', 'Fix quarantined-row scans first', '', ['B-082'], 'store-hang'),
+      handover('2026-10-01-release-7-0-0', 96, 'Released 7.0.0', 'Watch for adoption reports', 'master', [], 'release'),
     ],
     handoversTotal: 6,
     bound: {

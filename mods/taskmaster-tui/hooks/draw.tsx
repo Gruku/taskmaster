@@ -166,6 +166,8 @@ export type BandHandlers = {
   confirmDone: (id: string) => void
   cancel: () => void
   sendBack: (id: string) => void
+  /** `3` on the handover-written notice: copy its block. */
+  copyNotice: (surface: RenderSurface) => void
 }
 
 const MIN_TEXT = 12
@@ -279,13 +281,40 @@ export async function bandTree(
       )
     }
   }
+  if (m.notice !== undefined && keep.includes('handover')) {
+    // `HANDOVER  <tldr>  3: copy  2: handovers`: `2` only while the needs-you row (which has its own) is not drawn. Gives
+    // way left to right after the tldr shrinks to MIN_TEXT: the handovers chip, then the label; `3: copy` always stays.
+    const copy = await chip(ui, rr, { id: 'band-copy', hotkey: '3', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copyNotice(press.surface) })
+    const toPane = keep.includes('needs')
+      ? null
+      : await chip(ui, rr, { id: 'notice-handovers', hotkey: '2', label: 'handovers', treatment: 'chip', tone: 'signature', onPress: on.openHandovers })
+    const label = 'handover'
+    let showPane = toPane !== null
+    let showLabel = true
+    const used = () => (showLabel ? label.length + 2 : 0) + copy.width + (showPane && toPane !== null ? 1 + toPane.width : 0)
+    if (showPane && width - used() - 2 < MIN_TEXT) showPane = false
+    if (width - used() - 2 < MIN_TEXT) showLabel = false
+    const tldr = truncate(oneLine(m.notice), width - used() - 2)
+    rows.push(
+      <Box flexDirection="row" columnGap={2}>
+        {showLabel ? node(await rr.label({ text: label })) : null}
+        {tldr !== '' ? (
+          <Text color={t.fg.default} wrap="truncate-end">
+            {tldr}
+          </Text>
+        ) : null}
+        {chipRow(ui, showPane && toPane !== null ? [copy.el, toPane.el] : [copy.el])}
+      </Box>,
+    )
+  }
   if (m.needsYou > 0 && keep.includes('needs')) {
     const [review, handovers] = await Promise.all([
       chip(ui, rr, { id: 'band-review', hotkey: '1', label: 'review', treatment: 'chip', tone: 'signature', onPress: on.openReview }),
       chip(ui, rr, { id: 'band-handovers', hotkey: '2', label: 'handovers', treatment: 'chip', tone: 'signature', onPress: on.openHandovers }),
     ])
     // The count says the most in the least room: its words shorten before the review chip goes.
-    const words = [`${m.needsYou} waiting on you`, `${m.needsYou} waiting`, `${m.needsYou}`]
+    const count = m.needsCapped === true ? `${m.needsYou}+` : `${m.needsYou}`
+    const words = [`${count} waiting on you`, `${count} waiting`, count]
     const word = words.find(w => signalWidth(w) + 1 + review.width <= width) ?? truncate(words[0] ?? '', Math.max(1, width - 2))
     const signal = { el: node(await rr.signal({ kind: 'warning', word })), width: signalWidth(word) }
     rows.push(chipRow(ui, fit([signal, review, handovers], width, 1)))
@@ -656,10 +685,11 @@ async function handoverCard(
   if (open) {
     const refs = handoverRefs(ho)
     if (refs !== '') nodes.push(...lines(ui, t.fg.subtle, refs, room, CARD_INDENT))
-    if (summary === undefined) {
+    if (summary === undefined || summary.unavailable === true) {
+      // Unavailable: the reader could not get it (refused, unreadable, offline); `i` twice asks again.
       nodes.push(
         <Box flexDirection="column" marginTop={1} paddingLeft={CARD_INDENT}>
-          {lines(ui, t.fg.subtle, 'loading summary…', body)}
+          {lines(ui, t.fg.subtle, summary === undefined ? 'loading summary…' : 'summary unavailable', body)}
         </Box>,
       )
     } else {

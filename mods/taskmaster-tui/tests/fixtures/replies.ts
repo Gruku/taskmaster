@@ -121,6 +121,24 @@ export const WITH_WARNING = `${updated('tm-audit-031', 'status', 'in-progress')}
 export const CLAIM_OK = JSON.stringify({ task_id: 'tm-audit-030', holder: 'sess-A', expires_at: '2026-10-05T13:00', live: true, expired: false, state: 'held', ok: true })
 export const CLAIM_CONFLICT = JSON.stringify({ ok: false, error: 'claim_conflict', task_id: 'tm-audit-030', holder: 'sess-B', live: true, expires_at: '2026-10-05T13:00', hint: 'another session holds it' })
 
+export const HANDOVER_SUMMARY = [
+  '## Handover: 2026-10-05-shipped-unified-chat-022',
+  '',
+  '### decisions',
+  '- The cookbook owns the build order, not the pre-build',
+  '- Pre-build hands the supervisor its full toolset',
+  '### blockers',
+  '- Needs unifiedChatGenerate + unifiedChatBuild on dev',
+].join('\n')
+export const HANDOVER_SUMMARY_DECISIONS_ONLY = ['## Handover: 2026-10-04-audit-fixes-landed', '', '### decisions', '- Audit fixes ride the native branch'].join('\n')
+export const HANDOVER_WRITTEN = [
+  'Handover written: 2026-10-06-live-data-wired',
+  '- File: .taskmaster\\handovers\\2026-10-06-live-data-wired.md',
+  '- Path: C:\\work\\proj\\.taskmaster\\handovers\\2026-10-06-live-data-wired.md',
+  '- Index entries: 8',
+  'Resume: tui-mods — Run the Step 9 live check',
+].join('\n')
+
 export function backlog(tool: string, args: Record<string, unknown>): { text: string } {
   if (tool === 'backlog_list_tasks') return { text: LIST_IN_REVIEW }
   if (tool === 'backlog_continuity_items') return { text: args.action_class === 'decide' ? CONTINUITY_DECIDE : CONTINUITY_REVIEW }
@@ -128,6 +146,11 @@ export function backlog(tool: string, args: Record<string, unknown>): { text: st
   if (tool === 'backlog_get_task') {
     const id = String(args.task_id)
     return { text: id === 'tm-audit-030' ? GET_TASK_BOUND : id === 'unified-chat-022' ? GET_TASK_REVIEW : id === 'tm-audit-031' ? GET_TASK_031 : GET_TASK_MISSING }
+  }
+  if (tool === 'backlog_handover_get') {
+    const id = String(args.handover_id)
+    if (id === '2026-10-05-shipped-unified-chat-022') return { text: HANDOVER_SUMMARY }
+    return { text: id === '2026-10-04-audit-fixes-landed' ? HANDOVER_SUMMARY_DECISIONS_ONLY : `Handover not found: ${id}` }
   }
   if (tool === 'backlog_task_pipeline') return { text: String(args.task_id) === 'tm-audit-030' ? PIPELINE_BOUND : PIPELINE_READY }
   return { text: `Error: ${tool} is not part of the test backlog` }

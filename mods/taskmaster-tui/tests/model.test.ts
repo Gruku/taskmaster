@@ -28,7 +28,7 @@ import {
 import { DEMO_DETAILS } from '../hooks/demo'
 import type { TmHandover, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 
-const H1: TmHandover = { id: 'h1', created: '', tldr: 'Shipped it', nextAction: '', path: '/p/h1.md', branch: '', taskIds: [] }
+const H1: TmHandover = { id: 'h1', created: '', tldr: 'Shipped it', nextAction: '', path: '/p/h1.md', branch: '', taskIds: [], thread: '' }
 
 const task = (id: string, priority: 'critical' | 'high' | 'medium' | 'low'): TmQueueItem => ({
   kind: 'task',
@@ -147,6 +147,21 @@ describe('band', () => {
     expect(bandRows({ task: null, needsYou: 3 }, 1)).toEqual(['needs'])
   })
 
+  test('a handover-written notice shows the band on its own, and gives way after the task row', () => {
+    expect(bandModel(null, { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
+    expect(bandModel(snap({}), { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
+    const m = { task: { id: 'x-001', title: 't', inferred: false, review: false, humanAction: '', meta: '', stage: 'IN PROGRESS' }, needsYou: 3, notice: 'h' }
+    expect(bandRows(m, 4)).toEqual(['task', 'stage', 'handover', 'needs'])
+    expect(bandRows(m, 3)).toEqual(['task', 'handover', 'needs'])
+    expect(bandRows(m, 2)).toEqual(['task', 'handover'])
+    expect(bandRows({ task: null, needsYou: 0, notice: 'h' }, 1)).toEqual(['handover'])
+  })
+
+  test("needs-you is the server's count; a count cut at the window is marked capped", () => {
+    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 355 }))).toEqual({ task: null, needsYou: 355 })
+    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 50, queueCapped: true }))).toEqual({ task: null, needsYou: 50, needsCapped: true })
+  })
+
   test('stage line wording', () => {
     expect(stageLine(DETAIL, { ...PIPELINE, outstanding: [] })).toBe('IN PROGRESS → ready for done')
     expect(stageLine(DETAIL, { laneless: true, lane: '', gateState: '', outstanding: [] })).toBe('IN PROGRESS → no pipeline')
@@ -172,12 +187,16 @@ describe('text', () => {
     expect(truncate('abc', -5)).toBe('')
   })
 
-  test('Telegram copy text is tldr, next action and the absolute path; the path follows the root separator', () => {
+  test('Telegram copy text is one three-line block: tldr, absolute path, Resume: thread — next action; the path follows the root separator', () => {
     expect(handoverPath('C:\\Users\\gruku\\Files\\Claude\\claude-tools\\', '2026-10-05-x')).toBe(
       'C:\\Users\\gruku\\Files\\Claude\\claude-tools\\.taskmaster\\handovers\\2026-10-05-x.md',
     )
     expect(handoverPath('/home/me/proj', 'h1')).toBe('/home/me/proj/.taskmaster/handovers/h1.md')
-    expect(handoverCopyText({ ...H1, nextAction: 'Record merge' })).toBe('Shipped it\n\nNext: Record merge\n\n/p/h1.md')
+    expect(handoverCopyText({ ...H1, nextAction: 'Record merge', thread: 'tm-audit' })).toBe('Shipped it\n/p/h1.md\nResume: tm-audit — Record merge')
+    // As the server's own Resume line: no next action resumes on the tldr; no thread (an older snapshot) leaves it out.
+    expect(handoverCopyText({ ...H1, thread: 'tm-audit' })).toBe('Shipped it\n/p/h1.md\nResume: tm-audit — Shipped it')
+    const { thread: _t, ...older } = H1
+    expect(handoverCopyText({ ...older, nextAction: 'Record merge' } as unknown as TmHandover)).toBe('Shipped it\n/p/h1.md\nResume: Record merge')
   })
 
   test('the summary line of branch and tasks leaves out whichever is empty', () => {

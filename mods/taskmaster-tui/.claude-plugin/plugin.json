@@ -13,6 +13,19 @@
       "default": "tm",
       "options": ["tm", "demo"]
     },
+    "reviewScope": {
+      "type": "string",
+      "title": "Review queue scope",
+      "description": "waiting: in-review tasks that name a human action (the sign-off state). all: every in-review task, pre-protocol ones included.",
+      "default": "waiting",
+      "options": ["waiting", "all"]
+    },
+    "reviewPhase": {
+      "type": "string",
+      "title": "Review queue phase",
+      "description": "A phase id to limit the review queue to, as the board's phase filter does. Empty for every phase.",
+      "default": ""
+    },
     "handoverGuard": {
       "type": "boolean",
       "title": "Cache-cold handover guard",

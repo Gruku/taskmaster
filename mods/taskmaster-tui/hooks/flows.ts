@@ -2,7 +2,7 @@
 // pane can never disagree and every write goes through one explicit confirmation and at most one write per task at a time.
 import type { RenderSurface } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBandMode, TmCursor, TmHandover, TmHandoverNotice, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
 import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW, TICKS_PREFIX, ticksOf, toggleTick } from './model'
@@ -19,6 +19,7 @@ export type TmWriter = {
     change: (s: Readonly<Record<string, TmHandoverSummary>>) => Readonly<Record<string, TmHandoverSummary>>,
   ) => Promise<void>
   summaryOpen: (change: (id: string) => string) => Promise<void>
+  notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -29,8 +30,8 @@ export type TmFlowDeps = {
   /** Which data the flows act on: demo never reaches the tm server (the viewer is only announced). Default tm. */
   source?: 'tm' | 'demo'
   /**
-   * Reads a handover's decisions and blockers (Task 3b: backlog_handover_get with sections decisions + blockers), or null
-   * when it cannot. Absent in demo, whose summaries are seeded like the task details.
+   * Reads a handover's decisions and blockers (tm: backlog_handover_get with sections decisions + blockers), or null when it
+   * cannot. Absent in demo, whose summaries are seeded like the task details.
    */
   summary?: (handoverId: string) => Promise<TmHandoverSummary | null>
 }
@@ -38,10 +39,23 @@ export type TmFlowDeps = {
 export type TmFlows = ReturnType<typeof createFlows>
 
 const PROMPT_REFUSED = 'taskmaster-tui: the prompt did not take the text; close the dialog and try again'
+const UNAVAILABLE: TmHandoverSummary = { decisions: [], blockers: [], unavailable: true }
 
 export function createFlows(d: TmFlowDeps) {
   const busy = new Set<string>()
+  // Summaries asked for since the last refresh; `generation` moves on at each refresh, so a read begun before it never
+  // writes its (possibly stale) answer after it.
   const summaryAsked = new Set<string>()
+  let generation = 0
+  const askSummary = async (id: string): Promise<void> => {
+    if (d.summary === undefined || summaryAsked.has(id)) return
+    summaryAsked.add(id)
+    const asked = generation
+    const summary = await d.summary(id)
+    if (asked !== generation) return
+    if (summary === null) summaryAsked.delete(id) // a later expand asks again
+    await d.write.summaries(all => ({ ...all, [id]: summary ?? UNAVAILABLE }))
+  }
   const once = async (id: string, work: () => Promise<void>): Promise<void> => {
     if (busy.has(id)) return
     busy.add(id)
@@ -136,14 +150,35 @@ export function createFlows(d: TmFlowDeps) {
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
     },
-    // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once.
+    // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once (an
+    // unavailable one is asked again, "loading summary…" meanwhile).
     toggleSummary: async (h: TmHandover, open: boolean): Promise<void> => {
       await d.write.summaryOpen(() => (open ? h.id : ''))
       if (!open || d.summary === undefined || summaryAsked.has(h.id)) return
-      summaryAsked.add(h.id)
-      const summary = await d.summary(h.id)
-      if (summary === null) summaryAsked.delete(h.id)
-      else await d.write.summaries(all => ({ ...all, [h.id]: summary }))
+      await d.write.summaries(all => {
+        if (all[h.id]?.unavailable !== true) return all
+        const { [h.id]: _gone, ...rest } = all
+        return rest
+      })
+      await askSummary(h.id)
+    },
+    /** The open card found no summary (a refresh forgot it): read it again, once. */
+    askSummary,
+    /** After a refresh: every summary is read again when next shown, so an edited handover is never stale. */
+    forgetSummaries: async (): Promise<void> => {
+      generation += 1
+      summaryAsked.clear()
+      await d.write.summaries(all => (Object.keys(all).length === 0 ? all : {}))
+    },
+    // The band's handover-written notice: `3` copies its block; the row goes once the copy landed.
+    copyNotice: async (n: TmHandoverNotice, surface: RenderSurface | undefined): Promise<void> => {
+      const r = await d.host.copy(n.text, surface)
+      if (!r.isCopied) {
+        d.host.toast(`Clipboard unavailable (${r.reason}): copy by hand from ${n.path}`)
+        return
+      }
+      d.host.toast(`Copied handover ${n.id}`)
+      await d.write.notice(current => (current?.id === n.id ? null : current))
     },
     // Ticks are local UI state: read the stored set first (another session may have ticked), toggle, write it back, then
     // mirror it into $.state so the card redraws. Never sent to Taskmaster.

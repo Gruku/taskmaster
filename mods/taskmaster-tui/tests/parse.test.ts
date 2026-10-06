@@ -4,6 +4,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   claimOk,
+  continuityTotal,
   type ContinuityItem,
   firstParagraph,
   isRefusal,
@@ -11,6 +12,8 @@ import {
   parseContinuity,
   parseGetTask,
   parseHandovers,
+  parseHandoverSummary,
+  parseHandoverWritten,
   parseListTasks,
   parsePipeline,
   stripSeq,
@@ -141,7 +144,15 @@ describe('JSON replies', () => {
       path: '/proj/.taskmaster/handovers/2026-10-05-shipped-unified-chat-022.md',
       branch: 'main',
       taskIds: ['unified-chat-022'],
+      thread: 'unified-chat',
     })
+  })
+
+  test('continuity: the server total is read when given, and null when the reply has none', () => {
+    expect(continuityTotal(R.CONTINUITY_REVIEW)).toBe(3)
+    expect(continuityTotal(R.CONTINUITY_DECIDE)).toBe(1)
+    expect(continuityTotal(JSON.stringify({ view: 'action', items: [] }))).toBeNull()
+    expect(continuityTotal('Error: No backlog found')).toBeNull()
   })
 
   test('claim ok is read from the JSON; anything else is not ok', () => {
@@ -400,5 +411,54 @@ describe('captured scratch store (write paths)', () => {
 
   test('claim status is JSON the claim reader understands: a released claim reads ok', () => {
     expect(claimOk(at('claim_status').text)).toBe(true)
+  })
+})
+
+describe('handover replies', () => {
+  test('a summary reads each section block into its list items; a missing section is empty', () => {
+    expect(value(parseHandoverSummary(R.HANDOVER_SUMMARY))).toEqual({
+      decisions: ['The cookbook owns the build order, not the pre-build', 'Pre-build hands the supervisor its full toolset'],
+      blockers: ['Needs unifiedChatGenerate + unifiedChatBuild on dev'],
+    })
+    expect(value(parseHandoverSummary(R.HANDOVER_SUMMARY_DECISIONS_ONLY))).toEqual({ decisions: ['Audit fixes ride the native branch'], blockers: [] })
+    expect(value(parseHandoverSummary('## Handover: h1\n'))).toEqual({ decisions: [], blockers: [] })
+  })
+
+  test('a summary item keeps its continuation lines and nested bullets; unbulleted prose is one item per paragraph', () => {
+    const raw = [
+      '## Handover: h1',
+      '',
+      '### decisions',
+      '- First decision',
+      '  continues here',
+      '  - nested detail',
+      '* Second decision',
+      '### blockers',
+      'One blocker in prose',
+      'over two lines.',
+      '',
+      'Another blocker.',
+    ].join('\n')
+    expect(value(parseHandoverSummary(raw))).toEqual({
+      decisions: ['First decision continues here nested detail', 'Second decision'],
+      blockers: ['One blocker in prose over two lines.', 'Another blocker.'],
+    })
+  })
+
+  test('a summary refusal or a missing handover is unreadable, with the reason', () => {
+    expect(parseHandoverSummary('Handover not found: h9')).toEqual({ ok: false, reason: 'handover_get: Handover not found: h9' })
+    expect(parseHandoverSummary('Error: x is not a canonical section')).toEqual({ ok: false, reason: 'handover_get: Error: x is not a canonical section' })
+    expect(parseHandoverSummary('No backlog found.')).toEqual({ ok: false, reason: 'handover_get: No backlog found.' })
+  })
+
+  test('a "Handover written:" receipt gives the id, the absolute path and the Resume line; anything else is null', () => {
+    expect(parseHandoverWritten(R.HANDOVER_WRITTEN)).toEqual({
+      id: '2026-10-06-live-data-wired',
+      path: 'C:\\work\\proj\\.taskmaster\\handovers\\2026-10-06-live-data-wired.md',
+      resume: 'Resume: tui-mods — Run the Step 9 live check',
+    })
+    expect(parseHandoverWritten('Handover written: h1\n- File: .taskmaster/handovers/h1.md')).toEqual({ id: 'h1', path: '', resume: '' })
+    expect(parseHandoverWritten('Error: tldr is required')).toBeNull()
+    expect(parseHandoverWritten('')).toBeNull()
   })
 })

@@ -9,14 +9,10 @@ export type TmActions = {
   backToAgent: (taskId: string, note: string) => Promise<TmWriteOutcome>
 }
 
-export const WRITES_PENDING = 'writes not wired yet'
-
 /** tm mode until Task 4 wires the real writes: every write refuses, so nothing is ever shown as signed off that was not. */
-export function pendingActions(): TmActions {
-  return {
-    done: async () => ({ ok: false, refusal: WRITES_PENDING }),
-    backToAgent: async () => ({ ok: false, refusal: WRITES_PENDING }),
-  }
+export function readOnlyActions(): TmActions {
+  const refusal = 'taskmaster-tui is read-only in this build: sign off and send back arrive with the write actions.'
+  return { done: async () => ({ ok: false, refusal }), backToAgent: async () => ({ ok: false, refusal }) }
 }
 
 export function demoActions(): TmActions {

@@ -194,6 +194,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - `i` toggles details inline under the check: notes, links, branch/PR (from `backlog_get_task`).
 - Action bar, one row: `done` is the primary — a 24% success chip with the button recipe (§5.4), so it reads stronger than the 12% secondary chips; the 3-row outline is no longer used on the card.
 
+- Scope (decided 2026-10-06, option A): `userConfig.reviewScope` defaults to `waiting` — only in-review tasks that name a `human_action` (the sign-off state); `all` adds pre-protocol ones — and `reviewPhase` (a phase id, empty for all) narrows it like the board's phase filter; the queue is a window of the first 50 rows and its count is the server's total.
 - Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
 - The check is shown in full (the pane scrolls if long).
 - `d` → inline confirm row `done <id>?  y: yes  n: no` (focus starts on `n`, so Enter cancels; with unticked items it reads `1 of 2 unchecked — done anyway?`) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.

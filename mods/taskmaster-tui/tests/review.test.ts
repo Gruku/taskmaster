@@ -138,7 +138,7 @@ describe('review queue', () => {
     }
   })
 
-  test('tm mode: y refuses until the writes are wired, and the card and tally stay', { plugins: [RR_STUB] }, async ($, on) => {
+  test('tm mode: y refuses as read-only until the write actions arrive, and the card and tally stay', { plugins: [RR_STUB] }, async ($, on) => {
     worldOf(on, mock.clock(on))
     stateOf(on, { [SNAP]: { ...demoSnapshot(0), reason: '' }, [`${PLUGIN}.details`]: DEMO_DETAILS })
     await $.session.start(SESSION)
@@ -147,7 +147,7 @@ describe('review queue', () => {
     await ui.redraw()
     await ui.press({ key: 'confirm-yes' })
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: /writes not wired yet/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^taskmaster-tui is read-only in this build: sign off and send back/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /1 of 5 · 0 done this pass/ })).toBeDefined()
   })

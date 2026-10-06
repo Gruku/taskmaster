@@ -1,6 +1,6 @@
 // User intent: read Taskmaster's MCP replies — markdown and JSON text — into plain data, purely, so every format quirk is
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
-import type { TmHandover, TmPipeline, TmPriority, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
@@ -132,6 +132,12 @@ export function parseContinuity(raw: string): Parsed<ContinuityItem[]> {
   )
 }
 
+/** The continuity reply's server `total` (every item of the asked class, past the window), or null when it gives none. */
+export function continuityTotal(raw: string): number | null {
+  const doc = json(raw)
+  return doc.ok && typeof doc.value.total === 'number' ? doc.value.total : null
+}
+
 export function parseGetTask(raw: string): Parsed<TmTaskDetail | null> {
   const text = clean(raw)
   if (/^Error: task `[^`]+` not found/.test(text)) return ok(null)
@@ -195,8 +201,80 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
       path: handoverPath(root, str(h.id)),
       branch: str(h.branch),
       taskIds: Array.isArray(h.task_ids) ? h.task_ids.filter((t): t is string => typeof t === 'string') : [],
+      thread: str(h.thread),
     }))
     .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
   const total = typeof doc.value.total === 'number' ? doc.value.total : handovers.length
   return ok({ handovers, total })
+}
+
+const SUMMARY_SECTION = /^### (decisions|blockers)\s*$/
+const LIST_ITEM = /^(\s*)(?:[-*•]|\d+[.)])\s+(.*)$/
+
+/**
+ * A section block's items: its top-level list lines, each joined by the lines under it (continuations, nested bullets); a
+ * block without one is prose, one item per paragraph.
+ */
+function itemsOf(block: readonly string[]): string[] {
+  const topItem = (line: string): string | null => {
+    const m = LIST_ITEM.exec(line)
+    return m !== null && (m[1] ?? '').length < 2 ? (m[2] ?? '').trim() : null
+  }
+  const listed = block.some(line => topItem(line) !== null)
+  const items: string[] = []
+  let open = false
+  for (const line of block) {
+    const text = line.trim()
+    if (text === '') {
+      if (!listed) open = false
+      continue
+    }
+    const head = topItem(line)
+    if (listed && head !== null) {
+      items.push(head)
+      open = true
+    } else if (open) {
+      const last = items.length - 1
+      items[last] = `${items[last] ?? ''} ${LIST_ITEM.exec(line)?.[2]?.trim() ?? text}`.trim()
+    } else if (!listed) {
+      items.push(text)
+      open = true
+    }
+  }
+  return items.filter(item => item !== '')
+}
+
+/**
+ * backlog_handover_get with sections decisions + blockers: `## Handover: <id>`, then a `### decisions` / `### blockers`
+ * block per section the body has (a missing one is left out, read as empty). Anything else, a refusal or "Handover not
+ * found" included, is unreadable.
+ */
+export function parseHandoverSummary(raw: string): Parsed<TmHandoverSummary> {
+  const text = raw.replace(/\r\n/g, '\n').trim()
+  if (!text.startsWith('## Handover:')) return fail(`handover_get: ${firstParagraph(text) || 'empty reply'}`)
+  const blocks: Record<'decisions' | 'blockers', string[]> = { decisions: [], blockers: [] }
+  let current: string[] | null = null
+  for (const line of text.split('\n').slice(1)) {
+    const head = SUMMARY_SECTION.exec(line)
+    if (head !== null) {
+      current = blocks[head[1] as 'decisions' | 'blockers']
+      continue
+    }
+    if (current !== null) current.push(line)
+  }
+  return ok({ decisions: itemsOf(blocks.decisions), blockers: itemsOf(blocks.blockers) })
+}
+
+export type HandoverReceipt = { readonly id: string; readonly path: string; readonly resume: string }
+
+/** backlog_handover_create's receipt: `Handover written: <id>`, its `- Path:` line and its `Resume:` line; else null. */
+export function parseHandoverWritten(raw: string): HandoverReceipt | null {
+  const text = raw.replace(/\r\n/g, '\n')
+  const id = /^Handover written: (\S+)\s*$/m.exec(text)?.[1]
+  if (id === undefined) return null
+  return {
+    id,
+    path: (/^- Path: (.+)$/m.exec(text)?.[1] ?? '').trim(),
+    resume: (/^(Resume: .+)$/m.exec(text)?.[1] ?? '').trim(),
+  }
 }

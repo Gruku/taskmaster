@@ -1,6 +1,6 @@
 // User intent: the Taskmaster semantics behind every taskmaster-tui surface — what waits on the user, queue order, card and
 // band wording, Telegram-ready handover text — as plain functions over snapshot data, tested without drawing.
-import type { TmCursor, TmHandover, TmPipeline, TmPriority, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmCursor, TmHandover, TmHandoverNotice, TmPipeline, TmPriority, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 
 export const REVIEW = 'tm-review'
 export const HANDOVERS = 'tm-handovers'
@@ -109,11 +109,13 @@ export type BandTask = {
   readonly meta: string
   readonly stage: string
 }
-export type BandModel = { readonly task: BandTask | null; readonly needsYou: number }
-export type BandRow = 'task' | 'stage' | 'needs'
+/** `needsCapped`: the count was cut at the window with no server total (drawn `N+`); `notice`: a just-written handover's tldr. */
+export type BandModel = { readonly task: BandTask | null; readonly needsYou: number; readonly needsCapped?: boolean; readonly notice?: string }
+export type BandRow = 'task' | 'stage' | 'handover' | 'needs'
 
-export function bandModel(s: TmSnapshot | null): BandModel | null {
-  if (s === null) return null
+export function bandModel(s: TmSnapshot | null, notice: TmHandoverNotice | null = null): BandModel | null {
+  const shown = notice === null ? {} : { notice: notice.tldr }
+  if (s === null) return notice === null ? null : { task: null, needsYou: 0, ...shown }
   const b = s.bound
   const detail = b?.detail ?? null
   const live = s.reachable && detail !== null
@@ -130,17 +132,18 @@ export function bandModel(s: TmSnapshot | null): BandModel | null {
           stage: live ? stageLine(detail, b.pipeline) : '',
         }
   const needsYou = s.reachable ? s.queueTotal : 0
-  if (task === null && needsYou === 0) return null
-  return { task, needsYou }
+  if (task === null && needsYou === 0 && notice === null) return null
+  return { task, needsYou, ...(needsYou > 0 && s.queueCapped === true ? { needsCapped: true } : {}), ...shown }
 }
 
 export function bandRows(m: BandModel, maxRows: number): BandRow[] {
   const wanted: BandRow[] = []
   if (m.task !== null) wanted.push('task')
+  if (m.notice !== undefined) wanted.push('handover')
   if (m.needsYou > 0) wanted.push('needs')
   if (m.task !== null && (m.task.review || m.task.stage !== '')) wanted.push('stage')
   const kept = new Set(wanted.slice(0, Math.max(0, maxRows)))
-  return (['task', 'stage', 'needs'] as const).filter(row => kept.has(row))
+  return (['task', 'stage', 'handover', 'needs'] as const).filter(row => kept.has(row))
 }
 
 export function ageLabel(stamp: string, now: number): string {
@@ -173,8 +176,38 @@ export function handoverPath(root: string, id: string): string {
   return [root.replace(/[\\/]+$/, ''), '.taskmaster', 'handovers', `${id}.md`].join(sep)
 }
 
+/**
+ * The one Telegram-ready handover block (decided 2026-10-06), its last line worded as the server's own receipt words it:
+ * `<tldr>` / `<absolute path>` / `Resume: <thread> — <next action, else the tldr>`; an empty thread is left out.
+ */
+export function copyBlock(tldr: string, path: string, thread: string, nextAction: string): string {
+  const resume = [thread.trim(), nextAction.trim() || tldr.trim()].filter(Boolean).join(' — ')
+  return [tldr.trim(), path, `Resume: ${resume}`].join('\n')
+}
+
+/** A listed handover's block; a snapshot older than the `thread` field reads it as empty, never throws. */
 export function handoverCopyText(h: TmHandover): string {
-  return [h.tldr.trim(), h.nextAction.trim() ? `Next: ${h.nextAction.trim()}` : '', h.path].filter(Boolean).join('\n\n')
+  return copyBlock(h.tldr, h.path, typeof h.thread === 'string' ? h.thread : '', h.nextAction)
+}
+
+/**
+ * The band notice for a handover this session just wrote: id and path from the receipt (the path from `root` when the
+ * receipt has none), tldr from the call's input; the block's Resume line is the receipt's own (the server derives the
+ * thread when the input names none), else built from the input.
+ */
+export function handoverNotice(
+  input: Readonly<Record<string, unknown>>,
+  receipt: { readonly id: string; readonly path: string; readonly resume: string },
+  root: string,
+): TmHandoverNotice {
+  const field = (key: string): string => {
+    const v = input[key]
+    return typeof v === 'string' ? v.trim() : ''
+  }
+  const tldr = field('tldr')
+  const path = receipt.path || handoverPath(root, receipt.id)
+  const text = receipt.resume === '' ? copyBlock(tldr, path, field('thread'), field('next_action')) : [tldr, path, receipt.resume].join('\n')
+  return { id: receipt.id, tldr, path, text }
 }
 
 /**
