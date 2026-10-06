@@ -165,6 +165,174 @@ test('a long title and a long path stay inside 390px', async ({ page }) => {
   expect(box.rects).toBe(1);
 });
 
+// Answers GET and records every write to /api/bugs/B-031; after an accepted write the GET answers the merged bug.
+function bugWrites(page, answer = () => ({ json: { ok: true, id: 'B-031' } })) {
+  const posts = [];
+  let current = BUG;
+  const install = () => page.route('**/api/bugs/B-031', async (route) => {
+    const req = route.request();
+    if (req.method() === 'GET') { await route.fulfill({ json: current }); return; }
+    const body = req.postDataJSON();
+    posts.push(body);
+    const r = answer(body, posts.length);
+    if ((r.status ?? 200) < 300) current = { ...BUG, ...body };
+    await route.fulfill({ status: r.status ?? 200, json: r.json });
+  });
+  return { posts, install };
+}
+
+const focusIsSensible = (page) => page.evaluate(() => document.activeElement && document.activeElement !== document.body);
+const statusWord = (page) => mount(page).locator('[data-field="status"] .marker__word');
+
+test('Mark fixed asks for the commit in a form and the page shows the bug fixed', async ({ page }) => {
+  const w = bugWrites(page, (body) => ({ json: { ok: true, id: 'B-031', status: body.status } }));
+  await open(page, '#/bug/B-031', { before: w.install });
+  const primary = page.locator('#topbar-primary').getByRole('button', { name: 'Mark this bug fixed' });
+  await primary.click();
+  const dlg = page.getByRole('dialog', { name: 'Mark fixed' });
+  await expect(dlg).toBeVisible();
+  const save = dlg.getByRole('button', { name: 'Mark fixed' });
+  await expect(save).toBeDisabled();
+  await dlg.getByRole('textbox', { name: /Fix commit/ }).fill('abc1234');
+  await save.click();
+  await expect(dlg).toHaveCount(0);
+  expect(w.posts).toEqual([{ status: 'fixed', fix_commit: 'abc1234' }]);
+  await expect(statusWord(page)).toHaveText('Fixed');
+  await expect(mount(page).locator('.dp-actions')).toHaveCount(0);
+  await expect(page.locator('#topbar-primary')).toBeEmpty();
+  expect(await focusIsSensible(page)).toBe(true);
+});
+
+test('a refused fix is said in words in the form', async ({ page }) => {
+  const w = bugWrites(page, (_b, n) => (n === 1
+    ? { status: 400, json: { ok: false, error: 'Error: status=fixed requires fix_commit to be set' } }
+    : { status: 500, json: { ok: false, error: 'Traceback: boom' } }));
+  await open(page, '#/bug/B-031', { before: w.install });
+  await page.locator('#topbar-primary button').click();
+  const dlg = page.getByRole('dialog', { name: 'Mark fixed' });
+  await dlg.getByRole('textbox', { name: /Fix commit/ }).fill('abc1234');
+  await dlg.getByRole('button', { name: 'Mark fixed' }).click();
+  const alert = dlg.locator('[role="alert"]').filter({ hasText: /\S/ });
+  await expect(alert).toContainText('requires fix_commit');
+  for (const word of ['400', '/api', '{']) await expect(alert).not.toContainText(word);
+  await dlg.getByRole('button', { name: 'Mark fixed' }).click();
+  await expect(alert).toHaveText('The server could not save this change. Try again in a moment.');
+  await expect(dlg).toBeVisible();
+  await expect(statusWord(page)).toHaveText('Open');
+  expect(w.posts).toHaveLength(2);
+});
+
+test('Shelve asks in the app and Keep open sends nothing', async ({ page }) => {
+  const w = bugWrites(page);
+  await open(page, '#/bug/B-031', { before: w.install });
+  const row = mount(page).getByRole('group', { name: 'Bug actions' });
+  await row.getByRole('button', { name: 'Shelve' }).click();
+  const ask = page.getByRole('alertdialog', { name: 'Shelve B-031?' });
+  await ask.getByRole('button', { name: 'Keep open' }).click();
+  await expect(ask).toHaveCount(0);
+  expect(w.posts).toEqual([]);
+  expect(await focusIsSensible(page)).toBe(true);
+  await row.getByRole('button', { name: 'Shelve' }).click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  await expect(statusWord(page)).toHaveText('Shelved');
+  expect(w.posts).toEqual([{ status: 'shelved' }]);
+  await expect(mount(page).getByRole('button', { name: 'Shelve' })).toHaveCount(0);
+  expect(await focusIsSensible(page)).toBe(true);
+});
+
+test('Adopt refuses a task that is not on the board, then adopts', async ({ page }) => {
+  const w = bugWrites(page);
+  await open(page, '#/bug/B-031', { before: w.install });
+  await mount(page).getByRole('button', { name: 'Adopt into task' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Adopt into a task' });
+  const field = dlg.getByRole('textbox', { name: /Task/ });
+  await field.fill('T-999');
+  await dlg.getByRole('button', { name: 'Adopt' }).click();
+  await expect(dlg).toContainText('No task T-999 on the board');
+  expect(w.posts).toEqual([]);
+  await field.fill('');
+  await expect(dlg).toContainText('Task is required');
+  await field.fill('T-101');
+  await dlg.getByRole('button', { name: 'Adopt' }).click();
+  await expect(dlg).toHaveCount(0);
+  expect(w.posts).toEqual([{ status: 'adopted', adopted_into: 'T-101' }]);
+  await expect(statusWord(page)).toHaveText('Adopted');
+  expect(await focusIsSensible(page)).toBe(true);
+});
+
+test('Promote opens the new issue', async ({ page }) => {
+  const sent = [];
+  await open(page, '#/bug/B-031', { before: async () => {
+    await page.route('**/api/bugs/promote', async (route) => {
+      sent.push(route.request().postDataJSON());
+      await route.fulfill({ status: 201, json: { ok: true, issue_id: 'ISS-030' } });
+    });
+    await page.route('**/api/issues', (route) => route.fulfill({ json: { issues: [{ id: 'ISS-030', title: 'Promoted', severity: 'P1', status: 'open' }] } }));
+  } });
+  await mount(page).getByRole('button', { name: 'Promote to issue' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Promote to an issue' });
+  await dlg.getByRole('textbox', { name: /Evidence/ }).fill('Recurring: 3 bugs');
+  await dlg.getByRole('button', { name: 'Promote' }).click();
+  await expect(page).toHaveURL(/#\/issue\/ISS-030$/);
+  await expect(dlg).toHaveCount(0);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ bug_ids: ['B-031'], title: BUG.title, severity: 'P2', evidence_text: 'Recurring: 3 bugs' });
+  await expect(page.locator("#screen-mount h1")).toHaveText("Promoted");
+  await expect(page.locator("#screen-mount h1")).toBeFocused();
+  expect(await focusIsSensible(page)).toBe(true);
+});
+
+test('leaving the bug page with an action form open: clean closes, typed asks', async ({ page }) => {
+  const w = bugWrites(page);
+  await open(page, '#/bug/B-031', { before: w.install });
+  await page.locator('#topbar-primary button').click();
+  await expect(page.getByRole('dialog', { name: 'Mark fixed' })).toBeVisible();
+  await page.evaluate(() => { location.hash = '#/bugs'; });
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await page.evaluate(() => { location.hash = '#/bug/B-031'; });
+  await page.locator('#topbar-primary button').click();
+  await page.getByRole('dialog', { name: 'Mark fixed' }).getByRole('textbox', { name: /Fix commit/ }).fill('abc');
+  await page.evaluate(() => { location.hash = '#/bugs'; });
+  const ask = page.getByRole('alertdialog', { name: 'Discard changes?' });
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+  expect(w.posts).toEqual([]);
+});
+
+const FORMS = [
+  ['#topbar-primary button', 'dialog', 'Mark fixed'],
+  ['[data-action="adopt"]', 'dialog', 'Adopt into a task'],
+  ['[data-action="promote"]', 'dialog', 'Promote to an issue'],
+  ['[data-action="shelve"]', 'alertdialog', 'Shelve B-031?'],
+];
+const AXE_RULES = (id) => ['color-contrast', 'label', 'select-name'].includes(id) || id.startsWith('aria-');
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}): the action row and each form are clean; every control is 44px tall at 390px`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, '#/bug/B-031', { theme });
+    await expect(mount(page).locator('h1')).toBeVisible();
+    await page.addScriptTag({ content: axeSource });
+    const run = (sel) => page.evaluate((s) => window.axe.run(s, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } })
+      .then((r) => r.violations.map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target.join(' ')).join(' | ') }))), sel);
+    const bad = (list, where) => list.filter((v) => AXE_RULES(v.id)).map((v) => `${where} ${v.id}: ${v.nodes}`);
+    expect(bad(await run('#screen-mount'), 'page')).toEqual([]);
+    const short = (sel) => page.evaluate((s) => [...document.querySelectorAll(s)]
+      .filter((el) => el.getClientRects().length && el.getBoundingClientRect().height < 44)
+      .map((el) => `${el.tagName.toLowerCase()}.${el.className} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 30)}" ${Math.round(el.getBoundingClientRect().height)}`), sel);
+    expect(await short('.dp-actions .btn')).toEqual([]);
+    for (const [opener, role, name] of FORMS) {
+      await page.locator(opener).click();
+      const dlg = page.getByRole(role, { name });
+      await expect(dlg).toBeVisible();
+      expect(bad(await run('.modal'), name)).toEqual([]);
+      expect(await short('.modal button, .modal input, .modal select, .modal textarea, .modal [contenteditable="true"]')).toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(dlg).toHaveCount(0);
+    }
+  });
+}
+
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the bug page has no violations`, async ({ page }) => {
     for (const id of ['B-031', 'B-030']) {
