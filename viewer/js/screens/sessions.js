@@ -75,8 +75,13 @@ export function mount(root, { params, subpath, store, prefs }) {
   const rowFor = (sel) => sel && list.querySelector(sel.kind === 'session'
     ? `.ho[data-session-id="${CSS.escape(sel.id)}"]`
     : `.ho-child[data-handover-id="${CSS.escape(sel.id)}"]`);
+  // Rows say they control the rail only while it is open: closed, `#right-rail` does not exist.
   function paintSelected() {
     for (const b of list.querySelectorAll('[aria-current]')) b.removeAttribute('aria-current');
+    for (const b of list.querySelectorAll('.ho, .ho-child')) {
+      if (state.selected) b.setAttribute('aria-controls', 'right-rail');
+      else b.removeAttribute('aria-controls');
+    }
     rowFor(state.selected)?.setAttribute('aria-current', 'true');
   }
   state.onRailOpen = (sel) => { state.selected = sel; paintSelected(); };

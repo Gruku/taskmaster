@@ -28,14 +28,19 @@ function draw(opts = {}) {
   return root;
 }
 
-test('every row is a button that controls the right rail', () => {
-  const root = draw();
-  const rows = root.querySelectorAll('.ho, .ho-child');
-  assert.equal(rows.length, 4);
-  for (const row of rows) {
+test('every row is a button that controls the right rail while one is open', () => {
+  const open = draw({ selected: { kind: 'session', id: 'team-relayout' } }).querySelectorAll('.ho, .ho-child');
+  assert.equal(open.length, 4);
+  for (const row of open) {
     assert.equal(row.localName, 'button');
     assert.equal(row.getAttribute('type'), 'button');
     assert.equal(row.getAttribute('aria-controls'), 'right-rail');
+  }
+  // With no rail open, #right-rail does not exist: no row points at it.
+  const root = draw();
+  for (const row of root.querySelectorAll('.ho, .ho-child')) {
+    assert.equal(row.localName, 'button');
+    assert.equal(row.hasAttribute('aria-controls'), false);
   }
   assert.ok(root.querySelector('button.ho[data-session-id="team-relayout"]'));
   assert.ok(root.querySelector('button.ho-child[data-handover-id="2026-07-12-scope"]'));

@@ -53,12 +53,13 @@ export function kindLabel(kind) {
  *    sessions: [{id, start, end, tldr?, task_ids[], handover_ids[]}] — the handovers to show under each
  *    handovers: id → {viewer_kind, status, tldr}
  *    onSelect({ kind: 'session' | 'handover', id }, button)
- *    selected: { kind, id } | null — that row is marked aria-current
+ *    selected: { kind, id } | null — the row the open rail shows, marked aria-current. Rows say they control the rail
+      only while one is open: with none, `#right-rail` does not exist and the reference would point at nothing.
  *  Returns a cleanup function.
  */
 export function renderTimeline(root, { sessions, handovers, onSelect, selected = null }) {
-  const isSelected = (kind, id) => !!selected && selected.kind === kind && selected.id === id;
-  const container = (s) => sessionContainer(s, handovers || {}, onSelect, isSelected);
+  const ctx = { handovers: handovers || {}, onSelect, selected };
+  const container = (s) => sessionContainer(s, ctx);
   const wrapper = h('div', { class: 'tl' });
   for (const group of clusterParallelSessions(sessions || [])) {
     if (group.length > 1) {
@@ -82,9 +83,9 @@ function formatRange(group) {
 }
 
 // A row of the timeline: a button holding spans only, so nothing in it is a control of its own.
-function row(kind, id, attrs, isSelected, onSelect, children) {
-  const btn = h('button', { type: 'button', ...attrs, 'aria-controls': 'right-rail' }, children);
-  if (isSelected(kind, id)) btn.setAttribute('aria-current', 'true');
+function row(kind, id, attrs, { onSelect, selected }, children) {
+  const btn = h('button', { type: 'button', ...attrs, 'aria-controls': selected ? 'right-rail' : null }, children);
+  if (selected && selected.kind === kind && selected.id === id) btn.setAttribute('aria-current', 'true');
   btn.addEventListener('click', () => onSelect?.({ kind, id }, btn));
   return btn;
 }
@@ -95,9 +96,9 @@ const titleAndSlug = (tldr, id) => [
   tldr ? truncate(id, { className: 'ho-slug' }) : null,
 ];
 
-function sessionContainer(session, handovers, onSelect, isSelected) {
+function sessionContainer(session, ctx) {
   const tasks = session.task_ids || [];
-  const head = row('session', session.id, { class: 'ho', 'data-session-id': session.id }, isSelected, onSelect, [
+  const head = row('session', session.id, { class: 'ho', 'data-session-id': session.id }, ctx, [
     h('span', { class: 'ho-head' },
       h('span', { class: 'ho-kind' }, 'Thread'),
       h('span', { class: 'ho-time' }, sessionTimeLine(session))),
@@ -107,12 +108,12 @@ function sessionContainer(session, handovers, onSelect, isSelected) {
   const childIds = session.handover_ids || [];
   return h('div', { class: 'ses-container' },
     head,
-    childIds.length ? h('div', { class: 'ses-children' }, childIds.map((cid) => handoverRow(cid, handovers[cid] || {}, onSelect, isSelected))) : null);
+    childIds.length ? h('div', { class: 'ses-children' }, childIds.map((cid) => handoverRow(cid, ctx.handovers[cid] || {}, ctx))) : null);
 }
 
-function handoverRow(id, meta, onSelect, isSelected) {
+function handoverRow(id, meta, ctx) {
   const status = meta.status || 'open';
-  return row('handover', id, { class: 'ho-child', 'data-handover-id': id }, isSelected, onSelect, [
+  return row('handover', id, { class: 'ho-child', 'data-handover-id': id }, ctx, [
     h('span', { class: 'ho-head' },
       h('span', { class: 'ho-kind' }, kindLabel(meta.viewer_kind)),
       h('span', { class: 'ho-status' }, Object.hasOwn(HO_STATUS_LABEL, status) ? HO_STATUS_LABEL[status] : kindLabel(status))),

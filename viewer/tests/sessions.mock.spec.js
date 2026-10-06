@@ -108,10 +108,12 @@ test('keyboard: a session row opened with Enter gets focus back when Escape clos
   await page.keyboard.press('Enter');
   await expect(rail(page).locator('h2.rr-title')).toBeFocused();
   await expect(row).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('#screen-mount [aria-controls="right-rail"]')).toHaveCount(4);
   await page.keyboard.press('Escape');
   await expect(page.locator('#right-rail')).toHaveCount(0);
   await expect(row).toBeFocused();
   await expect(page.locator('#screen-mount [aria-current]')).toHaveCount(0);
+  await expect(page.locator('#screen-mount [aria-controls]')).toHaveCount(0);
 });
 
 test('the mark moves with the rail: a handover opened from a session\'s rail is the marked row', async ({ page }) => {
@@ -207,26 +209,37 @@ test('sessions that cannot be loaded are said in words', async ({ page }) => {
   await expect(page.locator('#screen-mount')).not.toContainText('boom');
 });
 
+// Polled: with reduced motion, tokens.css gives every element a 0.01ms transition, and `order` and the grid's columns
+// are animatable — a read in the same frame as the change still sees the old value.
 test('the rail sits beside the timeline on a wide screen and above it on a narrow one', async ({ page }) => {
+  const layout = () => page.evaluate(() => {
+    const host = document.querySelector('[data-role=rail-host]').getBoundingClientRect();
+    const list = document.querySelector('[data-role=mount]').getBoundingClientRect();
+    return {
+      side: host.left >= list.right, above: host.bottom <= list.top,
+      columns: getComputedStyle(document.querySelector('.sessions-body')).gridTemplateColumns.split(' ').length,
+    };
+  });
   await boot(page);
   await hoRow(page, M1).click();
-  const wide = await page.evaluate(() => {
-    const host = document.querySelector('[data-role=rail-host]').getBoundingClientRect();
-    const list = document.querySelector('[data-role=mount]').getBoundingClientRect();
-    return { side: host.left >= list.right, width: host.width, position: getComputedStyle(document.querySelector('[data-role=rail-host]')).position };
-  });
-  expect(wide.side, 'rail to the right of the timeline').toBe(true);
-  expect(wide.width).toBeGreaterThanOrEqual(320);
-  expect(wide.width).toBeLessThanOrEqual(420);
-  expect(wide.position).toBe('sticky');
+  await expect(rail(page)).toBeVisible();
+  await expect.poll(layout, 'rail to the right of the timeline').toEqual({ side: true, above: false, columns: 2 });
+  const host = page.locator('[data-role=rail-host]');
+  const box = await host.evaluate((el) => ({ width: el.getBoundingClientRect().width, position: getComputedStyle(el).position }));
+  expect(box.width).toBeGreaterThanOrEqual(320);
+  expect(box.width).toBeLessThanOrEqual(420);
+  expect(box.position).toBe('sticky');
 
+  // Resized with the rail open, the layout follows both ways.
   await page.setViewportSize({ width: 900, height: 900 });
-  const narrow = await page.evaluate(() => {
-    const host = document.querySelector('[data-role=rail-host]').getBoundingClientRect();
-    const list = document.querySelector('[data-role=mount]').getBoundingClientRect();
-    return { above: host.bottom <= list.top };
-  });
-  expect(narrow.above, 'rail above the timeline').toBe(true);
+  await expect.poll(layout, 'one column, the rail above the timeline').toEqual({ side: false, above: true, columns: 1 });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect.poll(layout).toEqual({ side: true, above: false, columns: 2 });
+
+  // Closed, the timeline takes the whole width again.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#right-rail')).toHaveCount(0);
+  await expect.poll(() => page.locator('.sessions-body').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(1);
 });
 
 test('leaving with the rail and its status menu open leaves nothing behind', async ({ page }) => {
@@ -269,8 +282,9 @@ test('thirty sessions with long slugs stay inside a phone screen', async ({ page
 });
 
 for (const theme of ['dark', 'light']) {
-  test(`axe (${theme}): the screen with the rail open, and the topbar`, async ({ page }) => {
+  test(`axe (${theme}): the screen with the rail closed, then open, and the topbar`, async ({ page }) => {
     await boot(page, { theme });
+    expect(await axe(page, '#screen-mount')).toEqual([]);
     await hoRow(page, M1).click();
     await expect(rail(page)).toBeVisible();
     expect(await axe(page, '#screen-mount')).toEqual([]);

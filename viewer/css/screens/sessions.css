@@ -19,6 +19,7 @@
   max-height: 85vh;
   overflow-y: auto;
 }
+/* Narrow: one column with the rail above the timeline; opening it focuses its title, which scrolls it into view. */
 @media (max-width: 1024px) {
   .sessions-body:has(> .right-rail-host > .right-rail) { grid-template-columns: minmax(0, 1fr); }
   .sessions-body:has(> .right-rail-host > .right-rail) > .right-rail-host {
