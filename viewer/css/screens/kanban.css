@@ -87,21 +87,17 @@
 .epic-option__pin { flex: 0 0 auto; }
 .epic-option__pin[aria-pressed="true"] { color: var(--foreground-bold); }
 
-.kanban-head-right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
-.kanban-group-btn,
-.kanban-sort-btn {
-  background: var(--bg-card); border: 1px solid var(--border); color: var(--ink-2);
-  font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: var(--r-md);
-  cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-1);
-  font-family: var(--font-sans);
+/* Row 2's labelled selects: a Technical label beside the shared edit-field select. */
+.kanban-field { display: inline-flex; align-items: center; gap: var(--space-xs); }
+.kanban-field__label {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
   white-space: nowrap;
-  flex: 0 0 auto;
 }
-.kanban-group-btn:hover,
-.kanban-sort-btn:hover { color: var(--ink); border-color: var(--border-strong); }
-
-.kanban-reset-link { color: var(--ink-3); cursor: pointer; font-size: var(--text-xs); }
-.kanban-reset-link:hover { color: var(--red); }
 
 
 /* ─────────── PHASE STRIP (one line of phase chips; the rest behind More) ─────────── */
@@ -153,21 +149,6 @@
 .phase-archived__menu .popover-item { display: flex; gap: var(--space-xs); align-items: baseline; }
 
 
-/* ─────────── GROUP / SORT DROPDOWNS ─────────── */
-.kanban-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: var(--bg-card) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23bfc4cc' stroke-width='1.2' fill='none' stroke-linecap='round'/></svg>") no-repeat right 12px center;
-  border: 1px solid var(--border); color: var(--ink-2);
-  font-size: var(--text-sm);
-  font-family: var(--font-sans);
-  padding: 6px 33px 6px var(--sp-3);
-  border-radius: var(--r-md);
-  cursor: pointer;
-  outline: none;
-}
-.kanban-select:hover { color: var(--ink); border-color: var(--border-strong); }
-.kanban-select:focus { border-color: var(--accent); }
 
 /* ─────────── BOARD SURFACE + COLUMNS ─────────── */
 .kanban-board {
@@ -372,13 +353,7 @@
   .epic-options__filter,
   .epic-options .epic-option__pin { min-height: 44px; }
 
-  .kanban-select,
-  .kanban-group-btn,
-  .kanban-sort-btn {
-    min-height: 44px;
-    padding-top: 0;
-    padding-bottom: 0;
-  }
+  .kanban-field .ef-enum-select { min-height: 44px; }
 
 }
 

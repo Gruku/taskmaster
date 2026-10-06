@@ -517,3 +517,54 @@ test('at 1440 every control in the filter bar is the chip height', async ({ page
     .evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().height)));
   expect([...new Set(hs)]).toEqual([28]);
 });
+
+// Row 1 carries the count and Add task; row 2 keeps search, density and the labelled Group and Sort selects.
+const rowFilters = (page) => page.locator('#topbar-actions > .overflow-more');
+const colLabels = (page) => page.locator('.kanban-col-head .lbl');
+
+test('1440: row 1 has the count, row 2 parks nothing, Group and Sort are named selects', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await expect(page.locator('#topbar-count')).toHaveText('7 tasks');
+  await expect(rowFilters(page)).toBeHidden();
+  await expect(page.locator('#topbar-actions .tm-subcount, .kanban-head-right')).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Group' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Sort' })).toBeVisible();
+  for (const sel of ['.tm-search', '.tm-segmented', 'label.kanban-field']) {
+    expect(await page.locator(`#topbar-actions > ${sel}`).count()).toBeGreaterThan(0);
+  }
+  const dens = page.getByRole('group', { name: 'Card density' });
+  await expect(dens).toHaveClass(/tm-segmented/);
+  await expect(page.locator('.card-tags').first()).toBeVisible();
+  const minimal = dens.getByRole('button', { name: 'Minimal cards' });
+  await minimal.click();
+  await expect(minimal).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.card-tags')).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Group' }).selectOption({ label: 'Epic' });
+  await expect(colLabels(page)).toContainText(['Viewer re-skin', 'Native store']);
+});
+
+test('390: Add task is a 44px row-1 button that opens Create; Group works from the Filters popover', async ({ page }) => {
+  await board(page, { viewport: { width: 390, height: 844 } });
+  const add = page.locator('#topbar-primary [aria-label="Add task"]');
+  await expect(add).toBeVisible();
+  const box = await add.boundingBox();
+  expect([Math.round(box.width), Math.round(box.height)]).toEqual([44, 44]);
+  await expect(page.locator('#topbar-actions > .tm-search')).toBeVisible();
+  await expect(rowFilters(page)).toBeVisible();
+  await rowFilters(page).click();
+  const pop = page.getByRole('dialog', { name: 'Filters' });
+  await pop.getByRole('combobox', { name: 'Group' }).selectOption({ label: 'Epic' });
+  await expect(colLabels(page)).toContainText(['Viewer re-skin', 'Native store']);
+  await page.keyboard.press('Escape');
+  await add.click();
+  await expect(page.locator('.modal--form')).toBeVisible();
+});
+
+test('choosing Sort "Created: oldest first" saves { by: created, dir: asc }', async ({ page }) => {
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/api/viewer/prefs')) puts.push(r.postDataJSON()); });
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await page.getByRole('combobox', { name: 'Sort' }).selectOption({ label: 'Created: oldest first' });
+  await expect.poll(() => puts.filter((p) => p?.kanban?.filters?.sort).at(-1)?.kanban.filters.sort)
+    .toEqual({ by: 'created', dir: 'asc' });
+});

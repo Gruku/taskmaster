@@ -237,7 +237,7 @@ test('the search ring belongs to the input; the clear button shows its own', asy
 
 test('Ctrl+K leaves focus alone while a modal is open', async ({ page }) => {
   await page.goto('/#/kanban');
-  await (await topbarControl(page, '[aria-label="Add task"]')).click();
+  await page.locator('#topbar-primary [aria-label="Add task"]').click();
   const modal = page.locator('[aria-modal="true"]');
   const field = modal.locator('input, textarea').first();
   await field.focus();
@@ -283,7 +283,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page, withContent());
     await page.goto('/#/kanban');
-    const add = await topbarControl(page, '[aria-label="Add task"]');
+    const add = page.locator('#topbar-primary [aria-label="Add task"]');
     await expect(add).toBeVisible();
     await expect(add).toHaveClass(/(^|\s)btn(\s|$)/);
     await expect(add).toHaveClass(/(^|\s)btn--primary(\s|$)/);
@@ -560,12 +560,23 @@ test.describe('topbar row 2 at phone width', () => {
 
   test('parked controls are a column in the Filters popover and any parked chip row wraps', async ({ page }) => {
     await mockApi(page, withContent());
-    // Ideas parks its status and tag chip rows in topbar row 2 (Kanban's chips moved into its own filter bar in 3a Task 6).
-    const idea = (n, status, tags) => ({ id: `I-${n}`, title: `Idea ${n}`, status, tags, created: '2026-10-01' });
-    await page.route('**/api/ideas**', (route) => route.fulfill({ json: { ideas: [
-      idea(1, 'new', ['ux', 'viewer']), idea(2, 'exploring', ['perf']), idea(3, 'parked', ['docs', 'store']),
-    ] } }));
-    await page.goto('/#/ideas');
+    await page.goto('/#/kanban');
+    // Kanban's row 2 has no chip row of its own, so probe controls stand in (still over the board's sticky column heads).
+    await expect(page.locator('#topbar-actions > .tm-search')).toBeVisible();
+    await page.evaluate(() => {
+      const row = document.getElementById('topbar-actions');
+      const chips = document.createElement('div');
+      chips.className = 'tm-chip-row';
+      chips.id = 'probe-chips';
+      for (let i = 1; i <= 10; i++) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'chip'; b.textContent = `Probe chip ${i}`;
+        chips.appendChild(b);
+      }
+      const wide = document.createElement('button');
+      wide.type = 'button'; wide.className = 'btn btn--secondary'; wide.id = 'probe-wide'; wide.textContent = 'Probe control';
+      row.append(chips, wide);
+    });
     await expect(filters(page)).toBeVisible();
     await filters(page).click();
     const pop = filtersPopover(page);
@@ -581,6 +592,7 @@ test.describe('topbar row 2 at phone width', () => {
         sideways: el.scrollWidth - el.clientWidth,
         // Over the board's sticky column headers, not under them: each parked control takes a press at its centre.
         covered: [...list.querySelectorAll('button, select')].filter((c) => {
+          c.scrollIntoView({ block: 'nearest' });
           const b = c.getBoundingClientRect();
           return !c.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2));
         }).map((c) => c.getAttribute('aria-label') || c.className),
@@ -610,8 +622,7 @@ test.describe('topbar row 2 at phone width', () => {
     await expect.poll(() => rowFits(page)).toEqual({ overflow: 0, cut: [] });
     // Kanban's own controls were laid out afresh: what is parked is Kanban's, and Filters lists them.
     await filters(page).click();
-    await expect(filtersPopover(page).locator('[aria-label="Add task"]')).toHaveCount(1);
-    await expect(filtersPopover(page).locator('.tm-subcount')).toHaveCount(1);
+    await expect(filtersPopover(page).getByRole('combobox', { name: 'Sort' })).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 

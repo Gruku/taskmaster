@@ -13,7 +13,7 @@ import { chipClickNext }                     from '../util/chip-toggle.js';
 import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles, countOpen, OPEN_COUNT_HINT } from '../lib/filters.js';
 import { renderBundleFrame } from '../components/bundle-frame.js';
 import { epicIndex }                         from '../lib/epics.js';
-import { claimTopbar, tmAction, tmSearch } from '../lib/topbar.js';
+import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmAction, tmSearch, tmSegmented } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
@@ -54,11 +54,11 @@ export async function mount(root, { store, api, prefs }) {
 
   // 1) Page header — inject into topbar-actions slot
   const head = claimTopbar();
-
-  const subcount = document.createElement('span');
-  subcount.className = 'tm-subcount';
-  subcount.textContent = '… tasks';
-  head.appendChild(subcount);
+  setTopbarCount('… tasks');
+  claimTopbarPrimary()?.append(tmAction({
+    icon: 'plus', label: 'Task', variant: 'primary', title: 'Add task',
+    onClick: () => openTaskCreateModal({ store, api }),
+  }));
 
   // Search
   const { el: search, input: searchInput } = tmSearch({
@@ -77,80 +77,61 @@ export async function mount(root, { store, api, prefs }) {
   };
   head.appendChild(search);
 
-  const right = document.createElement('div');
-  right.className = 'kanban-head-right';
+  // Row 2: each control is a direct child of #topbar-actions so Filters can park them one by one.
+  const dens = tmSegmented([
+    { key: 'minimal', label: 'Minimal', title: 'Minimal cards' },
+    { key: 'full', label: 'Full', title: 'Full cards' },
+  ], {
+    value: state.density,
+    onChange: (k) => { state.density = k; paint(); prefs.patch({ card_density: k }); },
+  });
+  dens.setAttribute('role', 'group');
+  dens.setAttribute('aria-label', 'Card density');
+  head.appendChild(dens);
 
-  // Density toggle (▤ minimal / ▦ full)
-  const dens = document.createElement('div');
-  dens.className = 'tm-segmented tm-segmented--icon';
-  for (const k of ['minimal', 'full']) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.dataset.key = k;
-    b.title = k === 'minimal' ? 'Minimal cards' : 'Full cards';
-    b.setAttribute('aria-label', b.title);
-    b.textContent = k === 'minimal' ? '▤' : '▦';
-    if (state.density === k) b.classList.add('on');
-    b.addEventListener('click', () => {
-      state.density = k;
-      dens.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.key === k));
-      paint(); prefs.patch({ card_density: k });
-    });
-    dens.appendChild(b);
-  }
-  right.appendChild(dens);
+  // A labelled select: the visible label names the control, the chevron is the shared edit-field one.
+  const field = (labelText, options, current, onChange) => {
+    const label = document.createElement('label');
+    label.className = 'kanban-field';
+    const text = document.createElement('span');
+    text.className = 'kanban-field__label';
+    text.textContent = labelText;
+    const wrap = document.createElement('span');
+    wrap.className = 'ef-select';
+    const select = document.createElement('select');
+    select.className = 'ef-enum-select';
+    for (const [value, name] of options) {
+      const o = document.createElement('option');
+      o.value = value; o.textContent = name;
+      if (value === current) o.selected = true;
+      select.appendChild(o);
+    }
+    select.addEventListener('change', () => onChange(select.value));
+    wrap.append(select, icon('chevron', { size: 16 }));
+    label.append(text, wrap);
+    return label;
+  };
 
-  // Group dropdown
-  const group = document.createElement('select');
-  group.className = 'kanban-select';
-  group.setAttribute('aria-label', 'Group by');
-  for (const opt of [['status','Group: Status'],['phase','Group: Phase'],['epic','Group: Epic'],['area','Group: Area']]) {
-    const o = document.createElement('option');
-    o.value = opt[0]; o.textContent = opt[1];
-    if (state.filters.group_by === opt[0]) o.selected = true;
-    group.appendChild(o);
-  }
-  group.addEventListener('change', () => { state.filters.group_by = group.value; paint(); savePrefs(); });
-  right.appendChild(group);
+  head.appendChild(field('Group',
+    [['status', 'Status'], ['phase', 'Phase'], ['epic', 'Epic'], ['area', 'Area']],
+    state.filters.group_by,
+    (v) => { state.filters.group_by = v; paint(); savePrefs(); }));
 
-  // Sort dropdown
-  const sort = document.createElement('select');
-  sort.className = 'kanban-select';
-  sort.setAttribute('aria-label', 'Sort by');
   const SORT_OPTS = [
-    ['priority:desc', 'Sort: priority ↓'],
-    ['priority:asc',  'Sort: priority ↑'],
-    ['size:desc',     'Sort: size ↓'],
-    ['size:asc',      'Sort: size ↑'],
-    ['created:desc',  'Sort: created ↓'],
-    ['created:asc',   'Sort: created ↑'],
-    ['started:desc',  'Sort: started ↓'],
-    ['started:asc',   'Sort: started ↑'],
-    ['touched:desc',  'Sort: touched ↓'],
-    ['touched:asc',   'Sort: touched ↑'],
+    ['priority:desc', 'Priority: high first'],
+    ['priority:asc',  'Priority: low first'],
+    ['size:desc',     'Size: largest first'],
+    ['size:asc',      'Size: smallest first'],
+    ['created:desc',  'Created: newest first'],
+    ['created:asc',   'Created: oldest first'],
+    ['started:desc',  'Started: newest first'],
+    ['started:asc',   'Started: oldest first'],
+    ['touched:desc',  'Touched: newest first'],
+    ['touched:asc',   'Touched: oldest first'],
   ];
-  for (const [v, label] of SORT_OPTS) {
-    const o = document.createElement('option');
-    o.value = v; o.textContent = label;
-    const cur = `${state.filters.sort?.by || 'priority'}:${state.filters.sort?.dir || 'desc'}`;
-    if (v === cur) o.selected = true;
-    sort.appendChild(o);
-  }
-  sort.addEventListener('change', () => {
-    const [by, dir] = sort.value.split(':');
-    state.filters.sort = { by, dir };
-    paint(); savePrefs();
-  });
-  right.appendChild(sort);
-
-  // + Task button — the shared primary button.
-  const addBtn = tmAction({
-    icon: 'plus', label: 'Task', variant: 'primary', title: 'Add task',
-    onClick: () => openTaskCreateModal({ store, api }),
-  });
-  right.appendChild(addBtn);
-
-  head.appendChild(right);
+  head.appendChild(field('Sort', SORT_OPTS,
+    `${state.filters.sort?.by || 'priority'}:${state.filters.sort?.dir || 'desc'}`,
+    (v) => { const [by, dir] = v.split(':'); state.filters.sort = { by, dir }; paint(); savePrefs(); }));
 
   // 3) Unified filter bar — phases on top row, epics on bottom row
   const filterBar = document.createElement('div');
@@ -282,8 +263,10 @@ export async function mount(root, { store, api, prefs }) {
       if (t.bundle) bundleTotals[t.bundle] = (bundleTotals[t.bundle] || 0) + 1;
     }
 
-    // 2) Subcount
-    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
+    // 2) Row-1 count: "· m visible" only while a filter or search narrows the board.
+    const hasFilters = !!(state.filters.priorities?.length || state.filters.epics?.length ||
+      state.filters.areas?.length || state.filters.search || (state.filters.phase && state.filters.phase !== '__all__'));
+    setTopbarCount(`${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')}${hasFilters ? ` · ${filtered.length} visible` : ''}`);
 
     // 3) Phase strip data — sort by order so non-sequential insertion in
     // the YAML (e.g. phase "1.5" added after "2") doesn't scramble the strip.
@@ -350,8 +333,6 @@ export async function mount(root, { store, api, prefs }) {
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
     boardGrid.replaceChildren();
 
-    const hasFilters = !!(state.filters.priorities?.length || state.filters.epics?.length ||
-      state.filters.areas?.length || state.filters.search || (state.filters.phase && state.filters.phase !== '__all__'));
     // When the whole board is empty (all tasks filtered out), show count context
     // only in the first non-collapsed column so the message appears once.
     const allEmpty = filtered.length === 0 && hasFilters;
@@ -362,7 +343,8 @@ export async function mount(root, { store, api, prefs }) {
       col.className = 'kanban-col';
       const head = document.createElement('div');
       head.className = 'kanban-col-head ' + (state.filters.group_by === 'status' ? g.key : '');
-      head.innerHTML = `<span class="dot"></span><span class="lbl">${escapeHtml(state.filters.group_by === 'status' ? STATUS_LABELS[g.key] : g.label)}</span><span class="tnum">${g.tasks.length}</span>`;
+      head.innerHTML = `<span class="dot"></span><span class="lbl">${escapeHtml(state.filters.group_by === 'status' ? STATUS_LABELS[g.key]
+        : state.filters.group_by === 'epic' ? (epicsArr.find((e) => e.id === g.key)?.name || g.label) : g.label)}</span><span class="tnum">${g.tasks.length}</span>`;
       const toggleBtn = document.createElement('button');
       toggleBtn.type = 'button';
       toggleBtn.className = 'kanban-col-toggle';
