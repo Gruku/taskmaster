@@ -1,8 +1,10 @@
 // User intent: the bug page reads as the shared detail template — its summary and location finally shown, status and
 // severity as markers, where it was found and went in the rail — and a missing or failed load is said in words, never
-// with the server's text. Task 9 brings the actions back as forms.
+// with the server's text. Its actions are in-app forms: Mark fixed leads in topbar row 1, refusals are said in words.
 import * as api from '../api.js';
-import { claimTopbar } from '../lib/topbar.js';
+import { claimTopbar, claimTopbarPrimary, tmAction } from '../lib/topbar.js';
+import { openModalCount, topModal } from '../components/modal.js';
+import { openMarkFixed, openAdopt, openPromote, shelveBug } from '../components/edit/bug-actions.js';
 import { h } from '../util/h.js';
 import { statusMarker, severityMarker } from '../components/status.js';
 import { linkRoute } from '../components/link-pills.js';
@@ -16,6 +18,7 @@ export const meta = { title: 'Bug', icon: '⊘', sidebarKey: 'bugs' };
 
 const ROOT_CLASSES = ['td-doc', 'td-doc--page', 'td-page', 'dp-page', 'dp-page--bug'];
 const TO_BUGS = { label: 'Open Bugs', href: '#/bugs' };
+const ACTIONABLE = new Set(['open', 'shelved']);
 
 const hasText = (v) => typeof v === 'string' && v.trim() !== '';
 const textList = (v) => (Array.isArray(v) ? v : hasText(v) ? [v] : []).filter(hasText);
@@ -78,7 +81,22 @@ function rail(bug, tasks) {
   return groups.length ? [railPanel({ name: 'relations', label: 'Relations', children: groups })] : [];
 }
 
-function page(bug, { tasks, timers }) {
+// The secondary actions; Mark fixed is topbar row 1. `act(name, button)` runs one.
+function actionRow(bug, act) {
+  const button = (name, label) => {
+    const el = h('button', { type: 'button', class: 'btn btn--secondary', 'data-action': name }, label);
+    el.addEventListener('click', () => act(name, el));
+    return el;
+  };
+  return h('div', { class: 'dp-actions', role: 'group', 'aria-label': 'Bug actions' }, [
+    (bug.status || 'open') === 'open' ? button('shelve', 'Shelve') : null,
+    button('adopt', 'Adopt into task'),
+    button('promote', 'Promote to issue'),
+    h('div', { class: 'dp-actions__message', role: 'alert' }),
+  ]);
+}
+
+function page(bug, { tasks, timers, act }) {
   const head = detailHead({
     meta: detailMeta([
       copyId({ id: bug.id, noun: 'bug', timers }),
@@ -88,7 +106,7 @@ function page(bug, { tasks, timers }) {
       hasText(bug.discovered_by) ? h('span', {}, `reported by ${bug.discovered_by}`) : null,
     ].filter(Boolean)),
     title: detailTitle(bug.title),
-    after: [markers(bug, timers)],
+    after: [markers(bug, timers), act && ACTIONABLE.has(bug.status || 'open') ? actionRow(bug, act) : null].filter(Boolean),
   });
   return [head, detailGrid({ body: body(bug), panels: rail(bug, tasks) })];
 }
@@ -123,6 +141,37 @@ export function mount(root, { params, subpath, store }) {
     void load();
   }
 
+  // After a write: re-read and repaint, focus on the heading.
+  function done() {
+    if (disposed) return;
+    refocus = true;
+    void load();
+  }
+
+  function paintPrimary(bug) {
+    const slot = claimTopbarPrimary();
+    if (!slot || !ACTIONABLE.has(bug.status || 'open')) return;
+    slot.appendChild(tmAction({
+      icon: 'check', label: 'Mark fixed', variant: 'primary', title: 'Mark this bug fixed',
+      onClick: () => openMarkFixed({ bug, onDone: done }),
+    }));
+  }
+
+  async function act(name, el, bug) {
+    if (name === 'adopt') openAdopt({ bug, getBacklog: () => store?.getBacklog?.(), onDone: done });
+    else if (name === 'promote') {
+      openPromote({ bug, onDone: (issueId) => { if (disposed) return; if (issueId) location.hash = `#/issue/${encodeURIComponent(issueId)}`; else done(); } });
+    } else if (name === 'shelve') {
+      const msg = root.querySelector('.dp-actions__message');
+      if (msg) msg.textContent = '';
+      const answer = await shelveBug({ bug });
+      if (disposed) return;
+      if (answer?.error) { if (msg) msg.textContent = answer.error; el.focus(); }
+      else if (answer?.cancelled) el.focus();
+      else done();
+    }
+  }
+
   async function load() {
     let bug;
     try {
@@ -149,7 +198,8 @@ export function mount(root, { params, subpath, store }) {
     }
     const backlog = store?.getBacklog?.();
     const tasks = Array.isArray(backlog?.tasks) ? backlog.tasks : [];
-    root.replaceChildren(...page(bug, { tasks, timers }));
+    root.replaceChildren(...page(bug, { tasks, timers, act: (name, el) => act(name, el, bug) }));
+    paintPrimary(bug);
     takeFocus(root.querySelector('h1'));
   }
 
@@ -162,6 +212,9 @@ export function mount(root, { params, subpath, store }) {
 
   return () => {
     disposed = true;
+    claimTopbarPrimary();
+    // An action form left open is asked to close once: a clean one goes, a typed one asks to discard.
+    if (openModalCount() > 0) topModal()?.requestClose();
     timers.forEach(clearTimeout);
     timers.clear();
     root.classList.remove(...ROOT_CLASSES);

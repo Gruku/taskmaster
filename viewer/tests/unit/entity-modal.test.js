@@ -910,3 +910,27 @@ test('9. footer: the summary comes first, then Cancel, then Save', () => {
   assert.deepEqual(order, ['status', 'alert', 'Cancel', 'Save']);
   close();
 });
+
+test('title, eyebrow and saveLabel name the form; omitted, the defaults stand', async () => {
+  let answers = [{ error: 'Refused in words' }, undefined];
+  openEntityModal({ schema: schema(), mode: 'create', initialEntity: CREATE, onSave: async () => answers.shift(),
+    title: 'Mark fixed', eyebrow: 'B-031', saveLabel: 'Mark fixed' });
+  assert.equal(form().querySelector('.modal-title').textContent, 'Mark fixed');
+  assert.equal(form().querySelector('.modal-eyebrow').textContent, 'B-031');
+  assert.equal(saveBtn().textContent, 'Mark fixed');
+  type('title', 'Something');
+  saveBtn().click();
+  await tick(10);
+  assert.equal(alertText(), 'Refused in words');
+  assert.equal(saveBtn().textContent, 'Mark fixed');
+  saveBtn().click();
+  await tick(10);
+  assert.equal(openModalCount(), 0);
+
+  openEntityModal({ schema: schema(), mode: 'create', initialEntity: CREATE, onSave: async () => {} });
+  assert.equal(form().querySelector('.modal-title').textContent, 'Create task');
+  assert.equal(saveBtn().textContent, 'Save');
+  cancelBtn().click();
+  await tick(10);
+  assert.equal(openModalCount(), 0);
+});

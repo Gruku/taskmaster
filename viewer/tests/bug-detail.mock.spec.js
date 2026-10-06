@@ -134,13 +134,13 @@ test('the first fetch shows a Loading state, not a blank page', async ({ page })
 async function tabStops(page) {
   return page.evaluate(() => [...document.querySelector('#screen-mount').querySelectorAll('a[href], button, [tabindex]')]
     .filter((el) => el.tabIndex >= 0 && el.getClientRects().length && !el.disabled)
-    .map((el) => el.getAttribute('data-test') || el.getAttribute('data-tag') || el.getAttribute('href')));
+    .map((el) => el.getAttribute('data-test') || el.getAttribute('data-tag') || el.getAttribute('href') || el.getAttribute('data-action')));
 }
 
 test('walks by keyboard', async ({ page }) => {
   await open(page, '#/bug/B-031');
   await expect(mount(page).locator('h1')).toBeVisible();
-  expect(await tabStops(page)).toEqual(['bug-id', '#/bugs', '#/task/T-102', '#/task/T-102']);
+  expect(await tabStops(page)).toEqual(['bug-id', '#/bugs', '#/task/T-102', 'shelve', 'adopt', 'promote', '#/task/T-102']);
   await page.evaluate(() => { location.hash = '#/bug/B-030'; });
   await expect(mount(page).locator('[data-tag="fix_commit"]')).toBeVisible();
   expect(await tabStops(page)).toEqual(['bug-id', '#/bugs', '#/task/T-102', 'fix_commit', '#/task/T-102', '#/task/T-101', '#/issue/ISS-012']);

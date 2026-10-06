@@ -93,8 +93,12 @@ export async function getEpic(id) {
 }
 
 export const createIdea = (payload) => http('POST', '/api/ideas', payload);
+export const updateBug = (bugId, patch) => http('POST', `/api/bugs/${encodeURIComponent(bugId)}`, patch);
+export const promoteBugs = ({ bug_ids, title, severity, evidence_text, components, body }) =>
+  http('POST', '/api/bugs/promote', { bug_ids, title, severity, evidence_text, components, body });
 
 export const api = {
+  updateBug, promoteBugs,
   // Generic HTTP helpers — screens needing arbitrary endpoints (e.g. continuity
   // dashboard hitting /api/continuity, /api/decisions/*) route through these
   // instead of growing the named-method surface.
@@ -220,16 +224,6 @@ export async function createBug(payload) {
   return r.json();
 }
 
-export async function updateBug(bugId, patch) {
-  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!r.ok) throw new Error(`updateBug ${bugId} failed: ${r.status}`);
-  return r.json();
-}
-
 export async function archiveBug(bugId) {
   const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}/archive`, { method: 'POST' });
   if (!r.ok) throw new Error(`archiveBug ${bugId} failed: ${r.status}`);
@@ -246,12 +240,3 @@ export async function bugPatternScan({ mode = 'all' } = {}) {
   return r.json();
 }
 
-export async function promoteBugs({ bug_ids, title, severity, evidence_text, components, body }) {
-  const r = await fetch('/api/bugs/promote', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bug_ids, title, severity, evidence_text, components, body }),
-  });
-  if (!r.ok) throw new Error(`promoteBugs failed: ${r.status}`);
-  return r.json();
-}
