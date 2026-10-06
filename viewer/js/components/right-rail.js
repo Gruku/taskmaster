@@ -237,7 +237,8 @@ let openMenu = null;   // { anchor, popover } — one menu at a time
 
 // Opens the menu under `anchor`; called again for the same anchor while it is open, it closes it.
 export function openStatusMenu(anchor, handoverId, currentStatus) {
-  if (openMenu?.popover.isOpen()) {
+  // `openMenu` is the menu open now: its popover's onClose forgets it however it closes.
+  if (openMenu) {
     const same = openMenu.anchor === anchor;
     openMenu.popover.close();
     if (same) return;
@@ -298,7 +299,10 @@ export class RightRail {
   }
 
   open({ kind = 'plain', title, head = [], body = [], opener = null, onClose } = {}) {
-    this.close();
+    // Swapping content: the new title takes focus, so the old opener is not focused (and scrolled to) on the way.
+    this.close({ returnFocus: false });
+    // A host taken out of the page (the screen was left while its data loaded) gets no rail and no key listener.
+    if (!this.host.isConnected) return null;
     const doc = this.host.ownerDocument;
     const titleId = `rr-title-${++railSeq}`;
     const closeBtn = h('button', {
@@ -324,7 +328,7 @@ export class RightRail {
     return el;
   }
 
-  close() {
+  close({ returnFocus = true } = {}) {
     if (!this.el) return;
     const el = this.el;
     const doc = el.ownerDocument;
@@ -338,7 +342,7 @@ export class RightRail {
     this._onClose = null;
     this._onKey = null;
     el.remove();
-    if (hadFocus && opener?.isConnected) opener.focus();
+    if (returnFocus && hadFocus && opener?.isConnected) opener.focus();
     onClose?.();
   }
 

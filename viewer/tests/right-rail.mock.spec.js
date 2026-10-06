@@ -69,18 +69,6 @@ test('a failed handover status change is said in words beside the pill', async (
   const text = await page.locator('#screen-mount').textContent();
   for (const raw of ['sqlite3', '500', '/api']) expect(text, `no "${raw}" on the page`).not.toContain(raw);
 
-  // A full-width sentence on a line of its own, under the pill.
-  const geo = await alert.evaluate((el) => {
-    const row = el.parentElement;
-    const cs = getComputedStyle(row);
-    const inner = row.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
-      - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
-    const pillBox = el.previousElementSibling.getBoundingClientRect();
-    return { width: el.getBoundingClientRect().width, inner, top: el.getBoundingClientRect().top, pillBottom: pillBox.bottom };
-  });
-  expect(Math.abs(geo.width - geo.inner)).toBeLessThanOrEqual(1);
-  expect(geo.top).toBeGreaterThanOrEqual(geo.pillBottom);
-
   await answerStatus(page, { json: { ok: true } });
   await choose(page, pill, 'closed');
   await expect(pill).toHaveAttribute('data-status', 'closed');
@@ -96,6 +84,25 @@ test('a refusal gives the server\'s reason', async ({ page }) => {
   await expect(page.locator('.td-doc--page .ho-status-pill + .ho-status-error'))
     .toHaveText('Handover is already superseded by 2026-10-02-wrap');
   await expect(pill).toHaveAttribute('data-status', 'open');
+});
+
+// Measured on a one-word reason: a long sentence fills its row whatever the rules, a short one only when they hold.
+test('even a one-word refusal is a full-width line of its own under the pill', async ({ page }) => {
+  const pill = await taskPage(page);
+  await answerStatus(page, { status: 409, json: { ok: false, error: 'No.' } });
+  await choose(page, pill, 'closed');
+  const alert = page.locator('.td-doc--page .ho-status-pill + .ho-status-error[role="alert"]');
+  await expect(alert).toHaveText('No.');
+  const geo = await alert.evaluate((el) => {
+    const row = el.parentElement;
+    const cs = getComputedStyle(row);
+    const inner = row.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+      - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+    const box = el.getBoundingClientRect();
+    return { width: box.width, inner, top: box.top, pillBottom: el.previousElementSibling.getBoundingClientRect().bottom };
+  });
+  expect(Math.abs(geo.width - geo.inner), 'as wide as its row').toBeLessThanOrEqual(1);
+  expect(geo.top, 'below the pill').toBeGreaterThanOrEqual(geo.pillBottom);
 });
 
 test('the sessions rail is a panel in the page', async ({ page }) => {
@@ -115,6 +122,10 @@ test('the sessions rail is a panel in the page', async ({ page }) => {
   // Eight files shown, the rest counted; the long path keeps its words in its title.
   await expect(rail.locator('.rr-files > li')).toHaveCount(9);
   await expect(rail.locator('.rr-files > li').last()).toHaveText('+ 2 more');
+  const longPath = SESSION_DETAILS['team-relayout'].handovers[1].files_touched.find((f) => f.length === 140);
+  const longRow = rail.locator('.rr-files > li').nth(5).locator('span');
+  await expect(longRow).toHaveAttribute('title', longPath);
+  await expect(longRow).toHaveText(longPath);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('#right-rail')).toHaveCount(0);

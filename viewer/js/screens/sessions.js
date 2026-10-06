@@ -286,24 +286,28 @@ function render(root, state, rail) {
   });
 }
 
-async function openSessionDetail(rail, sid, state, opener = null) {
+// Exported for the unit tests. A screen left while the detail loads opens nothing (the rail's host is gone).
+export async function openSessionDetail(rail, sid, state, opener = null) {
   const detail = state.detailCache.get(sid) || await getSessionDetail(sid);
   state.detailCache.set(sid, detail);
+  if (!rail.host.isConnected) return;
   const s = detail.session;
   rail.open({
     kind: 'session',
     title: s.tldr || s.id,
     opener,
-    ...renderSessionRail(detail, (hid, btn) => openHandoverDetail(rail, hid, state, btn)),
+    // The button that opens a handover goes with this rail, so the handover's rail hands focus to this rail's opener.
+    ...renderSessionRail(detail, (hid) => openHandoverDetail(rail, hid, state, opener)),
   });
 }
 
-async function openHandoverDetail(rail, hid, state, opener = null) {
+export async function openHandoverDetail(rail, hid, state, opener = null) {
   // Locate the session containing this handover, then pull its detail.
   const owner = state.sessions.find(s => (s.handover_ids || []).includes(hid));
   if (!owner) return;
   const detail = state.detailCache.get(owner.id) || await getSessionDetail(owner.id);
   state.detailCache.set(owner.id, detail);
+  if (!rail.host.isConnected) return;
   const ho = (detail.handovers || []).find(x => x.id === hid);
   if (!ho) return;
   rail.open({
@@ -355,7 +359,7 @@ function renderSessionRail(detail, openHandover) {
         type: 'button',
         class: 'rr-ho btn btn--ghost btn--sm',
         'data-handover-id': ho.id,
-        on: { click: (ev) => openHandover(ho.id, ev.currentTarget) },
+        on: { click: () => openHandover(ho.id) },
       },
         h('span', { class: 'rr-kind' }, sentenceCase(ho.viewer_kind || 'standalone')),
         h('span', { class: 'rr-ho__id' }, ho.id),

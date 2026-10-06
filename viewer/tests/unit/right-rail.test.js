@@ -61,11 +61,17 @@ test('open() puts a labelled panel in its host and focuses its title', () => {
 });
 
 test('open() twice swaps the content', () => {
-  const { host } = railPage();
+  const { host } = railPage('<div id="host"><button id="row">row</button></div>');
+  const opener = document.getElementById('row');
+  let openerFocused = 0;
+  opener.addEventListener('focus', () => { openerFocused += 1; });
   const rail = new RightRail({ host, label: 'Session details' });
   const closed = [];
-  rail.open({ title: 'first', body: [para('a')], onClose: () => closed.push('first') });
+  rail.open({ title: 'first', body: [para('a')], opener, onClose: () => closed.push('first') });
   rail.open({ kind: 'session', title: 'second', body: [para('b')] });
+  // Focus goes from the old title straight to the new one: the old opener is not focused (and scrolled to) between.
+  assert.equal(openerFocused, 0);
+  assert.equal(document.activeElement, host.querySelector('.rr-title'));
   assert.equal(host.querySelectorAll('aside').length, 1);
   assert.deepEqual(closed, ['first']);
   const aside = host.querySelector('aside#right-rail');
@@ -119,6 +125,23 @@ test('Escape closes the rail unless a menu or a modal took it', async () => {
   assert.equal(openModalCount(), 0, 'the modal closes');
   assert.equal(rail2.isOpen(), true, 'the rail stays open');
   rail2.close();
+});
+
+test('a host taken out of the page gets no rail and no key listener', () => {
+  const { host } = railPage();
+  const rail = new RightRail({ host });
+  host.remove();
+  const types = [];
+  const add = document.addEventListener;
+  document.addEventListener = function (type, ...rest) { types.push(type); return add.call(this, type, ...rest); };
+  try {
+    assert.equal(rail.open({ title: 'late' }), null);
+  } finally {
+    document.addEventListener = add;
+  }
+  assert.deepEqual(types, []);
+  assert.equal(rail.isOpen(), false);
+  assert.equal(host.querySelector('#right-rail'), null);
 });
 
 test('a rail without a host refuses', () => {
@@ -388,6 +411,14 @@ test('a closed menu does not stay remembered', () => {
   document.querySelector('.ho-status-menu [role="menuitemradio"]')
     .dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   assert.equal(document.querySelector('.ho-status-menu'), null);
+  // The same pill again: its first click opens its menu (a remembered menu would read as "close it").
+  a.click();
+  assert.ok(document.querySelector('.ho-status-menu'), 'the first click on the same pill opens its menu again');
+  assert.equal(a.getAttribute('aria-expanded'), 'true');
+  assert.equal(openPopoverCount(), 1);
+  document.querySelector('.ho-status-menu [role="menuitemradio"]')
+    .dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(openPopoverCount(), 0);
   b.click();
   const menu = document.querySelector('.ho-status-menu');
   assert.ok(menu, 'the first click on the next pill opens its menu');
