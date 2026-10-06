@@ -151,6 +151,7 @@ export function mount(root, { params, subpath, store }) {
     const loading = stateBlock({ headline: 'Loading…', busy: true });
     loading.setAttribute('tabindex', '-1');
     root.replaceChildren(loading);
+    claimTopbarPrimary();
     return loading;
   }
 
@@ -160,9 +161,11 @@ export function mount(root, { params, subpath, store }) {
     void load();
   }
 
-  // After a write: re-read and repaint, focus on the heading.
+  // After a write: re-read and repaint, focus on the heading. Row 1's Mark fixed is bound to the bug as it was,
+  // so it goes now and comes back only if the re-read paints a bug that can still be marked fixed.
   function done() {
     if (disposed) return;
+    claimTopbarPrimary();
     refocus = true;
     void load();
   }
@@ -207,6 +210,7 @@ export function mount(root, { params, subpath, store }) {
           state: 'error', label: id, headline: 'Could not load this bug',
           hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: retry },
         }));
+        claimTopbarPrimary();
         takeFocus(root.querySelector('.tm-empty button'));
         return;
       }
@@ -217,6 +221,7 @@ export function mount(root, { params, subpath, store }) {
       root.replaceChildren(stateBlock({
         state: 'missing', label: id, headline: 'Bug not found', hint: 'It may have been archived or renamed.', action: TO_BUGS,
       }));
+      claimTopbarPrimary();
       takeFocus(root.querySelector('.tm-empty a[href]'));
       return;
     }

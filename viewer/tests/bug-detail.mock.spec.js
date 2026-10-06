@@ -260,6 +260,24 @@ test('Adopt refuses a task that is not on the board, then adopts', async ({ page
   expect(await focusIsSensible(page)).toBe(true);
 });
 
+for (const status of [500, 404]) {
+  test(`after a Shelve, a re-read that answers ${status} leaves no Mark fixed in row 1`, async ({ page }) => {
+    const posts = [];
+    await open(page, '#/bug/B-031', { before: () => page.route('**/api/bugs/B-031', async (route) => {
+      const req = route.request();
+      if (req.method() !== 'GET') { posts.push(req.postDataJSON()); await route.fulfill({ json: { ok: true, id: 'B-031' } }); return; }
+      if (posts.length) await route.fulfill({ status, json: { ok: false, error: 'gone' } });
+      else await route.fulfill({ json: BUG });
+    }) });
+    await expect(page.locator('#topbar-primary').getByRole('button', { name: 'Mark this bug fixed' })).toHaveCount(1);
+    await mount(page).getByRole('group', { name: 'Bug actions' }).getByRole('button', { name: 'Shelve' }).click();
+    await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+    await expect(mount(page).locator('.tm-empty')).toContainText(status === 404 ? 'Bug not found' : 'Could not load this bug');
+    await expect(page.locator('#topbar-primary')).toBeEmpty();
+    expect(posts).toEqual([{ status: 'shelved' }]);
+  });
+}
+
 test('Promote opens the new issue', async ({ page }) => {
   const sent = [];
   await open(page, '#/bug/B-031', { before: async () => {
