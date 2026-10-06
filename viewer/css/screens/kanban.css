@@ -270,7 +270,7 @@
   /* The head stays in view while its cards scroll by, on the column's own surface and with no shadow. */
   .kanban-col-head {
     position: sticky;
-    top: 0;
+    top: var(--topbar-height);
     z-index: 1;
     padding-top: var(--space-xs);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;

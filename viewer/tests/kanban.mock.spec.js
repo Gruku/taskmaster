@@ -816,3 +816,19 @@ test('a cut column title keeps its words: every heading\'s title is its full lab
   console.log(`epic headings cut: ${heads.filter((h) => h.cut).length} of ${heads.length}`);
   for (const h of heads) expect(h.title).toBe(h.text);
 });
+
+test('390, the long board: the sticky column head stays below the sticky topbar when the page scrolls', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await page.evaluate(() => window.scrollTo(0, 1500));
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(1500);
+  const m = await page.evaluate(() => {
+    const head = document.querySelector('.kanban-col:not([hidden]) .kanban-col-head');
+    const r = head.getBoundingClientRect();
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { headTop: Math.round(r.top), barBottom: Math.round(bar.bottom), covered: !head.contains(hit) };
+  });
+  console.log(`390 sticky head: ${JSON.stringify(m)}`);
+  expect(m.headTop).toBeGreaterThanOrEqual(m.barBottom);
+  expect(m.covered).toBe(false);
+});

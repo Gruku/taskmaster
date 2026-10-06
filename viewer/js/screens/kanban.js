@@ -599,11 +599,20 @@ export async function mount(root, { store, api, prefs }) {
   const resizeObs = new ResizeObserver(() => updateGridTemplate(false));
   resizeObs.observe(boardGrid);
 
+  // The phone's sticky column head sits below the sticky topbar, whose height changes with its second row.
+  const topbarEl = document.querySelector('.topbar');
+  const topbarObs = new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--topbar-height', `${topbarEl.offsetHeight}px`);
+  });
+  if (topbarEl) topbarObs.observe(topbarEl);
+
   // Cleanup
   return () => {
     unsubBacklog();
     resizeObs.disconnect();
     whisperObs.disconnect();
+    topbarObs.disconnect();
+    document.documentElement.style.removeProperty('--topbar-height');
     mq?.removeEventListener?.('change', onMedia);
     tabs.destroy();
     strip.destroy();
