@@ -114,3 +114,53 @@ def test_bug_list_still_a_list(running_server, tmp_path):
     _post(f"{base}/api/bugs", {"title": "alpha", "discovered_by": "user"})
     assert isinstance(_get(f"{base}/api/bugs"), list)
     assert isinstance(_get(f"{base}/api/bugs?status=open"), list)
+
+
+def _raw(url: str) -> tuple[int, str]:
+    try:
+        with urllib.request.urlopen(url) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def test_bug_get_single_carries_body_and_location(running_server, tmp_path):
+    base, _ = running_server
+    a = _post(f"{base}/api/bugs", {
+        "title": "edge", "discovered_by": "user", "found_in": "T-102",
+        "location": ["viewer/css/screens/kanban.css:87"], "body": "The border is **too faint**.",
+    })
+    one = _get(f"{base}/api/bugs/{a['id']}")
+    assert one["summary"] == "The border is **too faint**."
+    assert one["location"] == ["viewer/css/screens/kanban.css:87"]
+    assert one["found_in"] == "T-102"
+    assert "_body" not in one
+
+
+def test_bug_get_single_ignores_query(running_server, tmp_path):
+    base, _ = running_server
+    a = _post(f"{base}/api/bugs", {"title": "alpha", "discovered_by": "user"})
+    assert _get(f"{base}/api/bugs/{a['id']}?include_archive=1")["id"] == a["id"]
+
+
+def test_bug_get_empty_id_is_404_not_the_list(running_server, tmp_path):
+    base, _ = running_server
+    _post(f"{base}/api/bugs", {"title": "alpha", "discovered_by": "user"})
+    status, body = _raw(f"{base}/api/bugs/")
+    assert status == 404
+    assert not body.lstrip().startswith("[")
+
+
+def test_bug_list_route_matches_only_its_own_path(running_server, tmp_path):
+    base, _ = running_server
+    _post(f"{base}/api/bugs", {"title": "alpha", "discovered_by": "user"})
+    status, body = _raw(f"{base}/api/bugsx")
+    assert not (status == 200 and body.lstrip().startswith("["))
+    assert isinstance(_get(f"{base}/api/bugs?found_in=T-102&include_archive=true"), list)
+
+
+def test_bug_get_404_body_is_a_reason(running_server, tmp_path):
+    base, _ = running_server
+    status, body = _raw(f"{base}/api/bugs/B-999")
+    assert status == 404
+    assert json.loads(body) == {"ok": False, "error": "unknown bug B-999"}
