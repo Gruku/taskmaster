@@ -133,6 +133,14 @@
 /* Kept in the row whatever its width: at 390 it gives way (its name truncates) so More stays on screen. Two classes:
    chips.css loads after this sheet and its .chip sets flex: 0 0 auto. */
 .phase-chip.phase-chip--current { flex-shrink: 1; min-width: 0; }
+/* Phone: the current phase never shrinks past a readable name (it ends in an ellipsis); the other phases go behind
+   More first; All, the current phase, Archived and More do not fit one line at 390, so the strip takes a second. */
+@media (max-width: 480px) {
+  .phase-strip { gap: var(--space-micro); }
+  .phase-strip__items { flex-wrap: wrap; row-gap: var(--space-micro); }
+  .phase-chip.phase-chip--current { flex-shrink: 0; }
+  .phase-chip--current .phase-chip__name { max-width: 12ch; }
+}
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
   display: block; height: 4px; overflow: hidden;

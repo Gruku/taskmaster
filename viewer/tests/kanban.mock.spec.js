@@ -242,7 +242,8 @@ test('every phase is named in full or in its title, and the current one is wider
 test('at 390 the phase row is one line; More lists the rest and picking one filters the board', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
   const tops = await page.locator('.phase-strip__items > *').evaluateAll((els) => [...new Set(els.filter((e) => e.offsetParent).map((e) => e.offsetTop))]);
-  expect(tops).toHaveLength(1);
+  // At most two lines: the current phase keeps a readable name, so Archived and More may take a second line (fix round 1).
+  expect(tops.length).toBeLessThanOrEqual(2);
   const more = page.locator('.phase-strip .overflow-more');
   await expect(more).toBeVisible();
   await more.click();
@@ -445,6 +446,31 @@ test('at 390 the phase strip\'s More is inside the screen and its text is not cu
   const m = await more.evaluate((el) => ({ right: el.getBoundingClientRect().right, vw: innerWidth, sw: el.scrollWidth, cw: el.clientWidth }));
   expect(m.right).toBeLessThanOrEqual(m.vw);
   expect(m.sw).toBeLessThanOrEqual(m.cw);
+});
+
+test('at 390 the current phase keeps a readable name, and More and Archived stay whole on screen', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await expect(page.locator('.phase-strip .overflow-more')).toBeVisible();
+  const m = await page.evaluate(() => {
+    const name = document.querySelector('.phase-strip .phase-chip--current .phase-chip__name');
+    const box = (sel) => {
+      const el = document.querySelector(sel);
+      return { right: el.getBoundingClientRect().right, cut: el.scrollWidth - el.clientWidth };
+    };
+    return {
+      nameWidth: name.getBoundingClientRect().width, nameText: name.textContent.trim(),
+      more: box('.phase-strip .overflow-more'), archived: box('.phase-strip .phase-archived'),
+      vw: innerWidth, sideways: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  console.log(`390 current-name width: ${m.nameWidth}px`);
+  expect(m.nameText.length).toBeGreaterThan(0);
+  expect(m.nameWidth).toBeGreaterThanOrEqual(80);
+  expect(m.more.right).toBeLessThanOrEqual(m.vw);
+  expect(m.archived.right).toBeLessThanOrEqual(m.vw);
+  expect(m.more.cut).toBeLessThanOrEqual(0);
+  expect(m.archived.cut).toBeLessThanOrEqual(0);
+  expect(m.sideways).toBeLessThanOrEqual(0);
 });
 
 test('at 1440 every control in the filter bar is the chip height', async ({ page }) => {
