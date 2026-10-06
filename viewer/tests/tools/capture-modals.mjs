@@ -260,12 +260,22 @@ const ALL_SCENES = [
     ['page-missing', { open: openScreen('#/task/NOPE-999', '.tm-empty[data-state="missing"]'), routes: detail(F.taskPageMocks()), fullPage: true, scope: '#screen-mount' }],
     ['page-gates', { open: openPage('T-107'), routes: (p) => p.route('**/api/task/T-107/detail', (r) => r.fulfill({ json: F.taskDetail(F.REVIEW_TASK) })), fullPage: true, scope: '#screen-mount' }],
     ...[['issue-rich', 'ISS-012'], ['issue-fixed', 'ISS-009'], ['issue-long', 'ISS-1234']].map(([name, id]) =>
-      [name, { open: openScreen(`#/issue/${id}`, '.dp-page--issue h1.td-title'), routes: detail(F.issueDetailMocks()), fullPage: true, scope: '#screen-mount' }]),
+      [name, { open: openScreen(`#/issue/${id}`, '.dp-page--issue h1.td-title'), fullPage: true, scope: '#screen-mount',
+        routes: async (p) => {
+          await detail(F.issueDetailMocks())(p);
+          if (name !== 'issue-rich') return;
+          // aging.High = 30 so the stale tag shows; the theme is merged in from the page's colour scheme, not replaced.
+          await p.route((url) => url.pathname === '/api/viewer/prefs', async (r) => {
+            if (r.request().method() !== 'GET') return r.fulfill({ json: {} });
+            const dark = await r.request().frame().evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches);
+            await r.fulfill({ json: { theme: dark ? 'dark' : 'light', ui: {}, screens: {}, issues: { aging: { High: 30 } } } });
+          });
+        } }]),
     ['issue-missing', { open: openScreen('#/issue/ISS-999', '.tm-empty[data-state="missing"]'), routes: detail(F.issueDetailMocks()), fullPage: true, scope: '#screen-mount' }],
     ...[['bug-open', 'B-031'], ['bug-fixed', 'B-030'], ['bug-long', 'B-1234']].map(([name, id]) =>
       [name, { open: openScreen(`#/bug/${id}`, '.dp-page--bug h1.td-title'), routes: detail(F.bugDetailMocks()), fullPage: true, scope: '#screen-mount' }]),
     ['bug-missing', { open: openScreen('#/bug/B-999', '.tm-empty[data-state="missing"]'), routes: detail(F.bugDetailMocks()), fullPage: true, scope: '#screen-mount' }],
-    ...[['bug-mark-fixed', 'Mark fixed'], ['bug-promote', 'Promote to issue'], ['bug-shelve-confirm', 'Shelve']].map(([name, label]) =>
+    ...[['bug-mark-fixed', 'Mark this bug fixed'], ['bug-promote', 'Promote to issue'], ['bug-shelve-confirm', 'Shelve']].map(([name, label]) =>
       [name, { open: openScreen('#/bug/B-031', '.dp-page--bug h1.td-title'), routes: detail(F.bugDetailMocks()), drive: async (p) => {
         await p.locator('#screen-mount, #topbar-primary').getByRole('button', { name: label }).first().click();
         await p.locator('[role="dialog"], [role="alertdialog"], dialog[open]').last().waitFor();
