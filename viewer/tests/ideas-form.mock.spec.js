@@ -37,10 +37,7 @@ async function openCreate(page, { theme = 'dark', post = { ok: true, id: 'IDEA-9
   });
   await page.goto('/#/ideas');
   await expect(page.locator('.ideas__list')).toContainText('Board swimlanes by epic');
-  // Once the fonts have settled the row, "New Idea" is in it or behind Filters (row 2 too narrow for it).
-  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
-  const filters = page.locator('#topbar-actions > .overflow-more');
-  if (await filters.isVisible()) await filters.click();
+  // "New idea" is the row-1 primary, never behind Filters.
   await newIdea(page).click();
   const dialog = page.getByRole('dialog', { name: 'Create idea' });
   await expect(dialog).toBeVisible();
@@ -48,7 +45,7 @@ async function openCreate(page, { theme = 'dark', post = { ok: true, id: 'IDEA-9
   return { dialog, reads };
 }
 
-const newIdea = (page) => page.getByRole('button', { name: /new idea/i });
+const newIdea = (page) => page.locator('#topbar-primary').getByRole('button', { name: 'Create a new idea' });
 const field = (dialog, key) => dialog.locator(`[data-key="${key}"]`);
 const ctl = (dialog, key) => field(dialog, key).locator('input, select, textarea').first();
 const save = (dialog) => dialog.getByRole('button', { name: 'Save', exact: true });

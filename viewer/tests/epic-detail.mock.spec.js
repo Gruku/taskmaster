@@ -384,6 +384,18 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
     await expect(page.locator('.ed-diagram .cd-block').first()).toBeVisible();
     // The map's blocks and 3a's re-skinned Kanban cards inside them.
     expect(await run('#screen-mount'), 'architecture map').toEqual([]);
+    // The map really holds Kanban cards, and axe measured their text (not an empty pass).
+    const measured = await page.evaluate(async () => {
+      const r = await window.axe.run({ include: [['.ed-diagram .card-task']] }, { runOnly: { type: 'rule', values: ['color-contrast'] } });
+      const ratios = r.passes.flatMap((x) => x.nodes).map((n) => n.any[0]?.data?.contrastRatio).filter(Boolean);
+      return { cards: document.querySelectorAll('.ed-diagram .card-task').length, nodes: ratios.length, min: Math.min(...ratios), bad: r.violations.length, incomplete: r.incomplete.flatMap((x) => x.nodes).filter((n) => !/class="marker__shape" aria-hidden="true"/.test(n.html)).length };
+    });
+    expect(measured.min).toBeGreaterThanOrEqual(4.5);
+    // axe cannot judge the aria-hidden marker glyphs (non-text, 'only non-text characters'); every other node must be decided.
+    expect(measured.incomplete, 'axe could not decide some card text').toBe(0);
+    expect(measured.cards).toBeGreaterThan(0);
+    expect(measured.nodes).toBeGreaterThan(0);
+    expect(measured.bad).toBe(0);
     expect(await page.locator('.cd-block').evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).boxShadow))])).toEqual(['none']);
 
     await page.evaluate(() => import('/js/lib/open-detail.js').then((m) => m.openDetail('epic', 'viewer')));

@@ -237,3 +237,7 @@ These override the sections they name.
 - **§4 Sessions filters (plan 3e).** Sessions' filter chips sit in a bar at the top of the page, as the Table's do, not in topbar row 2 (a chip row's own overflow inside row 2's overflow would fight it).
 - **§4 tags (plan 3e).** Tags (kinds, reasons, type words) are 12px Technical; the 11px uppercase label is for section labels only.
 - **§4 counts (plan 3e).** The Sessions and Archived counts read "n <noun> · m visible".
+- **§5.6 / §6 Table (plan 3b).** Table rows stay `<tr>` (sortable `th` with `aria-sort` need table semantics, and a `<tr>` cannot hold a link as a direct child); each row's title is its one link and a click elsewhere on the row is forwarded to it. Rows open per the detail-view setting, like Kanban cards.
+- **§6 Table at ≤768px (plan 3b).** A card shows ID, priority, title (2 lines), status, size and epic; phase, area, branch and started are left to the detail. The header row gives way to a labelled Sort select.
+- **§5.1 epics (plan 3b).** The lifecycle map (`active` ◐, `planned` ○, `done` ●, `archived` ✕) lives in `lib/epic-format.js` beside the epic figures; a missing status reads "Active". The design status is a tag "Design · <word>" on Epic detail only.
+- **§6 Epic detail / §7 (plan 3b).** Every figure is counted from the task list the page draws (`epicStats(epic.tasks)`), not the server's `stats`; Done and Archived groups start collapsed.

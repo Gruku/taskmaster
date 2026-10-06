@@ -34,7 +34,7 @@ export function collectTags(items) {
 }
 
 export function tagFilter({ label = 'Tags', getTags, selected = [], onChange }) {
-  let chosen = [...new Set(selected.map(tagKey).filter(Boolean))];
+  let chosen = [...new Set((selected ?? []).map(tagKey).filter(Boolean))];
   const labels = new Map();   // key → its last label shown, for a chosen key the data no longer carries
   let pop = null;
   let parts = null;           // the open popover's search, list, status and Clear, plus each key's option
@@ -62,7 +62,7 @@ export function tagFilter({ label = 'Tags', getTags, selected = [], onChange }) 
     if (!opt) {
       const box = h('input', { type: 'checkbox', value: tag.key, 'data-popover-item': '' });
       box.addEventListener('change', () => toggle(tag.key, box.checked));
-      opt = { el: h('label', { class: 'tag-filter__option' }, box, h('span', { class: 'tag-filter__name' }), h('span', { class: 'tag-filter__count' })), box };
+      opt = { el: h('label', { class: 'tag-filter__option' }, box, h('span', { class: 'tag-filter__name' }), h('span', { class: 'tag-filter__count', 'aria-hidden': 'true' })), box };
       parts.options.set(tag.key, opt);
     }
     const name = opt.el.querySelector('.tag-filter__name');
@@ -148,10 +148,10 @@ export function tagFilter({ label = 'Tags', getTags, selected = [], onChange }) 
     clearBtn.addEventListener('click', clear);
     paintList();
     pop = openPopover({
-      anchor: el, content: [search, list, none, clearBtn], role: 'dialog', label: 'Filter by tag', focus: 'first',
+      anchor: el, content: [search, list, none, clearBtn], role: 'dialog', label: 'Filter by tag', focus: 'none',
       className: 'tag-filter__popover', onClose: () => { pop = null; parts = null; },
     });
-    // The popover's 'first' is its first choice; this one starts in the search box.
+    // The popover places no focus; this one starts in the search box.
     search.focus({ preventScroll: true });
   }
 

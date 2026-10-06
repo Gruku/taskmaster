@@ -1,4 +1,4 @@
-// User intent: the issue and bug detail rules live only in detail-pages.css so the list screens' files can be enforced without touching 3c's pages.
+// User intent: the issue and bug detail pages keep only template rules in detail-pages.css — no legacy selector survives anywhere, and the file is enforced.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -13,19 +13,23 @@ const walk = (d) => readdirSync(d).flatMap((n) => {
   return statSync(p).isDirectory() ? walk(p) : p.endsWith('.css') ? [p] : [];
 });
 
-const SELECTORS = ['.id-empty', '.id-head', '.id-meta', '.id-sev', '.id-status',
-  '.id-title', '.id-location', '.id-grid', '.id-main', '.id-side', '.id-h', '.id-body', '.id-repro-list', '.id-side-block',
-  '.id-aging', '.id-dl', '.id-rel-pill', '.bug-detail', '.bug-detail__sev',
-  '.bug-detail__actions', '.bug-detail__action-btn'];
-const re = (s) => new RegExp('(^|[},\\s])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])');
+const LEGACY = ['.issue-detail', '.id-', '.bug-detail', '.aging-bar'];
 
-test('detail selectors live in detail-pages.css only', () => {
+test('detail-pages.css holds no legacy detail selector, and the list screens hold none either', () => {
   const dp = read('screens/detail-pages.css');
   const old = read('screens/issues.css') + read('screens/bugs.css');
-  for (const s of SELECTORS) {
-    assert.ok(re(s).test(dp), `${s} missing from detail-pages.css`);
-    assert.ok(!re(s).test(old), `${s} still in issues.css/bugs.css`);
+  for (const s of LEGACY) {
+    const re = new RegExp('(^|[},\\s])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    assert.ok(!re.test(dp), `${s} still in detail-pages.css`);
+    assert.ok(!re.test(old), `${s} still in issues.css/bugs.css`);
   }
+});
+
+test('detail-pages.css is held to the style rules', () => {
+  // Read as text: importing the style-rules test would register its tests a second time here.
+  const rules = readFileSync(join(ROOT, 'tests', 'unit', 'style-rules.test.js'), 'utf8');
+  const start = rules.indexOf('export const ENFORCED');
+  assert.ok(start >= 0 && rules.slice(start, rules.indexOf('];', start)).includes("'screens/detail-pages.css'"));
 });
 
 test('the dead italic body rule is gone everywhere', () => {

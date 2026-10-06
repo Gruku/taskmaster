@@ -3,9 +3,8 @@
 
 .tag-filter__on { color: var(--foreground-default); }
 
-.tag-filter__popover { width: min(320px, calc(100vw - 8px)); gap: var(--space-xs); }
-/* The search box's clear button and the checkboxes are the browser's own; they follow the theme. */
-.tag-filter__popover { color-scheme: dark; }
+/* color-scheme: the search box's clear button and the checkboxes are the browser's own; they follow the theme. */
+.tag-filter__popover { width: min(320px, calc(100vw - 8px)); gap: var(--space-xs); color-scheme: dark; }
 [data-theme="light"] .tag-filter__popover { color-scheme: light; }
 
 .tag-filter__search {
