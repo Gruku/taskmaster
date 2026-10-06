@@ -17,7 +17,8 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'components/overflow-row.css',
   'components/toolbar.css',
   'screens/table.css',
-  'screens/epics.css'];
+  'screens/epics.css',
+  'screens/epic-detail.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
