@@ -234,3 +234,48 @@ export const SESSION_DETAILS = Object.fromEntries(SESSIONS.map((s) => [s.id, {
     `${ho.id.slice(0, 10)}T10:00:00+00:00`)),
   task_ids: s.task_ids,
 }]));
+
+// Review focus 1: a board at real data volume (27 epics, 230 tasks, IDs up to T-1234, 120-character titles) for the
+// phone-width checks. Deterministic — no Date.now().
+const PHASE_WORDS = ['Foundation and tokens', 'Shell and navigation', 'Shared components and modals',
+  'Screens re-skinned onto the shared parts', 'Data fixes and the bug route', 'Cleanup and the full re-audit',
+  'Release and the changelog'];
+const EPIC_WORDS = ['Viewer re-skin onto RR', 'Native store cutover', 'Linear sync retries', 'Handover quotes', 'Guard hooks',
+  'Status line', 'Feedback inbox', 'Agent tool-use evals', 'Release 7.2 notes'];
+const STATUS_CYCLE = ['todo', 'todo', 'in-progress', 'todo', 'done', 'in-review', 'todo', 'blocked', 'in-progress', 'done'];
+export function longBoard() {
+  const phases = [
+    { id: 'P0', name: 'Phase 0: The prototype that was dropped before anyone used it', status: 'archived',
+      archived_reason: 'superseded', order: 0 },
+    ...PHASE_WORDS.map((words, k) => {
+      const n = k + 1;
+      return { id: `P${n}`, name: `Phase ${n}: ${words}`, status: n <= 3 ? 'done' : n === 4 ? 'active' : 'planned', order: n };
+    }),
+  ];
+  const epics = Array.from({ length: 27 }, (_, k) => {
+    const n = k + 1;
+    const nn = String(n).padStart(2, '0');
+    return { id: `epic-${nn}`, name: `Epic ${nn}: ${EPIC_WORDS[(n - 1) % 9]}`, status: n <= 22 ? 'active' : n <= 25 ? 'done' : 'archived' };
+  });
+  const tasks = Array.from({ length: 230 }, (_, i) => {
+    const id = `T-${1005 + i}`;
+    const status = STATUS_CYCLE[i % 10];
+    const phase = i % 23 === 0 ? undefined : `P${(i % 7) + 1}`;
+    const estimate = ['S', 'M', 'L', '3', undefined][i % 5];
+    return {
+      id,
+      title: `Task ${i + 1}: make every column, chip and row cope with a title that runs past one line`.padEnd(120, ' and more').slice(0, 120),
+      status,
+      priority: ['critical', 'high', 'medium', 'low', 'medium'][i % 5],
+      epic: `epic-${String((i % 27) + 1).padStart(2, '0')}`,
+      ...(phase ? { phase } : {}),
+      ...(estimate ? { estimate } : {}),
+      ...(i % 5 === 0 ? { branch: `feat/${id}-a-branch-name-long-enough-to-be-cut-on-a-card` } : {}),
+      ...(i >= 10 && i <= 13 ? { bundle: 'long-bundle-slug-alpha' } : {}),
+      depends_on: [],
+      created: '2026-09-01T09:00:00Z',
+      ...(status !== 'todo' ? { started: '2026-09-20T09:00:00Z' } : {}),
+    };
+  });
+  return { revision: 'long-r1', cursor: 'c1', meta: { project: 'Long fixture' }, phases, epics, tasks };
+}
