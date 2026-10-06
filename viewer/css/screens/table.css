@@ -1,10 +1,6 @@
-/* Table view — sortable, filterable alt to Kanban. */
-
-.tbl-screen {
-  display: flex; flex-direction: column;
-  height: 100%; min-height: 0; min-width: 0;
-  gap: var(--page-gap);
-}
+/* User intent: the Table shows every task in fixed columns that never cut an ID, keeps ID and title in view while the
+   rest scrolls sideways inside its frame (a fade says there is more), and reads in both themes. */
+.tbl-screen { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--page-gap); }
 
 /* The filter rail: one chip row per group. A whole group may move to the next line; chips inside a group never wrap,
    what does not fit waits behind that row's More. Status and Priority keep their natural width; Epic and Area share
@@ -27,125 +23,49 @@
   .tbl-chips > .tbl-clear { min-height: 44px; }
 }
 
-.tbl-host {
-  flex: 1 1 auto; min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-card, var(--surface, #1f2025));
+.tbl-frame {
+  position: relative; display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--card-bg);
 }
+.tbl-host { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
+.tbl-fade {
+  position: absolute; top: 0; right: 0; bottom: 0; width: var(--space-2xl); pointer-events: none;
+  background: linear-gradient(to left, var(--card-bg), transparent); opacity: 0;
+  transition: opacity var(--dur-standard) var(--ease-hourglass);
+}
+.tbl-frame[data-more-end] .tbl-fade { opacity: 1; }
+.tbl-probe { position: absolute; visibility: hidden; white-space: nowrap; }
 
 table.tbl {
-  display: grid;
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-sm);
+  table-layout: fixed; width: 100%; border-collapse: separate; border-spacing: 0;
+  color: var(--foreground-default); font-family: var(--font-narrator); font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
 }
-table.tbl thead, table.tbl tbody, table.tbl tr {
-  display: contents;
-}
-
-/* Header cells are sortHeader cells; the button inside takes this type and colour. */
 .tbl-th {
-  position: sticky; top: 0; z-index: 1;
-  display: flex; align-items: center;
-  padding: var(--space-xs) var(--space-sm);
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--foreground-subtle);
-  font-family: var(--font-technical);
-  font-weight: var(--font-technical-weight);
-  font-size: var(--size-technical-label);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  text-align: left;
-  user-select: none;
+  position: sticky; top: 0; z-index: 2; padding: var(--space-xs) var(--space-sm);
+  background: var(--card-bg); border-bottom: 1px solid var(--border-default); color: var(--foreground-subtle);
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-wide); text-transform: uppercase; text-align: left; white-space: nowrap; user-select: none;
 }
 .tbl-th[aria-sort] { color: var(--foreground-bold); }
-
-.tbl-row { cursor: pointer; }
-.tbl-row:hover .tbl-cell {
-  background: rgba(255,255,255,0.025);
-  color: var(--ink);
-}
-.tbl-row:focus-visible .tbl-cell {
-  background: rgba(74,158,255,0.08);
-  outline: none;
-}
-
 .tbl-cell {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-soft, rgba(255,255,255,0.05));
-  color: var(--ink-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
+  white-space: nowrap; overflow: hidden; vertical-align: middle;
 }
-.tbl-cell--title { color: var(--ink); font-weight: 500; }
+.tbl-row { cursor: pointer; }
+.tbl-row:hover > .tbl-cell { background: var(--card-bg-hover); }
 
-.t-id {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  letter-spacing: 0.02em;
-}
+/* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. */
+.tbl-th[data-key="id"], .tbl-cell--id { position: sticky; left: 0; z-index: 1; }
+.tbl-th[data-key="title"], .tbl-cell--title { position: sticky; z-index: 1; border-right: 1px solid var(--border-subtle); }
+.tbl-th:is([data-key="id"], [data-key="title"]) { z-index: 3; }
+.tbl-frame[data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-strong); }
 
-.t-status {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  background: rgba(255,255,255,0.06);
-  color: var(--ink-2);
+.tbl-link { display: block; min-width: 0; color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); text-decoration: none; }
+.t-id, .t-tech {
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small);
+  color: var(--foreground-default); white-space: nowrap;
 }
-.t-status--in-progress { background: rgba(74,158,255,0.18); color: #a3c8ff; }
-.t-status--in-review   { background: rgba(168,201,88,0.16); color: #b9d273; }
-.t-status--blocked     { background: rgba(214,107,95,0.18); color: #e5887d; }
-.t-status--done        { background: rgba(95,174,110,0.16); color: #87c891; }
-.t-status--todo        { background: rgba(255,255,255,0.06); color: var(--ink-3); }
-
-.t-pri {
-  font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
-  font-weight: 600;
-  padding: 1px 6px; border-radius: 4px;
-}
-.t-pri--critical { color: #e5887d; background: rgba(214,107,95,0.14); }
-.t-pri--high     { color: #e0b46d; background: rgba(214,164,95,0.12); }
-.t-pri--medium   { color: var(--ink-2); }
-.t-pri--low      { color: var(--ink-3); }
-
-.t-epic {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: var(--text-xs);
-  background: rgba(123,104,238,0.14);
-  color: #b6acf2;
-}
-
-.t-area {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: var(--text-xs);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  color: var(--ink-3);
-}
-
-.t-branch {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  background: transparent;
-}
-
-.tbl-empty {
-  padding: var(--sp-8);
-  text-align: center;
-  color: var(--ink-3);
-  font-style: italic;
-}
+code.t-tech { background: transparent; padding: 0; }
+.t-none { color: var(--foreground-subtle); }
+.tbl-empty { padding: var(--space-2xl) var(--space-lg); white-space: normal; }

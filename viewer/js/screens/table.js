@@ -5,41 +5,51 @@
 import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { formatAbsolute } from '../lib/time.js';
-import { emptyState } from '../components/empty-state.js';
+import { stateBlock } from '../components/empty-state.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { chipRow } from '../components/chips.js';
 import { sortHeader } from '../components/sort-header.js';
 import { icon } from '../components/icon.js';
-import { TASK_STATUS, PRIORITY } from '../components/status.js';
+import { TASK_STATUS, PRIORITY, statusMarker, priorityMarker } from '../components/status.js';
 import { epicSwatch } from '../lib/epics.js';
+import { truncate } from '../lib/text.js';
+import { h } from '../util/h.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
-const COLUMNS = [
-  { key: 'id',        label: 'ID',       width: '110px', sortable: true,
-    get: t => t.id, render: t => `<span class="t-id">${esc(t.id)}</span>` },
-  { key: 'title',     label: 'Title',    width: 'minmax(220px, 1fr)', sortable: true,
-    get: t => (t.title || '').toLowerCase(), render: t => esc(t.title || '—') },
-  { key: 'status',    label: 'Status',   width: '110px', sortable: true,
-    get: t => statusOrder(t.status), render: t => `<span class="t-status t-status--${esc(t.status||'')}">${esc(prettyStatus(t.status))}</span>` },
-  { key: 'priority',  label: 'Priority', width: '90px', sortable: true,
-    get: t => priorityOrder(t.priority), render: t => `<span class="t-pri t-pri--${esc((t.priority||'').toLowerCase())}">${esc(t.priority || '')}</span>` },
-  { key: 'phase',     label: 'Phase',    width: '90px', sortable: true,
-    get: t => t.phase || '', render: t => esc(t.phase || '—') },
-  { key: 'epic',      label: 'Epic',     width: '140px', sortable: true,
-    get: t => t.epic || '', render: t => t.epic ? `<span class="t-epic">${esc(t.epic)}</span>` : '—' },
-  { key: 'area',      label: 'Area',     width: '120px', sortable: true,
-    get: t => t.area || '', render: t => t.area ? `<span class="t-area">${esc(t.area)}</span>` : '—' },
-  { key: 'estimate',  label: 'Size',     width: '60px', sortable: true,
-    get: t => sizeOrder(t.estimate), render: t => esc(t.estimate || '—') },
-  { key: 'branch',    label: 'Branch',   width: '180px', sortable: false,
-    get: t => t.branch || '', render: t => t.branch ? `<code class="t-branch">${esc(t.branch)}</code>` : '—' },
-  { key: 'started',   label: 'Started',  width: '110px', sortable: true,
-    get: t => t.started || '', render: t => t.started ? (formatAbsolute(t.started, { time: false, year: true }) || esc(t.started)) : '—' },
-];
+const none = () => h('span', { class: 't-none' }, '—');
+const tech = (v) => (v ? truncate(v, { className: 't-tech' }) : none());
 
-const STATUS_ORDER = { 'in-progress': 0, 'in-review': 1, blocked: 2, todo: 3, done: 4 };
+// Widths in rem are fixed; the ID column is measured to its longest ID and the title takes the rest.
+const COLUMNS = [
+  { key: 'id',        label: 'ID',       sortable: true,
+    get: t => t.id, cell: t => h('span', { class: 't-id' }, String(t.id ?? '')) },
+  { key: 'title',     label: 'Title',    sortable: true,
+    get: t => (t.title || '').toLowerCase(),
+    cell: t => h('a', { class: 'tbl-link', href: '#/task/' + encodeURIComponent(t.id) }, truncate(t.title || t.id)) },
+  { key: 'status',    label: 'Status',   width: 9,    sortable: true,
+    get: t => statusOrder(t.status), cell: t => statusMarker('task', t.status) },
+  { key: 'priority',  label: 'Priority', width: 7.5,  sortable: true,
+    get: t => priorityOrder(t.priority), cell: t => (t.priority ? priorityMarker(String(t.priority).toLowerCase()) : none()) },
+  { key: 'phase',     label: 'Phase',    width: 7,    sortable: true,
+    get: t => t.phase || '', cell: t => tech(t.phase) },
+  { key: 'epic',      label: 'Epic',     width: 12.5, sortable: true,
+    get: t => t.epic || '', cell: (t, ctx) => (t.epic ? truncate(ctx.epicName.get(t.epic) || t.epic) : none()) },
+  { key: 'area',      label: 'Area',     width: 9,    sortable: true,
+    get: t => t.area || '', cell: t => tech(t.area) },
+  { key: 'estimate',  label: 'Size',     width: 4.5,  sortable: true,
+    get: t => sizeOrder(t.estimate), cell: t => (t.estimate ? h('span', { class: 't-tech' }, String(t.estimate)) : none()) },
+  { key: 'branch',    label: 'Branch',   width: 14,   sortable: false,
+    get: t => t.branch || '', cell: t => (t.branch ? truncate(t.branch, { tag: 'code', className: 't-tech' }) : none()) },
+  { key: 'started',   label: 'Started',  width: 8,    sortable: true,
+    get: t => t.started || '',
+    cell: t => (t.started ? h('span', { class: 't-tech' }, formatAbsolute(t.started, { time: false, year: true }) || String(t.started)) : none()) },
+];
+const TITLE_MIN_REM = 20;
+const FIXED_REM = COLUMNS.reduce((sum, c) => sum + (c.width || 0), 0);
+
+const STATUS_ORDER = { 'in-progress': 0, 'in-review': 1, blocked: 2, todo: 3, done: 4, archived: 5 };
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const SIZE_ORDER = { XS: 0, S: 1, M: 2, L: 3, XL: 4 };
 
@@ -48,7 +58,6 @@ function priorityOrder(p){ return PRIORITY_ORDER[(p||'').toLowerCase()] ?? 99; }
 function sizeOrder(s)    { return SIZE_ORDER[s] ?? 99; }
 function prettyStatus(s) { return TASK_STATUS[s]?.label || s || ''; }
 function prettyPriority(p) { return PRIORITY[p]?.label || p || ''; }
-function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 const DEFAULT_STATE = {
   sort: { by: 'priority', dir: 'asc' },   // priority asc → critical first
@@ -56,8 +65,8 @@ const DEFAULT_STATE = {
   filters: { status: [], priority: [], epic: [], area: [] },
 };
 
-export async function mount(root, { store, api, prefs }) {
-  root.innerHTML = '';
+export async function mount(root, { store, api, prefs, params }) {
+  root.replaceChildren();
   const screen = document.createElement('section');
   screen.className = 'tbl-screen';
 
@@ -105,10 +114,21 @@ export async function mount(root, { store, api, prefs }) {
   }) : null;
   railObserver?.observe(chipRail);
 
-  // ── Table mount ───────────────────────────────────────────────
-  const tableHost = document.createElement('div');
-  tableHost.className = 'tbl-host';
-  screen.appendChild(tableHost);
+  // ── Table frame ───────────────────────────────────────────────
+  // The host scrolls both ways inside the frame; the frame says whether there is more to the right (the fade) and
+  // whether the user has scrolled sideways (a stronger edge on the title column).
+  const frame = h('div', { class: 'tbl-frame' });
+  const tableHost = h('div', { class: 'tbl-host' });
+  const fade = h('div', { class: 'tbl-fade', 'aria-hidden': 'true' });
+  frame.append(tableHost, fade);
+  screen.appendChild(frame);
+  const cue = () => {
+    frame.toggleAttribute('data-more-end', tableHost.scrollLeft + tableHost.clientWidth < tableHost.scrollWidth - 1);
+    frame.toggleAttribute('data-scrolled', tableHost.scrollLeft > 0);
+  };
+  tableHost.addEventListener('scroll', cue, { passive: true });
+  const hostObserver = window.ResizeObserver ? new ResizeObserver(cue) : null;
+  hostObserver?.observe(tableHost);
 
   root.appendChild(screen);
 
@@ -124,15 +144,16 @@ export async function mount(root, { store, api, prefs }) {
       area:     [...(persisted.filters?.area     || [])],
     },
   };
+  // A link may name the statuses to show (the Dashboard's "In progress"): they replace the saved Status chips for this
+  // visit only — nothing is saved until the user changes something.
+  const seed = [...new Set(String(params?.status ?? '').split(',').map((v) => v.trim()))]
+    .filter((v) => v !== 'archived' && Object.hasOwn(TASK_STATUS, v));
+  if (seed.length) state.filters.status = seed;
   search.value = state.search;
 
   function persist() {
     if (!prefs?.patch) return;
     prefs.patch({ table: state });
-  }
-
-  function rowClick(taskId) {
-    window.location.hash = '#/task/' + encodeURIComponent(taskId);
   }
 
   function applyFilters(tasks) {
@@ -239,17 +260,81 @@ export async function mount(root, { store, api, prefs }) {
     paint(); persist();
   }
 
-  function renderTable(tasks, totalCount) {
-    // The table is rebuilt on every paint, so the header the keyboard was on gets the focus back.
-    const focusedKey = tableHost.contains(document.activeElement) ? document.activeElement.closest('th')?.dataset.key : null;
-    tableHost.innerHTML = '';
-    const tbl = document.createElement('table');
-    tbl.className = 'tbl';
-    tbl.style.gridTemplateColumns = COLUMNS.map(c => c.width).join(' ');
+  // The ID column is as wide as the longest ID on screen, so no ID is ever cut; the title column sticks just after it.
+  let measured = { longest: null, px: 0 };
+  function sizeColumns(tbl, tasks) {
+    const longest = tasks.reduce((a, t) => (String(t.id ?? '').length > a.length ? String(t.id) : a), 'ID');
+    if (longest !== measured.longest) {
+      const probe = h('span', { class: 't-id tbl-probe' }, longest);
+      tableHost.append(probe);
+      const cs = getComputedStyle(tbl.querySelector('th[data-key="id"]'));
+      measured = { longest, px: Math.ceil(probe.getBoundingClientRect().width) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 1 };
+      probe.remove();
+    }
+    tbl.querySelector('col.tbl-col--id').style.width = `${measured.px}px`;
+    tbl.style.minWidth = `calc(${measured.px}px + ${FIXED_REM + TITLE_MIN_REM}rem)`;
+    for (const el of tbl.querySelectorAll('th[data-key="title"], td.tbl-cell--title')) el.style.left = `${measured.px}px`;
+  }
 
-    // Header row
-    const thead = document.createElement('thead');
-    const trh = document.createElement('tr');
+  // The table is rebuilt on every paint: where the frame was scrolled and what the keyboard was on are noted first and
+  // given back after, so another writer's change never loses the user's place.
+  function snapshot() {
+    const at = document.activeElement;
+    const snap = { top: tableHost.scrollTop, left: tableHost.scrollLeft, inside: !!at && tableHost.contains(at), key: null, taskId: null, index: 0 };
+    if (!snap.inside) return snap;
+    snap.key = at.closest('th')?.dataset.key ?? null;
+    const tr = at.closest('tr.tbl-row');
+    if (tr) {
+      snap.taskId = tr.dataset.taskId;
+      snap.index = [...tr.parentNode.children].indexOf(tr);
+    }
+    return snap;
+  }
+
+  function restore(tbl, snap) {
+    tableHost.scrollTop = snap.top;
+    tableHost.scrollLeft = snap.left;
+    if (!snap.inside) return;
+    const links = [...tbl.querySelectorAll('tr.tbl-row a.tbl-link')];
+    const target = (snap.key && tbl.querySelector(`th[data-key="${snap.key}"] .sort-header`))
+      || (snap.taskId != null && links.find((a) => a.closest('tr').dataset.taskId === snap.taskId))
+      || (links.length ? links[Math.min(snap.index, links.length - 1)] : tbl.querySelector('th[data-key="id"] .sort-header'));
+    target?.focus({ preventScroll: true });
+  }
+
+  // A plain click anywhere on a row is a click on its title link (which the detail interceptor opens); a modified
+  // click, a click on a control, or the end of a text selection is left alone.
+  function onBodyClick(e) {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (e.target.closest('a[href], button, input, select, textarea')) return;
+    if (String(window.getSelection?.() ?? '')) return;
+    e.target.closest('tr.tbl-row')?.querySelector('a.tbl-link')?.click();
+  }
+
+  function emptyRow(totalCount) {
+    const block = hasFilters()
+      ? stateBlock({
+        label: 'No match',
+        headline: `0 of ${totalCount} ${pluralize(totalCount, 'task', 'tasks')} match.`,
+        hint: buildFilterHint(totalCount),
+        action: { label: 'Clear filters', onClick: clearFilters },
+      })
+      : stateBlock({ label: 'Table', headline: 'No tasks yet.', hint: 'Tasks added to the backlog show up here.' });
+    return h('tr', {}, h('td', { class: 'tbl-empty', colspan: String(COLUMNS.length) }, block));
+  }
+
+  function renderTable(tasks, totalCount, ctx) {
+    const snap = snapshot();
+    const tbl = h('table', { class: 'tbl' });
+
+    const colgroup = h('colgroup');
+    for (const col of COLUMNS) {
+      const c = h('col', { class: 'tbl-col--' + col.key });
+      if (col.width) c.style.width = `${col.width}rem`;
+      colgroup.appendChild(c);
+    }
+
+    const trh = h('tr');
     for (const col of COLUMNS) {
       const th = sortHeader({
         key: col.key, label: col.label, sortable: col.sortable, sort: state.sort,
@@ -259,46 +344,21 @@ export async function mount(root, { store, api, prefs }) {
       th.classList.add('tbl-th');
       trh.appendChild(th);
     }
-    thead.appendChild(trh);
-    tbl.appendChild(thead);
 
-    // Body
-    const tbody = document.createElement('tbody');
-    if (!tasks.length) {
-      const filtered = hasFilters();
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = COLUMNS.length;
-      td.className = 'tbl-empty';
-      td.appendChild(emptyState({
-        headline: filtered ? `0 of ${totalCount} ${pluralize(totalCount, 'task', 'tasks')} match` : 'No tasks yet',
-        hint: filtered ? buildFilterHint(totalCount) : null,
-        action: filtered ? { label: 'Clear filters', onClick: clearFilters } : null,
-      }));
-      tr.appendChild(td);
+    const tbody = h('tbody');
+    if (!tasks.length) tbody.appendChild(emptyRow(totalCount));
+    for (const t of tasks) {
+      const tr = h('tr', { class: 'tbl-row', 'data-task-id': t.id });
+      for (const col of COLUMNS) tr.appendChild(h('td', { class: 'tbl-cell tbl-cell--' + col.key }, col.cell(t, ctx)));
       tbody.appendChild(tr);
-    } else {
-      for (const t of tasks) {
-        const tr = document.createElement('tr');
-        tr.className = 'tbl-row';
-        tr.dataset.taskId = t.id;
-        tr.tabIndex = 0;
-        for (const col of COLUMNS) {
-          const td = document.createElement('td');
-          td.className = 'tbl-cell tbl-cell--' + col.key;
-          td.innerHTML = col.render(t);
-          tr.appendChild(td);
-        }
-        tr.addEventListener('click', () => rowClick(t.id));
-        tr.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rowClick(t.id); }
-        });
-        tbody.appendChild(tr);
-      }
     }
-    tbl.appendChild(tbody);
-    tableHost.appendChild(tbl);
-    if (focusedKey) tbl.querySelector(`th[data-key="${focusedKey}"] .sort-header`)?.focus({ preventScroll: true });
+    tbody.addEventListener('click', onBodyClick);
+
+    tbl.append(colgroup, h('thead', {}, trh), tbody);
+    tableHost.replaceChildren(tbl);
+    sizeColumns(tbl, tasks);
+    restore(tbl, snap);
+    cue();
   }
 
   function paint() {
@@ -311,14 +371,21 @@ export async function mount(root, { store, api, prefs }) {
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
     renderChipRail(backlog);
-    renderTable(sorted, tasks.length);
+    const epicName = new Map((backlog.epics || []).filter(e => e && e.id).map(e => [e.id, e.name || e.id]));
+    renderTable(sorted, tasks.length, { epicName });
   }
 
   paint();
   const unsubBacklog = store.subscribe('backlog', paint);
+  // The ID column was measured in whatever font was ready; once the real one is, measure again.
+  let alive = true;
+  document.fonts?.ready.then(() => { if (!alive) return; measured.longest = null; paint(); });
 
   return () => {
+    alive = false;
     unsubBacklog?.();
+    tableHost.removeEventListener('scroll', cue);
+    hostObserver?.disconnect();
     railObserver?.disconnect();
     for (const { row } of chipRows.values()) row.destroy();
     chipRows.clear();
