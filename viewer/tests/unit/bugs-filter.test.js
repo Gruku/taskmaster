@@ -45,6 +45,15 @@ test('filterBugs: archived bugs only when asked; fixed bugs are there', () => {
   assert.ok(ids(filterBugs(LIST_BUGS, { archived: true })).includes('B-026'));
 });
 
+test('filterBugs: a bug whose status is archived matches no chip, so Show archived admits it whatever chips are pressed', () => {
+  const withStatusArchived = [...LIST_BUGS, { id: 'B-040', title: 'Retired', status: 'archived' }];
+  const statuses = ['open', 'shelved'];
+  assert.ok(!ids(filterBugs(withStatusArchived, { statuses })).includes('B-040'));
+  assert.ok(ids(filterBugs(withStatusArchived, { statuses, archived: true })).includes('B-040'));
+  // The toggle widens only to archived bugs: a fixed bug still answers to the chips.
+  assert.ok(!ids(filterBugs(withStatusArchived, { statuses, archived: true })).includes('B-029'));
+});
+
 test('filterBugs: statuses narrow, empty means every status', () => {
   assert.deepEqual(ids(filterBugs(LIST_BUGS, { statuses: ['open'] })), ['B-031', 'B-030']);
   assert.equal(filterBugs(LIST_BUGS, { statuses: [] }).length, 5);
