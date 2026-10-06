@@ -132,8 +132,11 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   return card;
 }
 
-/** A resolved (fixed, won't-fix, duplicate) issue as a one-line link row: id, severity, title, status, when. */
-export function issueRow(issue, { now = Date.now() } = {}) {
+/**
+ * A resolved (fixed, won't-fix, duplicate) issue as a one-line link row: id, severity, title, status, when.
+ * `narrow` is for a place as narrow as a phone (a board column): the title takes its own line, status and date wrap.
+ */
+export function issueRow(issue, { now = Date.now(), narrow = false } = {}) {
   const name = document.createDocumentFragment();
   name.append(span('issue-row__id', issue.id));
   const sev = severityMarker(issue.severity_label ?? issue.severity);
@@ -157,7 +160,7 @@ export function issueRow(issue, { now = Date.now() } = {}) {
   // The name is a fragment so its three parts are the link's own grid items; linkRow cannot read titles out of a
   // fragment it has already emptied, so the link's title is gathered here the way linkRow would.
   const linkTitle = [title.title, when?.title].filter(Boolean).join('\n');
-  const row = linkRow({ tag: 'div', className: 'issue-row', href: issueHref(issue.id), name, content, title: linkTitle });
+  const row = linkRow({ tag: 'div', className: narrow ? 'issue-row issue-row--narrow' : 'issue-row', href: issueHref(issue.id), name, content, title: linkTitle });
   row.dataset.issueId = issue.id;
   row.dataset.status = issue.status || '';
   return row;

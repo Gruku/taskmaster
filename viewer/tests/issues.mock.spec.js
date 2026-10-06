@@ -391,6 +391,56 @@ test('leaving Issues while its issues are still loading leaves nothing behind', 
   await expect(page.locator('#page-title')).toHaveText('Kanban');
 });
 
+test('a search typed just before leaving never writes into the next screen', async ({ page }) => {
+  await boot(page);
+  // Typed and left inside the search's debounce: the late search must find the screen gone.
+  await page.evaluate(() => {
+    const input = document.querySelector('#topbar-actions .tm-search input');
+    input.value = 'mutex';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    location.hash = '#/kanban';
+  });
+  await expect(page.locator('#page-title')).toHaveText('Kanban');
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+  await expect(page.locator('#topbar-count')).not.toContainText('issue');
+  await expect(page.locator('.issues')).toHaveCount(0);
+});
+
+test('only the latest load is applied: an older reply never overwrites a newer list or says it failed', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page, issuesMocks());
+  const fresh = [...LIST_ISSUES, { id: 'ISS-008', title: 'Found since the last visit', status: 'open', severity: 'P2', severity_label: 'Medium' }];
+  let mode = 'ok';
+  const held = [];
+  await page.route((url) => url.pathname === '/api/issues', (route) => {
+    if (mode === 'ok') return route.fulfill({ json: { issues: LIST_ISSUES } });
+    if (mode === 'fail') return route.fulfill({ status: 500, json: { ok: false, error: 'locked' } });
+    if (mode === 'hold') { held.push(route); return undefined; }
+    return route.fulfill({ json: { issues: fresh } });
+  });
+  await page.goto('/#/issues');
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await page.evaluate(() => { location.hash = '#/kanban'; });
+  await expect(page.locator('#page-title')).toHaveText('Kanban');
+  mode = 'fail';
+  await page.evaluate(() => { location.hash = '#/issues'; });
+  const notice = page.locator('.issues__notice');
+  await expect(notice).toBeVisible();
+  // Three loads in flight at once: the first two are held, the last answers at once with the newer list.
+  mode = 'hold';
+  await page.evaluate(() => { const b = document.querySelector('.issues__notice button'); b.click(); b.click(); });
+  await expect.poll(() => held.length).toBe(2);
+  mode = 'fresh';
+  await page.evaluate(() => document.querySelector('.issues__notice button').click());
+  await expect(card(page, 'ISS-008')).toBeVisible();
+  await held[0].fulfill({ json: { issues: LIST_ISSUES } });
+  await held[1].fulfill({ status: 500, json: { ok: false, error: 'locked' } });
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  await expect(card(page, 'ISS-008')).toBeVisible();
+  await expect(page.locator('#topbar-count')).toHaveText('8 issues');
+  await expect(notice).toBeHidden();
+});
+
 test('returning to Issues reads them again', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, issuesMocks());

@@ -45,13 +45,6 @@
   color: var(--foreground-subtle);
 }
 .issues-col__list { display: flex; flex-direction: column; gap: var(--space-xs); }
-/* A resolved row in a column is only as wide as the column: the title takes its own line, status and date wrap under it.
-   Three classes deep, because issue-card.css loads after this file. Not max-content twice: the title spans both tracks
-   and would size them to its whole unbroken line, pushing the severity out of the row. */
-.issues-col .issue-row { grid-template-columns: minmax(0, 1fr); }
-.issues-col .issue-row > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
-.issues-col .issue-row__title { grid-column: 1 / -1; }
-.issues-col .issue-row > .link-row__content { flex-wrap: wrap; }
 .issues-col__empty {
   margin: 0;
   font-family: var(--font-narrator);

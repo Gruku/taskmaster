@@ -235,6 +235,12 @@ test('issueRow: a won\'t-fix issue is a link row to the issue with its status wo
   assert.ok(link.title.includes('Old thing'), 'the cut title reaches the link');
 });
 
+test('issueRow: narrow adds its modifier, and only then', () => {
+  const issue = { id: 'ISS-004', title: 'In a column', status: 'fixed' };
+  assert.ok(issueRow(issue, { now, narrow: true }).classList.contains('issue-row--narrow'));
+  assert.ok(!issueRow(issue, { now }).classList.contains('issue-row--narrow'));
+});
+
 test('issueRow: no severity → no marker; no resolved or updated date → no time', () => {
   const el = issueRow({ id: 'ISS-003', title: 'Plain', status: 'fixed' }, { now });
   assert.equal(el.querySelector('.link-row__link .marker'), null);

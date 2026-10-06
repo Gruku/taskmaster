@@ -143,6 +143,21 @@ test('no match offers to clear', async ({ page }) => {
   await expect(page.locator('.list-filters__clear')).toBeHidden();
 });
 
+test('a search typed just before leaving never writes into the next screen', async ({ page }) => {
+  await boot(page);
+  // Typed and left inside the search's debounce: the late search must find the screen gone.
+  await page.evaluate(() => {
+    const input = document.querySelector('#topbar-actions .tm-search input');
+    input.value = 'card';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    location.hash = '#/kanban';
+  });
+  await expect(page.locator('#page-title')).toHaveText('Kanban');
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 400)));
+  await expect(page.locator('#topbar-count')).not.toContainText('bug');
+  await expect(page.locator('.bugs')).toHaveCount(0);
+});
+
 test('leaving Bugs with More open leaves nothing behind', async ({ page }) => {
   await boot(page, { width: 390, height: 844, '/api/bugs': LONG_BUGS });
   const more = page.locator('.bugs .chip-row .overflow-more');

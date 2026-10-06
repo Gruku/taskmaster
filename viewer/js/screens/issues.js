@@ -138,14 +138,17 @@ export function mount(root, { store, prefs }) {
     paint();
   }
 
+  // Only the latest request is applied: a slower earlier reply never overwrites a newer list or says it failed.
+  let loadSeq = 0;
   function load() {
+    const seq = ++loadSeq;
     failed = false;
     paint();
     api.getIssues({ includeResolved: true }).then((data) => {
-      if (!alive) return;
+      if (!alive || seq !== loadSeq) return;
       store.setIssues(data?.issues ?? []);   // the subscription repaints
     }, (e) => {
-      if (!alive) return;
+      if (!alive || seq !== loadSeq) return;
       console.error('issues load failed', e);
       failed = true;
       paint();
@@ -247,7 +250,7 @@ export function mount(root, { store, prefs }) {
       s.name.textContent = c.label;
       s.count.textContent = String(c.items.length);
       s.list.replaceChildren(...(c.items.length
-        ? c.items.map((i) => (c.kind === 'row' ? issueRow(i) : issueCard(i, {
+        ? c.items.map((i) => (c.kind === 'row' ? issueRow(i, { narrow: true }) : issueCard(i, {
           tasksIndex, agingCfg, expanded: expandedIds.has(i.id), revealed: revealed.has(i.id), onToggleEvidence, showStatus,
         })))
         : [h('p', { class: 'issues-col__empty' }, 'None')]));
@@ -305,6 +308,8 @@ export function mount(root, { store, prefs }) {
 
   // Focus in the screen is put back on the same control in the fresh DOM, or handed on, never dropped to <body>.
   function paint() {
+    // A debounced search (or Clear's own input event) can fire after the screen is gone; the topbar is the next screen's.
+    if (!alive) return;
     const back = keepFocus(screen, {
       fallback: () => screen.querySelector('.issues-col:not([hidden]) a[href]') ?? stateHost.querySelector('button') ?? searchInput,
     });
