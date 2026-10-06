@@ -21,7 +21,7 @@ test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); }
 async function bootProbe(page, width, height) {
   await page.setViewportSize({ width, height });
   await page.goto('/#/settings');
-  await expect(page.locator('.set-detail-view')).toBeVisible();
+  await expect(page.locator('.set-control[role="group"] .tm-segmented > button[data-key="system"]')).toBeVisible();
   await expect(page.locator('#theme-toggle')).toBeEnabled();
   await page.evaluate(([count, probe]) => import('/js/lib/topbar.js').then(({ setTopbarCount, claimTopbarPrimary, tmAction }) => {
     setTopbarCount(count);
