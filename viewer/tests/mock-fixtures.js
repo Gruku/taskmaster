@@ -295,3 +295,26 @@ export const deskMocks = ({ theme = 'dark', notes = NOTES } = {}) => ({
   '/api/notes': notes,
   '/api/continuity': { items: [] },
 });
+
+// The Dashboard's summary strip: two open issues, one investigating, one fixed (3 open); two open bugs, one fixed.
+export const ISSUES_LIST = {
+  issues: [
+    { id: 'ISS-011', title: 'Board poll drops a delta under load', status: 'open', severity: 'high', created: ago(30) },
+    { id: 'ISS-012', title: 'Light theme pills fail contrast', status: 'open', severity: 'medium', created: ago(20) },
+    { id: 'ISS-013', title: 'Writer mutex held across the projection scan', status: 'investigating', severity: 'critical', created: ago(10) },
+    { id: 'ISS-009', title: 'Handover list ignores the archive cap', status: 'fixed', severity: 'low', created: ago(90), resolved: ago(40) },
+  ],
+};
+
+export const BUGS_LIST = [
+  { id: 'B-031', title: 'Card edge vanishes at 390px', status: 'open', found_in: 'T-102', discovered: ago(6) },
+  { id: 'B-032', title: 'Note fade covers the last line', status: 'open', found_in: 'T-103', discovered: ago(4) },
+  { id: 'B-027', title: 'Sessions timeline keeps the legacy palette', status: 'fixed', found_in: 'T-104', discovered: ago(80) },
+];
+
+// The Dashboard with a board, issues and bugs behind its summary strip; `extra` overrides any route.
+export const summaryMocks = ({ theme = 'dark', ...extra } = {}) => ({
+  ...deskMocks({ theme }),
+  '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
+  ...extra,
+});

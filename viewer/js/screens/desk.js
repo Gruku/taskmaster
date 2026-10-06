@@ -7,6 +7,8 @@ import { buildRails, sortNotes } from '../lib/desk.js';
 import { createNoteCard } from '../components/desk/note-card.js';
 import { createComposer } from '../components/desk/composer.js';
 import { describeWriteError } from '../components/edit/write-errors.js';
+import { createSummaryStrip, summaryCounts } from '../components/desk/summary-strip.js';
+import { getIssues, listBugs } from '../api.js';
 
 export const meta = { title: 'Dashboard', icon: '◧', sidebarKey: 'dashboard' };
 
@@ -20,15 +22,30 @@ const NOTE_CONTROLS = ['dk-note__edit', 'dk-note__pin', 'dk-note__archive', 'dk-
 export async function mount(root, { store, api }) {
   root.classList.add('dk-desk');
 
-  // Topbar: project label only (no view switcher — the desk has a single view).
-  // Nothing is appended without a name: an empty label would still open the topbar's second row.
-  const topbarSlot = claimTopbar();
-  const projectName = store?.projectName?.() || '';
-  if (topbarSlot && projectName) topbarSlot.appendChild(h('span', { class: 'dk-proj' }, projectName));
+  // Row 2 stays empty: the desk has a single view and nothing to filter.
+  claimTopbar();
 
+  const strip = createSummaryStrip();
   const boardEl = h('section', { class: 'dk-board', 'aria-label': 'Sticky notes' });
   const bandEl = h('section', { class: 'dk-continuity', 'aria-label': 'Continuity' });
-  root.replaceChildren(boardEl, bandEl);
+  root.replaceChildren(strip.root, boardEl, bandEl);
+
+  // ── Summary strip ────────────────────────────────────────────────────────
+  // Issues and bugs are read once; tasks are re-counted on every board emit. A read that fails is null for its count only.
+  let openIssues = null;
+  let openBugs = null;
+  async function loadCounts() {
+    const cached = store?.getIssues?.();
+    const [issues, bugs] = await Promise.all([
+      Array.isArray(cached) ? cached : getIssues({ includeResolved: false }).then((r) => r?.issues).catch(() => null),
+      listBugs({ status: 'open' }).catch(() => null),
+    ]);
+    openIssues = issues;
+    openBugs = bugs;
+  }
+  function renderStrip() {
+    strip.update(summaryCounts({ tasks: store?.getBacklog?.()?.tasks, issues: openIssues, bugs: openBugs }));
+  }
 
   let notes = [];
   let items = [];
@@ -200,12 +217,20 @@ export async function mount(root, { store, api }) {
   }
 
   // ── Initial paint ────────────────────────────────────────────────────────
-  await Promise.all([loadNotes(), loadItems()]);
+  await Promise.all([loadNotes(), loadItems(), loadCounts()]);
+  renderStrip();
   renderBoard();
   await renderBand();
 
+  // A mount the router abandoned never gets its cleanup called, so a detached strip unsubscribes itself.
+  const unsubscribe = store?.subscribe?.('backlog', () => {
+    if (!strip.root.isConnected) { unsubscribe?.(); return; }
+    renderStrip();
+  });
+
   // Leaving with a note mid-edit: blurring its editor saves it, once, before the screen is torn down.
   return async () => {
+    unsubscribe?.();
     if (boardEl.contains(document.activeElement)) document.activeElement.blur();
   };
 }
