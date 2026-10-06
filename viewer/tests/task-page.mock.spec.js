@@ -426,3 +426,24 @@ test('fullscreen keeps a tall graph scrollable and its way out in reach, and its
   await expect(full).toHaveText('Fullscreen');
   await expect(full).toHaveAttribute('aria-pressed', 'false');
 });
+
+test('a repaint of the same task keeps the graph in fullscreen, on the same frame, showing the new data', async ({ page }) => {
+  await open(page, GRAPH);
+  const full = page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]');
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
+  await page.evaluate(() => { document.fullscreenElement.dataset.marked = 'before'; });
+
+  await renamedElsewhere(page, 'Renamed elsewhere');
+  await expect(page.locator('#screen-mount h1')).toHaveText('Renamed elsewhere');
+  await expect(page.locator('#screen-mount .node--center')).toHaveAttribute('aria-label', /Renamed elsewhere/);
+  const after = await page.evaluate(() => ({
+    same: document.fullscreenElement?.dataset.marked === 'before',
+    frames: document.querySelectorAll('#screen-mount .td-graph-frame').length,
+  }));
+  expect(after.same, 'the frame that fills the screen is the one the click put there').toBe(true);
+  expect(after.frames).toBe(1);
+  await expect(full).toHaveAttribute('aria-pressed', 'true');
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+});

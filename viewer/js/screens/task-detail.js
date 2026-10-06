@@ -78,12 +78,19 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     const restore = rememberView(root);
     // The graph view's own state (open tab, hidden context, canvas scroll) carries over a repaint of the graph view.
     const viewState = view === 'B' ? cleanup?.viewState?.() : undefined;
-    cleanup?.();
+    // A fullscreen graph frame stays on the page for the graph mount below to repaint inside it.
+    const keepFrame = !!viewState?.frame;
+    cleanup?.({ keepFrame });
     cleanup = null;
     const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view, viewState};
     if (view === 'B') {
       const mod = await import('../components/task-detail-graph.js');
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
+      else if (keepFrame) {
+        // Nothing replaces the kept frame after all: leave no screen filled by an abandoned page.
+        if (document.fullscreenElement && root.contains(document.fullscreenElement)) document.exitFullscreen?.();
+        root.replaceChildren();
+      }
     } else cleanup = mountTaskDetailDocument(root, ctx);
     shown = value;
     restore(root);
