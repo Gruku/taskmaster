@@ -1,38 +1,60 @@
-// Variant B — Graph layout for Task Detail.
-// Renders a compact head, an SVG-based dependency graph, a context band,
-// graph controls, and tabs (Spec / Plan / Notes / Activity / Anchors / Raw YAML).
+// User intent: the task page's Graph view — the same page head and h1 as the Document view, the task between what it
+// depends on and what it unblocks, each neighbour a link the keyboard reaches that says its status in a shape and a
+// word, a context band, and the task's documents behind real tabs. No control that does nothing.
 
 import { computeGraphLayout } from './dependency-graph.js';
 import { railPanels } from './right-rail.js';
-import { renderMarkdown } from './markdown.js';
 import { stateBlock } from './empty-state.js';
-import { mountTaskTopbar, openEditForm } from './task-detail-document.js';
+import { statusMeta, priorityMeta, statusMarker, priorityMarker } from './status.js';
+import { linkRoute } from './link-pills.js';
+import { detailHead, detailTitle, markdownBody, detailGrid } from './detail-page.js';
+import { mountTaskTopbar, openEditForm, taskMeta } from './task-detail-document.js';
+import { h } from '../util/h.js';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+let seq = 0;
 
 export function mountTaskDetailGraph(root, ctx) {
   if (ctx.etag) ctx.store?.setEtag?.(`task:${ctx.task.id}`, ctx.etag);
-  root.innerHTML = '';
+  const task = ctx.task && typeof ctx.task === 'object' ? ctx.task : {};
+  const timers = new Set();
+  const uid = `tdg${++seq}`;
+  root.replaceChildren();
   root.classList.add('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
+  // A node is a link to its task; on this page it navigates rather than opening a modal over this one.
   root.dataset.detailLinks = 'follow';
 
   // The switch shows the view on screen, which is this one.
   mountTaskTopbar({ view: 'B', onToggleVariant: ctx.onToggleVariant, onEdit: () => openEditForm(ctx) });
-  root.appendChild(renderGrid(ctx));
+
+  const markers = h('div', { class: 'td-markers', 'data-test': 'chips' }, [
+    statusMarker('task', task.status), priorityMarker(task.priority),
+  ]);
+  root.appendChild(detailHead({ meta: taskMeta(task, { timers }), title: detailTitle(words(task.title)), after: [markers] }));
+  const body = h('div', { class: 'td-body' }, [renderGraphFrame(task, ctx.related, uid), renderTabs(task, uid)]);
+  root.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
+  // A canvas larger than its frame opens on this task, not on its first neighbour.
+  const canvas = root.querySelector('.td-graph-canvas');
+  if (canvas) {
+    canvas.scrollLeft = (canvas.scrollWidth - canvas.clientWidth) / 2;
+    canvas.scrollTop = (canvas.scrollHeight - canvas.clientHeight) / 2;
+  }
+
   return () => {
-    root.innerHTML = '';
+    for (const timer of timers) clearTimeout(timer);
+    root.replaceChildren();
     root.classList.remove('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
     delete root.dataset.detailLinks;
   };
 }
 
-function h(tag, attrs = {}, children = []) {
-  const NS = tag === 'svg' || tag === 'g' || tag === 'path' || tag === 'rect' || tag === 'text' || tag === 'circle' || tag === 'line';
-  const el = NS ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') NS ? el.setAttribute('class', v) : (el.className = v);
-    else if (k === 'on') for (const [evt, fn] of Object.entries(v)) el.addEventListener(evt, fn);
-    else if (k === 'html') el.innerHTML = v;
-    else el.setAttribute(k, v);
-  }
+// Task data is written by many hands: a field of the wrong type is shown as nothing, never as "[object Object]".
+const words = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+const list = (v) => (Array.isArray(v) ? v : []);
+
+function s(tag, attrs = {}, children = []) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null && v !== false) el.setAttribute(k, v);
   for (const c of [].concat(children)) {
     if (c == null || c === false) continue;
     el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
@@ -40,50 +62,10 @@ function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-function renderGrid(ctx) {
-  // With nothing related there is no rail, and the body takes the width.
-  const panels = railPanels({ task: ctx.task, related: ctx.related, level: 2 });
-  const rail = panels.length ? h('aside', { class: 'td-rail', 'data-test': 'rail', 'aria-label': 'Related' }, panels) : null;
-  return h('div', { class: `td-grid${rail ? '' : ' td-grid--solo'}` }, [
-    renderBody(ctx),
-    rail,
-  ]);
-}
-
-function renderBody(ctx) {
-  const body = h('div', { class: 'td-body' });
-  body.appendChild(renderCompactHead(ctx.task));
-  body.appendChild(renderGraphFrame(ctx));
-  body.appendChild(renderTabs(ctx));
-  return body;
-}
-
-const words = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
-
-function renderCompactHead(task) {
-  const epic = words(task?.epic);
-  const parts = [
-    h('span', { class: 'td-id-text' }, words(task?.id)),
-    h('a', { href: '#/kanban' }, 'Tasks'),
-    epic ? h('a', { href: `#/epic/${encodeURIComponent(epic)}` }, epic) : null,
-    words(task?.phase) ? h('span', {}, words(task.phase)) : null,
-  ].filter(Boolean);
-  const meta = h('div', { class: 'td-meta' });
-  parts.forEach((part, i) => {
-    if (i) meta.appendChild(h('span', { class: 'td-sep', 'aria-hidden': 'true' }, '·'));
-    meta.appendChild(part);
-  });
-  return h('div', { class: 'td-head-block', 'data-test': 'compact-head' }, [
-    meta,
-    h('h2', { class: 'td-head-title' }, words(task?.title)),
-  ]);
-}
-
-function renderGraphFrame(ctx) {
+function renderGraphFrame(task, related, uid) {
   const frame = h('div', { class: 'td-graph-frame', 'data-test': 'graph-frame' });
-  const list = (v) => (Array.isArray(v) ? v : []);
   // A task with no neighbours has no graph to draw: say so instead of framing one lonely node.
-  if (!list(ctx.related?.dependencies).length && !list(ctx.related?.unblocks).length) {
+  if (!list(related?.dependencies).length && !list(related?.unblocks).length) {
     frame.classList.add('td-graph-frame--empty');
     frame.appendChild(stateBlock({
       state: 'empty', label: 'Graph', headline: 'No dependencies to draw',
@@ -91,202 +73,228 @@ function renderGraphFrame(ctx) {
     }));
     return frame;
   }
-  frame.appendChild(renderGraphRail());
-  frame.appendChild(renderGraphSvg(ctx));
-  frame.appendChild(renderContextBand(ctx));
-  frame.appendChild(renderGraphControls(ctx));
+  frame.appendChild(h('div', { class: 'td-graph-canvas' }, renderGraphSvg(task, related)));
+  const band = renderContextBand(related, uid);
+  if (band) frame.appendChild(band);
+  const controls = renderGraphControls(frame, band);
+  if (controls) frame.appendChild(controls);
   return frame;
 }
 
-function renderGraphRail() {
-  return h('div', { class: 'td-graph-rail' }, [
-    h('span', { class: 'axis' }, '← Dependencies | This task | Unblocks →'),
-    h('span', { class: 'legend' }, [
-      h('span', {}, [h('span', { class: 'dot s-done' }), 'done']),
-      h('span', {}, [h('span', { class: 'dot s-progress' }), 'in progress']),
-      h('span', {}, [h('span', { class: 'dot s-backlog' }), 'backlog']),
-    ]),
-  ]);
-}
+// The columns that name the sides; the outer two (depth 2) are never drawn, as every neighbour here is one step away.
+const SIDE_LABELS = { '-1': 'Depends on', 0: 'This task', 1: 'Unblocks' };
 
-function renderGraphSvg({ task, related, onNavigate }) {
-  const neighbours = (v) => (Array.isArray(v) ? v.filter((d) => d && typeof d === 'object') : []);
-  const upstream = neighbours(related?.dependencies).map((d) => ({
-    id: d.id, title: d.title, status: d.status, depth: 1,
-  }));
-  const downstream = neighbours(related?.unblocks).map((d) => ({
-    id: d.id, title: d.title, status: d.status, depth: 1,
-  }));
+function renderGraphSvg(task, related) {
+  const neighbours = (v) => list(v)
+    .filter((d) => d && typeof d === 'object' && words(d.id))
+    .map((d) => ({ id: words(d.id), title: words(d.title), status: words(d.status), priority: words(d.priority), estimate: words(d.estimate), depth: 1 }));
+  const upstream = neighbours(related?.dependencies);
+  const downstream = neighbours(related?.unblocks);
+  const id = words(task.id);
   const layout = computeGraphLayout({
-    center: { id: task.id, title: task.title, status: task.status,
-              priority: task.priority, estimate: task.estimate,
-              time_in_status: task.time_in_status,
+    center: { id, title: words(task.title), status: words(task.status),
+              priority: words(task.priority), estimate: words(task.estimate),
+              time_in_status: words(task.time_in_status),
               progress: task.auto_mode?.progress ?? null,
-              step: task.auto_mode?.step ?? null },
+              step: words(task.auto_mode?.step) || null },
     upstream, downstream,
     width: 820, height: 320,
   });
 
-  const svg = h('svg', {
-    class: 'td-graph-svg', viewBox: '0 0 820 320',
-    preserveAspectRatio: 'xMidYMid meet',
+  // The canvas is cut to what is drawn and shown at its own size: a long side is never clipped out of sight (its nodes
+  // are links the keyboard still reaches), and node text is never scaled below its 12px.
+  const top = Math.min(...layout.nodes.map((n) => n.y));
+  const bottom = Math.max(...layout.nodes.map((n) => n.y + n.h));
+  const left = Math.min(...layout.nodes.map((n) => n.x)) - 16;
+  const right = Math.max(...layout.nodes.map((n) => n.x + n.w)) + 16;
+  const box = { x: left, y: top - 34, w: right - left, h: bottom + 16 - (top - 34) };
+  const svg = s('svg', {
+    class: 'td-graph-svg', viewBox: `${box.x} ${box.y} ${box.w} ${box.h}`, width: box.w, height: box.h,
+    role: 'group', 'aria-label': `Dependencies and unblocks of ${id}`,
     'data-test': 'graph-svg',
   });
 
+  const used = new Set(layout.nodes.map((n) => n.column));
   for (const col of layout.columns) {
-    svg.appendChild(h('line', { class: 'col-guide', x1: col.x, y1: 14, x2: col.x, y2: 314 }));
-    svg.appendChild(h('text', { class: 'col-label', x: col.x, y: 14, 'text-anchor': 'middle' }, col.label));
+    if (!Object.hasOwn(SIDE_LABELS, col.depth) || !used.has(col.depth)) continue;
+    svg.appendChild(s('line', { class: 'col-guide', x1: col.x, y1: top - 10, x2: col.x, y2: bottom + 6, 'aria-hidden': 'true' }));
+    svg.appendChild(s('text', { class: 'col-label', x: col.x, y: top - 16, 'text-anchor': 'middle', 'aria-hidden': 'true' }, SIDE_LABELS[col.depth]));
   }
   for (const e of layout.edges) {
-    svg.appendChild(h('path', { class: 'edge-path', d: e.path }));
+    svg.appendChild(s('path', { class: 'edge-path', d: e.path, 'aria-hidden': 'true' }));
   }
-  for (const n of layout.nodes) {
-    svg.appendChild(renderNode(n, onNavigate));
-  }
+  for (const n of layout.nodes) svg.appendChild(renderNode(n));
   return svg;
 }
 
-function renderNode(n, onNavigate) {
-  const g = h('g', { class: 'node', 'data-id': n.id, on: { click: () => onNavigate?.(n.id) } });
-  g.appendChild(h('rect', {
-    class: `node-rect ${n.isCenter ? 'center' : ''} ${n.faded ? 'faded' : ''}`,
+// Character budgets for a node's lines: JetBrains Mono at 12px is about 7.2 units a character, DM Sans about 6.6.
+const PAD = 18;
+const monoChars = (n) => Math.floor((n.w - PAD) / 7.2);
+const sansChars = (n) => Math.floor((n.w - PAD) / 6.6);
+
+function renderNode(n) {
+  const status = statusMeta('task', n.status);
+  const parts = [status.label, n.priority ? priorityMeta(n.priority).label : '', words(n.estimate)].filter(Boolean);
+  const full = [n.id, n.title, ...parts].filter(Boolean).join(' · ');
+  const g = n.isCenter
+    ? s('g', { class: 'node node--center', 'data-id': n.id, role: 'img', 'aria-label': `This task: ${[n.id, n.title].filter(Boolean).join(' · ')}` },
+      [s('title', {}, [full, n.step].filter(Boolean).join(' · '))])
+    : s('a', { class: 'node node--link', href: `#/task/${encodeURIComponent(n.id)}`, 'data-id': n.id }, [s('title', {}, full)]);
+
+  g.appendChild(s('rect', {
+    class: `node-rect${n.isCenter ? ' center' : ''}${n.faded ? ' faded' : ''}`,
     x: n.x, y: n.y, width: n.w, height: n.h, rx: 6, ry: 6,
   }));
-  g.appendChild(h('circle', {
-    class: `status-dot s-${(n.status || '').replace(/[^a-z]/gi, '')}`,
-    cx: n.x + 10, cy: n.y + 12, r: 4,
-  }));
-  g.appendChild(h('text', { class: 'node-id', x: n.x + 20, y: n.y + 16 }, n.id));
+  g.appendChild(svgShape(status.shape, n.x + 12, n.y + 12, status.tone));
+  g.appendChild(s('text', { class: 'node-id', x: n.x + 21, y: n.y + 16 }, n.id));
   if (n.time_in_status) {
-    g.appendChild(h('text', { class: 'node-meta', x: n.x + n.w - 8, y: n.y + 16, 'text-anchor': 'end' }, n.time_in_status));
+    g.appendChild(s('text', { class: 'node-meta', x: n.x + n.w - 8, y: n.y + 16, 'text-anchor': 'end' }, n.time_in_status));
   }
-  g.appendChild(h('text', { class: 'node-title', x: n.x + 10, y: n.y + 36 }, truncate(n.title, n.isCenter ? 20 : 14)));
-  if (n.priority || n.estimate) {
-    g.appendChild(h('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 8 },
-      [n.priority, n.estimate].filter(Boolean).join(' · ')));
-  }
+  g.appendChild(s('text', { class: 'node-title', x: n.x + 10, y: n.y + 36 }, cut(n.title, sansChars(n))));
   if (n.isCenter && (n.progress != null || n.step)) {
     const barW = n.w - 20;
     const pct = Math.max(0, Math.min(1, n.progress || 0));
-    g.appendChild(h('rect', { class: 'node-progress-track', x: n.x + 10, y: n.y + n.h - 22, width: barW, height: 3 }));
-    g.appendChild(h('rect', { class: 'node-progress-fill', x: n.x + 10, y: n.y + n.h - 22, width: barW * pct, height: 3 }));
-    if (n.step) {
-      g.appendChild(h('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 26 }, truncate(n.step, 22)));
-    }
+    g.appendChild(s('rect', { class: 'node-progress-track', x: n.x + 10, y: n.y + n.h - 22, width: barW, height: 3 }));
+    g.appendChild(s('rect', { class: 'node-progress-fill', x: n.x + 10, y: n.y + n.h - 22, width: barW * pct, height: 3 }));
+    if (n.step) g.appendChild(s('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 26 }, cut(n.step, monoChars(n))));
   }
+  g.appendChild(s('text', { class: 'node-meta node-status', x: n.x + 10, y: n.y + n.h - 8 }, cutParts(parts, monoChars(n))));
   return g;
 }
 
-function truncate(s, n) { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; }
-function renderContextBand({ related, onNavigate }) {
-  const handovers = Array.isArray(related?.handovers) ? related.handovers.filter(Boolean) : [];
-  const issues    = Array.isArray(related?.issues) ? related.issues.filter(Boolean) : [];
-  const band = h('div', { class: 'td-graph-context-band', 'data-test': 'context-band' });
+// The status.js shape drawn in SVG, 8×8 around (x, y): the fonts carry none of the glyphs, as in the markers.
+const SHAPES = { '○': 'ring', '◐': 'half', '▲': 'triangle', '◆': 'diamond', '●': 'dot', '→': 'arrow', '✕': 'cross' };
+function svgShape(shape, x, y, tone) {
+  const name = Object.hasOwn(SHAPES, shape) ? SHAPES[shape] : 'ring';
+  const stroked = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 };
+  const filled = { fill: 'currentColor' };
+  const parts = {
+    ring: () => [s('circle', { cx: x, cy: y, r: 3.5, ...stroked })],
+    half: () => [s('circle', { cx: x, cy: y, r: 3.5, ...stroked }), s('path', { d: `M ${x} ${y - 3.5} A 3.5 3.5 0 0 0 ${x} ${y + 3.5} Z`, ...filled })],
+    triangle: () => [s('path', { d: `M ${x} ${y - 4} L ${x + 4} ${y + 3.5} L ${x - 4} ${y + 3.5} Z`, ...filled })],
+    diamond: () => [s('path', { d: `M ${x} ${y - 4} L ${x + 4} ${y} L ${x} ${y + 4} L ${x - 4} ${y} Z`, ...filled })],
+    dot: () => [s('circle', { cx: x, cy: y, r: 4, ...filled })],
+    arrow: () => [s('path', { d: `M ${x - 4} ${y} L ${x + 4} ${y} M ${x + 1} ${y - 3} L ${x + 4} ${y} L ${x + 1} ${y + 3}`, ...stroked })],
+    cross: () => [s('path', { d: `M ${x - 3.5} ${y - 3.5} L ${x + 3.5} ${y + 3.5} M ${x + 3.5} ${y - 3.5} L ${x - 3.5} ${y + 3.5}`, ...stroked })],
+  }[name]();
+  return s('g', { class: `node-shape node-shape--${tone}`, 'data-shape': name, 'aria-hidden': 'true' }, parts);
+}
+
+// SVG text cannot wrap or ellipsise itself; the caller keeps the uncut text in the node's <title>.
+function cut(text, n) { text = text || ''; return text.length > n ? text.slice(0, Math.max(1, n - 1)) + '…' : text; }
+// A line of parts that does not fit drops whole parts from its end, so the status word is never the one cut.
+function cutParts(parts, n) {
+  const line = parts.join(' · ');
+  if (line.length <= n) return line;
+  let shown = '';
+  for (const part of parts) {
+    const next = shown ? `${shown} · ${part}` : part;
+    if (next.length + 2 > n) break;
+    shown = next;
+  }
+  return shown ? `${shown} …` : cut(line, n);
+}
+
+function renderContextBand(related, uid) {
+  const handovers = list(related?.handovers).filter((ho) => ho && words(ho.id));
+  const issues = list(related?.issues).filter((i) => i && words(i.id));
+  if (!handovers.length && !issues.length) return null;
+  const band = h('div', { class: 'td-graph-context-band', id: `${uid}-context`, 'data-test': 'context-band' });
   if (handovers.length) {
     band.appendChild(h('span', { class: 'lbl' }, 'Handovers'));
-    for (const ho of handovers.slice(0, 3)) {
-      band.appendChild(h('span', { class: 'ctx-pill handover' },
-        [h('span', { class: 'glyph' }, '§'), h('span', {}, ho.id)]));
-    }
+    for (const ho of handovers.slice(0, 3)) band.appendChild(h('span', { class: 'ctx-pill handover' }, words(ho.id)));
   }
   if (issues.length) {
     band.appendChild(h('span', { class: 'lbl' }, 'Issues'));
-    for (const i of issues.slice(0, 4)) {
-      band.appendChild(h('span', { class: 'ctx-pill issue' },
-        [h('span', { class: 'glyph' }, '!'), h('span', { class: 'mono' }, i.id)]));
-    }
+    for (const i of issues.slice(0, 4)) band.appendChild(h('a', { class: 'ctx-pill issue', href: linkRoute(words(i.id)) }, words(i.id)));
   }
   return band;
 }
 
-function renderGraphControls(ctx) {
-  const wrap = h('div', { class: 'td-graph-controls', 'data-test': 'graph-controls' });
-  const buttons = [
-    { id: 'depth', label: 'Depth: 2', toggle: () => {} },
-    { id: 'show-all', label: 'Show all', toggle: () => {} },
-    { id: 'hide-context', label: 'Hide context', toggle: (el) => el.classList.toggle('on') },
-    { id: 'fullscreen', label: 'Fullscreen', toggle: (el) => {
-        const f = el.closest('.td-graph-frame');
-        if (!document.fullscreenElement) f.requestFullscreen?.();
-        else document.exitFullscreen?.();
-      } },
-  ];
-  for (const b of buttons) {
-    const btn = h('button', { type: 'button', class: 'gc-btn', 'data-id': b.id, on: { click: (e) => b.toggle(e.currentTarget) } }, b.label);
-    wrap.appendChild(btn);
+function renderGraphControls(frame, band) {
+  const buttons = [];
+  if (band) {
+    const hide = h('button', {
+      type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': 'false', 'aria-controls': band.id,
+    }, 'Hide context');
+    hide.addEventListener('click', () => {
+      band.hidden = !band.hidden;
+      hide.setAttribute('aria-pressed', String(band.hidden));
+    });
+    buttons.push(hide);
   }
-  wrap.querySelector('[data-id="hide-context"]').addEventListener('click', (e) => {
-    const frame = e.currentTarget.closest('.td-graph-frame');
-    frame.querySelector('.td-graph-context-band')?.classList.toggle('hidden');
-  });
-  return wrap;
+  if (document.fullscreenEnabled) {
+    const full = h('button', { type: 'button', class: 'btn btn--ghost btn--sm' }, 'Fullscreen');
+    full.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen?.();
+      else frame.requestFullscreen?.();
+    });
+    buttons.push(full);
+  }
+  return buttons.length ? h('div', { class: 'td-graph-controls', 'data-test': 'graph-controls' }, buttons) : null;
 }
 
-function renderTabs({ task, related }) {
-  const tabs = [
-    ['spec',     'Spec',     () => renderMd(task.specification || task.description)],
-    ['plan',     'Plan',     () => renderMd(task.plan)],
-    ['notes',    'Notes',    () => renderMd(task.notes)],
-    ['activity', 'Activity', () => renderActivityList(task.activity || [])],
-    ['anchors',  'Anchors',  () => renderAnchors(task.anchors || [])],
-    ['raw',      'Raw YAML', () => renderRaw(task)],
+function renderTabs(task, uid) {
+  const docs = [
+    ['spec', 'Spec', () => renderMd(task.specification || task.description)],
+    ['plan', 'Plan', () => renderMd(task.plan)],
+    ['notes', 'Notes', () => renderMd(task.notes)],
+    ['activity', 'Activity', () => renderActivityList(task.activity)],
+    ['anchors', 'Anchors', () => renderAnchors(task.anchors)],
+    ['raw', 'Raw JSON', () => renderRaw(task)],
   ];
-  const wrap = h('div', { class: 'td-tabs-wrap', 'data-test': 'tabs' });
-  const bar = h('div', { class: 'td-tabs' });
+  const bar = h('div', { class: 'td-tabs', role: 'tablist', 'aria-label': 'Task documents' });
   const panels = h('div', { class: 'td-tab-panels' });
-  tabs.forEach(([id, label, build], idx) => {
-    const tab = h('button', { type: 'button', class: `td-tab ${idx === 0 ? 'on' : ''}`, 'data-tab': id }, label);
-    const panel = h('div', { class: `td-tab-panel ${idx === 0 ? 'on' : ''}`, 'data-tab-panel': id });
-    panel.appendChild(build());
-    tab.addEventListener('click', () => {
-      bar.querySelectorAll('.td-tab').forEach((t) => t.classList.toggle('on', t === tab));
-      panels.querySelectorAll('.td-tab-panel').forEach((p) => p.classList.toggle('on', p.dataset.tabPanel === id));
-    });
+  const tabs = [];
+  docs.forEach(([key, label, build], i) => {
+    const tabId = `${uid}-tab-${key}`;
+    const panelId = `${uid}-panel-${key}`;
+    const tab = h('button', {
+      type: 'button', class: 'td-tab', role: 'tab', id: tabId, 'data-tab': key,
+      'aria-selected': String(i === 0), 'aria-controls': panelId, tabindex: i === 0 ? '0' : '-1',
+    }, label);
+    const panel = h('div', { class: 'td-tab-panel', role: 'tabpanel', id: panelId, 'aria-labelledby': tabId, tabindex: '0', 'data-tab-panel': key }, build());
+    panel.hidden = i !== 0;
+    tab.addEventListener('click', () => select(i));
+    tabs.push([tab, panel]);
     bar.appendChild(tab);
     panels.appendChild(panel);
   });
-  wrap.appendChild(bar);
-  wrap.appendChild(panels);
-  return wrap;
+  function select(index, focus = false) {
+    tabs.forEach(([tab, panel], i) => {
+      tab.setAttribute('aria-selected', String(i === index));
+      tab.setAttribute('tabindex', i === index ? '0' : '-1');
+      panel.hidden = i !== index;
+    });
+    if (focus) tabs[index][0].focus();
+  }
+  bar.addEventListener('keydown', (e) => {
+    const at = tabs.findIndex(([tab]) => tab === e.target);
+    if (at < 0) return;
+    const last = tabs.length - 1;
+    const next = { ArrowRight: at === last ? 0 : at + 1, ArrowLeft: at === 0 ? last : at - 1, Home: 0, End: last }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    select(next, true);
+  });
+  return h('div', { class: 'td-tabs-wrap', 'data-test': 'tabs' }, [bar, panels]);
 }
 
+const empty = (text) => h('div', { class: 'td-empty' }, text);
+
 function renderMd(src) {
-  const div = document.createElement('div');
-  if (typeof src !== 'string' || !src.trim()) {
-    div.className = 'td-empty';
-    div.textContent = 'Nothing written.';
-    return div;
-  }
-  div.className = 'md-body';
-  // renderMarkdown sanitises; it is the only path task text takes into innerHTML.
-  div.innerHTML = renderMarkdown(src);
-  return div;
+  return typeof src === 'string' && src.trim() ? markdownBody(src) : empty('Nothing written.');
 }
 function renderActivityList(lines) {
-  const ul = document.createElement('ul');
-  ul.className = 'td-activity';
-  for (const l of (Array.isArray(lines) ? lines : []).slice(0, 30)) {
-    const li = document.createElement('li');
-    li.textContent = typeof l === 'string' ? l : JSON.stringify(l);
-    ul.appendChild(li);
-  }
-  if (!ul.children.length) ul.innerHTML = '<li class="td-empty">No activity.</li>';
-  return ul;
+  const items = list(lines).slice(0, 30);
+  if (!items.length) return empty('No activity.');
+  return h('ul', { class: 'td-activity' }, items.map((l) => h('li', {}, typeof l === 'string' ? l : JSON.stringify(l))));
 }
 function renderAnchors(anchors) {
-  const wrap = document.createElement('div');
-  anchors = Array.isArray(anchors) ? anchors.filter((a) => typeof a === 'string') : [];
-  if (!anchors.length) { wrap.className = 'td-empty'; wrap.textContent = 'No anchors.'; return wrap; }
-  for (const a of anchors) {
-    const pill = document.createElement('span');
-    pill.className = 'td-anchor-pill';
-    pill.textContent = a;
-    wrap.appendChild(pill);
-  }
-  return wrap;
+  const names = list(anchors).filter((a) => typeof a === 'string');
+  if (!names.length) return empty('No anchors.');
+  return h('div', { class: 'td-anchors' }, names.map((a) => h('span', { class: 'td-anchor-pill' }, a)));
 }
 function renderRaw(task) {
-  const pre = document.createElement('pre');
-  pre.textContent = JSON.stringify(task, null, 2);
-  return pre;
+  return h('pre', {}, JSON.stringify(task, null, 2));
 }

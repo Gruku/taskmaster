@@ -1,11 +1,12 @@
 // User intent: the full task page must hold up as a frame — the Document/Graph switch shows what is on screen, Edit is
 // the page's one primary in row 1, a load that fails says so in words with one way on, and another writer, a reload
 // mid-edit or leaving the page (while it loads, or with Edit open) never paints over the user or loses their typing.
+// Its Graph view is walked by keyboard — nodes are links, tabs move by arrow keys — and holds at phone width.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, RICH_RELATED, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
@@ -245,11 +246,11 @@ test('Try again says it is loading, then puts focus on the title, or on the new 
   await expect(h1(page)).toBeFocused();
 });
 
-async function axe(page, selector) {
+async function axe(page, selector, rules = ['color-contrast']) {
   await page.evaluate(axeSource);
-  const result = await page.evaluate((sel) => window.axe.run(document.querySelector(sel), {
-    runOnly: { type: 'rule', values: ['color-contrast'] }, resultTypes: ['violations'],
-  }), selector);
+  const result = await page.evaluate(([sel, values]) => window.axe.run(document.querySelector(sel), {
+    runOnly: { type: 'rule', values }, resultTypes: ['violations'],
+  }), [selector, rules]);
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
 }
 
@@ -295,3 +296,62 @@ test('a refused reason goes when another writer changes that field, and stays wh
   await expect(status.locator('.marker__word')).toHaveText('In review');
   await expect(status.locator('.if-error'), 'the field itself changed: the reason is gone').toHaveText('');
 });
+
+// ── Graph view ──
+const GRAPH = '#/task/T-102?view=B';
+const graph = (page) => page.locator('#screen-mount.td-page-B');
+
+test('the graph walks by keyboard: nodes are links and the tabs move by arrow keys', async ({ page }) => {
+  await open(page, GRAPH, { '/api/task/T-101/detail': taskDetail(DONE_TASK) });
+  await expect(graph(page)).toBeVisible();
+  await expect(page.locator('#screen-mount h1')).toHaveCount(1);
+  await page.locator('#screen-mount [data-test="task-id"]').focus();
+  let href = null;
+  for (let i = 0; i < 12 && href !== '#/task/T-101'; i++) {
+    await page.keyboard.press('Tab');
+    href = await page.evaluate(() => document.activeElement?.getAttribute('href') ?? null);
+  }
+  expect(href, 'Tab reaches the first dependency node').toBe('#/task/T-101');
+  expect(await page.evaluate(() => document.activeElement.closest('svg')?.getAttribute('role'))).toBe('group');
+
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/task/T-101');
+  await expect(page.locator('#screen-mount h1')).toHaveText(DONE_TASK.title);
+
+  await page.goBack();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(GRAPH);
+  await expect(graph(page)).toBeVisible();
+  await expect(page.locator('#screen-mount h1')).toHaveText(DETAIL_TASK.title);
+
+  const tab = (name) => page.locator('#screen-mount [role="tablist"]').getByRole('tab', { name });
+  await tab('Spec').focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(tab('Plan')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab('Plan')).toBeFocused();
+  await expect(tab('Spec')).toHaveAttribute('aria-selected', 'false');
+  const panelId = await tab('Plan').getAttribute('aria-controls');
+  await expect(page.locator(`#${panelId}`)).toBeVisible();
+});
+
+test('the graph at 390 scrolls nothing sideways and every cut label keeps its full text', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, '#/task/T-105?view=B', { '/api/task/T-105/detail': taskDetail(LONG_TASK, 't1:fixture', LONG_RELATED) });
+  await expect(page.locator('#screen-mount svg.td-graph-svg')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const labels = await page.evaluate(() => [...document.querySelectorAll('#screen-mount text.node-title')].map((t) => ({
+    shown: t.textContent,
+    full: [...t.parentNode.children].find((c) => c.localName === 'title')?.textContent ?? '',
+  })));
+  const cutOnes = labels.filter((l) => l.shown.endsWith('…'));
+  expect(cutOnes.length).toBeGreaterThan(0);
+  for (const l of cutOnes) expect(l.full.length, l.shown).toBeGreaterThan(l.shown.length);
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`axe (${theme}): the graph view has no contrast, nested-interactive or name violation`, async ({ page }) => {
+    await open(page, GRAPH, { '/api/viewer/prefs': { theme, ui: {}, screens: {} } });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('#screen-mount svg.td-graph-svg')).toBeVisible();
+    expect(await axe(page, '#screen-mount', ['color-contrast', 'nested-interactive', 'link-name', 'svg-img-alt', 'aria-allowed-role', 'aria-required-children'])).toEqual([]);
+  });
+}

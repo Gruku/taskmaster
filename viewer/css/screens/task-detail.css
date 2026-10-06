@@ -472,18 +472,6 @@
 }
 
 /* ---------- Variant B — graph ---------- */
-.td-page-B .td-head-block { padding-bottom: var(--space-md); border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
-.td-page-B .td-head-title {
-  margin: var(--space-xs) 0 0;
-  color: var(--foreground-bold);
-  font-family: var(--font-narrator);
-  font-weight: 700;
-  font-size: var(--size-narrator-large);
-  line-height: var(--leading-heading);
-  letter-spacing: var(--tracking-normal);
-  overflow-wrap: anywhere;
-}
-
 /* A bordered recess: no shadow, no gradient. */
 .td-graph-frame {
   position: relative;
@@ -491,23 +479,12 @@
   overflow: hidden;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
-  background: var(--bg-recessed);
+  background: var(--graph-frame-bg);
 }
-.td-graph-rail {
-  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-md);
-  padding: var(--space-xs) var(--space-md);
-  border-bottom: 1px solid var(--border-default);
-  color: var(--foreground-subtle);
-  font-family: var(--font-technical);
-  font-weight: var(--font-technical-weight);
-  font-size: var(--size-technical-small);
-}
-.td-graph-rail .axis { letter-spacing: var(--tracking-wide); text-transform: uppercase; font-size: var(--size-technical-label); }
-.td-graph-rail .legend { display: flex; gap: var(--space-sm); }
-.td-graph-rail .legend .dot { display: inline-block; width: 8px; height: 8px; margin-right: var(--space-micro); border-radius: var(--radius-full); vertical-align: middle; background: var(--tone-neutral); }
-.td-graph-rail .legend .dot.s-done { background: var(--tone-success); }
-.td-graph-rail .legend .dot.s-progress { background: var(--tone-accent); }
-.td-graph-svg { display: block; width: 100%; height: var(--graph-canvas-h); }
+/* The graph is drawn at its own size: a canvas wider or taller than the frame scrolls inside it, never the page. */
+.td-graph-canvas { overflow: auto; max-height: calc(var(--graph-canvas-h) * 1.5); }
+.td-graph-frame:fullscreen .td-graph-canvas { max-height: none; }
+.td-graph-svg { display: block; margin-inline: auto; }
 .td-graph-context-band {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm);
   padding: var(--space-xs) var(--space-md);
@@ -515,10 +492,10 @@
   color: var(--foreground-subtle);
   font-size: var(--size-technical-small);
 }
-.td-graph-context-band:empty { display: none; }
+.td-graph-context-band[hidden] { display: none; }
 .td-graph-context-band .lbl { flex: 0 0 auto; font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label); letter-spacing: var(--tracking-ultra); text-transform: uppercase; }
 .td-graph-context-band .ctx-pill {
-  display: inline-flex; align-items: center; gap: var(--space-micro);
+  display: inline-flex; align-items: center;
   padding: 0 var(--space-xs);
   min-height: 24px;
   border: 1px solid var(--border-default);
@@ -527,48 +504,47 @@
   font-family: var(--font-technical);
   font-weight: var(--font-technical-weight);
   font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
 }
-.td-graph-context-band .ctx-pill .glyph { color: var(--foreground-subtle); }
-.td-graph-context-band.hidden { display: none; }
+/* An issue pill is a link: bold ink, underlined, its edge firming on hover. */
+.td-graph-context-band a.ctx-pill {
+  color: var(--foreground-bold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
+}
+.td-graph-context-band a.ctx-pill:hover { border-color: var(--foreground-subtle); }
 
 .td-graph-controls {
   display: flex; flex-wrap: wrap; gap: var(--space-xs);
   padding: var(--space-xs) var(--space-md);
   border-top: 1px solid var(--border-default);
 }
-.td-graph-controls .gc-btn {
-  min-height: 24px;
-  padding: 0 var(--space-xs);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--foreground-default);
-  font-family: var(--font-technical);
-  font-weight: var(--font-technical-weight);
-  font-size: var(--size-technical-small);
-  cursor: pointer;
-}
-.td-graph-controls .gc-btn:hover { border-color: var(--foreground-subtle); color: var(--foreground-bold); }
-/* Pressed: an inverted edge and bold ink on a tinted fill. */
-.td-graph-controls .gc-btn.on { border-color: var(--signature-dim); background: var(--signature-glow-strong); color: var(--foreground-bold); }
 
-/* SVG: column guides + nodes */
+/* SVG: the side labels, their guides, the edges and the nodes. */
 .td-graph-svg .col-guide { stroke: var(--graph-col-guide); stroke-dasharray: 3 4; }
-.td-graph-svg .col-label { fill: var(--foreground-subtle); font-family: var(--font-technical); font-size: var(--size-technical-label); text-transform: uppercase; }
-.td-graph-svg .node { cursor: pointer; }
-.td-graph-svg .node-rect { fill: var(--card-bg); stroke: var(--border-strong); }
+.td-graph-svg .col-label { fill: var(--foreground-subtle); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-label); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+.td-graph-svg .node-rect { fill: var(--card-bg); stroke: var(--border-strong); transition: fill var(--dur-standard) var(--ease-hourglass); }
 .td-graph-svg .node-rect.center { stroke: var(--signature); stroke-width: 2; }
 .td-graph-svg .node-rect.faded { opacity: 0.6; }
-.td-graph-svg .node-id { fill: var(--text-accent); font-family: var(--font-technical); font-size: var(--size-technical-label); }
+.td-graph-svg a.node { cursor: pointer; }
+.td-graph-svg a.node:hover .node-rect { fill: var(--card-bg-hover); }
+/* An SVG link takes no outline offset: its ring is the node's own edge. */
+.td-graph-svg a.node:focus-visible .node-rect { stroke: var(--border-focus); stroke-width: 2; }
+.td-graph-svg .node-id { fill: var(--text-accent); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
 .td-graph-svg .node-title { fill: var(--foreground-bold); font-family: var(--font-narrator); font-size: var(--size-technical-small); font-weight: var(--font-narrator-weight); }
-.td-graph-svg .node-meta { fill: var(--foreground-subtle); font-family: var(--font-technical); font-size: var(--size-technical-label); }
+.td-graph-svg .node-meta { fill: var(--foreground-default); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
 .td-graph-svg .node-progress-track { fill: var(--border-default); }
 .td-graph-svg .node-progress-fill { fill: var(--signature); }
 .td-graph-svg .edge-path { fill: none; stroke: var(--graph-edge-stroke); stroke-width: 1.4; }
 .td-graph-svg .edge-path.active { stroke: var(--graph-edge-stroke-active); }
-.td-graph-svg .status-dot { fill: var(--tone-neutral); }
-.td-graph-svg .status-dot.s-done { fill: var(--tone-success); }
-.td-graph-svg .status-dot:is(.s-progress, .s-inprogress) { fill: var(--tone-accent); }
+/* The status shape carries the hue; the word on the node's last line stays readable ink. */
+.node-shape--neutral { color: var(--tone-neutral); }
+.node-shape--accent { color: var(--tone-accent); }
+.node-shape--warning { color: var(--tone-warning); }
+.node-shape--critical { color: var(--tone-critical); }
+.node-shape--success { color: var(--tone-success); }
+.node-shape--orange { color: var(--tone-orange); }
 
 .td-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
 .td-tabs .td-tab {
@@ -581,12 +557,12 @@
   font-weight: var(--font-technical-weight);
   font-size: var(--size-technical-small);
   cursor: pointer;
+  transition: color var(--dur-standard) var(--ease-hourglass);
 }
 .td-tabs .td-tab:hover { color: var(--foreground-default); }
 /* The open tab: bold ink and an underline in the signature hue. */
-.td-tabs .td-tab.on { color: var(--foreground-bold); border-bottom-color: var(--signature); }
-.td-tab-panel { display: none; }
-.td-tab-panel.on { display: block; }
+.td-tabs .td-tab[aria-selected="true"] { color: var(--foreground-bold); border-bottom-color: var(--signature); }
+.td-tab-panel[hidden] { display: none; }
 .td-tab-panel > .md-body { max-width: 80ch; font-size: var(--size-narrator-default); }
 .td-tab-panel pre {
   max-width: 100%;
@@ -616,6 +592,6 @@
 }
 
 @media (max-width: 768px) {
-  /* Graph canvas: cap height on mobile for usability */
-  .td-graph-svg { height: 200px; }
+  .td-tabs .td-tab,
+  .td-graph-controls .btn { min-height: 44px; }
 }
