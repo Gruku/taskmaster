@@ -726,3 +726,60 @@ test('a poll keeps a column\'s scroll at 1440, and the chosen tab and page scrol
   await expect(tab).toBeFocused();
   expect(await page.evaluate(() => scrollY)).toBe(600);
 });
+
+test('keyboard walk: row 2, phases, priority, epics, then the cards in order; Enter opens, Escape returns', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const order = ['[data-global-search]', '.tm-segmented button', '.kanban-field select', '.phase-chip--all',
+    '.chip[data-value="critical"]', '.chip[data-value="__all__"]', '.epic-options-btn', '.kanban-col .link-row__link', '.kanban-col .card-id'];
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  const first = new Map();
+  for (let i = 0; i < 120 && first.size < order.length; i++) {
+    await page.keyboard.press('Tab');
+    const hit = await page.evaluate((sels) => sels.find((s) => document.activeElement?.matches(s)), order);
+    if (hit && !first.has(hit)) first.set(hit, i);
+  }
+  expect([...first.keys()]).toEqual(order);
+  const idx = order.map((s) => first.get(s));
+  for (let k = 1; k < idx.length; k++) expect(idx[k]).toBeGreaterThan(idx[k - 1]);
+  const link = page.locator('.kanban-col .link-row__link').first();
+  await link.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.modal--detail')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal--detail')).toHaveCount(0);
+  await expect(link).toBeFocused();
+  // Escape with nothing open leaves the board alone, and Space on a chip presses it.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.card-task').first()).toBeVisible();
+  const crit = page.locator('.chip[data-value="critical"]');
+  await crit.focus();
+  await page.keyboard.press('Space');
+  await expect(crit).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('Escape closes only the topmost thing: Epic options first, then nothing else', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.epic-options')).toBeHidden();
+  await expect(page.locator('.epic-options-btn')).toBeFocused();
+  await expect(page.locator('.card-task').first()).toBeVisible();
+});
+
+for (const theme of ['light', 'dark']) {
+  for (const width of [1440, 390]) {
+    test(`axe (${theme}, ${width}): the Kanban screen has no violation`, async ({ page }) => {
+      await board(page, { theme, viewport: { width, height: width > 400 ? 900 : 844 } });
+      if (width > 400) await toggleOf(page, 'done').click(); // a collapsed column is scanned too
+      await page.evaluate(axeSource);
+      const result = await page.evaluate(() => window.axe.run(document.querySelector('#screen-mount'), {
+        runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive', 'aria-allowed-attr', 'aria-valid-attr', 'aria-valid-attr-value',
+          'aria-required-attr', 'aria-required-children', 'aria-required-parent', 'aria-allowed-role', 'aria-prohibited-attr',
+          'scrollable-region-focusable', 'heading-order', 'button-name', 'link-name'] },
+        resultTypes: ['violations'],
+      }));
+      expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+    });
+  }
+}
