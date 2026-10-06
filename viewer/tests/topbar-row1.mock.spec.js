@@ -79,3 +79,18 @@ test('a new route clears the count, its title and the primary', async ({ page })
   await expect(page.locator('#topbar-primary').getByRole('button', { name: PROBE })).toHaveCount(0);
   await expect(page.locator('#topbar-primary').getByRole('link', { name: PROBE })).toHaveCount(0);
 });
+
+// The page scrolls at phone width, so the topbar must stick to the viewport, not to .main (which never scrolls).
+for (const [hash, loaded] of [['#/kanban', '.card-task'], ['#/table', 'table.tbl .tbl-row']]) {
+  test(`at 390 the topbar stays at the top of a scrolled ${hash} and nothing scrolls sideways`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/' + hash);
+    await expect(page.locator(loaded).first()).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 3000));
+    expect(await page.evaluate(() => window.scrollY), 'the page is long enough to scroll').toBeGreaterThan(0);
+    const top = await page.locator('.topbar').evaluate((el) => el.getBoundingClientRect().top);
+    expect(top).toBe(0);
+    const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.inner);
+  });
+}
