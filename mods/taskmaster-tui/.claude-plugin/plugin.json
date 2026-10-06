@@ -12,6 +12,24 @@
       "description": "tm reads the Taskmaster MCP server; demo draws built-in sample data (screenshots and tuning without a backlog).",
       "default": "tm",
       "options": ["tm", "demo"]
+    },
+    "handoverGuard": {
+      "type": "boolean",
+      "title": "Cache-cold handover guard",
+      "description": "After the idle minutes below with a big context and no handover yet this session, ask the model once to write a handover before the 1-hour prompt cache expires. Arms from the next turn end after enabling or a reload.",
+      "default": false
+    },
+    "handoverGuardIdleMinutes": {
+      "type": "number",
+      "title": "Handover guard: idle minutes",
+      "description": "Minutes idle after a turn before the guard asks (at most 57; the cache expires at 60).",
+      "default": 55
+    },
+    "handoverGuardMinTokens": {
+      "type": "number",
+      "title": "Handover guard: minimum context tokens",
+      "description": "The guard asks only when the context holds at least this many tokens. The 200000 default targets 1M-context models: on a 200k window auto-compact acts first.",
+      "default": 200000
     }
   }
 }

@@ -71,6 +71,8 @@ export type TmCursor = {
 }
 /** `refusalId` names the task `refusal` was given for; the band shows a refusal only on that task (absent: shown nowhere). */
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
+/** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
+export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly latch: 'none' | 'fired' | 'handover' }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -89,6 +91,8 @@ declare module 'claude-code' {
       summaries: Readonly<Record<string, TmHandoverSummary>>
       /** The handover whose summary is expanded ('' none); it shows only while that handover is the picked one. */
       summaryOpen: string
+      /** One handover prompt per session at most: `$.state` is per session, so /clear or a resume can earn another. */
+      handoverGuard: TmHandoverGuard
     }
   }
 }

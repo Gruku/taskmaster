@@ -8,6 +8,7 @@ import { demoActions, pendingActions } from './actions'
 import { DEMO_DETAILS, DEMO_REASON, DEMO_SUMMARIES, demoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
+import { onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
 import { bandModel, FRESH_CURSOR, HANDOVERS, isStaleTicks, REVIEW, TICKS_PREFIX, ticksOf } from './model'
 import type { Rr } from './rr'
@@ -196,6 +197,7 @@ const act = (run: (flows: TmFlows) => Promise<void>): void => {
 export const register: Register = (on, options) => {
   mod.source = options.source === 'demo' ? 'demo' : 'tm'
   mod.flows = null
+  onHandoverGuard(on, options)
 
   on('session.start', async ($, e, next) => {
     await ready($)
