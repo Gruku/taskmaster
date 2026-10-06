@@ -433,10 +433,46 @@ test('at 390x844 every chip, the options button and Clear filters are at least 4
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
   await searchBox(page).fill('T-10');
   await expect(page.locator('.kanban-clear')).toBeVisible();
-  const heights = await page.locator('.kanban-filters .chip, .epic-options-btn, .kanban-clear')
+  const heights = await page.locator('.kanban-filters .chip, .epic-options-btn, .kanban-clear, .kanban-filters .overflow-more, .phase-strip .overflow-more')
     .evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => [e.dataset.value || e.className, e.getBoundingClientRect().height]));
   expect(heights.length).toBeGreaterThan(3);
+  // The rows' More buttons are touch targets too: the phase strip's, Priority's and Epic's.
+  const mores = heights.filter(([name]) => String(name).includes('overflow-more'));
+  console.log(`390 More heights: ${mores.map(([, hgt]) => hgt).join(', ')}`);
+  expect(mores.length).toBeGreaterThanOrEqual(3);
   expect(heights.filter(([, hgt]) => hgt < 44)).toEqual([]);
+});
+
+test('at 390 the priority row shows at least two chips (all four if they fit), none cut, and nothing scrolls sideways', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const m = await page.evaluate(() => {
+    const row = document.querySelector('.kanban-filters__priority');
+    const box = row.querySelector('.chip-row__chips') || row;
+    const boxRight = box.getBoundingClientRect().right;
+    const all = [...row.querySelectorAll('.chip-row__chips .chip')];
+    const shown = all.filter((c) => c.offsetParent && getComputedStyle(c).visibility !== 'hidden');
+    return {
+      total: all.length,
+      chips: shown.map((c) => ({ name: c.textContent.trim(), right: c.getBoundingClientRect().right, cut: c.scrollWidth - c.clientWidth })),
+      boxRight, vw: innerWidth, sideways: document.documentElement.scrollWidth - innerWidth,
+      rowWidth: row.getBoundingClientRect().width, boxWidth: box.getBoundingClientRect().width,
+    };
+  });
+  console.log(`390 priority chips shown: ${m.chips.length} (${m.chips.map((c) => c.name).join(' | ')}); row ${m.rowWidth}px, chips box ${m.boxWidth}px`);
+  expect(m.chips.length).toBeGreaterThanOrEqual(2);
+  for (const c of m.chips) {
+    expect(c.right).toBeLessThanOrEqual(m.vw);
+    expect(c.right).toBeLessThanOrEqual(m.boxRight + 0.5);
+    expect(c.cut).toBeLessThanOrEqual(0);
+  }
+  expect(m.sideways).toBeLessThanOrEqual(0);
+});
+
+test('no phase chip shows a stray "null" between its number and its name', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const texts = await page.locator('.phase-strip .phase-chip').evaluateAll((els) => els.map((e) => e.textContent));
+  expect(texts.length).toBeGreaterThan(0);
+  expect(texts.filter((t) => t.includes('null'))).toEqual([]);
 });
 
 test('at 390 the phase strip\'s More is inside the screen and its text is not cut', async ({ page }) => {

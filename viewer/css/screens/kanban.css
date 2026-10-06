@@ -136,10 +136,12 @@
 /* Phone: the current phase never shrinks past a readable name (it ends in an ellipsis); the other phases go behind
    More first; All, the current phase, Archived and More do not fit one line at 390, so the strip takes a second. */
 @media (max-width: 480px) {
+  /* A slimmer side inset hands the rows 16px: room for a second priority chip and slack on the strip's second line. */
+  .kanban-filterbar { padding: var(--space-sm) var(--space-xs); }
   .phase-strip { gap: var(--space-micro); }
   .phase-strip__items { flex-wrap: wrap; row-gap: var(--space-micro); }
   .phase-chip.phase-chip--current { flex-shrink: 0; }
-  .phase-chip--current .phase-chip__name { max-width: 12ch; }
+  .phase-chip--current .phase-chip__name { max-width: 16ch; }
 }
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
@@ -362,6 +364,7 @@
   .kanban-filters__priority,
   .kanban-filters__epic { flex: 1 1 100%; min-width: 0; }
   /* Scoped so they outrank .btn--sm's 24px: phone touch targets. */
+  .kanban-filters .overflow-more,
   .kanban-filters .epic-options-btn,
   .kanban-filters .kanban-clear { min-height: 44px; min-width: 44px; }
   .epic-option,

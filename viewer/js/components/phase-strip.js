@@ -22,7 +22,8 @@ function paintPhase(b, p, kind) {
   b.className = `chip phase-chip ${kind}`;
   b.title = `${p.name} · ${p.done}/${p.total} done`;
   const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-  b.replaceChildren(
+  // replaceChildren turns a null argument into the text "null", so the optional parts are filtered out first.
+  b.replaceChildren(...[
     h('span', { class: 'phase-chip__num' }, phaseNum(p)),
     kind === 'phase-chip--done' ? icon('check', { size: 12 }) : null,
     h('span', { class: 'phase-chip__name' }, p.name),
@@ -30,7 +31,7 @@ function paintPhase(b, p, kind) {
     kind === 'phase-chip--current'
       ? h('span', { class: 'phase-chip__bar' }, h('span', { style: `width: ${pct}%` }))
       : null,
-  );
+  ].filter(Boolean));
 }
 
 /**
