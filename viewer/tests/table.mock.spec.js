@@ -560,7 +560,20 @@ test('at 390 with 230 long rows nothing scrolls sideways, no ID is cut, and the 
     return { top: b.top >= document.querySelector('.topbar').getBoundingClientRect().bottom, bottom: b.bottom <= innerHeight + 0.5 };
   });
   expect(last).toEqual({ top: true, bottom: true });
+  // The topbar is sticky, not merely scrolled off: part-way down the page it still sits flush with the top edge.
+  await page.evaluate(() => window.scrollTo(0, 3000));
+  const stuck = await page.evaluate(() => ({ scrolled: scrollY > 0, top: document.querySelector('.topbar').getBoundingClientRect().top }));
+  expect(stuck).toEqual({ scrolled: true, top: 0 });
 });
+
+// A saved sort naming a gone or unsortable column (or a bad direction) falls back to the default instead of leaving
+// the phone Sort select blank.
+for (const sort of [{ by: 'bogus', dir: 'asc' }, { by: 'branch', dir: 'asc' }, { by: 'title', dir: 'up' }]) {
+  test(`a stale saved sort ${sort.by}:${sort.dir} falls back to priority ascending`, async ({ page }) => {
+    await boot(page, { width: 390, height: 844, table: { sort } });
+    await expect(page.locator('#tbl-sort')).toHaveValue('priority:asc');
+  });
+}
 
 test('at 390 a redraw keeps the keyboard on the same card and the page where it was', async ({ page }) => {
   await boot(page, { width: 390, height: 844, board: LONG_IDS_BOARD });

@@ -175,6 +175,24 @@ test('a redraw keeps focus on the same epic', async ({ page }) => {
   await expect(page.locator('.epic-row').nth(1).getByRole('link')).toBeFocused();
 });
 
+// A 120-character name (with one unbroken run) beside its swatch is cut, not pushed past the row, and keeps its title.
+test('at 390 a 120-character epic name stays inside its row and its cut text keeps a title', async ({ page }) => {
+  const name = 'Viewer re-skin of every remaining screen to the Reality Reprojection system ' + 'x'.repeat(44);
+  const board = { ...EPICS_BOARD, epics: EPICS_BOARD.epics.map((e, i) => (i === 0 ? { ...e, name, title: name } : e)) };
+  await boot(page, { width: 390, height: 844, board });
+  const look = await page.locator('.epic-row').first().evaluate((row) => {
+    const r = row.getBoundingClientRect();
+    const t = row.querySelector('.epic-row__name .truncate');
+    return {
+      pageX: document.scrollingElement.scrollWidth - innerWidth,
+      out: [...row.querySelectorAll('.epic-row__name, .epic-row__name > *')].filter((el) => el.getBoundingClientRect().right > r.right + 0.5).length,
+      nameX: row.querySelector('.epic-row__name').scrollWidth - row.querySelector('.epic-row__name').clientWidth,
+      title: t.title.length >= 120,
+    };
+  });
+  expect(look).toEqual({ pageX: 0, out: 0, nameX: 0, title: true });
+});
+
 test('at 390 a row stacks and nothing scrolls sideways', async ({ page }) => {
   await boot(page, { width: 390, height: 844, board: LONG_IDS_BOARD });
   const look = await page.evaluate(() => ({
