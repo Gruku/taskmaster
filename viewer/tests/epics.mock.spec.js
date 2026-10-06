@@ -172,10 +172,11 @@ test('at 390 a 120-character epic name stays inside its row and its cut text kee
       pageX: document.scrollingElement.scrollWidth - innerWidth,
       out: [...row.querySelectorAll('.epic-row__name, .epic-row__name > *')].filter((el) => el.getBoundingClientRect().right > r.right + 0.5).length,
       nameX: row.querySelector('.epic-row__name').scrollWidth - row.querySelector('.epic-row__name').clientWidth,
-      title: t.title.length >= 120,
+      title: t.title,
+      cut: t.scrollWidth > t.clientWidth || t.scrollHeight > t.clientHeight,
     };
   });
-  expect(look).toEqual({ pageX: 0, out: 0, nameX: 0, title: true });
+  expect(look).toEqual({ pageX: 0, out: 0, nameX: 0, title: name, cut: true });
 });
 
 test('at 390 a row stacks and nothing scrolls sideways', async ({ page }) => {

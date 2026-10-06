@@ -220,6 +220,12 @@ const ALL_SCENES = [
     await p.getByRole('dialog', { name: 'More Epic' }).waitFor();
   } }],
   ['table-sorted', { open: openTable, scope: '#screen-mount', drive: async (p) => {
+    // At 390 the Table shows a Sort select instead of headers.
+    if (await p.locator('#tbl-sort').isVisible()) {
+      await p.locator('#tbl-sort').selectOption('title:asc');
+      await p.locator('#tbl-sort').selectOption('title:desc');
+      return;
+    }
     const title = p.locator('th[data-key="title"] button.sort-header');
     await title.click();
     await p.locator('th[aria-sort="ascending"][data-key="title"]').waitFor();

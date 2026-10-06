@@ -560,6 +560,20 @@ for (const sort of [{ by: 'bogus', dir: 'asc' }, { by: 'branch', dir: 'asc' }, {
   });
 }
 
+test('at 1440 a stale saved sort leaves the default column marked and the rows in default order', async ({ page }) => {
+  const read = () => page.evaluate(() => ({
+    marked: [...document.querySelectorAll('th[aria-sort]')].map((th) => `${th.dataset.key}:${th.getAttribute('aria-sort')}`),
+    rows: [...document.querySelectorAll('tbody tr')].slice(0, 8).map((tr) => tr.innerText.replace(/\s+/g, ' ').trim()),
+  }));
+  await boot(page, { width: 1440, height: 900 });
+  const fresh = await read();
+  await boot(page, { width: 1440, height: 900, table: { sort: { by: 'bogus', dir: 'asc' } } });
+  const stale = await read();
+  expect(fresh.marked).toEqual(['priority:ascending']);
+  expect(fresh.rows.length).toBeGreaterThan(1);
+  expect(stale).toEqual(fresh);
+});
+
 test('at 390 a redraw keeps the keyboard on the same card and the page where it was', async ({ page }) => {
   await boot(page, { width: 390, height: 844, board: LONG_IDS_BOARD });
   const link = page.locator('.tbl-row[data-task-id="T-1040"] .tbl-link');
