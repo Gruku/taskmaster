@@ -6,7 +6,15 @@ export const LEGACY = {
     "store": "legacy",
     "captured": "2026-10-06",
     "redacted": true,
-    "idsPseudonymised": false
+    "idsPseudonymised": false,
+    "merged": {
+      "captured": "2026-10-06",
+      "keys": [
+        "issues_p0",
+        "issues_p1",
+        "issues_p1_capped"
+      ]
+    }
   },
   "replies": {
     "store_status": {
@@ -118,6 +126,36 @@ export const LEGACY = {
       },
       "isError": false,
       "text": "## Pipeline `store-perf-001` — lane: **full**\ngate_state: `review-gate:pass`\n\n- `spec`: done\n- `spec-review`: ⚠ skipped — Spec is the B-082 xxx xxxx (xxxxxxxx xxxx xxxxx + xxx xxxxxxxxxx) xxxx the xxxxxxx xxxxx; task created xxxx an xxxxxxx xxx, no xxxxxxxx spec xxx.\n- `plan`: done\n- `plan-review`: ⚠ skipped — Spec is the B-082 xxx xxxx (xxxxxxxx xxxx xxxxx + xxx xxxxxxxxxx) xxxx the xxxxxxx xxxxx; task created xxxx an xxxxxxx xxx, no xxxxxxxx spec xxx.\n- `xxxxx`: done\n- `xxxx`: done\n- `review-gate`: pass\n\n**Outstanding:** none — ready for done ✓"
+    },
+    "issues_p0": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P0",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "No issues xxxxx."
+    },
+    "issues_p1": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "- ISS-017 P1 open           — xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx [xxxxxxxxxx, xxxxxxxxx, xxx-xxxx, xxxx-xxxx]\n- ISS-018 P1 open           — xxxxx xxxxx xxx xxxxxxxxxx on xxxxxxxxx/xxxx xxxxx xxxxxxx of xxxxx xxxxxxxxxx xxxxxxxxxx error [xxxxxxxxxx, xxxxxxx-xxxxxxxx, xxx-xxxx, xxxxxx, xxxxxxxx-xxxxx]\n- ISS-027 P1 open           — xxxxxxx xxxxx xxx no xxxxxxxxxxx xxxxxxx — xxxxx xxxxxxx, xxxxxx xxxx xxxxxxx, ID xxxxxxxxxx, and xxxxx/xxxx xxxxx xxxxxx xxxxxx xxx xxxxx — xxxxxxx xxxxx xxx no xxxxxxxxxxx xxxxxxx — xxxxx xxxxxxx, xxxxxx xxxx xxxxxxx, ID xxxxxxxxxx, and xxxxx/xxxx xxxxx xxxxxx xxxxxx xxx xxxxx"
+    },
+    "issues_p1_capped": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 1
+      },
+      "isError": false,
+      "text": "- ISS-017 P1 open           — xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx [xxxxxxxxxx, xxxxxxxxx, xxx-xxxx, xxxx-xxxx]\n…2 more issues — xxxxxx with filters or pass limit=0 for all"
     }
   }
 } as const

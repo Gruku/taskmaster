@@ -17,9 +17,8 @@ import * as R from './fixtures/replies'
 const call = (tool: string, input: Record<string, unknown>, ok = true) => ({ tool: T + tool, input, ok })
 
 describe('binding transitions', () => {
-  test('a pick, a claim acquire or renewal, or a move to in-progress binds that task; release and status do not', () => {
+  test('a pick (which takes the claim), a claim renewal or a move to in-progress binds that task; release and status do not', () => {
     expect(bindingChange(call('backlog_pick_task', { task_id: 'a-001' }), null)).toEqual({ kind: 'set', taskId: 'a-001' })
-    expect(bindingChange(call('backlog_claim', { action: 'acquire', task_id: 'a-001' }), null)).toEqual({ kind: 'set', taskId: 'a-001' })
     expect(bindingChange(call('backlog_claim', { action: 'renew', task_id: 'a-001' }), null)).toEqual({ kind: 'set', taskId: 'a-001' })
     expect(bindingChange(call('backlog_claim', { action: 'release', task_id: 'a-001' }), 'a-001')).toEqual({ kind: 'keep' })
     expect(bindingChange(call('backlog_claim', { action: 'status', task_id: 'a-001' }), null)).toEqual({ kind: 'keep' })

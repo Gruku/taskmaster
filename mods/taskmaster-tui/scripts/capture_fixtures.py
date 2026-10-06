@@ -7,8 +7,14 @@
 """Capture Taskmaster MCP replies as taskmaster-tui test fixtures.
 
     uv run --no-project --with "fastmcp>=3.4,<4" python mods/taskmaster-tui/scripts/capture_fixtures.py [--server PATH]
+        [--only KEY,KEY]
 
 Real backlogs get read-only calls only. Every write runs against a scratch store in a temporary folder.
+
+--only captures just those READS keys from the real backlogs and merges them into the existing legacy.ts / native.ts
+(every other reply kept as it was, the scratch store left alone), so adding a read does not move the values the earlier
+replies' tests pin. The new replies are redacted the same way; their id pseudonyms come from a fresh capture-wide mapping
+(`epic-a`, … in first-seen order among the new replies), so a slug id in them need not match its pseudonym elsewhere.
 """
 from __future__ import annotations
 
@@ -48,6 +54,11 @@ READS = (
     ("handovers_open", "backlog_handover_list", {"format": "json", "status": "open", "limit": 5}),
     ("get_missing", "backlog_get_task", {"task_id": f"{MISSING_PREFIX}-999"}),
     ("pipeline_missing", "backlog_task_pipeline", {"task_id": f"{MISSING_PREFIX}-999"}),
+    # The review queue's P0/P1 issues, read on their own: continuity ranks every in-review task before any issue, so a
+    # 50-row review window on a big backlog holds none. `issues_p1_capped` pins the overflow footer.
+    ("issues_p0", "backlog_issue_list", {"status": "open", "severity": "P0", "limit": 50}),
+    ("issues_p1", "backlog_issue_list", {"status": "open", "severity": "P1", "limit": 50}),
+    ("issues_p1_capped", "backlog_issue_list", {"status": "open", "severity": "P1", "limit": 1}),
 )
 FIRST_ROW_ID = re.compile(r"^- `([^`]+)`", re.M)
 ANY_TASK_ID = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)*-\d+)`")
@@ -64,12 +75,15 @@ async def call(client: Client, tool: str, args: dict) -> dict:
     return {"tool": tool, "args": args, "isError": bool(getattr(result, "is_error", False)), "text": text}
 
 
-async def capture_real(server: Path, root: Path, log: Path, pseudonymise: bool) -> dict:
+async def capture_real(server: Path, root: Path, log: Path, pseudonymise: bool, only: frozenset[str] = frozenset()) -> dict:
     replies: dict[str, dict] = {}
     async with Client(transport(server, root, log)) as client:
         for name, tool, args in READS:
-            replies[name] = await call(client, tool, args)
+            if not only or name in only:
+                replies[name] = await call(client, tool, args)
         for name, source in (("review", "list_in_review"), ("active", "list_in_progress")):
+            if source not in replies:
+                continue
             found = FIRST_ROW_ID.search(replies[source]["text"])
             if found:
                 replies[f"get_{name}"] = await call(client, "backlog_get_task", {"task_id": found.group(1)})
@@ -131,6 +145,31 @@ def emit_ts(const: str, label: str, meta: dict, replies: dict) -> str:
             f"export const {const} = {body} as const\n")
 
 
+def read_ts(path: Path) -> dict:
+    """The {meta, replies} object a previous run wrote into a fixture file."""
+    text = path.read_text(encoding="utf-8")
+    return json.loads(text[text.index("= {") + 2:text.rindex("} as const") + 1])
+
+
+async def merge(server: Path, out: Path, only: frozenset[str]) -> int:
+    log = Path(tempfile.gettempdir()) / "tm-tui-capture.server.log"
+    unknown = only - {name for name, _tool, _args in READS}
+    if unknown:
+        raise SystemExit(f"--only names no READS key: {', '.join(sorted(unknown))}")
+    for const, label, root, pseudonymise in STORES:
+        path = out / f"{label}.ts"
+        if not (root / ".taskmaster").exists() or not path.exists():
+            print(f"skipped {label}.ts (no backlog or no earlier capture)")
+            continue
+        doc = read_ts(path)
+        new = await capture_real(server, root, log, pseudonymise, only)
+        doc["replies"].update(new)
+        doc["meta"]["merged"] = {"captured": date.today().isoformat(), "keys": sorted(new)}
+        path.write_text(emit_ts(const, label, doc["meta"], doc["replies"]), encoding="utf-8", newline="\n")
+        print(f"merged {sorted(new)} into {label}.ts")
+    return 0
+
+
 async def run(server: Path, out: Path) -> int:
     out.mkdir(parents=True, exist_ok=True)
     log = Path(tempfile.gettempdir()) / "tm-tui-capture.server.log"
@@ -156,10 +195,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", type=Path, default=DEFAULT_SERVER)
     parser.add_argument("--out", type=Path, default=OUT)
+    parser.add_argument("--only", default="", help="comma-separated READS keys to capture and merge into the existing files")
     ns = parser.parse_args()
     if not ns.server.exists():
         raise SystemExit(f"no Taskmaster server at {ns.server}: pass --server")
-    return asyncio.run(run(ns.server, ns.out))
+    only = frozenset(key.strip() for key in ns.only.split(",") if key.strip())
+    return asyncio.run(merge(ns.server, ns.out, only) if only else run(ns.server, ns.out))
 
 
 if __name__ == "__main__":

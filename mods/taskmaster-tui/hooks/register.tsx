@@ -159,8 +159,10 @@ function ioOf($: EngineInterface): TmIo {
 
 // A module instance may never see session.start: a userConfig change or any reload of an unchanged module re-runs
 // register() with session.start not refiring. So nothing here waits for it: host, io, writer, refresher and flows are built
-// by whichever hook needs them first, and demo data is seeded by an acting hook (session.start, command.run, ui.press,
-// ui.input) or drawn as a pure fallback. `lastFault` null: no status line written by this instance yet.
+// by the first hook that acts (session.start, classic.SessionStart, turn.complete, tool.call, command.run, ui.press,
+// ui.input) from its own `$`, and that first act asks for one refresh in tm mode (a changed reviewScope applies at once).
+// A draw never builds them and never writes: it only reads $.state, and asks for missing data only through what an acting
+// hook built. `lastFault` null: no status line written by this instance yet.
 const mod: {
   source: 'tm' | 'demo'
   scope: TmScope
@@ -172,6 +174,7 @@ const mod: {
   sessionId: string
   lastFault: TmFault | null
   detailAsked: Set<string>
+  refreshAsked: boolean
 } = {
   source: 'tm',
   scope: { waitingOnly: true, phase: '' },
@@ -183,6 +186,7 @@ const mod: {
   sessionId: '',
   lastFault: null,
   detailAsked: new Set(),
+  refreshAsked: false,
 }
 
 function ensureFlows($: EngineInterface): TmFlows {
@@ -216,10 +220,15 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
 }
 
+/** Every acting hook's entry: the flows from its `$`, the session id, demo's seed, and tm's first refresh of this instance. */
 async function ready($: EngineInterface): Promise<TmFlows> {
   const flows = ensureFlows($)
   if (mod.sessionId === '') mod.sessionId = await $.session.id()
   await ensureSeeded($)
+  if (mod.source === 'tm' && !mod.refreshAsked) {
+    mod.refreshAsked = true
+    mod.refresher?.request()
+  }
   return flows
 }
 
@@ -312,7 +321,8 @@ async function refreshRun(): Promise<void> {
   }
 }
 
-// Lazy reads a drawing finds missing, off the render: a card's task detail, the open handover's summary.
+// Lazy reads a drawing finds missing, off the render and only through what an acting hook built (a draw builds nothing):
+// a card's task detail, the open handover's summary.
 function askDetail(taskId: string): void {
   const { host, write } = mod
   if (host === null || write === null || mod.detailAsked.has(taskId)) return
@@ -330,14 +340,6 @@ function askSummary(handoverId: string): void {
   host.after(0, () => {
     void flows.askSummary(handoverId)
   })
-}
-
-/**
- * Spec §6.4: each main-loop turn end asks for one refresh (single-flight, never awaited). The guard's turn.complete hook
- * calls this; the refresher exists once any hook built the flows (session.start, or the band's first draw after a reload).
- */
-function refreshAfterTurn(): void {
-  if (mod.source === 'tm') mod.refresher?.request()
 }
 
 // Press and input handlers run after the ui.press / ui.input hooks below have built the flows; they read mod.flows then.
@@ -359,7 +361,8 @@ export const register: Register = (on, options) => {
   mod.sessionId = ''
   mod.lastFault = null
   mod.detailAsked = new Set()
-  onHandoverGuard(on, options, refreshAfterTurn)
+  mod.refreshAsked = false
+  onHandoverGuard(on, options)
 
   on('session.start', async ($, e, next) => {
     mod.sessionId = await $.session.id()
@@ -394,14 +397,28 @@ export const register: Register = (on, options) => {
         mod.sessionId = e.session_id
         const from = e.source === 'resume' ? e.session_id : previous
         const stored = from === '' ? null : parseStoredBinding(await $.store.get(`binding:${from}`))
-        if (stored !== null) {
-          await update($, BINDING, () => stored)
-          if (from !== e.session_id) await $.store.set(`binding:${e.session_id}`, stored)
-        }
+        // No stored binding is no binding: a resumed session never keeps the task the one before it was on.
+        await update($, BINDING, () => stored)
+        if (stored !== null && from !== e.session_id) await $.store.set(`binding:${e.session_id}`, stored)
         mod.refresher?.request()
       }
     } catch (error) {
       $.ui.log(`taskmaster-tui: session binding not carried: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    }
+    return result
+  })
+
+  // A main-loop turn end asks for a refresh with this hook's own `$` (spec §6.4: single-flight, never awaited by the turn).
+  // The engine allows one unmatched turn.complete per plugin and the handover guard holds it; `$` never crosses an import,
+  // so this one stands beside it with a matcher every turn end meets (`answer` is always a string).
+  on('turn.complete', { answer: /^/ }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || mod.source !== 'tm') return result
+    try {
+      await ready($)
+      mod.refresher?.request()
+    } catch (error) {
+      $.ui.log(`taskmaster-tui: refresh not asked: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return result
   })
@@ -455,7 +472,6 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey) return next(e)
     const below = await next(e)
     if (e.surface === 'mobile') return below
-    if (mod.source === 'tm') ensureFlows($) // after a reload, the next turn end finds a refresher to ask
     await $.state.get(RR_POLARITY)
     const notice = await read($, NOTICE)
     const model = bandModel((await dataOf($)).snapshot, notice)
@@ -486,7 +502,6 @@ export const register: Register = (on, options) => {
     const { snapshot, details } = await dataOf($)
     const cursor = await read($, CURSOR)
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable) {
-      ensureFlows($)
       const item = cardPosition(reviewQueue(snapshot, cursor, details), cursor, snapshot.queueTotal).item
       if (item !== null && item.kind === 'task' && details[item.id] === undefined) askDetail(item.id)
     }
@@ -525,13 +540,12 @@ export const register: Register = (on, options) => {
     await $.state.get(RR_POLARITY)
     const { snapshot, summaries } = await dataOf($)
     const view = { snapshot, pick: await read($, PICK), summaries, summaryOpen: await read($, SUMMARY_OPEN) }
-    // The open summary a refresh forgot is read again (the toggle reads it the first time).
+    // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
+    // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {
       const picked = snapshot.handovers.find(entry => entry.id === view.pick) ?? snapshot.handovers[0]
-      if (picked !== undefined && picked.id === view.summaryOpen && summaries[picked.id] === undefined) {
-        ensureFlows($)
-        askSummary(picked.id)
-      }
+      const held = picked === undefined ? undefined : summaries[picked.id]
+      if (picked !== undefined && picked.id === view.summaryOpen && (held === undefined || held.stale === true)) askSummary(picked.id)
     }
     return handoversPaneTree(
       $.ui.resolve(e) as unknown as Ui,

@@ -118,11 +118,7 @@ async function noteHandover($: EngineInterface): Promise<void> {
   await update($, GUARD, (g): TmHandoverGuard => (g.latch === 'handover' ? g : { ...g, latch: 'handover' }))
 }
 
-/**
- * `afterMainTurn`: the plugin's other work at each main-loop turn end (the tm refresh request). The engine allows one
- * unmatched `turn.complete` hook per plugin, so this one runs it; it must not wait on anything slow.
- */
-export function onHandoverGuard(on: On, options: PluginOptions, afterMainTurn?: () => void): void {
+export function onHandoverGuard(on: On, options: PluginOptions): void {
   guard.cfg = guardConfigOf(options)
   interrupt()
 
@@ -130,11 +126,6 @@ export function onHandoverGuard(on: On, options: PluginOptions, afterMainTurn?: 
     const epoch = guard.epoch
     const result = await next(e)
     if (e.agentId !== undefined) return result
-    try {
-      afterMainTurn?.()
-    } catch (error) {
-      $.ui.log(`taskmaster-tui: turn-end work failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
-    }
     try {
       await arm($, epoch)
     } catch (error) {

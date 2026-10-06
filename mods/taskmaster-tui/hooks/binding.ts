@@ -1,4 +1,4 @@
-// User intent: which task this session is on — set by its own pick, claim (acquire or renew) or move to in-progress, kept
+// User intent: which task this session is on — set by its own pick, claim renewal or move to in-progress, kept
 // through review, let go when done — decided purely from the tool call, plus the stored mirror's housekeeping; never another
 // session's task.
 import type { TmBinding } from '../types'
@@ -21,8 +21,9 @@ export function bindingChange(call: TmCall, bound: string | null): BindingChange
   if (id === '') return { kind: 'keep' }
   const mine = bound !== null && id === bound
   if (tool === 'backlog_pick_task') return { kind: 'set', taskId: id }
-  // Spec §6.3 / ruling F11: a claim taken or kept binds; release and status do not.
-  if (tool === 'backlog_claim') return call.input.action === 'acquire' || call.input.action === 'renew' ? { kind: 'set', taskId: id } : { kind: 'keep' }
+  // Spec §6.3 / ruling F11: a claim taken or kept binds. backlog_claim's actions are renew, release and status (a claim is
+  // taken by backlog_pick_task, above): renew binds; release and status do not.
+  if (tool === 'backlog_claim') return call.input.action === 'renew' ? { kind: 'set', taskId: id } : { kind: 'keep' }
   if (tool === 'backlog_update_task' && call.input.field === 'status') {
     const value = String(call.input.value ?? '')
     if (value === 'in-progress') return { kind: 'set', taskId: id }

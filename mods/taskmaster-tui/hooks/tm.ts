@@ -13,6 +13,7 @@ import {
   parseGetTask,
   parseHandovers,
   parseHandoverSummary,
+  parseIssueList,
   parseListTasks,
   parsePipeline,
 } from './parse'
@@ -101,10 +102,15 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   const listArgs: Record<string, unknown> = { status: 'in-review', limit: QUEUE_WINDOW }
   if (input.scope.waitingOnly) listArgs.waiting_on_human = true
   if (input.scope.phase !== '') listArgs.phase = input.scope.phase
-  let replies: [TmReply, TmReply, TmReply, TmReply, TmReply | null, TmReply | null]
+  let replies: [TmReply, TmReply, TmReply, TmReply, TmReply, TmReply, TmReply | null, TmReply | null]
   try {
     replies = await Promise.all([
       callTm(host, 'backlog_list_tasks', listArgs),
+      // P0/P1 issues on their own: continuity ranks every in-review task before any issue, so its 50-row review window
+      // holds no issue on a big backlog. Status `open` is continuity's own rule for an issue that asks for review.
+      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
+      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
+      // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
       callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
       callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
       callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: 5 }),
@@ -114,8 +120,8 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   } catch (error) {
     return { snapshot: offlineSnapshot(input, error instanceof Error ? error.message : String(error)), fault: 'offline', unreadable: [] }
   }
-  const [list, review, decide, handovers, task, pipeline] = replies
-  const refused = [list, review, decide, handovers].find(reply => isRefusal(reply.text))
+  const [list, p0, p1, review, decide, handovers, task, pipeline] = replies
+  const refused = [list, p0, p1, review, decide, handovers].find(reply => isRefusal(reply.text))
   if (refused !== undefined) return { snapshot: offlineSnapshot(input, firstParagraph(refused.text)), fault: 'offline', unreadable: [] }
 
   const unreadable: Unreadable[] = []
@@ -125,23 +131,23 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
     return empty
   }
   const listed = take('backlog_list_tasks', list.text, parseListTasks(list.text), { rows: [], total: 0 })
-  const reviewAll = take('backlog_continuity_items', review.text, parseContinuity(review.text), [])
+  const none = { issues: [], hidden: 0 }
+  const issuesP0 = take('backlog_issue_list', p0.text, parseIssueList(p0.text), none)
+  const issuesP1 = take('backlog_issue_list', p1.text, parseIssueList(p1.text), none)
+  const reviewItems = take('backlog_continuity_items', review.text, parseContinuity(review.text), []).filter(i => i.actionClass === 'review')
   const decideAll = take('backlog_continuity_items', decide.text, parseContinuity(decide.text), [])
-  const reviewItems = reviewAll.filter(i => i.actionClass === 'review')
   const decideItems = decideAll.filter(i => i.actionClass === 'decide')
   const ho = take('backlog_handover_list', handovers.text, parseHandovers(handovers.text, input.root), { handovers: [], total: 0 })
-  const stamps = new Map(reviewItems.filter(i => i.type === 'task').map(i => [i.id, i.timestamp]))
-  const issues = reviewItems.filter(i => i.type === 'issue')
+  const stamps = new Map(reviewItems.map(i => [i.id, i.timestamp]))
+  const issues = [...issuesP0.issues, ...issuesP1.issues]
   const decisions = decideItems.filter(i => i.type === 'decision')
-  // The counts are the server's totals (list_tasks' "**N tasks", continuity's `total`). The decide class holds only open
-  // decisions, so its total is theirs. A continuity reply with no total and a full window is cut where the count is
-  // unknown: the band shows `N+`. Issues are counted from the review window (the server's review total mixes in tasks).
+  // The counts are the server's totals: list_tasks' "**N tasks", each issue list's rows plus its "…N more" footer, the
+  // decide class's `total` (it holds only open decisions). A decide reply with no total and a full window is cut where the
+  // count is unknown: the band shows `N+`.
+  const issueCount = issues.length + issuesP0.hidden + issuesP1.hidden
   const decideTotal = continuityTotal(decide.text)
   const decisionCount = decideTotal ?? decisions.length
-  const capped = [
-    { total: continuityTotal(review.text), rows: reviewAll.length },
-    { total: decideTotal, rows: decideAll.length },
-  ].some(window => window.total === null && window.rows >= QUEUE_WINDOW)
+  const capped = decideTotal === null && decideAll.length >= QUEUE_WINDOW
   const queue = orderQueue([
     ...listed.rows.map(r => ({
       kind: 'task' as const,
@@ -151,7 +157,8 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       humanAction: r.humanAction,
       timestamp: stamps.get(r.id) ?? '',
     })),
-    ...issues.map(i => ({ kind: 'issue' as const, id: i.id, title: i.title, severity: /^P\d/.exec(i.next)?.[0] ?? 'P1', timestamp: i.timestamp })),
+    // An issue's age comes from the review window when it holds the issue; the issue list carries no date.
+    ...issues.map(i => ({ kind: 'issue' as const, id: i.id, title: i.title, severity: i.severity, timestamp: stamps.get(i.id) ?? '' })),
     ...decisions.map(i => ({ kind: 'decision' as const, id: i.id, title: i.title, timestamp: i.timestamp })),
   ])
   const bound = boundFrom(input, taskId, task, pipeline, unreadable)
@@ -161,7 +168,7 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       reason: '',
       fetchedAt: input.now,
       queue,
-      queueTotal: listed.total + issues.length + decisionCount,
+      queueTotal: listed.total + issueCount + decisionCount,
       ...(capped ? { queueCapped: true } : {}),
       handovers: ho.handovers,
       handoversTotal: ho.total,

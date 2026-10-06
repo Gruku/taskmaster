@@ -4,7 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import { BAND, command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { type Drawn, elementsOf, widthOf } from './fixtures/measure'
 import * as R from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -71,6 +71,7 @@ describe('the review window and its count', () => {
     const world = worldOf(on, clock)
     world.mcp = (tool, args) => {
       if (tool === 'backlog_list_tasks') return { text: R.LIST_EMPTY }
+      if (tool === 'backlog_issue_list') return { text: R.NO_ISSUES }
       if (tool === 'backlog_continuity_items') return { text: JSON.stringify({ view: 'action', items: args.action_class === 'decide' ? decisions(50) : [] }) }
       return R.backlog(tool, args)
     }
@@ -144,7 +145,7 @@ describe('handover summaries in tm mode', () => {
     expect(flatOf(cardOf(await ui.drawn()))).toContain('summary unavailable')
   })
 
-  test('a refresh forgets the read summaries: the open one is read again, so an edited handover is never stale', TM, async ($, on) => {
+  test('a refresh re-reads the open summary: the old one stays up (no flicker) until the new one lands', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -155,14 +156,41 @@ describe('handover summaries in tm mode', () => {
     await clock.settle()
     expect(flatOf(cardOf(await ui.drawn()))).toContain('Pre-build hands the supervisor its full toolset')
     const edited = '## Handover: x\n\n### decisions\n- Edited after the first read'
-    world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { text: edited } : R.backlog(tool, args))
+    world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { hangMs: 1000, text: edited } : R.backlog(tool, args))
     await $.turn.complete(TURN_END)
     await clock.settle()
     await ui.drawn()
     await clock.settle()
+    const meanwhile = flatOf(cardOf(await ui.drawn()))
+    expect(meanwhile).toContain('Pre-build hands the supervisor its full toolset')
+    expect(meanwhile).not.toContain('loading summary…')
+    expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
+    await clock.advance(1000)
+    await clock.settle()
     const shown = flatOf(cardOf(await ui.drawn()))
     expect(shown).toContain('Edited after the first read')
     expect(shown).not.toContain('Pre-build hands the supervisor its full toolset')
+    expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
+  })
+
+  test('a re-read that fails after a refresh keeps the cached summary, never "summary unavailable", and does not loop', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = R.backlog
+    await $.session.start(SESSION)
+    await clock.settle()
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    await ui.press({ key: 'summary' })
+    await clock.settle()
+    world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { text: 'Handover not found: x' } : R.backlog(tool, args))
+    await $.turn.complete(TURN_END)
+    for (let i = 0; i < 3; i += 1) {
+      await clock.settle()
+      await ui.drawn()
+    }
+    const shown = flatOf(cardOf(await ui.drawn()))
+    expect(shown).toContain('Pre-build hands the supervisor its full toolset')
+    expect(shown).not.toContain('summary unavailable')
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
   })
 
@@ -256,5 +284,79 @@ describe('handover-written notice', () => {
     await $.classic.SessionStart({ source: 'clear', session_id: 'sess-B' } as never)
     await clock.settle()
     expect(await band($)).not.toContain('HANDOVER')
+  })
+})
+
+describe('P0/P1 issues, read on their own', () => {
+  test('a review window full of tasks still shows the open P0/P1 issues, and the count adds the hidden ones', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const tasks = Array.from({ length: 50 }, (_, i) => ({ id: `t-${String(i + 1).padStart(3, '0')}`, type: 'task', title: 'T', next: 'in-review', action_class: 'review', timestamp: '' }))
+    world.mcp = (tool, args) => {
+      if (tool === 'backlog_continuity_items' && args.action_class === 'review') return { text: JSON.stringify({ view: 'action', total: 760, truncated: true, items: tasks }) }
+      if (tool === 'backlog_issue_list') {
+        return {
+          text:
+            args.severity === 'P0'
+              ? '- ISS-1 P0 open           — Store corrupts on crash [store]'
+              : `${R.ISSUES_P1_ONE}\n…6 more issues — narrow with filters or pass limit=0 for all`,
+        }
+      }
+      return R.backlog(tool, args)
+    }
+    await $.session.start(SESSION)
+    await clock.settle()
+    expect(world.calls.filter(c => c.tool === 'backlog_issue_list').map(c => c.args)).toEqual([
+      { status: 'open', severity: 'P0', limit: 50 },
+      { status: 'open', severity: 'P1', limit: 50 },
+    ])
+    // 2 tasks + (1 P0 + 1 P1 shown + 6 hidden) + 1 decision
+    expect(await band($)).toContain('11 waiting on you')
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
+    await ui.press({ key: 'skip' })
+    await ui.press({ key: 'skip' })
+    expect(await ui.find({ type: 'Text', text: 'ISS-1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /P0 ISSUE/ })).toBeDefined()
+    await ui.press({ key: 'skip' })
+    expect(await ui.find({ type: 'Text', text: 'ISS-7' })).toBeDefined()
+    // ISS-7's age comes from the review continuity item when the window holds it; here it does not: no age, no crash.
+    expect(await ui.find({ type: 'Text', text: /^· \d+[mhd]$/ })).toBeUndefined()
+  })
+})
+
+describe('after a reload (no session.start)', () => {
+  test('the band draws first, then a turn end refreshes with its own $ and the band shows the data', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = R.backlog
+    expect(await $.ui.render(BAND)).toEqual({ type: 'Text', children: ['BELOW'] })
+    await $.turn.complete(TURN_END)
+    await clock.settle()
+    expect(world.calls.filter(c => c.tool === 'backlog_list_tasks')).toHaveLength(1)
+    expect(await band($)).toContain('4 waiting on you')
+  })
+
+  test('a draw alone reads nothing from tm and writes nothing', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = R.backlog
+    await $.ui.render(BAND)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
+    await ui.drawn()
+    await clock.settle()
+    expect(world.calls).toEqual([])
+    expect(world.statuses).toEqual([])
+  })
+
+  test('the first acting hook asks for one refresh, so a changed reviewScope applies at once', { ...TM, options: { reviewScope: 'all' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = R.backlog
+    expect(await $.command.run(command('tm-review'))).toEqual({ text: 'Review queue opened.' })
+    await clock.settle()
+    expect(world.calls.filter(c => c.tool === 'backlog_list_tasks').map(c => c.args)).toEqual([{ status: 'in-review', limit: 50 }])
+    await $.command.run(command('tm-handovers'))
+    await clock.settle()
+    expect(world.calls.filter(c => c.tool === 'backlog_list_tasks')).toHaveLength(1)
   })
 })

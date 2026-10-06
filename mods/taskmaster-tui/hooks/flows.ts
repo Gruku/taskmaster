@@ -53,8 +53,19 @@ export function createFlows(d: TmFlowDeps) {
     const asked = generation
     const summary = await d.summary(id)
     if (asked !== generation) return
-    if (summary === null) summaryAsked.delete(id) // a later expand asks again
-    await d.write.summaries(all => ({ ...all, [id]: summary ?? UNAVAILABLE }))
+    if (summary !== null) {
+      await d.write.summaries(all => ({ ...all, [id]: summary }))
+      return
+    }
+    // A failed read keeps what is cached (stale but shown; asked again after the next refresh). Only with nothing cached
+    // does the card say "summary unavailable", and then the next expand asks again.
+    let cached = false
+    await d.write.summaries(all => {
+      const held = all[id]
+      cached = held !== undefined && held.unavailable !== true
+      return cached ? all : { ...all, [id]: UNAVAILABLE }
+    })
+    if (!cached) summaryAsked.delete(id)
   }
   const once = async (id: string, work: () => Promise<void>): Promise<void> => {
     if (busy.has(id)) return
@@ -162,13 +173,20 @@ export function createFlows(d: TmFlowDeps) {
       })
       await askSummary(h.id)
     },
-    /** The open card found no summary (a refresh forgot it): read it again, once. */
+    /** The open card's summary is missing or stale (a refresh marked it): read it again, once per refresh. */
     askSummary,
-    /** After a refresh: every summary is read again when next shown, so an edited handover is never stale. */
+    /**
+     * After a refresh: every cached summary is marked stale and read again when next shown, so an edited handover is never
+     * stale for long; the old one stays drawn until the new one lands (no flicker). An unavailable one is dropped.
+     */
     forgetSummaries: async (): Promise<void> => {
       generation += 1
       summaryAsked.clear()
-      await d.write.summaries(all => (Object.keys(all).length === 0 ? all : {}))
+      await d.write.summaries(all => {
+        const kept = Object.entries(all).filter(([, s]) => s.unavailable !== true)
+        if (kept.length === Object.keys(all).length && kept.every(([, s]) => s.stale === true)) return all
+        return Object.fromEntries(kept.map(([id, s]) => [id, s.stale === true ? s : { ...s, stale: true as const }]))
+      })
     },
     // The band's handover-written notice: `3` copies its block; the row goes once the copy landed.
     copyNotice: async (n: TmHandoverNotice, surface: RenderSurface | undefined): Promise<void> => {

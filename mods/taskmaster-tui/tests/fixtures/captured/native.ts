@@ -6,7 +6,15 @@ export const NATIVE = {
     "store": "native",
     "captured": "2026-10-06",
     "redacted": true,
-    "idsPseudonymised": true
+    "idsPseudonymised": true,
+    "merged": {
+      "captured": "2026-10-06",
+      "keys": [
+        "issues_p0",
+        "issues_p1",
+        "issues_p1_capped"
+      ]
+    }
   },
   "replies": {
     "store_status": {
@@ -118,6 +126,36 @@ export const NATIVE = {
       },
       "isError": false,
       "text": "## Pipeline `epic-v-0719-001` — lane: **full**\ngate_state: `plan-review:pending`\n\n- `spec`: ○ pending\n- `spec-review`: pass\n- `plan`: ○ pending\n- `plan-review`: pass\n- `xxxxx`: ○ pending\n- `xxxx`: ○ pending\n- `review-gate`: ○ pending\n\n**Outstanding:** review-gate"
+    },
+    "issues_p0": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P0",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "- ISS-001 P0 open           — xxx xxxxxx xxxxxxxxx xxxx xxxxxx xxx — xxxxxxxx xxxxxxxxxxxxxxx xxx xxxxxx 5.4–5.7 [xx-xxxxxx, code-xxxxxxx-xxx-xxxxxxx] — 1.\n- ISS-003 P0 open           — xxx_xxxxxxx_xxxxxxx xxxxxx is xxxx-and-xxxxxx — no xxxxxx/xxxxxxxxx/xxxxxx xxxxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — Any `xx-xxx-xxxxxx_xxx_xxxxxxx_xxxxxxx` xxxxxxxxxx with x `xx …` xxxxxx: ``` xx-xxx-xxxxxx_xxx_xxxxxxx_xxxxxxx(xxxxxxx=\"xx xxxxx('xxxxx)\") ``` xxxxxxxx: ```xxxx {\"xxxxxxxx_xxxxxxx\": \"xx xxxxx('xxxxx)…\n- ISS-004 P0 open           — xxx_xxxxx_xxxxxxxx xxxxxxxxxx xxx no xxxxxxxxxxxxxxxxx / xxxxxxxxxxxxxxxxxx / xxxxxxxxxxxxxx / xxxxxxxxxxxxx xxxxxxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — xxxx `xxx_xxxxx_xxxxxxxx` on `x_xxxxxxxxxxxxxxxxxxxxx` xxxxxxx `xxxxxxxxxxxxxxxxxxxxxxxxx` to x xxxx class xxxx: ``` xx-xxx-xxxxxx_xxx_xxxxx_xxxxxxxx( xxxxx_xxxx=\"/xxxx/.../x_xxxxxxxxxxxxxxxxxxxxx\",…\n- ISS-005 P0 open           — No component-xxxxx xxxxxxxx xxxxxx — no xxx-xxxxxxxx, no xxx/xxx_component_xxxxxxxx xxxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — xxx to xxxx or xxxxx x xxxxxxxx on x component of an xxxxx (x.x.\n- ISS-063 P0 open           — xxxxxx + xxxxxxx xxxxxx xxxx xx xxx xxxxx xxxxxx on xxxxx xxx xxxx xxxxxxxxxxx — xxxxxxxxx by xxxx xxxxxx xxxx [code-xxxxxxx-xxx-xxxxxxx, xxx-xxxx, xxxx, xxxxxxxx, xxxxxxx] — xxxxxxxx xxxx xxxxx + xxxxxxx_xxxxx in the xxxxx xxx xxxxxxxxxx xxx; xxxxxxx xxxxxx xxxxxxx xxxxxxxx xxxx in xxxx.xxx and xxx xxxxxxx."
+    },
+    "issues_p1": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "- ISS-006 P1 open           — xxxxxx .xxxxxx xxxxxxxxx xxx xxxx is xxxxxxxxxx — xxxxxxxxxx xxxxxxx xxxxxxxxxx xxxxxxx xxxxxxx of xxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — xxxx xxx-xxxxx-xxxxxxxxxx on x xxxx-xxxx xxxxxxxxx: ``` xx-xxx-xxxxxx_xxx_xxxxxxxxx_xxxx(xxxxx_xxxx=\"/xxxx/.../xx_xxxxxx_xxxxx\") ``` xxxxxxx the xxxxxxxxxx xxxxxxxxx xxxxxxxxxx (xxxxxx class, xxxxxxx…\n- ISS-007 P1 open           — xxxx xxxxxxx is class-xxxxx — no xxx_xxxxx_class first-step xxxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — ``` xx-xxx-xxxxxx_xxx_xxxxxxxxx_xxxx(xxxxx_xxxx=\"/xxxx/xxxxxxxxxxxxxxxxxx/xxxx/xxxxxxxxxx_xxxxx\") → \"xxxxxxxxx not found\" (xxxx x xxxxx, not x xx) xx-xxx-xxxxxx_xxx_xxxxxxxxx_xxxx(xxxxx_xxxx=\"/xxxx/x…\n- ISS-008 P1 open           — xxxxxxxx xxxx xxxxxxxxxxxxx xxxxxxxxxxxx xxxxxx xxxxxx xxxxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — 1.\n- ISS-011 P1 open           — xxx -x xxxxx on xxxxxxxxxxx (xxxxxxxxxxxxxxxxxxxxx + xxxxxxxxxxxx) — xxxxxxxxxx xxxxx xxxxxx [code-xxxxxxx-xxx-xxxxxxx, xxxxx-xxxxxx, xxxxx] — ```xxxx xx code-xxxxxxx-xxx-xxxxxxx xxx xxxxxxxx 1.3.1/xxxxxxx/xxxxx-xxxxxx-xxxxxxxxx # or any commit on/xxxxx b83c0dab xxx xxx -x xxx xxx xxxxx ``` ``` xxx/xxxxx/xxxxxxxxxxx/xxxxxxxxx/xxxxxxx/xxxxxx…\n- ISS-017 P1 open           — xxxxx xxxxxx xxxxx xxxxx-xxxx xxxxx with xxxx 422 — xxxxxx_xxxx: null xxxxxxxx by xxx xxxxxxxx (xxxxxxx 'xxxxx xxxxxxx or xxx) [xxxxx-xxxxxx, code-xxxxxxx-xxx-xxxxxxx, code-xxxxxxx-xxx, xxxxx-xxxxxxxxxx] — 1.\n- ISS-018 P1 open           — xxxxxxxxxxxxxxxxxxxxxxxxx xxxx-xxxxxx — xxxxxx xxxxxxxxxx xxxxxx on xxxxx xxxxxxxx [code-xxxxxxx-xxx, xxxxxx/xxxxx/xxxxxx, xxxxxxxxxx] — 1.\n- ISS-019 P1 open           — xxxxx_xxxxxx: null/xxxxxxx xxxxxxxx by xxx xxxxxxxx on _xxxxxxxxxxxxxx — xxxxxxxx 422 in xx 1.0 xxxxxxx with xxx xxx-xxxx bundle [xxxxx-xxxxxx, code-xxxxxxx-xxx-xxxxxxx, code-xxxxxxx-xxx, xxxxx-xxxxxxxxxx] — xxx xx xxxxxxx xxxxxxx (xx 1.0 xx + xxxxxx with the pre-`xxxxx_xxxxxx` xxx-xxxx bundle) fail xxxxx xxxxxxxxxx in xxxx xxxx and xxxxx xxxxxx.\n- ISS-021 P1 open           — xxxxx_xxxx xxxxxxx xxxx xxxxxx xxxxxx, xxx xxx xxxxx xxx xxxxxx (\"1024x1024\") → 422 on xxxx-xxxxxx xxxxx xxx [xxxxx-xxxxxx, code-xxxxxxx-xxx-xxxxxxx, code-xxxxxxx-xxx, xxxxx-xxxxxxxxxx, xxxx, xxx-xxxx] — xxxxx epic-a-235 xxxxxxxx and xxxxxxxxx the xxxxxxxx `xxxxx_xxxxxx: null` xxxxxx of 422x, the next class of xxxxxxx xxxxxxxx: ```xxxx {\"xxxxxx\":[ {\"type\":\"xxxxxxx_error\", \"xxx\":[\"xxxx\",\"xxxxxx\",…\n- ISS-035 P1 open           — Step 4 xxxxxxx xxxx xxxxx + xxxxxxxx 0×0 + xxxxxx-xxxx xxxx xxxxx (epic-a-251) [xxxxx-xxxxxx, xxxxxxx-xxx, step4] — Step 4 xxxxxxx with xxxxx/xxxxxx = 0: xxxxxxx xxxxxxxxx xxxxxxxxx, xxxxxxxx xxxx xxxxx 0×0, xxxxxx-xxxx xxxxxxxx xxxx xxxxxx \"xxxxxx · 0 × 0\" xx xxxxxx-on-xxxx is xxxxxxxx. xxxxxxxx + xxxxxx xxxx, xx xxxx x xxxxxx-xxxx xxx not x xxxx xxx.\n- ISS-059 P1 open           — xxxxxxxx↔xxxxxxxxx xxxxxxxx xxxxxxxx is xxxxxxxx — xxxxx xxxxxxxx xxxxxxxxxx is x xxx-xxx xxxx xxxx [xxxxxxxx_xxxxxxxx, xxxxxxxx_xxxxxxxx, xxxxxxxx-xxxxxxxxx, xxx-xxxx] — The xxxxxxxx (xxxxx xxxxx) and the xxxxxxxxx (xxxxxxxxxxxxx xxx-xxxx xxxxxxxxx) xxxxxxxxxxx xxxxxxx xxxxxx.xxxx + an xxxxxxx xxx, xxx the xxxxxxxx xxx xxxxxxxx.\n- ISS-060 P1 open           — xxxxxxxx-xxxxx xxx xxxxxxx xxx xxxxxxxxx: xxxxxxxxx xxxxxxxxx + xxxxxxx 401-xxxxxxx-xxxxx with no first-xxxxx xxxxxxxx (xxxxxx xxxxx, xxx xxxxxx-xxxx) [xxxxxxxx-xxxxxx, xxx, xxxx] — All xxxxxx-xxxxxxxx xxxxx xxx xxxxxx (xxx.xx, xxxxxxxxxxxxx.xx, xxxxxx xxxxxxxxxxxx.xx/xxxxxxxx.xx — xxxx xxxxxxxx).\n- ISS-061 P1 open           — xxxxxx xxxxx xxxxx xxxxxx xxxxxxxxx_xxxx + xxxxxxxxx_xxxxxx_x64 → all xxxxxxxxxx xxxx xxxxxxxxx-xxxxx [code-xxxxxxx-xxxxxx, code-xxxxxxx-xxx, code-xxxxxxx-xxx-xxxxxxx] — xxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxx xxx xxxxx xxxxxxxxx_xxxx + xxxxxxxxx_xxxxxx_x64; the xxxxx xxxxx xxxxxxxx xxxxxx xxxx xxxxxx xxxxxx, xx xxxxx-xxxxxxxxx xxxx and xxxx-xxxxxx xxxxxxxxx xxxxx xxxxxx.\n- ISS-062 P1 open           — xxxxx xxxxxxx xxxxx the xxxx 4x xxxx for xxxxx xxxx — xxxxxxxx 720x xxxxxxx 5.14× (xxxx xxxxxx xxxxx xxxxxxxx) [code-xxxxxxx-xxx, code-xxxxxxx-xxxxxx, xxxxx-xxxxxx, xxxxxxx] — xxxxx xxxxxxxx xxxx xxxxx the 4x xxxx xxxx xxxxxxx of the xxxxxxxxx 720x xxxx — 5.14× xxxxxxxxxx, xxxx xxxxx xxxxxxx xxxxxxx in the xxxx-xxxxxx xxxx.\n- ISS-064 P1 open           — xxxxxxxx.is_xxxx_xxxxx is xxxxxxxxxx and xxxxxxxxx xxxxxxx the xxx — xxxxx xxxxxx and xxxxx xxxxxxxxxxx xxxx xxxxx [xxxxxx, xxxxx, xxxxxxx, xxxxx-xxxxxx, xxxxxxx-xxxxxxxxxxx] — The xxxx xxxx xxxxxxx x xxxx-xxxxx xxxxxxx xxx xxxx xx xxx in xxx — xx xxxxxxx-created xxxxxx xxxx at xxxxxxxxxx xxxxxx and xxxxxx xx xxxx xxxxxxx.\n- ISS-065 P1 open           — xxxxx xxxxxxx xxxx xxxxx one xxxx xxx-xxxxxx xxxx for xxxxx xxxxxxxxxx xxxx, xx xxxxxx xxxxx xxxxx-xxxx (xxx xxxxxxxx: 1080x 2.26x, 4x 5.14x) [code-xxxxxxx-xxx/xxx/x2/xxxxx, docs/xxxxx-xxxxxx, code-xxxxxxx-xxx/xxx/x2/xxxxx, code-xxxxxxx-xxxxxx xxxxxxx, code-xxxxxxx-xxx-xxxxxxx xxxx estimate] — xxxxx xxxxxxx xxxx xxxxx one xxxx xxx-xxxxxx xxxx for xxxxx xxxxxxxxxx xxxx, xx xxxxxx xxxxx xxxxx-xxxx (xxx xxxxxxxx: 1080x 2.26x, 4x 5.14x)"
+    },
+    "issues_p1_capped": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 1
+      },
+      "isError": false,
+      "text": "- ISS-006 P1 open           — xxxxxx .xxxxxx xxxxxxxxx xxx xxxx is xxxxxxxxxx — xxxxxxxxxx xxxxxxx xxxxxxxxxx xxxxxxx xxxxxxx of xxx [xxx-xxxxxx, code-xxxxxxx-xx, xx-xxxxxx] — xxxx xxx-xxxxx-xxxxxxxxxx on x xxxx-xxxx xxxxxxxxx: ``` xx-xxx-xxxxxx_xxx_xxxxxxxxx_xxxx(xxxxx_xxxx=\"/xxxx/.../xx_xxxxxx_xxxxx\") ``` xxxxxxx the xxxxxxxxxx xxxxxxxxx xxxxxxxxxx (xxxxxx class, xxxxxxx…\n…14 more issues — xxxxxx with filters or pass limit=0 for all"
     }
   }
 } as const

@@ -104,6 +104,21 @@ describe('session binding', () => {
     expect(tree).toContain('waiting on you:')
   })
 
+  test('/resume of a session with no stored binding shows no task: the binding is set to none, not kept', TM, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const world = worldOf(on, clock)
+    world.mcp = backlog
+    toolAnswers(on, { backlog_pick_task: 'Picked `tm-audit-030` — T' })
+    await $.session.start(SESSION)
+    await $.tool.call(call('backlog_pick_task', { task_id: 'tm-audit-030' }))
+    await clock.settle()
+    expect(await band($)).toContain('tm-audit-030')
+    await $.classic.SessionStart({ source: 'resume', session_id: 'sess-R' } as never)
+    await clock.settle()
+    expect(await band($)).not.toContain('tm-audit-030')
+    expect(world.store.has('binding:sess-R')).toBe(false)
+  })
+
   test('another session binding is never shown; stale mirrors are pruned and fresh ones kept', TM, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on, clock, {

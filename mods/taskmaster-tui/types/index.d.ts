@@ -46,9 +46,15 @@ export type TmHandover = {
 }
 /**
  * A handover's body sections for the expanded summary (backlog_handover_get, sections decisions + blockers), one entry per
- * item. `unavailable`: the reader could not get them (refused, unreadable, offline); the card says so and `i` asks again.
+ * item. `unavailable`: the reader could not get them and nothing was cached (the card says so; `i` asks again). `stale`: a
+ * refresh happened since the read; still drawn, read again when shown.
  */
-export type TmHandoverSummary = { readonly decisions: readonly string[]; readonly blockers: readonly string[]; readonly unavailable?: true }
+export type TmHandoverSummary = {
+  readonly decisions: readonly string[]
+  readonly blockers: readonly string[]
+  readonly unavailable?: true
+  readonly stale?: true
+}
 export type TmBound = {
   readonly taskId: string
   readonly inferred: boolean

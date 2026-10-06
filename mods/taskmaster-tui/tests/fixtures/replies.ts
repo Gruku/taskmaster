@@ -121,6 +121,14 @@ export const WITH_WARNING = `${updated('tm-audit-031', 'status', 'in-progress')}
 export const CLAIM_OK = JSON.stringify({ task_id: 'tm-audit-030', holder: 'sess-A', expires_at: '2026-10-05T13:00', live: true, expired: false, state: 'held', ok: true })
 export const CLAIM_CONFLICT = JSON.stringify({ ok: false, error: 'claim_conflict', task_id: 'tm-audit-030', holder: 'sess-B', live: true, expires_at: '2026-10-05T13:00', hint: 'another session holds it' })
 
+export const ISSUES_P1 = [
+  '- ISS-7 P1 open           — Viewer drops edits on slow disks [viewer, store]',
+  '- ISS-9 P1 open           — Export stalls — on big stores — Repro: open a 2k-task store',
+].join('\n')
+/** The router's P1 list: ISS-7 only, as the continuity review fixture has it. */
+export const ISSUES_P1_ONE = '- ISS-7 P1 open           — Viewer drops edits on slow disks [viewer, store] — Edits lost after 30 s'
+export const NO_ISSUES = 'No issues match.'
+
 export const HANDOVER_SUMMARY = [
   '## Handover: 2026-10-05-shipped-unified-chat-022',
   '',
@@ -147,6 +155,7 @@ export function backlog(tool: string, args: Record<string, unknown>): { text: st
     const id = String(args.task_id)
     return { text: id === 'tm-audit-030' ? GET_TASK_BOUND : id === 'unified-chat-022' ? GET_TASK_REVIEW : id === 'tm-audit-031' ? GET_TASK_031 : GET_TASK_MISSING }
   }
+  if (tool === 'backlog_issue_list') return { text: args.severity === 'P1' ? ISSUES_P1_ONE : NO_ISSUES }
   if (tool === 'backlog_handover_get') {
     const id = String(args.handover_id)
     if (id === '2026-10-05-shipped-unified-chat-022') return { text: HANDOVER_SUMMARY }

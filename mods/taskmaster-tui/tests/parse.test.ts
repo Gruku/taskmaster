@@ -14,6 +14,7 @@ import {
   parseHandovers,
   parseHandoverSummary,
   parseHandoverWritten,
+  parseIssueList,
   parseListTasks,
   parsePipeline,
   stripSeq,
@@ -461,4 +462,64 @@ describe('handover replies', () => {
     expect(parseHandoverWritten('Error: tldr is required')).toBeNull()
     expect(parseHandoverWritten('')).toBeNull()
   })
+})
+
+describe('issue_list', () => {
+  test('rows give id, severity, status and the title (a components tag and the tldr after it left out); the footer counts the hidden', () => {
+    expect(value(parseIssueList(R.ISSUES_P1))).toEqual({
+      issues: [
+        { id: 'ISS-7', severity: 'P1', status: 'open', title: 'Viewer drops edits on slow disks' },
+        { id: 'ISS-9', severity: 'P1', status: 'open', title: 'Export stalls — on big stores — Repro: open a 2k-task store' },
+      ],
+      hidden: 0,
+    })
+    expect(value(parseIssueList(`${R.ISSUES_P1}\n…12 more issues — narrow with filters or pass limit=0 for all`)).hidden).toBe(12)
+  })
+
+  test('no match is no rows; a refusal, a missing backlog or a line it cannot read is unreadable', () => {
+    expect(value(parseIssueList('No issues match.'))).toEqual({ issues: [], hidden: 0 })
+    expect(parseIssueList('No backlog found.')).toEqual({ ok: false, reason: 'issue_list: No backlog found.' })
+    expect(parseIssueList("Error: status must be one of open, investigating; got 'x'")).toEqual({
+      ok: false,
+      reason: "issue_list: Error: status must be one of open, investigating; got 'x'",
+    })
+    expect(parseIssueList('- ISS-7 P1 open — ok\n**garbage')).toEqual({ ok: false, reason: 'issue_list: unreadable line "**garbage"' })
+  })
+
+  for (const [label, fixture, want] of [
+    [
+      'legacy',
+      LEGACY,
+      {
+        p0: [] as string[],
+        p1: ['ISS-017', 'ISS-018', 'ISS-027'],
+        first: 'xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx',
+        capped: { ids: ['ISS-017'], hidden: 2 },
+      },
+    ],
+    [
+      'native',
+      NATIVE,
+      {
+        p0: ['ISS-001', 'ISS-003', 'ISS-004', 'ISS-005', 'ISS-063'],
+        p1: ['ISS-006', 'ISS-007', 'ISS-008', 'ISS-011', 'ISS-017', 'ISS-018', 'ISS-019', 'ISS-021', 'ISS-035', 'ISS-059', 'ISS-060', 'ISS-061', 'ISS-062', 'ISS-064', 'ISS-065'],
+        first: 'xxxxxx .xxxxxx xxxxxxxxx xxx xxxx is xxxxxxxxxx — xxxxxxxxxx xxxxxxx xxxxxxxxxx xxxxxxx xxxxxxx of xxx',
+        capped: { ids: ['ISS-006'], hidden: 14 },
+      },
+    ],
+  ] as const) {
+    test(`captured ${label}: open P0 and P1 issues, every row read, the capped page counts the rest`, () => {
+      const at = replyAt(label, fixture)
+      const p0 = value(parseIssueList(at('issues_p0').text))
+      const p1 = value(parseIssueList(at('issues_p1').text))
+      expect([p0.issues.map(i => i.id), p0.hidden]).toEqual([[...want.p0], 0])
+      expect([p1.issues.map(i => i.id), p1.hidden]).toEqual([[...want.p1], 0])
+      expect([...p0.issues, ...p1.issues].filter(i => i.status !== 'open').map(i => i.id)).toEqual([])
+      expect(p0.issues.filter(i => i.severity !== 'P0').map(i => i.id)).toEqual([])
+      expect(p1.issues.filter(i => i.severity !== 'P1').map(i => i.id)).toEqual([])
+      expect(p1.issues[0]?.title).toBe(want.first)
+      const capped = value(parseIssueList(at('issues_p1_capped').text))
+      expect([capped.issues.map(i => i.id), capped.hidden]).toEqual([[...want.capped.ids], want.capped.hidden])
+    })
+  }
 })

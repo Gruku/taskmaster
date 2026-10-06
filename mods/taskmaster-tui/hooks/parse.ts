@@ -278,3 +278,37 @@ export function parseHandoverWritten(raw: string): HandoverReceipt | null {
     resume: (/^(Resume: .+)$/m.exec(text)?.[1] ?? '').trim(),
   }
 }
+
+export type IssueRow = { readonly id: string; readonly severity: string; readonly status: string; readonly title: string }
+
+const ISSUE_ROW = /^- (\S+) (P[0-3]|\?) (\S+)\s+— (.*)$/
+const ISSUE_FOOTER = /^…(\d+) more issues\b/
+// The row's `[components]` tag, which ends the title (a tldr may follow it after ` — `).
+const COMPONENTS = / \[[^\]]*\](?= — |$)/
+
+/**
+ * backlog_issue_list (slim): `- <id> <severity> <status padded> — <title>[ [components]][ — <tldr>]` per issue, and a
+ * `…N more issues — …` footer when the limit hid some. The title ends at the components tag; without one the title and
+ * tldr cannot be told apart (either may hold ` — `), so the rest is kept whole. Indented detail lines are skipped.
+ */
+export function parseIssueList(raw: string): Parsed<{ issues: IssueRow[]; hidden: number }> {
+  const text = raw.replace(/\r\n/g, '\n').trim()
+  if (/^No issues\b/.test(text)) return ok({ issues: [], hidden: 0 })
+  if (isRefusal(text) || /^No backlog found/.test(text)) return fail(`issue_list: ${firstParagraph(text)}`)
+  const issues: IssueRow[] = []
+  let hidden = 0
+  for (const line of text.split('\n')) {
+    if (line.trim() === '' || /^\s/.test(line)) continue
+    const footer = ISSUE_FOOTER.exec(line)
+    if (footer !== null) {
+      hidden = Number(footer[1])
+      continue
+    }
+    const row = ISSUE_ROW.exec(line)
+    if (row === null) return fail(`issue_list: unreadable line "${line.slice(0, 120)}"`)
+    const rest = (row[4] ?? '').trim()
+    const tag = COMPONENTS.exec(rest)
+    issues.push({ id: row[1] ?? '', severity: row[2] ?? '', status: row[3] ?? '', title: (tag === null ? rest : rest.slice(0, tag.index)).trim() })
+  }
+  return ok({ issues, hidden })
+}
