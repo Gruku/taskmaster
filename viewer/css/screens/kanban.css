@@ -1,8 +1,9 @@
-/* Kanban screen — owns its layout, phase strip, chips and board; the card and bundle frame are components/card.css.
-   NO edge stripes, NO body wash. */
+/* User intent: the Kanban board on Reality Reprojection — on desktop the page never scrolls and columns are named
+   channels whose bodies scroll; on a phone one column shows at a time behind the Columns tabs and nothing scrolls sideways.
+   Owns layout, phase strip, chips and board; the card and bundle frame are components/card.css. */
 
 /* ─────────── PAGE LAYOUT ─────────── */
-.kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; height: 100%; min-height: 0; }
+.kanban-page { display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0; height: 100%; min-height: 0; }
 
 /* ─────────── KANBAN FILTER BAR (phase strip over the Priority and Epic groups) ─────────── */
 .kanban-filterbar {
@@ -50,7 +51,7 @@
   padding: var(--space-xs) var(--space-sm);
   border: 1px solid var(--field-border);
   border-radius: var(--radius-md);
-  background: var(--bg-recessed);
+  background: var(--surface-recessed);
   color: var(--foreground-bold);
   font-family: var(--font-narrator);
   font-size: var(--size-narrator-small);
@@ -142,7 +143,7 @@
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
   display: block; height: 4px; overflow: hidden;
-  background: var(--bg-recessed); border-radius: var(--radius-full);
+  background: var(--surface-recessed); border-radius: var(--radius-full);
 }
 .phase-chip__bar > span { display: block; height: 100%; background: var(--tone-success); border-radius: var(--radius-full); }
 .phase-archived__reason { color: var(--foreground-subtle); }
@@ -151,11 +152,9 @@
 
 
 /* ─────────── BOARD SURFACE + COLUMNS ─────────── */
+/* Desktop: the page never scrolls; columns are channels whose bodies scroll. JS sets column widths. */
 .kanban-board {
   position: relative;
-  background: transparent;
-  border: 0;
-  padding: 0;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -167,7 +166,7 @@
   position: relative;
   display: flex;
   flex-direction: row;
-  gap: var(--sp-3);
+  gap: var(--space-sm);
   align-items: stretch;
   flex: 1 1 auto;
   min-height: 0;
@@ -176,171 +175,97 @@
 }
 .kanban-col {
   box-sizing: border-box;
-  background: var(--bg-board-col);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: var(--sp-3);
+  background: var(--col-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
   flex: 0 0 auto;        /* width controlled explicitly by JS */
   width: 0;              /* JS sets this on first paint */
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width var(--t-slow) var(--ease), padding var(--t-slow) var(--ease);
+  transition: width 240ms var(--ease), padding 240ms var(--ease);
 }
+.kanban-col[hidden] { display: none; }
 .kanban-board-grid.no-anim .kanban-col { transition: none; }
-.kanban-col-body, .kanban-col-empty {
-  transition: opacity var(--t-base) var(--ease);
-}
 .kanban-col-head {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: var(--sp-3);
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  padding-bottom: var(--space-sm);
+  background: var(--col-bg);
 }
-.kanban-col-head .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-3); }
-.kanban-col-head .dot { box-shadow: 0 0 0 4px color-mix(in oklch, currentColor 18%, transparent); }
-.kanban-col-head .lbl { font-size: 18px; font-weight: 600; color: var(--ink); flex: 1; }
-.kanban-col-head .tnum { color: var(--ink-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.kanban-col-empty { text-align: center; color: var(--ink-3); font-size: var(--text-sm); padding: 45px 0; }
-
-.kanban-col-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  margin-top: var(--sp-2);
-  /* Reserve gutter so cards don't shift when content overflows. */
-  scrollbar-gutter: stable;
-  /* Push the scrollbar into a deliberate rail to the right of cards. */
-  padding-right: 4px;
-}
-.kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
-.kanban-col-body::-webkit-scrollbar { width: 8px; }
-.kanban-col-body::-webkit-scrollbar-track {
-  background: rgba(255,255,255,0.02);
-  border-radius: 4px;
-  margin: 2px 0;
-}
-.kanban-col-body::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-.kanban-col-body::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; border: 2px solid transparent; }
-
-.kanban-col-head.blocked     .dot { background: var(--red); }
-.kanban-col-head.todo        .dot { background: var(--ink-3); }
-.kanban-col-head.in-progress .dot { background: var(--accent); }
-.kanban-col-head.in-review   .dot { background: var(--amber); }
-.kanban-col-head.done        .dot { background: var(--green); }
-
-/* ─────────── COLUMN COLLAPSE ─────────── */
-.kanban-col.collapsed {
-  padding: var(--sp-4) 6px;
-  cursor: pointer;
-}
-.kanban-col.collapsed .kanban-col-body,
-.kanban-col.collapsed .kanban-col-empty {
-  opacity: 0;
-  pointer-events: none;
-  height: 0;
+.kanban-col-title {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
-}
-.kanban-col.collapsed .kanban-col-head {
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-  padding-bottom: var(--sp-3);
-  border-bottom: 0;
-  margin-bottom: 0;
-}
-.kanban-col.collapsed .kanban-col-head .lbl {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground-bold);
+  font-size: var(--size-narrator-small);
   font-weight: 600;
-  color: var(--ink);
+}
+.kanban-col-whisper { flex: 0 0 auto; color: var(--foreground-subtle); font-size: var(--size-technical-small); }
+.kanban-col-count {
   flex: 0 0 auto;
+  color: var(--foreground-subtle);
+  font-size: var(--size-technical-default);
+  font-variant-numeric: tabular-nums;
 }
-.kanban-col-toggle {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--ink-3);
-  cursor: pointer;
-  padding: 0 6px;
-  font-size: 24px;
-  line-height: 1;
-  font-family: var(--font-sans);
+.kanban-col-toggle { flex: 0 0 auto; color: var(--foreground-subtle); }
+.kanban-col-toggle:hover { color: var(--foreground-bold); }
+.kanban-col-toggle[aria-expanded="true"] .icon { rotate: 90deg; }
+.kanban-col-toggle[hidden] { display: none; }
+.kanban-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
-.kanban-col-toggle:hover { color: var(--ink); }
+.kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
+.kanban-col-empty {
+  margin: 0;
+  padding: var(--space-xl) 0;
+  text-align: center;
+  color: var(--foreground-subtle);
+  font-size: var(--size-technical-default);
+}
 
-/* ─────────── MOBILE LAYOUT (< 768px = --bp-md) ─────────── */
-/* Stack kanban columns vertically — one full-width column per row, posts-like feed.
-   Desktop layout (≥ 768px) is completely unchanged.
-   JS updateGridTemplate() skips width assignment when this breakpoint is active. */
+/* Collapsed column: a narrow channel with the title running down it; a click anywhere expands it. */
+.kanban-col.collapsed { cursor: pointer; padding: var(--space-sm) var(--space-xs); }
+.kanban-col.collapsed:hover { background: var(--overlay-surface-hover); }
+.kanban-col.collapsed .kanban-col-body,
+.kanban-col.collapsed .kanban-col-whisper { display: none; }
+.kanban-col.collapsed .kanban-col-head { flex-direction: column; padding-bottom: 0; }
+.kanban-col.collapsed .kanban-col-title { writing-mode: vertical-rl; white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kanban-col { transition: none; }
+}
+
 @media (max-width: 768px) {
   /* Scoped so it outranks .btn--sm's 24px whatever the stylesheet order: the touch target, and one height in the row. */
   .phase-strip .phase-archived { min-height: 44px; }
-
-  /* Board grid: vertical stack, no horizontal scroll */
-  .kanban-board-grid {
-    flex-direction: column;
-    gap: var(--sp-5);
-    overflow: visible;
-    min-height: unset;
-    height: auto;
-  }
-
-  /* Each column: full width, natural height — no inner independent scroll */
-  .kanban-col {
-    width: 100% !important;  /* override any residual JS inline style */
-    flex: 0 0 auto;
-    height: auto;
-    overflow: visible;
-    transition: none;        /* no collapse width animation on mobile */
-  }
-
-  /* Column body: expand fully, let page scroll drive vertical navigation */
-  .kanban-col-body {
-    overflow-y: visible;
-    overflow-x: hidden;
-    height: auto;
-    min-height: 0;
-    padding-right: 0;
-    scrollbar-gutter: auto;
-  }
-  /* Hide per-column scrollbar on mobile (page scrolls instead) */
-  .kanban-col-body::-webkit-scrollbar { display: none; }
-
-  /* Sticky column header — stays visible while scrolling through its column's cards */
+  /* Natural flow: one column at a time (the Columns tabs pick it), the page ends with it, nothing scrolls sideways. */
+  .kanban-page, .kanban-board { height: auto; min-height: 0; overflow: visible; flex: 0 0 auto; }
+  .kanban-board-grid { flex-direction: column; gap: var(--space-lg); min-height: 0; height: auto; }
+  .kanban-col { width: 100%; height: auto; overflow: visible; transition: none; }
+  .kanban-col-body { overflow: visible; height: auto; scrollbar-gutter: auto; }
+  /* The head stays in view while its cards scroll by, on the column's own surface and with no shadow. */
   .kanban-col-head {
     position: sticky;
     top: 0;
-    z-index: 10;
-    background: var(--bg-board-col);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
-    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    z-index: 1;
+    padding-top: var(--space-xs);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
-
-  /* Board container: natural height, no overflow clipping */
-  .kanban-board {
-    overflow: visible;
-    height: auto;
-    min-height: 0;
-    flex: 0 0 auto;
-  }
-
-  /* Kanban page: allow natural document flow */
-  .kanban-page {
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-  }
-
   /* Filter bar: each group takes the full line, so chip-row parks what does not fit and the page never scrolls sideways. */
   .kanban-filters__priority,
   .kanban-filters__epic { flex: 1 1 100%; min-width: 0; }
@@ -352,8 +277,5 @@
   .epic-options__check,
   .epic-options__filter,
   .epic-options .epic-option__pin { min-height: 44px; }
-
   .kanban-field .ef-enum-select { min-height: 44px; }
-
 }
-

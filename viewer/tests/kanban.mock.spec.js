@@ -92,6 +92,8 @@ test('a recent card has a strong border and a New tag, and no glow', async ({ pa
   recentBoard.tasks.find((t) => t.id === 'T-102').started = new Date(Date.now() - 3_600_000).toISOString();
   // A card wide enough for all of line 1; in a narrow column "New" wraps below the id (next test).
   await board(page, { board: recentBoard, viewport: { width: 390, height: 844 } });
+  // At 390 one column shows at a time: pick T-102's from the Columns tabs.
+  await page.locator(`#kanban-col-${recentBoard.tasks.find((t) => t.id === 'T-102').status}-tab`).click();
   await page.mouse.move(0, 0);
   const recent = card(page, 'T-102');
   await expect(recent).toHaveClass(/\brecent\b/);
@@ -520,7 +522,7 @@ test('at 1440 every control in the filter bar is the chip height', async ({ page
 
 // Row 1 carries the count and Add task; row 2 keeps search, density and the labelled Group and Sort selects.
 const rowFilters = (page) => page.locator('#topbar-actions > .overflow-more');
-const colLabels = (page) => page.locator('.kanban-col-head .lbl');
+const colLabels = (page) => page.locator('.kanban-col-title');
 
 test('1440: row 1 has the count, row 2 parks nothing, Group and Sort are named selects', async ({ page }) => {
   await board(page, { viewport: { width: 1440, height: 900 } });
@@ -590,4 +592,44 @@ test('choosing Sort "Created: oldest first" saves { by: created, dir: asc }', as
   await page.getByRole('combobox', { name: 'Sort' }).selectOption({ label: 'Created: oldest first' });
   await expect.poll(() => puts.filter((p) => p?.kanban?.filters?.sort).at(-1)?.kanban.filters.sort)
     .toEqual({ by: 'created', dir: 'asc' });
+});
+
+test('at 390 with 230 tasks one column shows, nothing scrolls sideways, and the page ends with that column', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const list = page.getByRole('tablist', { name: 'Columns' });
+  await expect(list).toBeVisible();
+  for (const name of ['Blocked 23', 'Todo 92', 'In progress 46', 'In review 23', 'Done 46']) {
+    await expect(list.getByRole('tab', { name })).toHaveCount(1);
+  }
+  await expect(page.locator('.kanban-col:visible')).toHaveCount(1);
+  const m = await page.evaluate(() => {
+    const col = document.querySelector('.kanban-col:not([hidden])');
+    return { sw: document.documentElement.scrollWidth, iw: innerWidth, sh: document.documentElement.scrollHeight,
+      bottom: col.getBoundingClientRect().bottom + scrollY };
+  });
+  console.log(`390 long board page height: ${m.sh}`);
+  expect(m.sw).toBeLessThanOrEqual(m.iw);
+  expect(m.sh).toBeLessThanOrEqual(m.bottom + 64);
+  const sel = list.locator('[aria-selected="true"]');
+  const before = await sel.getAttribute('aria-controls');
+  await sel.focus();
+  await page.keyboard.press('ArrowRight');
+  const after = await list.locator('[aria-selected="true"]').getAttribute('aria-controls');
+  expect(after).not.toBe(before);
+  await expect(page.locator(`#${after}`)).toBeVisible();
+  await expect(page.locator('.kanban-col-toggle:visible')).toHaveCount(0);
+  const shadows = await page.locator('.kanban-col-head').evaluateAll((els) => els.map((e) => getComputedStyle(e).boxShadow));
+  expect(shadows.every((s) => s === 'none')).toBe(true);
+  for (const h of await list.getByRole('tab').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))) {
+    expect(h).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('at 1440 every column shows and the page does not scroll', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await expect(page.getByRole('tablist', { name: 'Columns' })).toBeHidden();
+  await expect(page.locator('.kanban-col:visible')).toHaveCount(5);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+  const todo = page.locator('#kanban-col-body-todo');
+  expect(await todo.evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
 });
