@@ -598,3 +598,15 @@ test('leaving with a summary fetch in flight throws nothing and paints nothing i
   await expect(page.locator('#screen-mount .set-control[role="group"]').first()).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test('review and clean-up rows say status and severity as a shape plus a word, never the stored slug', async ({ page }) => {
+  await mockApi(page, dashboardMocks({ theme: 'dark' }));
+  await page.goto('/#/dashboard');
+  const row = (id) => page.locator(`.dk-continuity [data-item-id="${id}"]`);
+  await expect(row('T-107').locator('.co-row__next .marker__word')).toHaveText('In review', { timeout: 15_000 });
+  await expect(row('T-107').locator('.co-row__next .marker__shape')).toHaveAttribute('data-shape', 'triangle');
+  await expect(row('T-106').locator('.co-row__next .marker__word')).toHaveText('In progress');
+  await expect(row('ISS-012').locator('.co-row__next .marker__word')).toHaveText(['Medium', 'Open']);
+  const text = await page.locator('.dk-continuity').innerText();
+  for (const slug of ['in-review', 'in-progress', 'P2 · open']) expect(text).not.toContain(slug);
+});

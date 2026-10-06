@@ -5,6 +5,7 @@ import { formatRelative } from '../../lib/time.js';
 import { hasKnownTags, renderInline } from '../../lib/xml-render.js';
 import { linkRow } from '../link-row.js';
 import { truncate } from '../../lib/text.js';
+import { statusMarker, severityMarker } from '../status.js';
 
 const enc = encodeURIComponent;
 export const ITEM_ROUTE = {
@@ -33,11 +34,23 @@ function titleNode(text) {
   return h('span', { class: 'co-row__title', title: text }, renderInline(text));
 }
 
+// The server sends a task's status, and an issue's "severity · status", as stored slugs in `next`; a row says them as
+// a shape plus a word, like every status in the viewer.
+function nextNode(item) {
+  const text = typeof item.next === 'string' ? item.next.trim() : '';
+  if (item.type === 'task' && text) return statusMarker('task', text);
+  if (item.type === 'issue' && text) {
+    const [sev, status] = text.split('·').map((s) => s.trim());
+    if (sev && status) return h('span', { class: 'co-row__markers' }, severityMarker(sev), statusMarker('issue', status));
+  }
+  return renderField(item.next);
+}
+
 // The row's words, as spans so they may sit inside a button: tag, title and age on one line, then next and where.
 function parts(item, word, label) {
   const chip = h('span', { class: 'co-chip' }, word);
   const when = h('span', { class: 'co-row__when' }, formatRelative(item.timestamp, { suffix: '' }));
-  const next = renderField(item.next);
+  const next = nextNode(item);
   const where = renderField(item.where);
   return {
     chip, when, title: titleNode(label),
