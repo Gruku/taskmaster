@@ -140,3 +140,53 @@ export const EPIC = {
   attention: [{ id: 'T-102', why: 'critical and in progress' }],
   tasks: BOARD.tasks.filter((t) => t.epic === 'viewer'),
 };
+
+// ── Sessions ──
+// GET /api/threads: one open thread, one parked.
+export const THREADS = [
+  { name: 'team-relayout', status: 'open', tldr: 'M1 shipped', next_action: 'start M2',
+    task_ids: ['T-1'], branch: 'feat/relayout', last_touched: '2026-07-13T10:00:00+00:00', staleness_days: 0 },
+  { name: 'guard-hooks-polish', status: 'parked', tldr: 'awaiting review', next_action: '',
+    task_ids: [], branch: '', last_touched: '2026-07-10T10:00:00+00:00', staleness_days: 3 },
+];
+
+// GET /api/sessions: two threads, three handovers in all, one of each status.
+export const SESSIONS = [
+  { id: 'team-relayout', kind: 'thread', status: 'open',
+    start: '2026-07-12T09:00:00+00:00', end: '2026-07-13T10:00:00+00:00', duration: 90000, time_resolution: 'full',
+    handover_ids: ['2026-07-12-scope', '2026-07-13-m1-shipped'],
+    handovers: [
+      { id: '2026-07-12-scope', status: 'closed', viewer_kind: 'mid-task', tldr: 'Scope the relayout' },
+      { id: '2026-07-13-m1-shipped', status: 'open', viewer_kind: 'checkpoint', tldr: 'M1 shipped' },
+    ],
+    task_ids: ['T-102'], tldr: 'M1 shipped', next_action: 'start M2' },
+  { id: 'guard-hooks-polish', kind: 'thread', status: 'closed',
+    start: '2026-07-10T10:00:00+00:00', end: '2026-07-10T10:00:00+00:00', duration: 0, time_resolution: 'full',
+    handover_ids: ['2026-07-10-hooks-old'],
+    handovers: [{ id: '2026-07-10-hooks-old', status: 'superseded', viewer_kind: 'wrap', tldr: 'Old hook plan' }],
+    task_ids: ['T-102'], tldr: 'Old hook plan', next_action: '' },
+];
+
+// Ten files, one of them a 140-character path, so the rail's list is cut at eight and its long line is truncated.
+const FILES_TOUCHED = [
+  'viewer/js/screens/sessions.js', 'viewer/js/components/right-rail.js', 'viewer/css/components/right-rail.css',
+  'viewer/css/components/handover-status.css', 'viewer/index.html',
+  `viewer/tests/${'deeply-nested-fixture-directory/'.repeat(3)}${'x'.repeat(140 - 13 - 32 * 3 - 8)}.spec.js`,
+  'viewer/tests/unit/right-rail.test.js', 'viewer/tests/mock-fixtures.js', 'docs/plans/3e.md', 'CHANGELOG.md',
+];
+const sessionHandover = (id, viewer_kind, status, tldr, created) => ({
+  id, viewer_kind, status, tldr, created,
+  done_items: ['Rail rebuilt from nodes', 'Status pill says its word'],
+  open_items: ['Rows become buttons', 'Phone layout check'],
+  task_ids: ['T-102'], files_touched: FILES_TOUCHED,
+  next_action: `Continue from ${id}`,
+  resume_prompt: `Resume ${id}: read the plan, then pick up the open items.`,
+});
+
+// GET /api/sessions/<id>: the session and its handovers in full.
+export const SESSION_DETAILS = Object.fromEntries(SESSIONS.map((s) => [s.id, {
+  session: s,
+  handovers: s.handovers.map((ho) => sessionHandover(ho.id, ho.viewer_kind, ho.status, ho.tldr,
+    `${ho.id.slice(0, 10)}T10:00:00+00:00`)),
+  task_ids: s.task_ids,
+}]));

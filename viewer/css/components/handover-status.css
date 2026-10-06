@@ -32,3 +32,14 @@
 /* The menu itself is a popover (popover.css); only the status words' casing and the check column are its own. */
 .ho-status-menu-item { text-transform: capitalize; }
 .ho-status-menu-check { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; }
+
+/* A refused status change is a sentence under the pill row, wherever the pill sits (Sessions' rail head, the task
+   rail's handover head): it takes a line of its own and is never hue-coloured. */
+.ho-status-error {
+  display: block;
+  flex-basis: 100%;
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+}
+:has(> .ho-status-error) { flex-wrap: wrap; }

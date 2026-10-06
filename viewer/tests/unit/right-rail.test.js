@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import { RightRail, mountRightRail, railPanels, statusPill, openStatusMenu } from '../../js/components/right-rail.js';
+import { RightRail, mountRightRail, railPanels, statusPill, openStatusMenu, HO_STATUS_LABEL } from '../../js/components/right-rail.js';
+import { openPopoverCount } from '../../js/components/popover.js';
 
 function page(html = '<!doctype html><body><aside></aside></body>') {
   const dom = new JSDOM(html, { url: 'http://localhost/' });
@@ -24,24 +25,106 @@ test('legacy string blockers render without breaking task detail', () => {
   assert.equal(aside.querySelector('.td-blocker').textContent, 'Waiting for review');
 });
 
-test('open() injects rendered content; close() removes it', () => {
-  page('<!doctype html><body></body>');
-  const rail = new RightRail({ width: 480 });
-  rail.open({ render: () => '<div id="x">hi</div>' });
-  assert.ok(document.querySelector('.right-rail'));
-  assert.ok(document.querySelector('#x'));
-  rail.close();
-  assert.equal(document.querySelector('.right-rail'), null);
+// ── The generic rail: a labelled panel in its host, built from nodes, that takes and returns focus ──
+const MODAL_PAGE = '<div class="shell"><button id="opener">o</button><section id="screen-mount"><div id="host"></div><a href="#x" id="fallback">f</a></section></div><div id="modal-host"></div>';
+function railPage(markup = '<div id="host"></div>') {
+  const dom = page(`<!doctype html><body>${markup}</body>`);
+  global.HTMLElement = dom.window.HTMLElement;
+  return { dom, host: document.getElementById('host') };
+}
+const para = (text) => { const el = document.createElement('p'); el.textContent = text; return el; };
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test('open() puts a labelled panel in its host and focuses its title', () => {
+  const { host } = railPage();
+  const rail = new RightRail({ host });
+  const body = para('Cards are done.');
+  rail.open({ title: 'M1 shipped', body: [body] });
+  const aside = host.querySelector('aside#right-rail');
+  assert.ok(aside, 'the rail is in its host');
+  assert.ok(aside.classList.contains('right-rail'));
+  assert.ok(aside.classList.contains('right-rail--plain'));
+  assert.equal(aside.getAttribute('aria-label'), 'Details');
+  assert.equal(document.getElementById(aside.getAttribute('aria-labelledby')).textContent, 'M1 shipped');
+  assert.equal(document.activeElement, aside.querySelector('.rr-title'));
+  assert.equal(document.activeElement.tagName, 'H2');
+  assert.equal(document.activeElement.getAttribute('tabindex'), '-1');
+  const close = aside.querySelector('.rr-h > button.rr-close');
+  assert.equal(close.getAttribute('aria-label'), 'Close details');
+  assert.ok(close.querySelector('.icon'));
+  assert.ok(aside.contains(body));
+  assert.equal(document.body.classList.contains('rail-open'), false);
+  assert.equal(rail.isOpen(), true);
+  close.click();
+  assert.equal(host.querySelector('#right-rail'), null);
+  assert.equal(rail.isOpen(), false);
 });
 
 test('open() twice swaps the content', () => {
-  page('<!doctype html><body></body>');
-  const rail = new RightRail();
-  rail.open({ render: () => '<div id="a">first</div>' });
-  rail.open({ render: () => '<div id="b">second</div>' });
-  assert.equal(document.querySelector('#a'), null);
-  assert.ok(document.querySelector('#b'));
+  const { host } = railPage();
+  const rail = new RightRail({ host, label: 'Session details' });
+  const closed = [];
+  rail.open({ title: 'first', body: [para('a')], onClose: () => closed.push('first') });
+  rail.open({ kind: 'session', title: 'second', body: [para('b')] });
+  assert.equal(host.querySelectorAll('aside').length, 1);
+  assert.deepEqual(closed, ['first']);
+  const aside = host.querySelector('aside#right-rail');
+  assert.ok(aside.classList.contains('right-rail--session'));
+  assert.equal(aside.getAttribute('aria-label'), 'Session details');
+  assert.equal(document.getElementById(aside.getAttribute('aria-labelledby')).textContent, 'second');
+  assert.ok(!aside.textContent.includes('first'));
   rail.close();
+});
+
+test('close() hands focus back to the opener and runs onClose once', () => {
+  const { host } = railPage('<div id="host"><button id="row">row</button></div>');
+  const opener = document.getElementById('row');
+  const rail = new RightRail({ host });
+  let calls = 0;
+  rail.open({ title: 'x', opener, onClose: () => { calls += 1; } });
+  assert.ok(host.querySelector('#right-rail').contains(document.activeElement));
+  rail.close();
+  rail.close();
+  assert.equal(calls, 1);
+  assert.equal(document.activeElement, opener);
+});
+
+test('Escape closes the rail unless a menu or a modal took it', async () => {
+  const { dom, host } = railPage();
+  const rail = new RightRail({ host });
+  const esc = (target) => target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+  rail.open({ title: 'x' });
+  esc(document.activeElement);
+  assert.equal(rail.isOpen(), false, 'a plain Escape closes it');
+
+  rail.open({ title: 'x' });
+  const taken = (e) => e.preventDefault();
+  document.addEventListener('keydown', taken, true);
+  esc(document.activeElement);
+  document.removeEventListener('keydown', taken, true);
+  assert.equal(rail.isOpen(), true, 'an Escape already used stays with whoever used it');
+  rail.close();
+
+  // A modal over the screen takes the key: Escape typed on the page behind it closes the modal, not the rail.
+  const under = railPage(MODAL_PAGE);
+  const { openModal, openModalCount } = await import('../../js/components/modal.js');
+  const rail2 = new RightRail({ host: under.host });
+  rail2.open({ title: 'under a modal' });
+  openModal({ title: 'x' });
+  await tick();
+  assert.equal(openModalCount(), 1);
+  document.body.dispatchEvent(new under.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(openModalCount(), 0, 'the modal closes');
+  assert.equal(rail2.isOpen(), true, 'the rail stays open');
+  rail2.close();
+});
+
+test('a rail without a host refuses', () => {
+  railPage();
+  assert.throws(() => new RightRail({}), TypeError);
+  assert.throws(() => new RightRail(), TypeError);
 });
 
 test('a task with nothing related has no panels at all', () => {
@@ -244,4 +327,79 @@ test('choosing a status posts it, updates every pill for that handover, and retu
   assert.deepEqual(heard, [{ id: 'HO-1', status: 'closed' }]);
   assert.equal(document.querySelector('.ho-status-menu'), null);
   assert.equal(document.activeElement, pill);
+});
+
+// ── A refused status change is said in words beside the pill it was chosen from ──
+const reply = (status, body = '') => async () => ({ ok: status >= 200 && status < 300, status, text: async () => body });
+async function choose(pill, word) {
+  pill.click();
+  [...document.querySelectorAll('.ho-status-menu [role="menuitemradio"]')].find((i) => i.textContent.trim() === word).click();
+  await tick();
+  await tick();
+}
+
+test('a failed status change is said beside the pill and the pill keeps its status', async () => {
+  const { pill } = menuPage();
+  const twin = statusPill('HO-1', 'open');
+  document.getElementById('elsewhere').after(twin);
+  global.CSS = { escape: (s) => s };
+
+  global.fetch = reply(500, '{"error":"sqlite3.OperationalError: database is locked"}');
+  await choose(pill, 'closed');
+  let alert = pill.nextElementSibling;
+  assert.ok(alert.matches('span.ho-status-error[role="alert"][id]'));
+  assert.equal(alert.textContent, 'The server could not save this change. Try again in a moment.');
+  assert.equal(pill.getAttribute('aria-describedby'), alert.id);
+  for (const pp of [pill, twin]) {
+    assert.equal(pp.dataset.status, 'open');
+    assert.ok(pp.classList.contains('ho-status-pill-open'));
+    assert.match(pp.textContent, /open/);
+  }
+  assert.ok(!twin.nextElementSibling?.classList.contains('ho-status-error'), 'the twin pill has no alert');
+  assert.equal(twin.hasAttribute('aria-describedby'), false);
+
+  global.fetch = reply(409, '{"error":"Handover is already superseded by 2026-10-02-wrap"}');
+  await choose(pill, 'closed');
+  assert.equal(document.querySelectorAll('.ho-status-error').length, 1, 'one message replaces the other');
+  alert = pill.nextElementSibling;
+  assert.equal(alert.textContent, 'Handover is already superseded by 2026-10-02-wrap');
+  assert.equal(pill.getAttribute('aria-describedby'), alert.id);
+
+  global.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await choose(pill, 'closed');
+  assert.equal(document.querySelectorAll('.ho-status-error').length, 1);
+  assert.equal(pill.nextElementSibling.textContent, 'Could not reach the server, so nothing was saved. Check that the viewer is still running.');
+  assert.equal(pill.dataset.status, 'open');
+
+  global.fetch = async () => ({ ok: true });
+  await choose(pill, 'closed');
+  assert.equal(document.querySelector('.ho-status-error'), null);
+  assert.equal(pill.hasAttribute('aria-describedby'), false);
+  assert.equal(pill.dataset.status, 'closed');
+  assert.equal(twin.dataset.status, 'closed');
+});
+
+test('a closed menu does not stay remembered', () => {
+  const { dom, pill: a } = menuPage();
+  const b = statusPill('HO-2', 'closed');
+  document.body.appendChild(b);
+  a.click();
+  assert.ok(document.querySelector('.ho-status-menu'));
+  document.querySelector('.ho-status-menu [role="menuitemradio"]')
+    .dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(document.querySelector('.ho-status-menu'), null);
+  b.click();
+  const menu = document.querySelector('.ho-status-menu');
+  assert.ok(menu, 'the first click on the next pill opens its menu');
+  assert.equal(b.getAttribute('aria-expanded'), 'true');
+  assert.equal(b.getAttribute('aria-controls'), menu.id);
+  assert.equal(openPopoverCount(), 1);
+  b.click();
+  assert.equal(openPopoverCount(), 0);
+});
+
+test('the status words are named once', () => {
+  assert.equal(HO_STATUS_LABEL.superseded, 'Superseded');
+  assert.deepEqual(Object.keys(HO_STATUS_LABEL), ['open', 'closed', 'superseded']);
+  assert.ok(Object.isFrozen(HO_STATUS_LABEL));
 });
