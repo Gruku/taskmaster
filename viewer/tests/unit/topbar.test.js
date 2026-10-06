@@ -12,7 +12,7 @@ globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 globalThis.Event = dom.window.Event;
 
-const { tmAction, tmSearch, tmSegmented, claimTopbar } = await import('../../js/lib/topbar.js');
+const { tmAction, tmSearch, tmSegmented, claimTopbar, claimTopbarPrimary, setTopbarCount } = await import('../../js/lib/topbar.js');
 
 const JS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'js');
 
@@ -99,4 +99,35 @@ test('claimTopbar: empties both rows and keeps one Filters button in row 2 for t
   row.append(tmSearch().el, tmAction({ label: 'A' }));
   assert.equal(claimTopbar(), row);
   assert.deepEqual([...row.children], [filters]);
+});
+
+const ROW1 = '<span id="topbar-count"></span><div id="topbar-primary"></div><div id="topbar-actions"></div>';
+
+test('setTopbarCount: the count shows its words and keeps them in its title, so a cut count can still be read', () => {
+  document.body.innerHTML = ROW1;
+  const count = document.getElementById('topbar-count');
+  setTopbarCount('12 tasks');
+  assert.equal(count.textContent, '12 tasks');
+  assert.equal(count.getAttribute('title'), '12 tasks');
+  setTopbarCount('');
+  assert.equal(count.textContent, '');
+  assert.equal(count.hasAttribute('title'), false);
+});
+
+test('claimTopbarPrimary: a claim clears the slot, so a second claim leaves only its own button', () => {
+  document.body.innerHTML = ROW1;
+  claimTopbarPrimary().append(tmAction({ label: 'First' }));
+  const slot = claimTopbarPrimary();
+  assert.equal(slot, document.getElementById('topbar-primary'));
+  slot.append(tmAction({ label: 'Second' }));
+  assert.deepEqual([...slot.children].map((b) => b.textContent), ['Second']);
+});
+
+test('claimTopbar: a new route clears the count and its title', () => {
+  document.body.innerHTML = ROW1;
+  setTopbarCount('230 tasks · 230 visible');
+  claimTopbar();
+  const count = document.getElementById('topbar-count');
+  assert.equal(count.textContent, '');
+  assert.equal(count.hasAttribute('title'), false);
 });

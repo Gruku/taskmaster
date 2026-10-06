@@ -31,7 +31,7 @@ function topbarRow(root) {
 }
 
 export function claimTopbar() {
-  document.getElementById('topbar-count')?.replaceChildren();
+  setTopbarCount('');
   document.getElementById('topbar-primary')?.replaceChildren();
   const root = document.getElementById('topbar-actions');
   if (!root) return null;
@@ -42,11 +42,20 @@ export function claimTopbar() {
   return root;
 }
 
-export function claimTopbarPrimary() { return document.getElementById('topbar-primary'); }
+// A claim clears, as claimTopbar() does: a screen that re-renders never finds its old primary still there.
+export function claimTopbarPrimary() {
+  const el = document.getElementById('topbar-primary');
+  el?.replaceChildren();
+  return el;
+}
 
+// The count is the first thing row 1 cuts at phone width, so its title carries the whole text.
 export function setTopbarCount(text = '') {
   const el = document.getElementById('topbar-count');
-  if (el) el.textContent = text;
+  if (!el) return;
+  el.textContent = text;
+  if (text) el.title = text;
+  else el.removeAttribute('title');
 }
 
 // The hint next to the search field names the shortcut main.js actually binds.
