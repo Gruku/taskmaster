@@ -91,6 +91,8 @@ export async function mount(root, { store }) {
 
   function clearSearch() {
     search.input.value = '';
+    // The field's own listener hides its clear button; its debounced repaint after ours is a no-op.
+    search.input.dispatchEvent(new Event('input', { bubbles: true }));
     q = '';
     paint();
     search.input.focus();

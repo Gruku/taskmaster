@@ -420,3 +420,23 @@ export function manySessions(n) {
   }]));
   return { sessions, details };
 }
+
+// ── Plan 3e: Archived ──
+// BOARD plus `n` archived tasks T-1001… spread over the two fixture epics, an epic the board does not list (`legacy`)
+// and no epic; every fifth title is 120 characters long; T-1002 was superseded, T-1003 is a duplicate. Deterministic.
+export function archivedBoard(n) {
+  const epics = ['viewer', 'store', 'legacy', undefined];
+  const long = (i) => `Archived task ${i} whose title runs well past the edge of a phone screen and keeps on going until it `.repeat(2).slice(0, 120);
+  const reasons = { 1: 'superseded by T-140', 2: 'duplicate' };
+  const archived = Array.from({ length: n }, (_, i) => task(`T-${1001 + i}`,
+    i % 5 === 4 ? long(1001 + i) : `Archived task ${1001 + i}`, 'archived', 'medium', epics[i % 4],
+    reasons[i] ? { archived_reason: reasons[i] } : {}));
+  return { ...BOARD, tasks: [...BOARD.tasks, ...archived] };
+}
+
+// The table plan 4's a11y gate reuses for #/archived; loaded when `.arch-row[data-task-id="T-1001"]` is visible.
+export const archivedMocks = ({ theme = 'dark' } = {}) => ({
+  '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+  '/api/board': archivedBoard(40), '/api/backlog': archivedBoard(40),
+  '/api/task/T-1001/detail': taskDetail({ ...EMPTY_TASK, id: 'T-1001', title: 'Archived task 1001', status: 'archived' }),
+});
