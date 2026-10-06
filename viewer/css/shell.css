@@ -203,7 +203,8 @@ body, .shell, .sidebar, .topbar, .main {
 /* A popover opened from the topbar (Filters) floats at the page-popover level: inside the topbar's stacking context
    it would otherwise sit under a screen's sticky chrome. */
 .topbar:has(.popover) { z-index: 70; }
-.topbar-row1 { display: flex; align-items: center; gap: var(--space-md); height: 56px; }
+/* Row 1 never wraps and never scrolls sideways: the count gives way first (its words stay in its title), then the title. */
+.topbar-row1 { display: flex; align-items: center; gap: var(--space-md); height: 56px; min-width: 0; }
 /* Row 2 is one line that neither wraps nor scrolls: what does not fit waits behind its "Filters" button
    (overflowRow, installed by claimTopbar). The padding leaves room for focus rings inside the clip;
    the negative margin keeps the controls on the gutter line. */
@@ -231,13 +232,14 @@ body, .shell, .sidebar, .topbar, .main {
 .topbar-row2 .overflow-list > :not(.tm-segmented) { flex-wrap: wrap; }
 /* League Spartan's capitals sit above the middle of its line box; the top padding puts them on the row's centre line. */
 #page-title {
+  flex: 0 1 auto;
   margin: 0;
   padding-top: var(--space-micro);
   min-width: 0;
   font-family: var(--font-declaration); font-weight: var(--font-declaration-weight); font-size: var(--size-declaration-h4); letter-spacing: var(--tracking-tight); line-height: var(--leading-tight); text-transform: uppercase; color: var(--foreground-bold);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.topbar-count { flex: 0 0 auto; font-family: var(--font-technical); font-size: var(--size-technical-small); color: var(--foreground-subtle); }
+.topbar-count { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-technical); font-size: var(--size-technical-small); color: var(--foreground-subtle); }
 .topbar-count:empty { display: none; }
 .topbar-primary { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-xs); }
 .btn-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--foreground-default); cursor: pointer; transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass); }
@@ -441,6 +443,9 @@ body, .shell, .sidebar, .topbar, .main {
   .topbar-row1 { gap: var(--space-sm); }
   .topbar-row2 { height: 56px; }
   #page-title { font-size: var(--size-declaration-h5); }
+  /* A primary with an icon shows only the icon; its aria-label still names it. */
+  .topbar-primary .btn:has(> .icon) { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .topbar-primary .btn:has(> .icon) > span { display: none; }
 
   /* Main: natural height, vertical scroll */
   .main {
