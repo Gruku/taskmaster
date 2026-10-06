@@ -208,7 +208,7 @@
   font-size: var(--size-narrator-small);
   font-weight: 600;
 }
-.kanban-col-whisper { flex: 0 0 auto; color: var(--foreground-subtle); font-size: var(--size-technical-small); }
+.kanban-col-whisper { margin-left: var(--space-sm); color: var(--foreground-subtle); font-size: var(--size-technical-small); font-weight: 400; }
 .kanban-col-count {
   flex: 0 0 auto;
   color: var(--foreground-subtle);

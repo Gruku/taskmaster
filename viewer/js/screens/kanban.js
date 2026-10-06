@@ -345,6 +345,8 @@ export async function mount(root, { store, api, prefs }) {
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
     // Record what had focus inside the board so the repaint can put it back (polls, collapse, tab switch).
     const restore = focusTarget();
+    // A poll must not throw a reader back to the top of a column they scrolled.
+    const bodyScroll = new Map([...boardGrid.querySelectorAll('.kanban-col-body')].map((b) => [b.id, b.scrollTop]));
     const phone = !!mq?.matches && groups.length >= 2;
     if (!groups.some((g) => g.key === selectedCol)) {
       selectedCol = (groups.find((g) => g.tasks.length) || groups[0])?.key ?? null;
@@ -387,7 +389,7 @@ export async function mount(root, { store, api, prefs }) {
         const whisper = document.createElement('span');
         whisper.className = 'kanban-col-whisper';
         whisper.textContent = 'waiting on you';
-        head.appendChild(whisper);
+        title.appendChild(whisper);
       }
       const num = document.createElement('span');
       num.className = 'kanban-col-count';
@@ -461,6 +463,7 @@ export async function mount(root, { store, api, prefs }) {
       boardGrid.appendChild(col);
     }
     updateGridTemplate();
+    for (const [id, top] of bodyScroll) { const b = top && boardGrid.querySelector(`#${CSS.escape(id)}`); if (b) b.scrollTop = top; }
     refocus(restore, phone);
   }
 

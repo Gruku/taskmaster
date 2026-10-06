@@ -633,3 +633,96 @@ test('at 1440 every column shows and the page does not scroll', async ({ page })
   const todo = page.locator('#kanban-col-body-todo');
   expect(await todo.evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
 });
+
+// Task 8, Part B: the collapse head, the no-match state, a poll's repaint, the keyboard walk, axe.
+const colOf = (page, key) => page.locator(`.kanban-col:has(#kanban-col-body-${key})`);
+const toggleOf = (page, key) => page.locator(`.kanban-col-toggle[data-key="${key}"]`);
+const renameTask = (page, id, title) => page.evaluate(([id, title]) => import('/js/store.js').then(({ store }) => {
+  const next = structuredClone(store.getBacklog());
+  next.revision = `r-${Date.now()}`;
+  const walk = (o) => { if (o && typeof o === 'object') { if (o.id === id && 'title' in o) o.title = title; Object.values(o).forEach(walk); } };
+  walk(next);
+  store.setBoard(next);
+}), [id, title]);
+
+test('a column head is a heading with a marker, a count and a named collapse button', async ({ page }) => {
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/api/viewer/prefs')) puts.push(r.postDataJSON()); });
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const h2 = colOf(page, 'in-review').getByRole('heading', { level: 2 });
+  await expect(h2).toContainText('In review');
+  await expect(h2).toContainText('waiting on you');
+  const t = toggleOf(page, 'in-review');
+  await expect(t).toHaveAccessibleName('Collapse In review');
+  await expect(t).toHaveAttribute('aria-expanded', 'true');
+  await t.click();
+  await expect(t).toHaveAttribute('aria-expanded', 'false');
+  await expect(t).toHaveAccessibleName('Expand In review');
+  await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
+  const cols = (o) => (o && typeof o === 'object' ? (o.kanban?.collapsed_columns ?? Object.values(o).map(cols).find(Boolean)) : undefined);
+  await expect.poll(() => cols(puts.at(-1))).toEqual(['in-review']);
+});
+
+test('a collapsed column stays collapsed across a poll, and the toggle works from the keyboard', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const t = toggleOf(page, 'in-review');
+  await t.focus();
+  await page.keyboard.press('Enter');
+  await expect(t).toHaveAttribute('aria-expanded', 'false');
+  await bumpBoard(page);
+  await expect(toggleOf(page, 'in-review')).toHaveAttribute('aria-expanded', 'false');
+  await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
+  await expect(toggleOf(page, 'in-review')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(toggleOf(page, 'in-review')).toHaveAttribute('aria-expanded', 'true');
+  await expect(colOf(page, 'in-review')).not.toHaveClass(/collapsed/);
+});
+
+test('a search that matches nothing says so once and offers Clear filters', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await searchBox(page).fill('zzzz');
+  const empty = page.locator('.kanban-board .tm-empty');
+  await expect(empty).toHaveCount(1);
+  await expect(empty).toContainText('0 of 7 tasks match');
+  await expect(empty.getByRole('button')).toHaveCount(1);
+  await expect(empty.getByRole('button', { name: 'Clear filters' })).toBeVisible();
+  const others = page.locator('.kanban-col-body:not(:has(.tm-empty))');
+  expect(await others.count()).toBeGreaterThan(0);
+  for (const t of await others.allTextContents()) expect(t.trim()).toBe('No tasks');
+  await empty.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(searchBox(page)).toHaveValue('');
+  await expect(page.locator('.card-task')).toHaveCount(7);
+});
+
+test('a poll that redraws the board keeps focus on the same card', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await linkOf(page, 'T-102').focus();
+  await renameTask(page, 'T-104', 'Renamed by the poll');
+  await expect(card(page, 'T-104')).toContainText('Renamed by the poll');
+  await expect(linkOf(page, 'T-102')).toBeFocused();
+  await card(page, 'T-102').locator('.card-id').focus();
+  await renameTask(page, 'T-104', 'Renamed again');
+  await expect(card(page, 'T-104')).toContainText('Renamed again');
+  await expect(card(page, 'T-102').locator('.card-id')).toBeFocused();
+});
+
+test('a poll keeps a column\'s scroll at 1440, and the chosen tab and page scroll at 390', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const todo = page.locator('#kanban-col-body-todo');
+  await todo.evaluate((b) => { b.scrollTop = 400; });
+  await bumpBoard(page);
+  await page.waitForTimeout(100);
+  expect(await page.locator('#kanban-col-body-todo').evaluate((b) => b.scrollTop)).toBe(400);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const list = page.getByRole('tablist', { name: 'Columns' });
+  await list.getByRole('tab', { name: 'In progress 46' }).click();
+  await page.evaluate(() => window.scrollTo(0, 600));
+  const tab = list.getByRole('tab', { name: 'In progress 46' });
+  await tab.focus();
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await bumpBoard(page);
+  await page.waitForTimeout(100);
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  await expect(tab).toBeFocused();
+  expect(await page.evaluate(() => scrollY)).toBe(600);
+});
