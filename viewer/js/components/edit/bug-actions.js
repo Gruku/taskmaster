@@ -52,7 +52,7 @@ export function openAdopt({ bug, getBacklog, onDone, onClose }) {
       key: 'adopted_into', label: 'Task', renderer: TextField, wide: true, required: true, maxLength: 40,
       validate: (v) => {
         const id = trim(v);
-        if (!id) return 'Required';
+        if (!id) return 'required'; // the shared wording: "Task is required"
         return onBoard(id) ? null : `No task ${id} on the board`;
       },
     }],
@@ -79,7 +79,7 @@ export async function shelveBug({ bug }) {
   const ok = await confirmDialog({
     title: `Shelve ${bug.id}?`,
     message: 'It leaves the open list. It can still be marked fixed, adopted or promoted later.',
-    confirmLabel: 'Shelve', cancelLabel: 'Keep open',
+    confirmLabel: 'Shelve', cancelLabel: 'Keep open', alert: true,
   });
   if (!ok) return { cancelled: true };
   try {

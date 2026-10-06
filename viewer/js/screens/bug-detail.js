@@ -111,6 +111,25 @@ function page(bug, { tasks, timers, act }) {
   return [head, detailGrid({ body: body(bug), panels: rail(bug, tasks) })];
 }
 
+// Promote moves to the new issue and the button that had focus goes with this page: focus follows to the next
+// page's title (or its settled empty state) rather than falling to <body>, unless the user has already moved it.
+function focusNextPage(root) {
+  const old = root.querySelector('h1');
+  let obs = null;
+  const stop = () => { obs?.disconnect(); clearTimeout(timer); };
+  const timer = setTimeout(stop, 5000);
+  obs = new MutationObserver(() => {
+    const target = [...root.querySelectorAll('h1, .tm-empty:not([aria-busy="true"])')].find((el) => el !== old);
+    if (!target) return;
+    stop();
+    const active = document.activeElement;
+    if (active && active !== document.body && root.contains(active)) return;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus();
+  });
+  obs.observe(root, { childList: true, subtree: true });
+}
+
 export function mount(root, { params, subpath, store }) {
   const id = subpath?.[0] || params?.id || null;
   const timers = new Set();
@@ -160,7 +179,12 @@ export function mount(root, { params, subpath, store }) {
   async function act(name, el, bug) {
     if (name === 'adopt') openAdopt({ bug, getBacklog: () => store?.getBacklog?.(), onDone: done });
     else if (name === 'promote') {
-      openPromote({ bug, onDone: (issueId) => { if (disposed) return; if (issueId) location.hash = `#/issue/${encodeURIComponent(issueId)}`; else done(); } });
+      openPromote({ bug, onDone: (issueId) => {
+        if (disposed) return;
+        if (!issueId) { done(); return; }
+        focusNextPage(root);
+        location.hash = `#/issue/${encodeURIComponent(issueId)}`;
+      } });
     } else if (name === 'shelve') {
       const msg = root.querySelector('.dp-actions__message');
       if (msg) msg.textContent = '';
