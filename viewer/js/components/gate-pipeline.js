@@ -11,6 +11,8 @@
 //   - A gate's state is a shape plus a word (the marker language of status.css); the shape carries the hue:
 //       done / pass → ● success      warn → ▲ warning      fail → ◆ critical
 //       skipped     → ✕ neutral      pending → ○ neutral
+//   - Gates and states are said in words ("Plan review", "passed with warnings"); a machine string such as
+//     `task.gate_state` is never printed as it is.
 //
 // Source of truth: taskmaster_v3.py blocking_gates(). Review gates only — these gate completion.
 // Status gates (spec/plan/tests/impl) are non-blocking plumbing and are not shown in the tracker.
@@ -37,6 +39,23 @@ const STATE_MARK = {
   pending: ['neutral', 'ring', '○'],
 };
 
+// state → the word a person reads beside the shape
+const STATE_WORD = {
+  done: 'done',
+  pass: 'passed',
+  warn: 'passed with warnings',
+  fail: 'failed',
+  skipped: 'skipped',
+  pending: 'pending',
+};
+
+const GATE_LABEL = {
+  'spec-review': 'Spec review',
+  'plan-review': 'Plan review',
+  'design-review': 'Design review',
+  'review-gate': 'Review gate',
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -44,6 +63,13 @@ const STATE_MARK = {
 function escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// A gate the viewer has no label for is sentence-cased from its id ('security-audit' → 'Security audit').
+function gateLabel(name) {
+  if (Object.hasOwn(GATE_LABEL, name)) return GATE_LABEL[name];
+  const words = String(name).replace(/[-_]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /**
@@ -84,15 +110,18 @@ export function renderGatePipeline(task) {
   const nodes = gates.map((gateName) => {
     const stateClass = gateStateClass(records[gateName]);
     const [tone, shape, glyph] = STATE_MARK[stateClass];
-    return `<span class="gp-gate gate--${stateClass} marker marker--${tone}" title="${escapeHtml(gateName)}: ${stateClass}">`
+    const label = escapeHtml(gateLabel(gateName));
+    return `<span class="gp-gate gate--${stateClass} marker marker--${tone}" title="${label}: ${STATE_WORD[stateClass]}">`
       + `<span class="marker__shape" data-shape="${shape}" aria-hidden="true">${glyph}</span>`
-      + `<span class="marker__word">${escapeHtml(gateName)}</span>`
-      + `<span class="gp-word">${stateClass}</span></span>`;
+      + `<span class="marker__word">${label}</span> `
+      + `<span class="gp-gate__state">${STATE_WORD[stateClass]}</span></span>`;
   }).join('');
 
-  // Optional gate_state one-liner (current machine state from server).
-  const stateEl = task.gate_state
-    ? `<span class="gp-state">${escapeHtml(task.gate_state)}</span>`
+  // The server's '<gate>:<state>' mirror, in words — only when its gate is off this lane's track (a node on the track
+  // already says it). Anything else (e.g. 'blocked@<gate>', an unknown state) is not printed.
+  const current = /^([^:]+):([^:]+)$/.exec(typeof task.gate_state === 'string' ? task.gate_state : '');
+  const stateEl = current && Object.hasOwn(STATE_WORD, current[2]) && !gates.includes(current[1])
+    ? `<span class="gp-state">Current step: ${escapeHtml(gateLabel(current[1]))} — ${STATE_WORD[current[2]]}</span>`
     : '';
 
   return `<div class="gp-track">${nodes}${stateEl}</div>`;

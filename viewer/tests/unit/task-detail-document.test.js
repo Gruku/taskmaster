@@ -32,7 +32,7 @@ const FAKE_TASK = {
 
 const FAKE_BACKLOG = {
   tasks: [FAKE_TASK],
-  epics: [{ id: 'core', label: 'Core' }],
+  epics: [{ id: 'core', name: 'Core platform' }],
   phases: [{ id: 'p1', label: 'Phase 1' }],
 };
 
@@ -253,6 +253,45 @@ test('marker row: estimate, epic, then branch / worktree / release / sub-repo as
   assert.match(row.querySelector('[data-tag="release"]').textContent, /7\.1\.0/);
   assert.match(row.querySelector('[data-tag="sub_repo"]').textContent, /viewer/);
   t.done();
+});
+
+test('the epic tag is a swatch and the epic\'s name, with no inline style, on the page and in the dialog', () => {
+  for (const chrome of ['page', 'embedded']) {
+    const t = mount(FAKE_TASK, { chrome });
+    const epic = t.root.querySelector('[data-test="chips"] [data-tag="epic"]');
+    assert.equal(epic.tagName, 'A', chrome);
+    assert.ok(epic.classList.contains('td-tag') && epic.classList.contains('td-epic'), chrome);
+    assert.equal(epic.getAttribute('href'), '#/epic/core', chrome);
+    assert.equal(epic.hasAttribute('style'), false, chrome);
+    const swatch = epic.querySelector('.td-swatch');
+    assert.ok(swatch.classList.contains('td-swatch--cat-1'), chrome);
+    assert.equal(swatch.getAttribute('aria-hidden'), 'true', chrome);
+    assert.equal(epic.querySelector('.td-tag__k').textContent, 'Epic', chrome);
+    assert.equal(epic.querySelector('.td-tag__v').textContent, 'Core platform', chrome);
+    t.done();
+  }
+});
+
+test('an epic missing from the backlog shows its id and no swatch', () => {
+  const t = mount({ ...FAKE_TASK, epic: 'gone' });
+  const epic = t.root.querySelector('[data-tag="epic"]');
+  assert.equal(epic.querySelector('.td-swatch'), null);
+  assert.equal(epic.querySelector('.td-tag__v').textContent, 'gone');
+  assert.equal(epic.getAttribute('href'), '#/epic/gone');
+  assert.equal(epic.hasAttribute('style'), false);
+  t.done();
+});
+
+test('the gate strip says each gate and its state in words and never prints the raw gate_state', () => {
+  const task = { ...FAKE_TASK, lane: 'full', gates: { 'spec-review': { verdict: 'pass' } }, gate_state: 'plan-review:pending' };
+  for (const chrome of ['page', 'embedded']) {
+    const t = mount(task, { chrome });
+    const strip = t.root.querySelector('[data-test="gate-pipeline"]');
+    assert.deepEqual([...strip.querySelectorAll('.marker__word')].map((el) => el.textContent), ['Spec review', 'Plan review', 'Review gate']);
+    assert.deepEqual([...strip.querySelectorAll('.gp-gate__state')].map((el) => el.textContent), ['passed', 'pending', 'pending']);
+    assert.ok(!strip.textContent.includes('plan-review:pending'), chrome);
+    t.done();
+  }
 });
 
 test('tags with nothing to show are left out', () => {

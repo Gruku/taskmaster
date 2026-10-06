@@ -14,7 +14,7 @@
 }
 
 /* Read aloud, not shown: the shape beside it is the visible form of the same word. */
-.td-doc :is(.gp-word, .ml-word) {
+.td-doc .ml-word {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -143,7 +143,14 @@
 .td-tag__v { min-width: 0; overflow-wrap: anywhere; }
 :is(a, button).td-tag { transition: border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass); }
 :is(a, button).td-tag:hover { border-color: var(--foreground-subtle); color: var(--foreground-bold); }
-.td-swatch { flex: 0 0 auto; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--epic); }
+/* The epic's categorical swatch: the --cat-N hue fills the dot only, never text. */
+.td-swatch { flex: 0 0 auto; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--foreground-subtle); }
+.td-swatch--cat-1 { background: var(--cat-1); }
+.td-swatch--cat-2 { background: var(--cat-2); }
+.td-swatch--cat-3 { background: var(--cat-3); }
+.td-swatch--cat-4 { background: var(--cat-4); }
+.td-swatch--cat-5 { background: var(--cat-5); }
+.td-swatch--cat-6 { background: var(--cat-6); }
 
 /* ---------- Lock banner, spec review, gates, merge ladder ---------- */
 /* A tinted fill with a full-perimeter edge; the shape and the word "Locked" say it without the hue. */
@@ -231,7 +238,14 @@
 }
 :is(.gate--pending, .gate--skipped, .rung--empty) .marker__word { color: var(--foreground-subtle); }
 .gate--skipped .marker__word { text-decoration: line-through; }
-/* gate_state one-liner — the machine state from the server */
+/* The gate's state, said beside its name. */
+.gp-gate__state {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+/* The current step, in words, when the server's gate_state names a gate off the lane's track */
 .gp-state {
   margin-left: auto;
   color: var(--foreground-subtle);

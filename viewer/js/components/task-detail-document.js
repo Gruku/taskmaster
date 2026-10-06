@@ -10,7 +10,7 @@
 import { railPanels } from './right-rail.js';
 import { claimTopbar, claimTopbarPrimary, tmSegmented, tmAction } from '../lib/topbar.js';
 import { formatAbsolute } from '../lib/time.js';
-import { assignEpicColors, epicColor, epicCssVar } from '../lib/epics.js';
+import { epicIndex } from '../lib/epics.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
 import { describeWriteError, lostRace } from './edit/write-errors.js';
@@ -246,13 +246,15 @@ export function mountTaskDetailDocument(root, ctx) {
     const estimate = EstimateField.read({ value: typeof raw.estimate === 'object' ? null : raw.estimate, readOnly: true });
     if (!estimate.classList.contains('ef-placeholder')) row.appendChild(detailTag('estimate', 'Estimate', estimate.textContent));
 
+    // The epic is its swatch and its name; one missing from the backlog shows its id and no swatch.
     const epic = text(raw.epic);
     if (epic) {
-      const colors = assignEpicColors(ctx.store?.getBacklog?.()?.epics);
-      row.appendChild(h('a', {
-        class: 'td-tag td-epic', 'data-tag': 'epic', href: `#/epic/${encodeURIComponent(epic)}`,
-        style: epicCssVar(epicColor(epic, colors)),
-      }, [h('span', { class: 'td-swatch', 'aria-hidden': 'true' }), h('span', { class: 'td-tag__k' }, 'Epic'), h('span', { class: 'td-tag__v' }, epic)]));
+      const known = epicIndex(ctx.store?.getBacklog?.()?.epics).get(epic);
+      row.appendChild(h('a', { class: 'td-tag td-epic', 'data-tag': 'epic', href: `#/epic/${encodeURIComponent(epic)}` }, [
+        known ? h('span', { class: `td-swatch td-swatch--cat-${known.swatch}`, 'aria-hidden': 'true' }) : null,
+        h('span', { class: 'td-tag__k' }, 'Epic'),
+        h('span', { class: 'td-tag__v' }, known?.name ?? epic),
+      ]));
     }
     const phase = text(raw.phase);
     if (chrome === 'embedded' && phase) row.appendChild(detailTag('phase', 'Phase', phase));

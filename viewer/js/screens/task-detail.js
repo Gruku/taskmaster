@@ -49,6 +49,24 @@ export function mount(root, { params, store, api, prefs, subpath }) {
 
   // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has
   // painted: remembering an id that does not load would send bare #/task to a dead end.
+  // Set by Try again: whatever the retried read paints next takes keyboard focus, so it is never left on <body>.
+  let refocus = false;
+  function takeFocus(el) {
+    if (!refocus) return;
+    refocus = false;
+    if (!el) return;
+    if (!el.matches('a[href], button') && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    el.focus();
+  }
+  function retry() {
+    const loading = stateBlock({ headline: 'Loading…', busy: true });
+    loading.setAttribute('tabindex', '-1');
+    root.replaceChildren(loading);
+    loading.focus();
+    refocus = true;
+    void refresh();
+  }
+
   let remembered = false;
   function rememberAsLast() {
     if (remembered || !prefs?.patch) return;
@@ -75,7 +93,11 @@ export function mount(root, { params, store, api, prefs, subpath }) {
       const value = await getTaskDetailFull(id, {force: true});
       if (!disposed && request === generation && !store.isEditing(id)) {
         await paint(value, request);
-        if (!disposed && request === generation) rememberAsLast();
+        if (!disposed && request === generation) {
+          rememberAsLast();
+          // The document's h1, or the graph view's heading.
+          takeFocus(root.querySelector('h1') ?? root.querySelector('.td-head-title'));
+        }
       }
     } catch (e) {
       if (!disposed && request === generation && !store.isEditing(id)) {
@@ -86,7 +108,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         // Said in words: the request, its status and the server's text are never shown on the page.
         root.replaceChildren(stateBlock(e?.code === 404
           ? { state: 'missing', label: id, headline: 'Task not found', hint: 'It may have been archived, renamed or removed.', action: TO_KANBAN }
-          : { state: 'error', label: id, headline: 'Could not load this task', hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: () => refresh() } }));
+          : { state: 'error', label: id, headline: 'Could not load this task', hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: retry } }));
+        takeFocus(root.querySelector('.tm-empty :is(a[href], button)'));
       }
     }
   }
