@@ -59,7 +59,7 @@ function makeCtx(task = FAKE_TASK, extra = {}) {
 }
 
 // --- Import the module under test ---
-const { mountTaskDetailDocument, rememberView } = await import('../../js/components/task-detail-document.js');
+const { mountTaskDetailDocument, rememberView, taskMeta } = await import('../../js/components/task-detail-document.js');
 
 function mount(task, extra) {
   const ctx = makeCtx(task, extra);
@@ -505,6 +505,48 @@ test('rememberView: a refusal still said beside a field is said again after a re
     assert.equal(message(next.root).textContent, '', 'opening the field clears it');
     assert.equal(message(next.root).hasAttribute('aria-live'), false, 'the next refusal is announced again');
   } finally { next.done(); }
+});
+
+// The reason was about the value the user tried to replace; once another writer has replaced it, it is stale.
+test('rememberView: a refusal is dropped when another writer changed that field, and kept when they changed another', async () => {
+  const api = { ...makeCtx().api, patchTask: async () => { throw Object.assign(new Error('No'), { code: 409 }); } };
+  const message = (root) => root.querySelector('[data-field="status"] .if-error');
+  const refused = async () => {
+    const t = mount(FAKE_TASK, { api });
+    for (const wrap of t.root.querySelectorAll('.if-wrap')) assert.ok(wrap.hasAttribute('data-stored'), `${wrap.dataset.key} carries data-stored`);
+    assert.equal(t.root.querySelector('[data-field="status"] .if-wrap').dataset.stored, JSON.stringify(FAKE_TASK.status));
+    t.root.querySelector('[data-field="status"] .if-wrap').firstElementChild.click();
+    const select = t.root.querySelector('[data-field="status"] select');
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    for (let i = 0; i < 100 && !message(t.root).textContent; i++) await tick(5);
+    select.blur();
+    assert.equal(message(t.root).textContent, 'No');
+    const restore = rememberView(t.root);
+    t.done();
+    return restore;
+  };
+
+  let restore = await refused();
+  const changed = mount({ ...FAKE_TASK, status: 'in-review' }, { api });
+  try {
+    restore(changed.root);
+    assert.equal(message(changed.root).textContent, '', 'the status itself changed: no reason carried');
+  } finally { changed.done(); }
+
+  restore = await refused();
+  const other = mount({ ...FAKE_TASK, title: 'Renamed elsewhere' }, { api });
+  try {
+    restore(other.root);
+    assert.equal(message(other.root).textContent, 'No', 'another field changed: the reason still stands');
+  } finally { other.done(); }
+});
+
+test('taskMeta of a missing record draws a meta line without throwing', () => {
+  for (const raw of [null, undefined]) {
+    const meta = taskMeta(raw);
+    assert.ok(meta.querySelector('a[href="#/kanban"]'), 'the way back to the tasks is still there');
+  }
 });
 
 test('rememberView with no scope gives back a restore that restores nothing, called with or without a target', () => {
