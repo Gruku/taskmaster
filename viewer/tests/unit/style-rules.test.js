@@ -19,7 +19,8 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'components/right-rail.css',
   'components/column-tabs.css',
   'components/list-toolbar.css',
-  'screens/table.css'];
+  'screens/table.css',
+  'components/issue-card.css'];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
