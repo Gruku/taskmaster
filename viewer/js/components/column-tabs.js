@@ -9,6 +9,21 @@ const MOVES = {
   End: (i, n) => n - 1,
 };
 
+/**
+ * The phone column switcher: a tablist with one tab per column, shown at 768px and below with two or more columns.
+ * @param {{ label: string, columns: Array<{ key: string, label: string, count: number, panelId: string }>,
+ *   selected: string, onSelect: (key: string) => void }} opts
+ * @returns {{ el: HTMLElement, update: (next: { columns?: object[], selected?: string }) => void }}
+ *
+ * Tab ids are always `${panelId}-tab`, and update() repaints each key's existing button in place (focus stays on it).
+ *
+ * Panel contract — the component never touches panels; every consumer does this itself:
+ * - each column's panel has `id = panelId`;
+ * - while `matchMedia('(max-width: 768px)')` matches and `el` is not hidden (two or more columns), every panel has
+ *   `role="tabpanel"` and `aria-labelledby="${panelId}-tab"`, and every panel but the selected one is `hidden`;
+ * - otherwise panels carry neither (no tab role, their own label) and none is hidden;
+ * - the consumer owns the `matchMedia` change listener (a change repaints) and removes it on cleanup.
+ */
 export function columnTabs({ label, columns = [], selected, onSelect }) {
   const el = h('div', { class: 'column-tabs', role: 'tablist', 'aria-label': label });
   const byKey = new Map();
@@ -20,6 +35,8 @@ export function columnTabs({ label, columns = [], selected, onSelect }) {
       btn.setAttribute('aria-selected', String(on));
       btn.setAttribute('tabindex', on ? '0' : '-1');
     }
+    // A selected key with no tab must not drop the list out of the Tab order: the first tab takes the stop.
+    if (!byKey.has(current)) el.firstElementChild?.setAttribute('tabindex', '0');
   }
 
   function choose(key, focus) {
@@ -48,21 +65,37 @@ export function columnTabs({ label, columns = [], selected, onSelect }) {
   }
 
   function paint(cols) {
+    const focused = el.contains(document.activeElement) ? document.activeElement : null;
     const keep = new Set(cols.map((c) => c.key));
     for (const [key, btn] of byKey) {
       if (!keep.has(key)) { btn.remove(); byKey.delete(key); }
     }
-    // Move only what is out of place, and refocus a moved button: moving a focused node in the DOM drops its focus.
-    const focused = el.contains(document.activeElement) ? document.activeElement : null;
+    // Move only what is out of place: moving a focused node in the DOM drops its focus.
     let next = null;
     for (const col of [...cols].reverse()) {
       const btn = tabFor(col);
       if (btn.nextElementSibling !== next || btn.parentNode !== el) el.insertBefore(btn, next);
       next = btn;
     }
-    if (focused?.isConnected && document.activeElement !== focused) focused.focus();
     el.hidden = cols.length < 2;
     paintSelection();
+    // Focus that was on a tab stays in the list: on the same button if it was moved, on the selected one (or the
+    // first) if its tab is gone — never dropped to <body>.
+    if (!focused || document.activeElement === focused) return;
+    (el.contains(focused) ? focused : byKey.get(current) ?? el.firstElementChild)?.focus();
+  }
+
+  // Slide the list itself so the selected tab shows. Not scrollIntoView: that also scrolls every scrolling ancestor,
+  // and a poll repaint would pull a page the user has scrolled down back up to the tab strip.
+  function revealSelected() {
+    const btn = byKey.get(current);
+    if (!btn || el.hidden) return;
+    const box = el.getBoundingClientRect();
+    const tab = btn.getBoundingClientRect();
+    const left = box.left + el.clientLeft;
+    const right = left + el.clientWidth;
+    if (tab.left < left) el.scrollLeft += tab.left - left;
+    else if (tab.right > right) el.scrollLeft += tab.right - right;
   }
 
   el.addEventListener('keydown', (ev) => {
@@ -82,7 +115,7 @@ export function columnTabs({ label, columns = [], selected, onSelect }) {
       columns = cols;
       current = sel;
       paint(cols);
-      byKey.get(current)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      revealSelected();
     },
   };
 }

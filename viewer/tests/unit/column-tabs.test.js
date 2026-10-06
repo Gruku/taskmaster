@@ -156,19 +156,67 @@ test('a tab id is its panelId plus -tab, also after its panel id changes', () =>
   assert.equal(b.getAttribute('aria-controls'), 'other-b');
 });
 
-test('update() scrolls the selected tab into view, nearest on both axes', () => {
+test('update() slides only the list to the selected tab, never through scrollIntoView', () => {
   const proto = dom.window.Element.prototype;
   const had = Object.getOwnPropertyDescriptor(proto, 'scrollIntoView');
-  const seen = [];
-  proto.scrollIntoView = function scrollIntoView(opts) { seen.push([this, opts]); };
+  const called = [];
+  proto.scrollIntoView = function scrollIntoView() { called.push(this); };
   try {
     const { el, update } = mount();
-    seen.length = 0;
+    // A 200px list showing 0–200 of its scroll; tab c sits at 300–380 in list coordinates.
+    let scrollLeft = 0;
+    Object.defineProperty(el, 'scrollLeft', { get: () => scrollLeft, set: (v) => { scrollLeft = v; }, configurable: true });
+    Object.defineProperty(el, 'clientWidth', { value: 200, configurable: true });
+    Object.defineProperty(el, 'clientLeft', { value: 0, configurable: true });
+    el.getBoundingClientRect = () => ({ left: 10, right: 210, top: 0, bottom: 44 });
+    const at = (b, l, r) => { b.getBoundingClientRect = () => ({ left: 10 + l - scrollLeft, right: 10 + r - scrollLeft, top: 0, bottom: 44 }); };
+    const [ta, , tc] = tabs(el);
+    at(ta, 0, 90);
+    at(tc, 300, 380);
     update({ columns: COLS, selected: 'c' });
-    assert.deepEqual(seen, [[tabs(el)[2], { block: 'nearest', inline: 'nearest' }]]);
+    assert.equal(scrollLeft, 180, 'off to the right: its right edge meets the list edge');
+    update({ columns: COLS, selected: 'c' });
+    assert.equal(scrollLeft, 180, 'already showing: no move');
+    update({ columns: COLS, selected: 'a' });
+    assert.equal(scrollLeft, 0, 'off to the left: its left edge meets the list edge');
+    assert.deepEqual(called, []);
   } finally {
     if (had) Object.defineProperty(proto, 'scrollIntoView', had); else delete proto.scrollIntoView;
   }
+});
+
+test('a selected key with no tab leaves the first tab as the Tab stop, unselected', () => {
+  const { el, update } = mount({ selected: 'gone' });
+  assert.deepEqual(tabs(el).map((b) => b.getAttribute('tabindex')), ['0', '-1', '-1']);
+  assert.deepEqual(tabs(el).map((b) => b.getAttribute('aria-selected')), ['false', 'false', 'false']);
+  update({ columns: COLS, selected: 'b' });
+  assert.deepEqual(tabs(el).map((b) => b.getAttribute('tabindex')), ['-1', '0', '-1']);
+  update({ columns: COLS.slice(1), selected: 'a' });
+  assert.deepEqual(tabs(el).map((b) => b.getAttribute('tabindex')), ['0', '-1']);
+});
+
+test('update(): removing the focused tab moves focus to the selected tab, not <body>', () => {
+  const { el, update } = mount({ selected: 'b' });
+  tabs(el)[2].focus();
+  update({ columns: COLS.slice(0, 2), selected: 'b' });
+  assert.equal(document.activeElement, el.querySelector('[data-key="b"]'));
+});
+
+test('update(): removing the focused tab with no selected tab left moves focus to the first tab', () => {
+  const { el, update } = mount({ selected: 'c' });
+  tabs(el)[2].focus();
+  update({ columns: COLS.slice(0, 2), selected: 'c' });
+  assert.equal(document.activeElement, el.querySelector('[data-key="a"]'));
+});
+
+test('update(): focus outside the list stays where it is', () => {
+  const { el, update } = mount();
+  const other = document.createElement('button');
+  document.body.append(other);
+  other.focus();
+  update({ columns: COLS.slice(1), selected: 'b' });
+  assert.equal(document.activeElement, other);
+  assert.equal(el.contains(document.activeElement), false);
 });
 
 test('a label with markup is text', () => {
