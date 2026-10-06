@@ -63,7 +63,8 @@ test('a session without a tldr is titled by its id and has no slug', () => {
 test('a handover row says its kind and status in words, then its title and slug', () => {
   const row = draw().querySelector('.ho-child[data-handover-id="2026-07-12-scope"]');
   assert.equal(row.querySelector('.ho-kind').textContent, 'Mid-task');
-  assert.equal(row.querySelector('.ho-status').textContent, 'Closed');
+  assert.equal(row.querySelector('.ho-status .marker__word').textContent, 'Closed');
+  assert.equal(row.querySelector('.ho-status .marker__shape').dataset.shape, 'dot');
   assert.equal(row.querySelector('.ho-title').textContent, 'Scope the relayout');
   assert.equal(row.querySelector('.ho-slug').textContent, '2026-07-12-scope');
 });

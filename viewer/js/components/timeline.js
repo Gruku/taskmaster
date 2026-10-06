@@ -5,7 +5,7 @@
 import { formatAbsolute, formatDurationCompact } from '../lib/time.js';
 import { truncate } from '../lib/text.js';
 import { h } from '../util/h.js';
-import { HO_STATUS_LABEL } from './right-rail.js';
+import { handoverStatusMarker } from './right-rail.js';
 
 /**
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
@@ -116,7 +116,7 @@ function handoverRow(id, meta, ctx) {
   return row('handover', id, { class: 'ho-child', 'data-handover-id': id }, ctx, [
     h('span', { class: 'ho-head' },
       h('span', { class: 'ho-kind' }, kindLabel(meta.viewer_kind)),
-      h('span', { class: 'ho-status' }, Object.hasOwn(HO_STATUS_LABEL, status) ? HO_STATUS_LABEL[status] : kindLabel(status))),
+      h('span', { class: 'ho-status' }, handoverStatusMarker(status))),
     ...titleAndSlug(meta.tldr, id),
   ]);
 }

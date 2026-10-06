@@ -220,8 +220,10 @@ test('the sessions rail says a failed status change in words', async ({ page }) 
   await page.locator('.ho-status-menu').getByRole('menuitemradio', { name: 'closed' }).click();
   await expect(rail(page).locator('.ho-status-pill + .ho-status-error[role="alert"]'))
     .toHaveText('The server could not save this change. Try again in a moment.');
-  await expect(pill.locator('.ho-status-pill__word')).toHaveText('open');
-  await expect(hoRow(page, M1).locator('.ho-status')).toHaveText('Open');
+  await expect(pill.locator('.ho-status-pill__word .marker__word')).toHaveText('Open');
+  await expect(pill.locator('.marker__shape')).toHaveAttribute('data-shape', 'ring');
+  await expect(pill).toHaveAccessibleName('Open');
+  await expect(hoRow(page, M1).locator('.ho-status .marker__word')).toHaveText('Open');
 });
 
 test('a status change the server takes is the timeline\'s too', async ({ page }) => {
@@ -229,7 +231,7 @@ test('a status change the server takes is the timeline\'s too', async ({ page })
   await hoRow(page, M1).click();
   await rail(page).locator('.ho-status-pill').click();
   await page.locator('.ho-status-menu').getByRole('menuitemradio', { name: 'closed' }).click();
-  await expect(hoRow(page, M1).locator('.ho-status')).toHaveText('Closed');
+  await expect(hoRow(page, M1).locator('.ho-status .marker__word')).toHaveText('Closed');
   await expect(chip(page, 'Status', 'Closed').locator('.chip__count')).toHaveText('2');
   await expect(hoRow(page, M1)).toHaveAttribute('aria-current', 'true');
 });
