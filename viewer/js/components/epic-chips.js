@@ -95,8 +95,7 @@ export function renderEpicChips({
   });
 
   // Close panel on outside click. Self-removes when this component's wrap node
-  // is detached (next paint replaced the row). Mirrors the pattern in
-  // archived-phases-dropdown.js.
+  // is detached (next paint replaced the row).
   const ctrl = new AbortController();
   document.addEventListener('click', (e) => {
     if (!wrap.isConnected) { ctrl.abort(); return; }

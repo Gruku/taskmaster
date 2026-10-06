@@ -219,3 +219,59 @@ for (const theme of ['light', 'dark']) {
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+// Task 5: the phase strip.
+test('every phase is named in full or in its title, and the current one is wider', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const r = await page.locator('.phase-strip').evaluate((strip) => {
+    const chips = [...strip.querySelectorAll('.phase-chip[data-value^="P"]')].filter((c) => c.isConnected && c.offsetParent);
+    const named = chips.every((c) => {
+      const n = c.querySelector('.phase-chip__name');
+      return n.scrollWidth <= n.clientWidth || c.title.startsWith(n.textContent);
+    });
+    const w = (c) => c.getBoundingClientRect().width;
+    const cur = strip.querySelector('.phase-chip--current');
+    const fut = chips.filter((c) => c.classList.contains('phase-chip--future')).map(w);
+    return { n: chips.length, named, wider: !!cur && fut.every((x) => w(cur) > x) };
+  });
+  expect(r.n).toBeGreaterThan(0);
+  expect(r.named).toBe(true);
+  expect(r.wider).toBe(true);
+});
+
+test('at 390 the phase row is one line; More lists the rest and picking one filters the board', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const tops = await page.locator('.phase-strip__items > *').evaluateAll((els) => [...new Set(els.filter((e) => e.offsetParent).map((e) => e.offsetTop))]);
+  expect(tops).toHaveLength(1);
+  const more = page.locator('.phase-strip .overflow-more');
+  await expect(more).toBeVisible();
+  await more.click();
+  await page.locator('.popover [data-value="P5"]').click();
+  await expect(page.locator('.card-task')).toHaveCount(longBoard().tasks.filter((t) => t.phase === 'P5').length);
+});
+
+test('the archived menu picks an archived phase from the keyboard', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const btn = page.locator('.phase-archived');
+  await btn.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.popover[role="menu"] [role="menuitemradio"]').first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(btn).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.card-task')).toHaveCount(0);
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`${theme}: the phase strip, its More and the archived menu pass axe`, async ({ page }) => {
+    await board(page, { theme, board: longBoard(), viewport: { width: 390, height: 844 } });
+    await page.evaluate(axeSource);
+    const run = (sel) => page.evaluate((s) => window.axe.run(document.querySelector(s), { resultTypes: ['violations'] })
+      .then((r) => r.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(' ')}`)), sel);
+    expect(await run('.phase-strip')).toEqual([]);
+    await page.locator('.phase-strip .overflow-more').click();
+    expect(await run('.popover')).toEqual([]);
+    await page.keyboard.press('Escape');
+    await page.locator('.phase-archived').click();
+    expect(await run('.popover[role="menu"]')).toEqual([]);
+  });
+}
