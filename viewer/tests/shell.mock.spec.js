@@ -142,6 +142,13 @@ test('links with their own colour rule keep it; only unclaimed links take the si
     await page.goto('/#/task/NOPE-999');
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    // The not-found state's own way on is a button-styled action now; a bare link in its hint is the unclaimed one.
+    await page.locator('#screen-mount .tm-empty__hint').evaluate((hint) => {
+      const a = document.createElement('a');
+      a.href = '#/kanban';
+      a.textContent = 'Open the Kanban';
+      hint.append(' ', a);
+    });
     await expect(page.locator('#screen-mount .tm-empty__hint a')).toBeVisible();
     await expect(page.locator('.sidebar-link').first()).toBeVisible();
     const c = await probe();
