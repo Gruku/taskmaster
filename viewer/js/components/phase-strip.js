@@ -22,7 +22,8 @@ function paintPhase(b, p, kind) {
   b.className = `chip phase-chip ${kind}`;
   b.title = `${p.name} · ${p.done}/${p.total} done`;
   const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
-  b.replaceChildren(
+  // replaceChildren turns a null argument into the text "null", so the optional parts are filtered out first.
+  b.replaceChildren(...[
     h('span', { class: 'phase-chip__num' }, phaseNum(p)),
     kind === 'phase-chip--done' ? icon('check', { size: 12 }) : null,
     h('span', { class: 'phase-chip__name' }, p.name),
@@ -30,7 +31,7 @@ function paintPhase(b, p, kind) {
     kind === 'phase-chip--current'
       ? h('span', { class: 'phase-chip__bar' }, h('span', { style: `width: ${pct}%` }))
       : null,
-  );
+  ].filter(Boolean));
 }
 
 /**
@@ -63,7 +64,10 @@ export function phaseStrip({ onSelect }) {
     return b;
   };
 
+  let menu = null;
   function openArchived(anchor) {
+    // A second press on Archived closes its menu rather than reopening it.
+    if (menu?.isOpen()) { menu.close('toggle', { returnFocus: true }); menu = null; return; }
     // The items exist before the popover opens: it picks the item to focus (the checked one, else the first) at open.
     const list = h('div', { class: 'phase-archived__menu' });
     let handle = null;
@@ -84,6 +88,7 @@ export function phaseStrip({ onSelect }) {
     handle = openPopover({
       anchor, content: list, role: 'menu', label: 'Archived phases', focus: 'checked',
     });
+    menu = handle;
   }
 
   function archivedButton() {

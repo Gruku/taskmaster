@@ -89,9 +89,9 @@ export function overflowRow(row, {
     const style = view.getComputedStyle(row);
     const gap = parseFloat(style.columnGap) || 0;
     const size = (el) => el.getBoundingClientRect().width;
-    // Measured at their natural width: in an overflowing row a shrinkable child would read as already squeezed.
-    const shrink = moving.map((el) => el.style.flexShrink);
-    for (const el of moving) el.style.flexShrink = '0';
+    // Every child is measured at its natural width: in an overflowing row a shrinkable child, kept or moving, would read as already squeezed.
+    const shrink = items.map((el) => el.style.flexShrink);
+    for (const el of items) el.style.flexShrink = '0';
     const widths = moving.map(size);
     // Only a child with a width is parked: an empty one would be counted on More and leave a gap in its list.
     const sized = moving.filter((el, i) => widths[i] > 0);
@@ -102,7 +102,7 @@ export function overflowRow(row, {
     const moreWidth = size(more);
     const available = row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
       - items.filter(keep).reduce((s, el) => s + size(el) + gap, 0) - gap * empty;
-    moving.forEach((el, i) => { el.style.flexShrink = shrink[i]; });
+    items.forEach((el, i) => { el.style.flexShrink = shrink[i]; });
     const hidden = sized.slice(fitCount(widths.filter((w) => w > 0), available, { gap, moreWidth }));
     const focused = hidden.find((el) => el.contains(doc.activeElement));
     for (const el of hidden) {

@@ -4,8 +4,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rankEpics, countActiveTasksByEpic } from '../../js/lib/epic-ranking.js';
-import { epicsForPhase } from '../../js/lib/filters.js';
+import { rankEpics } from '../../js/lib/epic-ranking.js';
+import { epicsForPhase, countOpen } from '../../js/lib/filters.js';
 
 // Shared test data
 const EPICS = [
@@ -61,7 +61,7 @@ test('epicsForPhase — null phase returns all epics (v3-polish-047)', () => {
 test('rankEpics — uses phase-scoped counts when provided (v3-polish-047)', () => {
   // Phase P-01: alpha has 2 active tasks (T-001 todo, T-002 in-progress), charlie 1 (T-005), delta 1 (T-006)
   const tasksInPhase = TASKS.filter(t => t.phase === 'P-01');
-  const phaseCounts = countActiveTasksByEpic(tasksInPhase);
+  const phaseCounts = countOpen(tasksInPhase, 'epic');
   const epicsInPhase = epicsForPhase(EPICS, TASKS, 'P-01');
   const ranked = rankEpics(epicsInPhase.map(e => ({
     ...e,
@@ -74,10 +74,10 @@ test('rankEpics — uses phase-scoped counts when provided (v3-polish-047)', () 
 
 test('rankEpics — global counts differ from phase-scoped counts (ISS-046 regression check)', () => {
   // Global: alpha=2 active, bravo=1 active (T-003 todo), charlie=2 active (T-005+T-007)
-  const globalCounts = countActiveTasksByEpic(TASKS);
+  const globalCounts = countOpen(TASKS, 'epic');
   // Phase P-01 counts: alpha=2, charlie=1, delta=1 (bravo=0 — not in phase)
   const tasksInP01 = TASKS.filter(t => t.phase === 'P-01');
-  const phaseCounts = countActiveTasksByEpic(tasksInP01);
+  const phaseCounts = countOpen(tasksInP01, 'epic');
 
   // Charlie has 1 in P-01 but 2 globally → counts differ
   assert.equal(globalCounts.get('charlie'), 2, 'charlie has 2 active tasks globally');

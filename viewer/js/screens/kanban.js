@@ -3,14 +3,16 @@
 // Subscribes to store(backlog) and store(prefs); all writes go through prefs.patch(...).
 
 import { renderCard }                        from '../components/card.js';
-import { renderPriorityChips,
-         updatePriorityChips }               from '../components/priority-chips.js';
+import { priorityChips }                     from '../components/priority-chips.js';
 import { phaseStrip }                        from '../components/phase-strip.js';
-import { renderEpicChips }                   from '../components/epic-chips.js';
-import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles } from '../lib/filters.js';
+import { epicChips }                         from '../components/epic-chips.js';
+import { openEpicOptions }                   from '../components/epic-dropdown.js';
+import { chipRow }                           from '../components/chips.js';
+import { icon }                              from '../components/icon.js';
+import { chipClickNext }                     from '../util/chip-toggle.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles, countOpen, OPEN_COUNT_HINT } from '../lib/filters.js';
 import { renderBundleFrame } from '../components/bundle-frame.js';
 import { epicIndex }                         from '../lib/epics.js';
-import { countActiveTasksByEpic, rankEpics } from '../lib/epic-ranking.js';
 import { claimTopbar, tmAction, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
@@ -75,13 +77,6 @@ export async function mount(root, { store, api, prefs }) {
   };
   head.appendChild(search);
 
-  // Priority chips
-  const pri = renderPriorityChips({
-    active: state.filters.priorities,
-    onToggle: (next) => { state.filters.priorities = next; paint(); savePrefs(); },
-  });
-  head.appendChild(pri);
-
   const right = document.createElement('div');
   right.className = 'kanban-head-right';
 
@@ -108,6 +103,7 @@ export async function mount(root, { store, api, prefs }) {
   // Group dropdown
   const group = document.createElement('select');
   group.className = 'kanban-select';
+  group.setAttribute('aria-label', 'Group by');
   for (const opt of [['status','Group: Status'],['phase','Group: Phase'],['epic','Group: Epic'],['area','Group: Area']]) {
     const o = document.createElement('option');
     o.value = opt[0]; o.textContent = opt[1];
@@ -120,6 +116,7 @@ export async function mount(root, { store, api, prefs }) {
   // Sort dropdown
   const sort = document.createElement('select');
   sort.className = 'kanban-select';
+  sort.setAttribute('aria-label', 'Sort by');
   const SORT_OPTS = [
     ['priority:desc', 'Sort: priority ↓'],
     ['priority:asc',  'Sort: priority ↑'],
@@ -172,9 +169,72 @@ export async function mount(root, { store, api, prefs }) {
   phaseHost.appendChild(strip.el);
   filterBar.appendChild(phaseHost);
 
-  const epicHost = document.createElement('div');
-  epicHost.className = 'kanban-filterbar-row epic';
-  filterBar.appendChild(epicHost);
+  // Built once at mount like the strip; paint() only calls update().
+  const filters = document.createElement('div');
+  filters.className = 'kanban-filters';
+  const priRow = chipRow({
+    label: 'Priority', chips: priorityChips(state.filters.priorities), hint: OPEN_COUNT_HINT,
+    onToggle: (value, ev) => { state.filters.priorities = chipClickNext(ev, state.filters.priorities, value); paint(); savePrefs(); },
+  });
+  priRow.el.classList.add('kanban-filters__priority');
+  const epicRow = chipRow({
+    label: 'Epic', chips: [], hint: OPEN_COUNT_HINT,
+    onToggle: (value, ev) => {
+      state.filters.epics = value === '__all__' ? [] : chipClickNext(ev, state.filters.epics, value);
+      paint(); savePrefs();
+    },
+  });
+  epicRow.el.classList.add('kanban-filters__epic');
+  state.showArchivedEpics = false;
+  let epicOptions = null;     // the open popover handle, so cleanup can close it
+  let epicOptionsData = { epics: [], counts: new Map() };
+  const optionsBtn = document.createElement('button');
+  optionsBtn.type = 'button';
+  optionsBtn.className = 'btn btn--ghost btn--icon btn--sm epic-options-btn';
+  optionsBtn.setAttribute('aria-label', 'Epic options');
+  optionsBtn.title = 'Epic options';
+  optionsBtn.appendChild(icon('sliders'));
+  optionsBtn.addEventListener('click', () => {
+    // A second press closes the popover rather than reopening it (and losing its search text and scroll).
+    if (epicOptions?.isOpen()) { epicOptions.close('toggle', { returnFocus: true }); epicOptions = null; return; }
+    epicOptions = openEpicOptions({
+      anchor: optionsBtn,
+      epics: epicOptionsData.epics,
+      counts: epicOptionsData.counts,
+      pinnedIds: state.pinnedEpics,
+      sort: state.epicSort,
+      showArchived: state.showArchivedEpics,
+      onPinToggle: (id, pinned) => {
+        const list = state.pinnedEpics.filter(x => x !== id);
+        if (pinned) list.push(id);
+        state.pinnedEpics = list;
+        prefs.patch({ kanban: { pinnedEpics: list } });
+        paint();
+      },
+      onSortChange: (next) => {
+        state.epicSort = next;
+        prefs.patch({ kanban: { epicSort: next } });
+        paint();
+      },
+      onShowArchived: (on) => { state.showArchivedEpics = !!on; paint(); },
+    });
+  });
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'btn btn--ghost btn--sm kanban-clear';
+  clearBtn.hidden = true;
+  clearBtn.append(icon('dismiss', { size: 14 }), document.createTextNode('Clear filters'));
+  clearBtn.addEventListener('click', () => { clearAllFilters(); searchInput.focus(); });
+  filters.append(priRow.el, epicRow.el, optionsBtn, clearBtn);
+  filterBar.appendChild(filters);
+
+  function clearAllFilters() {
+    state.filters = { ...DEFAULT_FILTERS };
+    state.collapsed = new Set();
+    resetSearchField();
+    prefs.patch({ kanban: { collapsed_columns: [] } });
+    paint(); savePrefs();
+  }
 
   page.appendChild(filterBar);
 
@@ -263,48 +323,26 @@ export async function mount(root, { store, api, prefs }) {
         })()
       : epicsArr;
 
-    // (c) Sort by phase task count: when a phase is active, use phase-scoped counts
-    // for rankEpics so ordering reflects the current view's volume, not global totals.
-    // Global counts are preserved as a fallback signal for no-phase mode. (v3-polish-047)
-    const activeCounts = countActiveTasksByEpic(phaseScoped ? tasksInPhase : tasks);
-    const ranked = rankEpics(epicsVisible.map(ep => ({
+    // Counts are open tasks in the current phase scope, the same map for chips and Epic options.
+    const epicCounts = countOpen(tasksInPhase, 'epic');
+    const epicsForChips = epicsVisible.map(ep => ({
       id: ep.id,
       name: ep.name || ep.id,
-      color: index.get(ep.id)?.swatch,
       status: ep.status || 'active',
       last_referenced: ep.last_referenced,
-      count: tasksInPhase.filter(t => t.epic === ep.id).length,
-    })), activeCounts);
-
-    epicHost.replaceChildren(renderEpicChips({
-      epics: ranked,
+      swatch: index.get(ep.id)?.swatch,
+    }));
+    epicOptionsData = { epics: epicsForChips, counts: epicCounts };
+    priRow.update(priorityChips(state.filters.priorities, countOpen(tasksInPhase, 'priority')));
+    epicRow.update(epicChips({
+      epics: epicsForChips,
       selectedIds: state.filters.epics,
       pinnedIds: state.pinnedEpics,
-      activeCounts,
+      counts: epicCounts,
       sort: state.epicSort,
-      filterCount,
-      onToggleEpics: (next) => { state.filters.epics = next; paint(); savePrefs(); },
-      onPinToggle: (id, pinned) => {
-        const list = state.pinnedEpics.filter(x => x !== id);
-        if (pinned) list.push(id);
-        state.pinnedEpics = list;
-        prefs.patch({ kanban: { pinnedEpics: list } });
-        paint();
-      },
-      onSortChange: (next) => {
-        state.epicSort = next;
-        prefs.patch({ kanban: { epicSort: next } });
-        paint();
-      },
-      onClearFilters: () => {
-        state.filters = { ...DEFAULT_FILTERS };
-        state.collapsed = new Set();
-        resetSearchField();
-        updatePriorityChips(pri, { active: [] });
-        prefs.patch({ kanban: { collapsed_columns: [] } });
-        paint(); savePrefs();
-      },
+      showArchived: state.showArchivedEpics,
     }));
+    clearBtn.hidden = filterCount === 0;
 
     // 5) Group + render columns — use phasesOrdered so swimlanes respect logical order
     const groupKeyArg = state.filters.group_by === 'phase' ? phasesOrdered.map(p => p.id) : undefined;
@@ -318,15 +356,6 @@ export async function mount(root, { store, api, prefs }) {
     // only in the first non-collapsed column so the message appears once.
     const allEmpty = filtered.length === 0 && hasFilters;
     let countShown = false;
-
-    const clearAllFilters = () => {
-      state.filters = { ...DEFAULT_FILTERS };
-      state.collapsed = new Set();
-      resetSearchField();
-      updatePriorityChips(pri, { active: [] });
-      prefs.patch({ kanban: { collapsed_columns: [] } });
-      paint(); savePrefs();
-    };
 
     for (const g of groups) {
       const col = document.createElement('div');
@@ -475,6 +504,9 @@ export async function mount(root, { store, api, prefs }) {
     unsubBacklog();
     resizeObs.disconnect();
     strip.destroy();
+    priRow.destroy();
+    epicRow.destroy();
+    epicOptions?.close?.();
   };
 }
 
