@@ -10,7 +10,7 @@ import { truncate } from '../lib/text.js';
 import { linkRow } from './link-row.js';
 import { icon } from './icon.js';
 import { marker, priorityMarker, statusMarker } from './status.js';
-import { laneBadge } from './gate-pipeline.js';
+import { laneBadge, gateStateWords } from './gate-pipeline.js';
 import { renderMergeLadderCompact } from './merge-status.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -55,10 +55,39 @@ function epicTag(epicId, epicIndex) {
   return tag;
 }
 
+// The merge ladder's dots say nothing to assistive tech; the rung they reached is said in words beside them.
+function mergeLadder(task) {
+  const ladder = fromMarkup(renderMergeLadderCompact(task));
+  if (!ladder) return null;
+  const rungs = [...ladder.querySelectorAll('.ml-dot')];
+  const reached = rungs.filter((d) => d.classList.contains('rung--filled'));
+  for (const d of rungs) d.setAttribute('aria-hidden', 'true');
+  ladder.append(el('span', 'card-sr', `Merged to ${reached.at(-1)?.title ?? 'none'}, ${reached.length} of ${rungs.length}`));
+  return ladder;
+}
+
+function blockersOf(task) {
+  // The live board sends a count; a full task payload sends the list.
+  return task.blockers_count ?? (Array.isArray(task.blockers) ? task.blockers.length : 0);
+}
+
+function depsWords(task) {
+  // A blocked card's note already says how many block it ("Blocked by <n>").
+  if (task.status === 'blocked' && blockersOf(task)) return '';
+  if (typeof task.depends_on_unmet_count === 'number' && task.depends_on_unmet_count > 0) return `${task.depends_on_unmet_count} unmet`;
+  if (Array.isArray(task.depends_on) && task.depends_on.length) return `${task.depends_on.length} deps`;
+  return '';
+}
+
 function tags(task, { epicIndex, groupBy, hideBundleChip }) {
   const box = el('div', 'card-tags');
-  if (task.epic) box.append(epicTag(task.epic, epicIndex));
-  if (task.estimate) box.append(el('span', 'card-tag card-estimate', task.estimate));
+  // Epic and estimate keep one line: the epic name is cut before the estimate wraps away from it.
+  if (task.epic || task.estimate) {
+    const lead = el('span', 'card-tags__lead');
+    if (task.epic) lead.append(epicTag(task.epic, epicIndex));
+    if (task.estimate) lead.append(el('span', 'card-tag card-estimate', task.estimate));
+    box.append(lead);
+  }
   const verdict = task.spec_review?.verdict || task.spec_review;
   if (typeof verdict === 'string' && Object.hasOwn(SPEC_REVIEW, verdict)) box.append(marker(SPEC_REVIEW[verdict]));
   const tracker = parseTrackerId(task.tracker_id);
@@ -67,25 +96,22 @@ function tags(task, { epicIndex, groupBy, hideBundleChip }) {
     tk.title = task.tracker_id;
     box.append(tk);
   }
-  if (typeof task.depends_on_unmet_count === 'number' && task.depends_on_unmet_count > 0) {
-    box.append(el('span', 'card-tag card-deps', `${task.depends_on_unmet_count} unmet`));
-  } else if (Array.isArray(task.depends_on) && task.depends_on.length) {
-    box.append(el('span', 'card-tag card-deps', `${task.depends_on.length} deps`));
-  }
+  const deps = depsWords(task);
+  if (deps) box.append(el('span', 'card-tag card-deps', deps));
   if (task.sub_repo) box.append(el('span', 'card-tag card-subrepo', task.sub_repo));
   if (task.bundle && !hideBundleChip) box.append(el('span', 'card-tag card-bundle', `Bundle ${task.bundle}`));
   const lane = fromMarkup(laneBadge(task));
   if (lane) box.append(lane);
-  if (task.gate_state) box.append(el('span', 'card-tag card-gate', task.gate_state));
-  const ladder = fromMarkup(renderMergeLadderCompact(task));
+  const gate = gateStateWords(task.gate_state);
+  if (gate) box.append(el('span', 'card-tag card-gate', gate));
+  const ladder = mergeLadder(task);
   if (ladder) box.append(ladder);
   if (groupBy !== 'status' && task.status) box.append(statusMarker('task', task.status));
   return box.childNodes.length ? box : null;
 }
 
 function note(task) {
-  // The live board sends a count; a full task payload sends the list.
-  const blockers = task.blockers_count ?? (Array.isArray(task.blockers) ? task.blockers.length : 0);
+  const blockers = blockersOf(task);
   let lead = null;
   let text = '';
   if (task.status === 'in-review' && task.human_action) {
@@ -150,12 +176,20 @@ export function renderCard({ task, density = 'full', epicIndex = new Map(), grou
     controls.push(btn);
   }
 
+  // The link's hit area covers the content, so the link carries the content's own titles, one per line: the title,
+  // the epic's (possibly cut) name, the tracker id and the age's date.
+  const tips = [title];
+  for (const c of content.filter(Boolean)) {
+    if (c.matches('.card-age')) tips.push(c.title);
+    for (const t of c.querySelectorAll('.card-epic .truncate, .card-tracker')) tips.push(t.title);
+  }
+
   const card = linkRow({
     tag: 'div',
     className: `card-task ${density}`,
     href: `#/task/${encodeURIComponent(task.id)}`,
     name,
-    title,
+    title: tips.join('\n'),
     content: content.filter(Boolean),
     controls,
   });

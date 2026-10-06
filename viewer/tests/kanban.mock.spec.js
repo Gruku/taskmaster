@@ -182,6 +182,31 @@ test('in a narrow card "New" and the age give way: they wrap below the id, which
   expect(tag.y + tag.height, '"New" above the title').toBeLessThanOrEqual(title.y + 1);
 });
 
+test('1440, the long board: the estimate shares the epic\'s line and the bundle slug stays on one', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const lines = await page.locator('.card-task').evaluateAll((cards) => cards
+    .filter((c) => c.querySelector('.card-epic') && c.querySelector('.card-estimate'))
+    .map((c) => {
+      const a = c.querySelector('.card-epic').getBoundingClientRect();
+      const b = c.querySelector('.card-estimate').getBoundingClientRect();
+      return { id: c.dataset.taskId, apart: Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) };
+    }));
+  expect(lines.length).toBeGreaterThan(100);
+  for (const l of lines) expect(l.apart, `${l.id}: estimate off the epic's line`).toBeLessThan(2);
+  const slug = page.locator('.bundle-frame-head .slug').first();
+  expect(await slug.evaluate((el) => el.getClientRects().length)).toBe(1);
+  await expect(slug).toHaveAttribute('title', 'long-bundle-slug-alpha');
+});
+
+test('the doc button opens the primary doc and never the task', async ({ page }) => {
+  await page.addInitScript(() => { window.open = (...args) => { (window.__opened ??= []).push(args); return null; }; });
+  await board(page, { board: richBoard() });
+  await card(page, 'T-102').locator('.card-docs').click();
+  expect(await page.evaluate(() => window.__opened)).toEqual([['docs/spec.md', '_blank', 'noopener']]);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal')).toHaveCount(0);
+});
+
 for (const theme of ['light', 'dark']) {
   test(`axe (${theme}): cards have no contrast, nested-interactive or aria violation`, async ({ page }) => {
     await board(page, { theme, board: richBoard() });

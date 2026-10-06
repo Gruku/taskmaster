@@ -12,6 +12,7 @@
 //   groupBy     — 'status' | 'phase' | 'epic'
 
 import { renderCard } from './card.js';
+import { truncate } from '../lib/text.js';
 
 // Lane strictness order: full is strictest, express is loosest.
 const LANE_RANK = { express: 1, standard: 2, full: 3 };
@@ -66,10 +67,8 @@ export function renderBundleFrame({ slug, tasks, total }, { density = 'full', ep
   swatch.setAttribute('aria-hidden', 'true');
   head.appendChild(swatch);
 
-  const slugEl = document.createElement('span');
-  slugEl.className = 'slug';
-  slugEl.textContent = slug;
-  head.appendChild(slugEl);
+  // One line; a long slug is cut with its full text in title.
+  head.appendChild(truncate(slug, { className: 'slug' }));
 
   // Lane badge — only if at least one task has a lane
   const lane = strictestLane(tasks);

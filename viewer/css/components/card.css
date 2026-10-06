@@ -91,6 +91,10 @@
   min-width: 0;
 }
 .card-tag { display: inline-flex; align-items: center; gap: var(--space-micro); min-width: 0; max-width: 100%; color: var(--foreground-default); }
+/* Epic and estimate share one line (§6): the group never wraps, the epic name gives way, the estimate keeps its size. */
+.card-tags__lead { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-sm); min-width: 0; max-width: 100%; }
+.card-tags__lead .card-epic { flex: 0 1 auto; }
+.card-estimate { flex: none; }
 .card-swatch, .bundle-frame__swatch { flex: none; width: 8px; height: 8px; border-radius: var(--radius-xs); }
 .card-swatch--cat-1 { background: var(--cat-1); }
 .card-swatch--cat-2 { background: var(--cat-2); }
@@ -142,7 +146,7 @@
 .bundle-frame.bh-4 { border-color: var(--cat-4); }
 .bundle-frame.bh-5 { border-color: var(--cat-5); }
 .bundle-frame.bh-6 { border-color: var(--cat-6); }
-.bundle-frame .card-task:last-child { margin-bottom: 0; }
+.bundle-frame:last-child, .bundle-frame .card-task:last-child { margin-bottom: 0; }
 .bundle-frame-head {
   display: flex;
   align-items: center;
@@ -151,6 +155,6 @@
   min-width: 0;
   color: var(--foreground-default);
 }
-.bundle-frame-head .slug { min-width: 0; overflow-wrap: anywhere; }
+.bundle-frame-head .slug { flex: 0 1 auto; min-width: 0; }
 .bundle-frame-head :is(.lane, .ct) { color: var(--foreground-subtle); white-space: nowrap; }
 .bundle-frame-head .ct { margin-left: auto; }

@@ -30,7 +30,7 @@ test('the link opens the task and is named "<id> <title>", with the full title i
   assert.equal(a.getAttribute('href'), '#/task/T-102');
   assert.equal(a.textContent.replace(/\s+/g, ' ').trim(), 'T-102 Re-skin the board');
   assert.equal(a.querySelector('.card-sr').textContent, 'T-102 ');
-  assert.equal(a.title, 'Re-skin the board');
+  assert.equal(a.title.split('\n')[0], 'Re-skin the board');
   assert.equal(a.dataset.focus, 'link');
   assert.equal(a.querySelector('a, button, input, [tabindex]'), null);
 });
@@ -120,4 +120,44 @@ test('the spec review is a marker word', () => {
   assert.deepEqual(words('pass'), ['Spec passed']);
   assert.deepEqual(words('warn'), ['Spec warning']);
   assert.deepEqual(words('fail'), ['Spec failed']);
+});
+
+test('the link carries the titles its hit area hides: the full title, the epic name and the age\'s date', () => {
+  const long = 'An epic name long enough to be cut on any card in any column';
+  const el = renderCard({
+    task: { ...TASK, epic: 'big', started: new Date(NOW - 5 * 86_400_000).toISOString(), tracker_id: 'linear-cm-eng-42' },
+    epicIndex: new Map([['big', { name: long, swatch: 2 }]]), now: NOW,
+  });
+  const lines = link(el).title.split('\n');
+  assert.equal(lines[0], 'Re-skin the board');
+  assert.ok(lines.includes(long), lines.join(' | '));
+  assert.ok(lines.includes(el.querySelector('.card-age').title), lines.join(' | '));
+  assert.match(lines.join('\n'), /^Since /m);
+  assert.ok(lines.includes('linear-cm-eng-42'), lines.join(' | '));
+});
+
+test('gate_state is said in words, never as the raw string; a malformed one shows nothing', () => {
+  const pending = card({ gate_state: 'review-gate:pending' });
+  assert.equal(pending.querySelector('.card-gate').textContent, 'Review gate — pending');
+  assert.equal(pending.outerHTML.includes('review-gate:pending'), false);
+  assert.equal(card({ gate_state: 'blocked@plan-review' }).querySelector('.card-gate').textContent, 'Blocked at Plan review');
+  assert.equal(card({ gate_state: 'whatever' }).querySelector('.card-gate'), null);
+});
+
+test('a blocked card says "Blocked by n" once, with no second unmet count', () => {
+  const el = card({ status: 'blocked', blockers_count: 1, depends_on_unmet_count: 1, depends_on: ['T-1'], human_action: undefined });
+  assert.equal(el.querySelector('.card-note .marker__word').textContent, 'Blocked by 1');
+  assert.equal(el.querySelector('.card-deps'), null);
+  assert.equal(card({ status: 'todo', depends_on_unmet_count: 2 }).querySelector('.card-deps').textContent, '2 unmet');
+});
+
+test('epic and estimate share a non-wrapping group', () => {
+  const lead = card({ estimate: 'M' }).querySelector('.card-tags__lead');
+  assert.deepEqual([...lead.children].map((c) => c.className), ['card-tag card-epic', 'card-tag card-estimate']);
+});
+
+test('the merge dots say the rung reached in words for assistive tech', () => {
+  const ladder = card({ merge_gate_state: 'stage' }).querySelector('.ml-compact');
+  assert.equal(ladder.querySelector('.card-sr').textContent, 'Merged to stage, 2 of 3');
+  for (const d of ladder.querySelectorAll('.ml-dot')) assert.equal(d.getAttribute('aria-hidden'), 'true');
 });
