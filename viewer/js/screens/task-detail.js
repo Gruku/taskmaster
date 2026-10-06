@@ -76,9 +76,11 @@ export function mount(root, { params, store, api, prefs, subpath }) {
   async function paint(value, request) {
     // A repaint replaces every node; what was open is opened again and focus put back on the same control.
     const restore = rememberView(root);
+    // The graph view's own state (open tab, hidden context, canvas scroll) carries over a repaint of the graph view.
+    const viewState = view === 'B' ? cleanup?.viewState?.() : undefined;
     cleanup?.();
     cleanup = null;
-    const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view};
+    const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view, viewState};
     if (view === 'B') {
       const mod = await import('../components/task-detail-graph.js');
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
@@ -95,8 +97,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         await paint(value, request);
         if (!disposed && request === generation) {
           rememberAsLast();
-          // The document's h1, or the graph view's heading.
-          takeFocus(root.querySelector('h1') ?? root.querySelector('.td-head-title'));
+          // The page's h1, in either view.
+          takeFocus(root.querySelector('h1'));
         }
       }
     } catch (e) {
