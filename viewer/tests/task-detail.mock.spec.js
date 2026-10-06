@@ -282,8 +282,8 @@ test('a refused title says why under the heading, and the dialog keeps the title
   const message = dialog.locator('.td-title-message');
   await expect(message).toBeVisible();
   await expect(message.locator('.if-error')).toHaveText(reason);
-  // First in the body, under the header; nothing of it inside the heading that names the dialog.
-  expect(await message.evaluate((el) => el.parentElement.classList.contains('td-body') && !el.previousElementSibling)).toBe(true);
+  // Under the header, outside the scrolling body; nothing of it inside the heading that names the dialog.
+  expect(await message.evaluate((el) => el.parentElement.classList.contains('modal--detail') && el.previousElementSibling?.classList.contains('modal-header'))).toBe(true);
   await expect(heading.locator('.if-error')).toHaveCount(0);
   expect(await heading.evaluate((el) => el.textContent)).not.toContain(reason);
 

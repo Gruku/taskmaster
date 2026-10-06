@@ -73,11 +73,13 @@ export function openDetailModal({ kind, id, opener }) {
   let generation = 0, closed = false;
   let cur = { kind, id };
   let task = null;            // the task on screen, for Edit
+  let titleMessage = null;    // the document's title message, lifted out of the body to sit under the header
 
   function dispose() {
     // The disposer locates inline editors in this DOM. Run it before clearing
     // anything so abandoned drafts lose their timers and edit-state leases.
     if (disposeComponent) { try { disposeComponent(); } catch (e) { console.error('detail dispose failed', e); } disposeComponent = null; }
+    titleMessage?.remove(); titleMessage = null;
     mountEl.removeAttribute('style');
   }
 
@@ -121,6 +123,9 @@ export function openDetailModal({ kind, id, opener }) {
         const { mountTaskDetailDocument, rememberView } = await import('./task-detail-document.js');
         const detail = await getTaskDetailFull(i, {force: true});
         if (closed || request !== generation) return;
+        // An inline editor opened while this read was in flight: leave it alone. Its edit lease ends with a
+        // `task:<id>` notice, and the subscription below reads the task again then (B-095).
+        if (soft && store.isEditing(i)) return;
         const restore = soft ? rememberView(modal.dialog) : null;
         const scrollTop = modal.body.scrollTop;
         dispose();
@@ -132,6 +137,9 @@ export function openDetailModal({ kind, id, opener }) {
           ...detail, prefs: store.getPrefs(), store, api,
           chrome: 'embedded', titleHost,
         });
+        // A refused title's reason sits under the header, outside the scrolling body, so it never scrolls away.
+        titleMessage = mountEl.querySelector('.td-body > .td-title-message');
+        if (titleMessage) modal.header.after(titleMessage);
         task = detail.task;
         editBtn.hidden = !task;
         if (soft) { modal.body.scrollTop = scrollTop; restore(modal.dialog); }
