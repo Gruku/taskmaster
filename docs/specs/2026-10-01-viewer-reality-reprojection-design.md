@@ -234,3 +234,9 @@ These override the sections they name.
 - **§6 Table at ≤768px (plan 3b).** A card shows ID, priority, title (2 lines), status, size and epic; phase, area, branch and started are left to the detail. The header row gives way to a labelled Sort select.
 - **§5.1 epics (plan 3b).** The lifecycle map (`active` ◐, `planned` ○, `done` ●, `archived` ✕) lives in `lib/epic-format.js` beside the epic figures; a missing status reads "Active". The design status is a tag "Design · <word>" on Epic detail only.
 - **§6 Epic detail / §7 (plan 3b).** Every figure is counted from the task list the page draws (`epicStats(epic.tasks)`), not the server's `stats`; Done and Archived groups start collapsed.
+- **§6 detail template (plan 3c).** Task, issue and bug pages share one set of builders (`components/detail-page.js`) and the `td-*` classes; issue and bug specifics are `dp-*` in `css/screens/detail-pages.css`. The graph view keeps the page's head and `h1`.
+- **§6 graph (plan 3c).** "Depth" and "Show all" are removed, not built (they did nothing); nodes are SVG links with the status shape and word; the tabs are ARIA tabs and the raw tab is "Raw JSON".
+- **§6 issue detail (plan 3c).** Staleness on the detail page is 3d's "stale Nd" tag (`staleTag()`, the one the Issues board shows; IS-04), not a bar.
+- **§6 bug detail (plan 3c).** Bug actions are in-app forms on the shared entity form; "Mark fixed" requires a commit (the server always did) and is the page's primary action in row 1; after an action the page shows the bug's new state, and a promote opens the new issue.
+- **§5.10 gates (plan 3c).** Each gate shows its state as a visible word; the raw `gate_state` string is never printed.
+- **§5.7 leaving a page (plan 3c).** Leaving a detail page with a form open asks the form to close, exactly as leaving the detail modal does.
