@@ -230,3 +230,13 @@ These override the sections they name.
 - **§5.3 chips (plan 2b).** A chip's `title` is its full label; the shift-click hint moves to the group label.
 - **§4 topbar row 2 (plan 2b).** Row 2 parks what does not fit behind "Filters", in order, and brings it back when room returns; the search field always stays in the row.
 - **§9 Table (plan 2b).** The Table adopts chips and sortable headers in plan 2b as the proving consumer of those components; its layout (§6 Table) stays in plan 3b.
+- **§5.1 (plan 3d).** §6 Ideas "Toolbar: search · status chips · Tags popover · Show archived" and §4 "row 2 = search · view switcher · filters" are read together with the Table's 2b precedent: on Issues, Bugs and Ideas the filters are a rail at the top of the screen, and row 2 keeps the search and the one view control (Issues' View, Bugs' Sort).
+- **§6 Issues (plan 3d).** The card names ID, severity, title and evidence, and keeps status (in the Severity and List views), "blocks n", the stale tag, location and its task/bug links. Impact and repro steps stay on the issue's own page.
+- **§6 Issues (plan 3d).** Status `duplicate` exists server-side; it reads "Duplicate", counts as moved on (→), sits in the resolved shelf, and is a Status-view column whenever any exists.
+- **§6 Issues (plan 3d).** The stale tag shows only for open and investigating issues whose aging tier is Stale, as a warning marker ("stale 45d").
+- **§6 Issues (plan 3d).** Column taglines ("— actively under triage") are dropped; column heads are Technical labels with counts.
+- **§6 Bugs (plan 3d).** Every `BUG_STATUS` value is a filter chip; archived bugs (the flag or the status) come in through a "Show archived" toggle, as on Ideas. The default is Open + Shelved pressed. A bug with no severity shows no severity marker.
+- **§6 Bugs (plan 3d).** No chip is ever "archived", so a bug whose status is archived is admitted by "Show archived" alone, whatever status chips are pressed; a bug flagged archived with another status still answers to the chips.
+- **§6 Ideas (plan 3d).** Rows are real links to `#/ideas/<id>`; a plain click selects in place and rewrites the hash with `history.replaceState`, so a new tab or a pasted link opens the same idea. An idea with no status shows no status marker.
+- **§6 Ideas (plan 3d).** The tag filter keeps today's AND semantics, compared case-insensitively. Escape closes the Tags popover and returns focus to the Tags button.
+- **§6 Ideas (plan 3d).** "New idea" is a row-1 action, not part of the filter rail.
