@@ -100,8 +100,9 @@ export function mount(root, { store, subpath = [] } = {}) {
     const cached = store.getIdeas();
     const ideas = cached && (cached.length || (!loading && !failed)) ? cached : null;   // an empty cache while loading (or failed) is no cache
     const tagSel = tags.selected();
-    const narrowed = statuses.length > 0 || tagSel.length > 0 || includeArchived || search.trim() !== '';
-    rail.setClearable(narrowed);
+    // Show archived widens the list, so it makes Clear available but is not a narrowing filter for the count.
+    const narrowed = statuses.length > 0 || tagSel.length > 0 || search.trim() !== '';
+    rail.setClearable(narrowed || includeArchived);
     notice.hidden = !(failed && ideas);
     const archivedCount = (ideas || []).filter((i) => i.archived).length;
     archivedChip.setAttribute('aria-pressed', String(includeArchived));
@@ -121,10 +122,11 @@ export function mount(root, { store, subpath = [] } = {}) {
     const admitted = admittedIdeas();
     statusRow.update(ideaStatusChips(admitted, statuses));
     const shown = applyIdeasFilters(ideas, { statuses, tags: tagSel, includeArchived, search: search.trim() });
-    const all = admittedIdeas().length;   // "all" = what the archived toggle admits (brief: 4 → 5 after a create)
-    setTopbarCount(`${all} ${pluralize(all, 'idea', 'ideas')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    const total = admitted.length;   // what the archived toggle admits (brief: 4 → 5 after a create)
+    setTopbarCount(`${total} ${pluralize(total, 'idea', 'ideas')}${narrowed ? ` · ${shown.length} visible` : ''}`);
     list.replaceChildren(...shown.map(ideaRow));
     if (!ideas.length) showState(stateBlock({ label: 'Ideas', headline: 'No ideas yet.', hint: 'Use “New idea” to capture one.' }));
+    else if (!total) showState(stateBlock({ label: 'Ideas', headline: 'Every idea is archived.', action: { label: 'Show archived', onClick: () => { includeArchived = true; paint(); } } }));
     else if (!shown.length) showState(stateBlock({ label: 'No matches', headline: 'No ideas match these filters.', action: { label: 'Clear filters', onClick: clear } }));
     else showState(null);
     list.hidden = !shown.length;
@@ -207,12 +209,13 @@ export function mount(root, { store, subpath = [] } = {}) {
 
   function detail(idea) {
     const headId = `ideas-detail-title-${idea.id}`;
-    const back = h('button', { type: 'button', class: 'btn btn--ghost btn--sm ideas-detail__back', on: { click: deselect } },
+    // data-focus keys let keepFocus find these again after a redraw rebuilds the pane (the list fallback is hidden on phones).
+    const back = h('button', { type: 'button', class: 'btn btn--ghost btn--sm ideas-detail__back', 'data-focus': 'ideas-detail-back', on: { click: deselect } },
       icon('chevron', { size: 14 }), h('span', {}, 'Back to ideas'));
     const tech = h('div', { class: 'ideas-detail__tech' }, h('span', { class: 'ideas-detail__id' }, idea.id));
     if (idea.status) tech.append(statusMarker('idea', idea.status));
     if (idea.archived) tech.append(h('span', { class: 'list-tag' }, 'Archived'));
-    const title = h('h2', { class: 'ideas-detail__title', id: headId, tabindex: '-1' }, idea.title || 'Untitled');
+    const title = h('h2', { class: 'ideas-detail__title', id: headId, tabindex: '-1', 'data-focus': 'ideas-detail-title' }, idea.title || 'Untitled');
 
     const main = h('div', { class: 'ideas-detail__main' });
     main.append(idea.body ? mountMarkdownInto(idea.body) : h('p', { class: 'ideas-detail__empty' }, 'No description.'));

@@ -102,6 +102,9 @@ test('status chips, Tags and Show archived filter together', async ({ page }) =>
   await page.getByRole('button', { name: /^Show archived/ }).click();
   await page.getByRole('button', { name: /^Clear/ }).click();
   await page.getByRole('button', { name: /^Show archived/ }).click();
+  // Show archived alone widens the list: no " · m visible", but Clear is still on offer.
+  await expect(page.locator('#topbar-count')).toHaveText('5 ideas');
+  await expect(page.getByRole('button', { name: /^Clear/ })).toBeVisible();
   await expect(rowOf(page, 'IDEA-5').locator('.list-tag', { hasText: 'Archived' })).toBeVisible();
   await link(page, 'IDEA-5').click();
   await pane(page).locator('a.link-pill[href="#/task/T-111"]').click();
@@ -189,6 +192,32 @@ test('phone: the pane replaces the list, Back returns focus to the row', async (
   await expect(link(page, 'IDEA-1')).toBeFocused();
 });
 
+test('phone: a redraw while focus is on the pane keeps it on Back, then on the heading', async ({ page }) => {
+  await boot(page, { width: 390, height: 844, hash: '#/ideas/IDEA-1', wait: false });
+  const back = page.getByRole('button', { name: 'Back to ideas' });
+  await expect(back).toBeVisible();
+  await back.focus();
+  const before = await back.elementHandle();
+  await setIdeas(page, LIST_IDEAS);
+  await expect.poll(() => before.evaluate((el) => el.isConnected)).toBe(false);   // the pane really was rebuilt
+  await expect(back).toBeFocused();
+  await pane(page).getByRole('heading', { level: 2 }).focus();
+  await setIdeas(page, LIST_IDEAS);
+  await expect(pane(page).getByRole('heading', { level: 2 })).toBeFocused();
+});
+
+test('every idea archived and Show archived off: the state says so and its action shows them', async ({ page }) => {
+  await boot(page, { wait: false, '/api/ideas': { ideas: LIST_IDEAS.map((i) => ({ ...i, archived: true })) } });
+  const mount = page.locator('#screen-mount');
+  await expect(mount.getByText('Every idea is archived.')).toBeVisible();
+  await expect(mount.getByText('No ideas match these filters.')).toHaveCount(0);
+  await expect(page.locator('#topbar-count')).toHaveText('0 ideas');
+  await page.locator('.ideas__state').getByRole('button', { name: 'Show archived' }).click();
+  await expect.poll(() => rowIds(page)).toHaveLength(LIST_IDEAS.length);
+  await expect(page.locator('#topbar-count')).toHaveText(`${LIST_IDEAS.length} ideas`);
+  await expect(page.getByRole('button', { name: /^Show archived/ }).first()).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('a failed load is said in words', async ({ page }) => {
   await boot(page, { wait: false, '/api/ideas': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError at /api/ideas' } } });
   const mount = page.locator('#screen-mount');
@@ -206,15 +235,26 @@ test('a 404 counts as no ideas', async ({ page }) => {
 test('at 390 with long data nothing scrolls sideways and every control is 44px tall', async ({ page }) => {
   await boot(page, { width: 390, height: 844, '/api/ideas': { ideas: LONG_IDEAS } });
   await page.evaluate(() => document.fonts.ready);
-  await statusChip(page, 'Exploring').click();
-  const m = await page.evaluate(() => {
+  const measure = () => page.evaluate(() => {
     const mount = document.getElementById('screen-mount');
     return { doc: document.documentElement.scrollWidth, inner: innerWidth, ms: mount.scrollWidth, mc: mount.clientWidth, h: document.documentElement.scrollHeight };
   });
-  console.log(`ideas 390 page height: ${m.h}`);
+  // The full, unfiltered list first: it holds IDEA-1203, the row with the long unbroken title built to break the width.
+  await expect.poll(() => rowIds(page)).toHaveLength(LONG_IDEAS.length);
+  await expect(link(page, 'IDEA-1203')).toBeVisible();
+  const m = await measure();
+  console.log(`ideas 390 page height (all ${LONG_IDEAS.length} rows): ${m.h}; widths doc ${m.doc}/${m.inner}, mount ${m.ms}/${m.mc}`);
   expect(m.doc).toBeLessThanOrEqual(m.inner);
   expect(m.ms).toBeLessThanOrEqual(m.mc);
+  expect(m.h).toBeGreaterThan(844);
   expect(m.h).toBeLessThanOrEqual(8000);
+  // Narrow with a filter that keeps IDEA-1203 only so Clear exists to be measured; the width must still hold.
+  await statusChip(page, 'Candidate').click();
+  await expect(link(page, 'IDEA-1203')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Clear/ })).toBeVisible();
+  const n = await measure();
+  expect(n.doc).toBeLessThanOrEqual(n.inner);
+  expect(n.ms).toBeLessThanOrEqual(n.mc);
   const controls = page.locator([
     // .list-filters holds every chip, More, Tags, Show archived and Clear.
     '.ideas .list-filters button', '.ideas .ideas__list .link-row__link',
