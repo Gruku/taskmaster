@@ -229,3 +229,33 @@ export const summaryMocks = ({ theme = 'dark', ...extra } = {}) => ({
   '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
   ...extra,
 });
+
+// The Dashboard's continuity band: seven open handovers (five fit the Resume rail, two are "older"), two tasks to
+// review, one open decision, and a task, an issue and an idea to clean up.
+const daysAgo = (d) => ago(d * 24);
+const HANDOVER_TLDR = ['Cards done, columns next', 'Columns re-skinned', 'Detail modal header', 'Topbar row 1 at 390px',
+  'Chips overflow row', 'Popover stacking ladder', 'Theme toggle saved'];
+export const CONTINUITY = {
+  items: [
+    ...HANDOVER_TLDR.map((title, i) => ({
+      id: `2026-10-05-r${i + 1}`, type: 'handover', title, action_class: 'resume', age_days: i + 1, timestamp: daysAgo(i + 1),
+      next: 'Pick up the next screen', where: 'rr3/e',
+    })),
+    { id: 'T-107', type: 'task', title: 'Review the cutover checklist', action_class: 'review', age_days: 1, timestamp: daysAgo(1),
+      next: 'in-review', where: 'store' },
+    { id: 'T-102', type: 'task', title: 'Re-skin the Kanban cards and columns', action_class: 'review', age_days: 2, timestamp: daysAgo(2),
+      next: 'in-review', where: 'viewer' },
+    { id: 'DEC-001', type: 'decision', title: 'Land the cutover', action_class: 'decide', age_days: 1, timestamp: daysAgo(1),
+      next: 'rec: Merge develop first', where: 'T-107' },
+    { id: 'T-106', type: 'task', title: 'Quarantined rows must not force a projection scan', action_class: 'clean-up', age_days: 9,
+      timestamp: daysAgo(9), next: 'in-progress', where: 'store' },
+    { id: 'ISS-012', type: 'issue', title: 'Light theme pills fail contrast', action_class: 'clean-up', age_days: 15,
+      timestamp: daysAgo(15), next: 'P2 · open', where: 'viewer' },
+    { id: 'IDEA-7', type: 'idea', title: 'Pin a handover to the desk', action_class: 'clean-up', age_days: 8, timestamp: daysAgo(8),
+      next: 'brainstorm', where: 'brainstorm' },
+  ],
+};
+
+export const DECISION = {
+  id: 'DEC-001', title: 'Land the cutover', options: ['Push the MR', 'Merge develop first', 'Hold'], recommendation: 2, body: '',
+};

@@ -1,6 +1,7 @@
 import { h } from '../util/h.js';
 import { claimTopbar } from '../lib/topbar.js';
-import { createSpine } from '../components/continuity/spine.js';
+import { createSpine, createSpineHead } from '../components/continuity/spine.js';
+import { createItemRow } from '../components/continuity/item-row.js';
 import { createDecisionCard } from '../components/continuity/decision-card.js';
 import { renderBlock } from '../lib/xml-render.js';
 import { buildRails, sortNotes } from '../lib/desk.js';
@@ -115,68 +116,74 @@ export async function mount(root, { store, api }) {
   async function refreshBoard() { await loadNotes(); renderBoard(); }
 
   // ── Continuity band ──────────────────────────────────────────────────────
+  // Every band write checks the band is still on the page: a screen left (or a mount the router abandoned) is never
+  // drawn into. Each render is numbered so a slower, older one never overwrites a newer one.
+  const bandLive = () => bandEl.isConnected;
+  let bandGeneration = 0;
+
   async function fetchDecision(id) {
     try { return await api.get(`/api/decisions/${encodeURIComponent(id)}`); }
     catch { return null; }
   }
 
+  // Resolve and drop reject when the server refuses, so the card can say why.
   async function resolveDecision(id, optionIndex) {
-    try {
-      await api.post(`/api/decisions/${encodeURIComponent(id)}/resolve`, { resolved_with: optionIndex, rationale: '' });
-      await loadItems();
-      await renderBand();
-    } catch (e) { console.error('[desk] resolve decision failed', e); }
+    await api.post(`/api/decisions/${encodeURIComponent(id)}/resolve`, { resolved_with: optionIndex, rationale: '' });
+    await refreshBand();
   }
 
   async function dropDecision(id) {
-    try {
-      await api.post(`/api/decisions/${encodeURIComponent(id)}/drop`, { reason: 'dropped via viewer' });
-      await loadItems();
-      await renderBand();
-    } catch (e) { console.error('[desk] drop decision failed', e); }
+    await api.post(`/api/decisions/${encodeURIComponent(id)}/drop`, { reason: 'dropped via viewer' });
+    await refreshBand();
   }
 
-  // Decide rail — spine-styled heading + a decision card per item. Decisions
-  // are interactive (resolve / drop), so they don't collapse into rows.
+  // Decide rail — the spine heading + a decision card per item, since a decision is settled in place. A decision
+  // whose detail cannot be read is still listed, as a row that opens in place.
   async function renderDecideRail(rail) {
-    const railEl = h('section', { class: 'co-spine' });
-    railEl.appendChild(h('div', { class: 'co-spine__head' },
-      h('span', { class: 'co-spine__label' }, RAIL_LABEL.decide),
-      h('span', { class: 'co-spine__count' }, String(rail.items.length)),
-    ));
+    const decisions = await Promise.all(rail.items.map((item) => fetchDecision(item.id)));
+    const railEl = h('section', { class: 'co-spine' }, createSpineHead({ label: RAIL_LABEL.decide, count: rail.items.length }));
     const list = h('div', { class: 'co-spine__list' });
-    for (const item of rail.items) {
-      const decision = await fetchDecision(item.id);
-      if (!decision) continue;
-      const card = createDecisionCard({
-        item,
-        decision,
-        onResolve: (idx) => resolveDecision(item.id, idx),
-        onDrop: (id) => dropDecision(id),
-      });
-      list.appendChild(card.root);
-    }
+    rail.items.forEach((item, i) => {
+      const decision = decisions[i];
+      list.appendChild(decision
+        ? createDecisionCard({
+          item,
+          decision,
+          onResolve: (idx) => resolveDecision(item.id, idx),
+          onDrop: (id) => dropDecision(id),
+        }).root
+        : createItemRow({ item, onToggle: toggleRow }).root);
+    });
     railEl.appendChild(list);
     return railEl;
   }
 
   async function renderBand() {
-    bandEl.replaceChildren();
+    const generation = ++bandGeneration;
     const rails = buildRails(items);
+    const railEls = [];
     for (const key of ['resume', 'review', 'decide', 'cleanup']) {
       const rail = rails[key];
       if (rail.items.length === 0 && rail.older === 0) continue;
-      let railEl;
-      if (key === 'decide' && rail.items.length > 0) {
-        railEl = await renderDecideRail(rail);
-      } else {
-        railEl = createSpine({ label: RAIL_LABEL[key], items: rail.items, empty: true, onItemClick: expandRow }).root;
+      const railEl = key === 'decide' && rail.items.length > 0
+        ? await renderDecideRail(rail)
+        : createSpine({ label: RAIL_LABEL[key], items: rail.items, onToggle: toggleRow }).root;
+      if (rail.older > 0) {
+        railEl.appendChild(h('a', {
+          class: 'dk-older btn btn--ghost btn--sm',
+          href: OLDER_TARGET[key],
+          'aria-label': `${rail.older} older ${RAIL_LABEL[key].toLowerCase()} items`,
+        }, `+${rail.older} older`));
       }
-      if (railEl && rail.older > 0) {
-        railEl.appendChild(h('a', { class: 'dk-older', href: OLDER_TARGET[key] }, `+${rail.older} older`));
-      }
-      if (railEl) bandEl.appendChild(railEl);
+      railEls.push(railEl);
     }
+    if (generation !== bandGeneration || !bandLive()) return;
+    bandEl.replaceChildren(...railEls);
+  }
+
+  async function refreshBand() {
+    await loadItems();
+    await renderBand();
   }
 
   // ── Inline expansion: fetch handover/decision body, render XML tags. ──────
@@ -192,27 +199,31 @@ export async function mount(root, { store, api }) {
   }
 
   function buildExpandedNode(item, doc) {
-    if (!doc) return h('p', { class: 'co-xblock__p' }, 'Failed to load body.');
+    if (!doc) return h('p', { class: 'co-xblock__p' }, 'This could not be loaded. Try again in a moment.');
     const body = doc.body || '';
     if (item.type === 'decision') {
       const rationale = doc.resolved_rationale || doc.dropped_reason || '';
       const text = [rationale, body].filter(Boolean).join('\n\n');
-      return renderBlock(text || '(no rationale recorded)');
+      return renderBlock(text || 'No rationale was recorded.');
     }
-    return renderBlock(body || '(empty body)');
+    return renderBlock(body || 'This handover has no body.');
   }
 
-  async function expandRow(item, controller) {
-    if (!controller) return;
+  // The fetch each open row is waiting on: a row closed and opened again mid-fetch shows only the latest answer.
+  const pendingBody = new WeakMap();
+
+  async function toggleRow(item, controller) {
     if (controller.isExpanded()) {
+      pendingBody.delete(controller);
       controller.clearExpanded();
       return;
     }
-    if (item.type !== 'handover' && item.type !== 'decision') return;
+    const request = {};
+    pendingBody.set(controller, request);
     controller.setLoading();
     const doc = await fetchBody(item);
-    // Only render if still expanded (user may have collapsed mid-fetch).
-    if (!controller.isExpanded()) return;
+    if (pendingBody.get(controller) !== request || !controller.root.isConnected) return;
+    pendingBody.delete(controller);
     controller.setExpanded(buildExpandedNode(item, doc));
   }
 

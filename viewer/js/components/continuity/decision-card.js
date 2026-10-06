@@ -1,25 +1,48 @@
+// User intent: an open decision is settled from the Dashboard with real buttons — each option, the recommended pick,
+// Drop — and when the server refuses, the card says why in words and lets the person try again.
 import { h } from '../../util/h.js';
+import { describeWriteError } from '../edit/write-errors.js';
 
 export function createDecisionCard({ item, decision, onResolve, onDrop }) {
   const root = h('div', { class: 'co-decision' });
   root.appendChild(h('div', { class: 'co-decision__rail' },
-    h('span', { class: 'co-chip co-chip--dec' }, 'Decision'),
+    h('span', { class: 'co-chip' }, 'Decision'),
     h('span', { class: 'co-decision__id' }, `${decision.id} · ${item.title}`),
   ));
   root.appendChild(h('h3', { class: 'co-decision__title' }, decision.title));
+
+  let errorEl = null;
+  // Every button waits while one write runs; a refusal is said on the card and the buttons come back.
+  async function run(write) {
+    const buttons = [...root.querySelectorAll('button')];
+    for (const b of buttons) b.disabled = true;
+    errorEl?.remove();
+    errorEl = null;
+    try {
+      await write();
+    } catch (e) {
+      if (!root.isConnected) return;
+      errorEl = h('p', { class: 'co-error', role: 'alert' }, describeWriteError(e, { noun: 'decision' }));
+      root.appendChild(errorEl);
+    } finally {
+      // A write that went through redraws the band; a card it replaced is left alone.
+      if (root.isConnected) for (const b of buttons) b.disabled = false;
+    }
+  }
+
   const opts = h('div', { class: 'co-decision__opts' });
   (decision.options || []).forEach((text, i) => {
     const idx = i + 1;
     const rec = decision.recommendation === idx;
-    const opt = h('div', {
+    opts.appendChild(h('button', {
+      type: 'button',
       class: 'co-decision__opt' + (rec ? ' is-rec' : ''),
-      on: { click: () => onResolve?.(idx) },
+      on: { click: () => run(() => onResolve?.(idx)) },
     },
       h('span', { class: 'co-decision__opt-num' }, `${idx}.`),
       h('span', { class: 'co-decision__opt-text' }, text),
-      rec ? h('span', { class: 'co-decision__opt-star' }, '★ rec') : null,
-    );
-    opts.appendChild(opt);
+      rec ? h('span', { class: 'co-decision__rec' }, 'Recommended') : null,
+    ));
   });
   root.appendChild(opts);
 
@@ -27,14 +50,14 @@ export function createDecisionCard({ item, decision, onResolve, onDrop }) {
   if (decision.recommendation) {
     actions.appendChild(h('button', {
       type: 'button',
-      class: 'co-decision__primary',
-      on: { click: () => onResolve?.(decision.recommendation) },
+      class: 'btn btn--primary btn--sm co-decision__primary',
+      on: { click: () => run(() => onResolve?.(decision.recommendation)) },
     }, `Pick option ${decision.recommendation}`));
   }
   actions.appendChild(h('button', {
     type: 'button',
-    class: 'co-decision__drop',
-    on: { click: () => onDrop?.(decision.id) },
+    class: 'btn btn--ghost btn--sm co-decision__drop',
+    on: { click: () => run(() => onDrop?.(decision.id)) },
   }, 'Drop'));
   root.appendChild(actions);
   return { root };
