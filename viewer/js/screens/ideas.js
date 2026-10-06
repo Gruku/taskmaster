@@ -1,7 +1,7 @@
 // User intent: the Ideas list in the Reality Reprojection skin — link rows that select in place and deep-link,
 // status chips + a Tags filter + a real Show archived toggle, "New idea" in row 1, a markdown detail pane, states in words.
 
-import * as api from '../api.js';
+import { api } from '../api.js';
 import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmSearch, tmAction } from '../lib/topbar.js';
 import { keepFocus } from '../lib/keep-focus.js';
 import { truncate } from '../lib/text.js';
@@ -120,7 +120,8 @@ export function mount(root, { store, subpath = [] } = {}) {
     const admitted = admittedIdeas();
     statusRow.update(ideaStatusChips(admitted, statuses));
     const shown = applyIdeasFilters(ideas, { statuses, tags: tagSel, includeArchived, search: search.trim() });
-    setTopbarCount(`${ideas.length} ${pluralize(ideas.length, 'idea', 'ideas')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    const all = admittedIdeas().length;   // "all" = what the archived toggle admits (brief: 4 → 5 after a create)
+    setTopbarCount(`${all} ${pluralize(all, 'idea', 'ideas')}${narrowed ? ` · ${shown.length} visible` : ''}`);
     list.replaceChildren(...shown.map(ideaRow));
     if (!ideas.length) showState(stateBlock({ label: 'Ideas', headline: 'No ideas yet.', hint: 'Use “New idea” to capture one.' }));
     else if (!shown.length) showState(stateBlock({ label: 'No matches', headline: 'No ideas match these filters.', action: { label: 'Clear filters', onClick: clear } }));
@@ -134,6 +135,13 @@ export function mount(root, { store, subpath = [] } = {}) {
     stateHost.hidden = !block;
   }
 
+  // linkRow takes one Node as its name: the id and the cut title go in a fragment.
+  function rowName(idea) {
+    const f = document.createDocumentFragment();
+    f.append(h('span', { class: 'idea-row__id' }, idea.id), truncate(idea.title || 'Untitled', { lines: 2, className: 'idea-row__title' }));
+    return f;
+  }
+
   function ideaRow(idea) {
     const content = [];
     if (idea.status) content.push(statusMarker('idea', idea.status));
@@ -144,12 +152,13 @@ export function mount(root, { store, subpath = [] } = {}) {
       content.push(wrap);
     }
     if (idea.archived) content.push(h('span', { class: 'list-tag' }, 'Archived'));
-    content.push(h('time', { class: 'idea-row__age', datetime: idea.created || '' }, formatStamp(idea.created)));
+    const age = formatStamp(idea.created);
+    content.push(h('time', { class: 'idea-row__age', datetime: idea.created || '', title: age.title || '' }, age.text || ''));
     const row = linkRow({
       tag: 'li',
       className: 'idea-row' + (idea.archived ? ' idea-row--archived' : ''),
       href: linkRoute(idea.id),
-      name: [h('span', { class: 'idea-row__id' }, idea.id), truncate(idea.title || 'Untitled', { lines: 2, className: 'idea-row__title' })],
+      name: rowName(idea),
       content,
     });
     const a = row.querySelector('a[href]');
@@ -209,7 +218,7 @@ export function mount(root, { store, subpath = [] } = {}) {
 
     const dl = h('dl', { class: 'ideas-detail__dl' });
     const term = (label, value) => { if (value) dl.append(h('dt', {}, label), h('dd', {}, value)); };
-    const stamp = (v) => v && h('span', { title: new Date(v).toLocaleString() }, formatStamp(v));
+    const stamp = (v) => { if (!v) return null; const s = formatStamp(v); return h('span', { title: s.title || '' }, s.text || ''); };
     term('Created', stamp(idea.created));
     term('Updated', stamp(idea.updated));
     term('Status', idea.status && statusMarker('idea', idea.status));
