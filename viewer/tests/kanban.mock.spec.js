@@ -416,6 +416,18 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
+test('a second press on Epic options closes it and keeps focus on the button', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const btn = page.locator('.epic-options-btn');
+  await btn.click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+  await btn.click();
+  await expect(page.locator('.epic-options')).toHaveCount(0);
+  await expect(btn).toBeFocused();
+  await btn.click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+});
+
 test('at 390x844 every chip, the options button and Clear filters are at least 44px tall', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
   await searchBox(page).fill('T-10');

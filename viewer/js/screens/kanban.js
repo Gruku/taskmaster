@@ -195,6 +195,8 @@ export async function mount(root, { store, api, prefs }) {
   optionsBtn.title = 'Epic options';
   optionsBtn.appendChild(icon('sliders'));
   optionsBtn.addEventListener('click', () => {
+    // A second press closes the popover rather than reopening it (and losing its search text and scroll).
+    if (epicOptions?.isOpen()) { epicOptions.close('toggle', { returnFocus: true }); epicOptions = null; return; }
     epicOptions = openEpicOptions({
       anchor: optionsBtn,
       epics: epicOptionsData.epics,
