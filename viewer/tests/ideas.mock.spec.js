@@ -99,7 +99,8 @@ test('status chips, Tags and Show archived filter together', async ({ page }) =>
   await choice(page, 'ux').check();
   await expect.poll(() => rowIds(page)).toEqual(['IDEA-3', 'IDEA-1']);
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: /^Show archived/ }).click();
+  await expect(tagDialog(page)).toBeHidden();
+  await expect(tagsButton(page)).toBeFocused();
   await page.getByRole('button', { name: /^Clear/ }).click();
   await page.getByRole('button', { name: /^Show archived/ }).click();
   // Show archived alone widens the list: no " · m visible", but Clear is still on offer.
@@ -170,11 +171,9 @@ test('keyboard walk: search, chips, Tags, Show archived, then rows newest first;
     seen.push(d);
     if (d === 'IDEA-2') break;
   }
-  const at = (x) => seen.indexOf(x);
-  for (const x of ['Exploring', 'Candidate', 'Tags', 'Show', 'IDEA-4', 'IDEA-3', 'IDEA-2']) expect(at(x), seen.join(',')).toBeGreaterThanOrEqual(0);
-  expect(at('Exploring')).toBeLessThan(at('Tags'));
-  expect(at('Tags')).toBeLessThan(at('Show'));
-  expect(seen.slice(at('Show') + 1)).toEqual(['IDEA-4', 'IDEA-3', 'IDEA-2']);
+  // The whole order, from the stop right after search: every status chip, then Tags, Show archived (Clear is hidden
+  // while nothing is narrowed), then the rows newest first.
+  expect(seen).toEqual(['Exploring', 'Candidate', 'Parking', 'Tags', 'Show', 'IDEA-4', 'IDEA-3', 'IDEA-2']);
   await page.keyboard.press('Enter');
   await expect(pane(page).getByRole('heading', { level: 2 })).toHaveText('Faster store writes');
   await expect(link(page, 'IDEA-2')).toBeFocused();
