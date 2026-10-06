@@ -140,6 +140,7 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 - 2026-10-05: Survivalist chip buttons get a value-only ground one surface step from the ground they sit on, so they read as buttons without hue. "Hue-free" means channels within 2: survivalist keeps RR's warm D2 temperature.
 - 2026-10-05: `classic.SessionStart` can fire before a session is bound (`$.config.list` unavailable); it never throws and leaves the publish to `session.start`.
 - 2026-10-05: Verified live: under `auto`, `/theme` → light switches the gallery to light.
+- 2026-10-06 (Task 2 live look): the user approved the lean review card as built, judged from the dark-polarity `/tm-review` screenshots: the critical card with checklist and collapsed details, and the high card with details open and a `refused` banner. No visual changes.
 
 ## 6. `taskmaster-tui`
 
