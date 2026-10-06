@@ -523,3 +523,8 @@ export const archivedMocks = ({ theme = 'dark' } = {}) => ({
   '/api/board': archivedBoard(40), '/api/backlog': archivedBoard(40),
   '/api/task/T-1001/detail': taskDetail({ ...EMPTY_TASK, id: 'T-1001', title: 'Archived task 1001', status: 'archived' }),
 });
+
+// The bug detail page (plan 3c Task 8): one open bug found in a board task, a fixed one that went somewhere, and one too long for a phone.
+export const BUG = { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P2', found_in: 'T-102', discovered: '2026-09-30T10:00:00Z', discovered_by: 'user', components: ['viewer'], location: ['viewer/css/screens/kanban.css:87'], summary: 'The card border uses `--border-subtle`.\n\n1. Light theme\n2. Laptop screen' };
+export const BUG_FIXED = { ...BUG, id: 'B-030', status: 'fixed', severity: null, fix_commit: 'abfb1b9c0ffee', adopted_into: 'T-101', promoted_to: 'ISS-012' };
+export const LONG_BUG = { ...BUG, id: 'B-1234', title: 'y'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
