@@ -385,3 +385,15 @@ for (const theme of ['dark', 'light']) {
     await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
   });
 }
+
+test('at 390px a picked handover brings the rail into view with its top below the sticky topbar', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  await hoRow(page, M1).click();
+  await expect(rail(page)).toBeVisible();
+  await expect.poll(async () => {
+    const barBottom = await page.locator('.topbar').evaluate((el) => el.getBoundingClientRect().bottom);
+    const railTop = await rail(page).evaluate((el) => el.getBoundingClientRect().top);
+    return railTop >= barBottom - 1;
+  }).toBe(true);
+});

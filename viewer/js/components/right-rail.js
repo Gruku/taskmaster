@@ -335,8 +335,13 @@ export class RightRail {
       this.close();
     };
     doc.addEventListener('keydown', this._onKey);
-    // Not preventScroll: on a narrow screen the rail may sit below the fold, and the reader is taken to it.
-    titleEl.focus();
+    // On a narrow screen the rail may sit out of view, and the reader is taken to it — with its top below the sticky
+    // topbar (whose height depends on its second row), not under it as a plain focus scroll leaves it.
+    titleEl.focus({ preventScroll: true });
+    const win = doc.defaultView;
+    const barBottom = doc.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+    const railTop = el.getBoundingClientRect().top;
+    if (win && (railTop < barBottom || railTop > win.innerHeight - 44)) win.scrollBy(0, railTop - barBottom);
     return el;
   }
 
