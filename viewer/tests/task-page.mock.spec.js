@@ -31,9 +31,11 @@ test.afterEach(async ({ page }) => {
 const doc = (page) => page.locator('#screen-mount.td-doc');
 const h1 = (page) => page.locator('#screen-mount h1.td-title');
 
-async function open(page, hash = '#/task/T-102', table = {}) {
+// Waits on the view's loaded heading (the brief's loaded-selectors); pass `loaded: null` for a page that never loads.
+async function open(page, hash = '#/task/T-102', table = {}, { loaded = /[?&]view=B\b/.test(hash) ? '.td-page-B h1.td-title' : '.td-page-A h1.td-title' } = {}) {
   await mockApi(page, { ...TABLE, ...table });
   await page.goto('/' + hash);
+  if (loaded) await expect(page.locator(`#screen-mount${loaded}, #screen-mount ${loaded}`).first()).toBeVisible();
 }
 
 // Another writer changes the task: the next detail read has `task`, and a poll brings a new board revision.
@@ -445,5 +447,14 @@ test('a repaint of the same task keeps the graph in fullscreen, on the same fram
   expect(after.frames).toBe(1);
   await expect(full).toHaveAttribute('aria-pressed', 'true');
   await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+});
+
+test('leaving the task page while the graph fills the screen leaves fullscreen', async ({ page }) => {
+  await open(page, GRAPH);
+  await page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]').click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
+  await page.evaluate(() => { location.hash = '#/kanban'; });
+  await expect(page.locator('#screen-mount.td-page-B')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
 });

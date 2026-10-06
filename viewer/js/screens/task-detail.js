@@ -101,7 +101,9 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     const request = ++generation;
     try {
       const value = await getTaskDetailFull(id, {force: true});
-      if (!disposed && request === generation && !store.isEditing(id)) {
+      // An edit that began while the read was out paints nothing either: no focus pulled to the h1 later.
+      if (!disposed && request === generation && store.isEditing(id)) refocus = false;
+      else if (!disposed && request === generation) {
         await paint(value, request);
         if (!disposed && request === generation) {
           rememberAsLast();
