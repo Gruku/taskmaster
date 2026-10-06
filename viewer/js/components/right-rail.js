@@ -3,12 +3,16 @@
 //   Relations (links · depends on · unblocks · blockers) · Docs · Handovers · Issues
 // — none at all for a task with nothing related, so the caller can leave the rail out.
 // `mountRightRail(root, ctx)` puts them in `root` and returns a cleanup function.
+// Also here: the handover status pill and its menu (a refused change is said beside the pill), and `RightRail`,
+// the generic in-page panel a screen opens beside its list (Sessions).
 
 import { linkPillsEl, legacyLinksToTyped } from './link-pills.js';
 import { renderMarkdown } from './markdown.js';
 import { statusMarker, priorityMarker } from './status.js';
 import { icon } from './icon.js';
 import { openPopover } from './popover.js';
+import { topModal } from './modal.js';
+import { describeWriteError } from './edit/write-errors.js';
 import { formatStamp } from '../lib/time.js';
 
 export function mountRightRail(root, ctx = {}) {
@@ -157,6 +161,7 @@ function panelIssues(issues, level) {
 
 // ── Handover status: a button that names the status and opens a menu to change it ──
 const HO_STATUSES = ['open', 'closed', 'superseded'];
+export const HO_STATUS_LABEL = Object.freeze({ open: 'Open', closed: 'Closed', superseded: 'Superseded' });
 const statusClass = (status) => `ho-status-pill-${String(status).replace(/[^a-z0-9-]/gi, '')}`;
 
 export function statusPill(handoverId, status) {
@@ -183,11 +188,57 @@ function paintPill(pill, status) {
   else pill.textContent = status;
 }
 
+// Throws the way api.js's http() does, so describeWriteError words it like any other refused write.
+export async function postHandoverStatus(handoverId, status) {
+  const path = `/api/handover/${encodeURIComponent(handoverId)}/status`;
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status, reason: 'viewer-override' }),
+  });
+  if (resp.ok) return;
+  let body = null;
+  try { body = JSON.parse(await resp.text()); } catch { body = null; }
+  const reason = typeof body?.error === 'string' ? body.error : null;
+  if (resp.status === 409) {
+    const err = new Error(reason && reason.trim() ? reason : 'stale');
+    err.code = 409;
+    throw err;
+  }
+  const err = new Error(`POST ${path} → ${resp.status}`);
+  err.code = resp.status;
+  if (reason != null) err.reason = reason;
+  throw err;
+}
+
+const pillsOf = (doc, handoverId) => doc.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`);
+
+function clearStatusError(doc, handoverId) {
+  for (const pill of pillsOf(doc, handoverId)) {
+    const id = pill.getAttribute('aria-describedby');
+    if (!id) continue;
+    doc.getElementById(id)?.remove();
+    pill.removeAttribute('aria-describedby');
+  }
+}
+
+let errorSeq = 0;
+
+// The sentence sits right after the pill it was chosen from, and that pill points to it.
+function showStatusError(pill, handoverId, message) {
+  const doc = pill.ownerDocument;
+  clearStatusError(doc, handoverId);
+  const id = `ho-status-error-${++errorSeq}`;
+  pill.after(h('span', { class: 'ho-status-error', role: 'alert', id }, message));
+  pill.setAttribute('aria-describedby', id);
+}
+
 let openMenu = null;   // { anchor, popover } — one menu at a time
 
 // Opens the menu under `anchor`; called again for the same anchor while it is open, it closes it.
 export function openStatusMenu(anchor, handoverId, currentStatus) {
-  if (openMenu?.popover.isOpen()) {
+  // `openMenu` is the menu open now: its popover's onClose forgets it however it closes.
+  if (openMenu) {
     const same = openMenu.anchor === anchor;
     openMenu.popover.close();
     if (same) return;
@@ -205,75 +256,94 @@ export function openStatusMenu(anchor, handoverId, currentStatus) {
   });
   const popover = openPopover({
     anchor, content: items, role: 'menu', label: 'Handover status', focus: 'checked', className: 'ho-status-menu',
+    // However it closes (Escape, a press outside, a redraw), it is no longer the open menu.
+    onClose: () => { if (openMenu?.popover === popover) openMenu = null; },
   });
   openMenu = { anchor, popover };
 
   async function choose(opt) {
     popover.close('api', { returnFocus: true });
     try {
-      const resp = await fetch(`/api/handover/${encodeURIComponent(handoverId)}/status`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ status: opt, reason: 'viewer-override' }),
-      });
-      if (resp && resp.ok === false) throw new Error(`status ${resp.status}`);
-      // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
-      for (const pill of doc.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) paintPill(pill, opt);
-      view?.dispatchEvent(new view.CustomEvent('viewer:handover-status-changed', {
-        detail: { id: handoverId, status: opt },
-      }));
+      await postHandoverStatus(handoverId, opt);
     } catch (e) {
-      // The pill keeps the status the server still has.
-      console.error('handover status change failed', e);
+      // The pills keep the status the server still has; the pill it was chosen from says why.
+      const pill = anchor.isConnected ? anchor : [...pillsOf(doc, handoverId)][0];
+      if (pill) showStatusError(pill, handoverId, describeWriteError(e, { noun: 'handover' }));
+      return;
     }
+    clearStatusError(doc, handoverId);
+    // Patch every pill rendered for this handover (task rail and sessions rail).
+    for (const pill of pillsOf(doc, handoverId)) paintPill(pill, opt);
+    view?.dispatchEvent(new view.CustomEvent('viewer:handover-status-changed', {
+      detail: { id: handoverId, status: opt },
+    }));
   }
 }
 
 // ---------------------------------------------------------------------------
-// Generic right-rail. Used by Plan 3 (task-detail) and Plan 5a (session-detail).
-// Construct once per screen, call open/close as the user picks rows.
+// Generic right rail: a panel in the page, placed by its host, that a screen opens and closes as rows are picked.
+// It takes focus to its title when it opens and hands it back to the row that opened it when it closes.
 // ---------------------------------------------------------------------------
 
-const ATTACH_PARENT_SEL = '.right-rail-host';
+let railSeq = 0;
 
 export class RightRail {
-  /** @param {{width?: number}} opts */
-  constructor(opts = {}) {
-    this.width = opts.width || 480;
+  constructor({ host, label = 'Details' } = {}) {
+    if (!host || typeof host.appendChild !== 'function') throw new TypeError('RightRail needs a host element');
+    this.host = host;
+    this.label = label;
     this.el = null;
-    this._cleanup = null;
+    this._opener = null;
+    this._onClose = null;
+    this._onKey = null;
   }
 
-  /** @param {{render: () => string, onMount?: (root: HTMLElement) => () => void, kind?: string}} args */
-  open(args) {
-    this.close();
-    const host = document.querySelector(ATTACH_PARENT_SEL) || document.body;
-    const el = document.createElement('aside');
-    el.className = `right-rail right-rail-${args.kind || 'plain'}`;
-    el.style.setProperty('--rail-w', this.width + 'px');
-    el.innerHTML = args.render();
-    host.appendChild(el);
-    document.body.classList.add('rail-open');
+  open({ kind = 'plain', title, head = [], body = [], opener = null, onClose } = {}) {
+    // Swapping content: the new title takes focus, so the old opener is not focused (and scrolled to) on the way.
+    this.close({ returnFocus: false });
+    // A host taken out of the page (the screen was left while its data loaded) gets no rail and no key listener.
+    if (!this.host.isConnected) return null;
+    const doc = this.host.ownerDocument;
+    const titleId = `rr-title-${++railSeq}`;
+    const closeBtn = h('button', {
+      type: 'button', class: 'rr-close btn btn--ghost btn--icon btn--sm', 'aria-label': 'Close details',
+      on: { click: () => this.close() },
+    }, icon('dismiss', { size: 14 }));
+    const titleEl = h('h2', { class: 'rr-title', id: titleId, tabindex: '-1' }, String(title ?? ''));
+    const el = h('aside', {
+      id: 'right-rail', class: `right-rail right-rail--${kind}`, 'aria-label': this.label, 'aria-labelledby': titleId,
+    }, [h('div', { class: 'rr-h' }, [...head, closeBtn]), titleEl, ...body]);
+    this.host.appendChild(el);
     this.el = el;
-    if (args.onMount) this._cleanup = args.onMount(el) || null;
-
-    // Escape closes the rail.
-    this._onKey = (e) => { if (e.key === 'Escape') this.close(); };
-    document.addEventListener('keydown', this._onKey);
+    this._opener = opener;
+    this._onClose = typeof onClose === 'function' ? onClose : null;
+    // A key a menu or a field already used is theirs; with a modal open, the modal answers Escape.
+    this._onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || topModal()) return;
+      this.close();
+    };
+    doc.addEventListener('keydown', this._onKey);
+    // Not preventScroll: on a narrow screen the rail may sit below the fold, and the reader is taken to it.
+    titleEl.focus();
+    return el;
   }
 
-  close() {
-    if (this._onKey) {
-      document.removeEventListener('keydown', this._onKey);
-      this._onKey = null;
-    }
-    if (this._cleanup) {
-      try { this._cleanup(); } catch {}
-      this._cleanup = null;
-    }
-    if (this.el && this.el.parentNode) this.el.parentNode.removeChild(this.el);
+  close({ returnFocus = true } = {}) {
+    if (!this.el) return;
+    const el = this.el;
+    const doc = el.ownerDocument;
+    doc.removeEventListener('keydown', this._onKey);
+    const active = doc.activeElement;
+    const hadFocus = !active || active === doc.body || el.contains(active);
+    const opener = this._opener;
+    const onClose = this._onClose;
     this.el = null;
-    document.body.classList.remove('rail-open');
+    this._opener = null;
+    this._onClose = null;
+    this._onKey = null;
+    el.remove();
+    if (returnFocus && hadFocus && opener?.isConnected) opener.focus();
+    onClose?.();
   }
 
   isOpen() { return !!this.el; }
