@@ -71,7 +71,7 @@ test('3: the content holds the meta line, then the evidence clamped to three lin
   assert.equal(loc.title, 'viewer/js/x.js:12');
   assert.ok(loc.classList.contains('truncate'));
   assert.equal(evidence.tagName, 'P');
-  assert.equal(evidence.id, 'issue-evidence-ISS-001');
+  assert.match(evidence.id, /^issue-evidence-ISS-001-\d+$/);
   assert.ok(evidence.classList.contains('issue-card__evidence'));
   assert.ok(evidence.classList.contains('truncate--3'));
   assert.equal(evidence.textContent, fixture().evidence);
@@ -103,7 +103,7 @@ test('4: the controls hold the Show all toggle, then the task and bug links, eac
   assert.equal(more.tagName, 'BUTTON');
   for (const c of ['btn', 'btn--ghost', 'btn--sm', 'issue-card__more']) assert.ok(more.classList.contains(c), c);
   assert.equal(more.getAttribute('type'), 'button');
-  assert.equal(more.getAttribute('aria-controls'), 'issue-evidence-ISS-001');
+  assert.equal(more.getAttribute('aria-controls'), el.querySelector('.issue-card__evidence').id);
   assert.equal(more.dataset.focus, 'evidence:ISS-001');
   assert.ok(refs.classList.contains('issue-card__refs'));
   const kids = [...refs.children].map((n) => [n.className, n.textContent, n.getAttribute('href'), n.dataset.focus]);
@@ -222,4 +222,119 @@ test('issueRow: no severity → no marker; no resolved or updated date → no ti
   assert.equal(el.querySelector('time'), null);
   const upd = issueRow({ id: 'ISS-004', title: 'U', status: 'fixed', updated: '2026-10-04T00:00:00Z' }, { now });
   assert.equal(upd.querySelector('time.issue-row__when').textContent, '2d ago');
+});
+
+// A stub ResizeObserver: the test decides when an observation is delivered, as layout would.
+function stubResizeObserver() {
+  const live = new Set();
+  globalThis.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; this.targets = new Set(); }
+    observe(el) { this.targets.add(el); live.add(this); }
+    unobserve(el) { this.targets.delete(el); }
+    disconnect() { this.targets.clear(); live.delete(this); }
+  };
+  return {
+    live,
+    deliver() { for (const o of [...live]) o.cb([...o.targets].map((target) => ({ target })), o); },
+    restore() { delete globalThis.ResizeObserver; },
+  };
+}
+const sized = (card, scroll, client) => {
+  const ev = card.querySelector('.issue-card__evidence');
+  Object.defineProperty(ev, 'scrollHeight', { value: scroll, configurable: true });
+  Object.defineProperty(ev, 'clientHeight', { value: client, configurable: true });
+};
+
+test('a card appended after its first frame still reveals Show all on the first observation that overflows', () => {
+  const ro = stubResizeObserver();
+  const frames = [];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  try {
+    const card = issueCard(fixture(), { now });
+    sized(card, 120, 60);
+    for (const fn of frames.splice(0)) fn(); // the frame passes before the screen appends the card
+    assert.equal(card.querySelector('.issue-card__more').hidden, true);
+    document.body.append(card);
+    ro.deliver();
+    assert.equal(card.querySelector('.issue-card__more').hidden, false);
+    card.remove();
+  } finally {
+    ro.restore();
+    delete globalThis.requestAnimationFrame;
+  }
+});
+
+test('a card in a hidden ancestor keeps Show all hidden until an observation reports overflow', () => {
+  const ro = stubResizeObserver();
+  try {
+    const host = document.createElement('div');
+    host.hidden = true;
+    document.body.append(host);
+    const card = issueCard(fixture(), { now });
+    host.append(card);
+    sized(card, 0, 0); // display: none — nothing laid out
+    ro.deliver();
+    assert.equal(card.querySelector('.issue-card__more').hidden, true);
+    host.hidden = false;
+    sized(card, 120, 60);
+    ro.deliver();
+    assert.equal(card.querySelector('.issue-card__more').hidden, false);
+    host.remove();
+  } finally {
+    ro.restore();
+  }
+});
+
+test('evidence that fits keeps Show all hidden on every observation', () => {
+  const ro = stubResizeObserver();
+  try {
+    const card = issueCard(fixture(), { now });
+    document.body.append(card);
+    sized(card, 61, 60);
+    ro.deliver();
+    ro.deliver();
+    assert.equal(card.querySelector('.issue-card__more').hidden, true);
+    card.remove();
+  } finally {
+    ro.restore();
+  }
+});
+
+test('the observer lets go once it has revealed the toggle or sees the card leave the page, and an expanded card never observes', () => {
+  const ro = stubResizeObserver();
+  try {
+    // An observation before the screen appends the card (a browser's first one) keeps the observer.
+    const early = issueCard(fixture({ id: 'ISS-003' }), { now });
+    sized(early, 120, 60);
+    ro.deliver();
+    assert.equal(ro.live.size, 1, 'a card not yet in the page stays watched');
+    document.body.append(early);
+    ro.deliver();
+    assert.equal(early.querySelector('.issue-card__more').hidden, false);
+    assert.equal(ro.live.size, 0, 'revealed → let go');
+
+    const gone = issueCard(fixture({ id: 'ISS-002' }), { now });
+    document.body.append(gone);
+    sized(gone, 60, 60);
+    ro.deliver();
+    assert.equal(ro.live.size, 1, 'fits and in the page → still watched for a resize');
+    gone.remove();
+    ro.deliver();
+    assert.equal(ro.live.size, 0, 'seen in the page, now out → let go');
+
+    issueCard(fixture(), { expanded: true, now });
+    assert.equal(ro.live.size, 0);
+    early.remove();
+  } finally {
+    ro.restore();
+  }
+});
+
+test('the evidence id is space-free and unique per card, and the toggle controls it', () => {
+  const a = issueCard(fixture({ id: 'ISS 7/x' }), { now });
+  const b = issueCard(fixture({ id: 'ISS 7/x' }), { now });
+  const ids = [a, b].map((c) => c.querySelector('.issue-card__evidence').id);
+  for (const id of ids) assert.match(id, /^issue-evidence-ISS-7-x-\d+$/);
+  assert.notEqual(ids[0], ids[1]);
+  assert.equal(a.querySelector('.issue-card__more').getAttribute('aria-controls'), ids[0]);
 });

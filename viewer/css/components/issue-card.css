@@ -28,6 +28,7 @@
   font-size: var(--size-narrator-small);
   overflow-wrap: break-word;
 }
+.issue-card > .link-row__content { display: flex; flex-direction: column; gap: var(--space-xs); }
 .issue-card__meta {
   display: flex;
   flex-wrap: wrap;

@@ -48,15 +48,31 @@ function refsBlock(issue) {
   return refs;
 }
 
-// The clamp is CSS, so only layout knows whether three lines cut anything; the toggle stays hidden until a frame after
-// the card is in the page shows the evidence overflowing. The screen appends the card in the same task that builds it.
+// The clamp is CSS, so only layout knows whether three lines cut anything; the toggle stays hidden until the evidence,
+// in the page, overflows. One frame after creation covers a card appended at once; the ResizeObserver covers one
+// appended later, one in a hidden phone column (laid out only when shown) and a resize that starts cutting it. The
+// observer lets go once the toggle shows, or once it sees the card out of the page after having seen it in (removal
+// reports a size change). A not-yet-appended card is kept watched: a browser's first observation can come before the
+// screen appends it. A card never appended is collected together with its observer.
 function revealWhenCut(card, evidence, toggle) {
+  let observer = null;
+  let wasIn = false;
+  const check = () => {
+    if (card.isConnected) wasIn = true;
+    if (toggle.hidden && card.isConnected && evidence.scrollHeight > evidence.clientHeight + 1) toggle.hidden = false;
+    if (!toggle.hidden || (wasIn && !card.isConnected)) observer?.disconnect();
+  };
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
-  raf(() => {
-    if (!card.isConnected) return;
-    if (evidence.scrollHeight > evidence.clientHeight + 1) toggle.hidden = false;
-  });
+  raf(() => { if (card.isConnected) check(); });
+  if (typeof ResizeObserver === 'function') {
+    observer = new ResizeObserver(check);
+    observer.observe(evidence);
+  }
 }
+
+// aria-controls needs an id with no spaces that no other card shares, even when two cards show the same issue.
+let evidenceSeq = 0;
+const evidenceId = (id) => `issue-evidence-${String(id ?? '').replace(/[^A-Za-z0-9_-]+/g, '-')}-${++evidenceSeq}`;
 
 /**
  * An open or investigating issue as a link-row card. The screen owns which cards are expanded: `onToggleEvidence(id)`
@@ -89,7 +105,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   let toggle = null;
   if (text) {
     evidence = truncate(text, { lines: 3, tag: 'p', className: 'issue-card__evidence' });
-    evidence.id = `issue-evidence-${issue.id}`;
+    evidence.id = evidenceId(issue.id);
     if (expanded) evidence.classList.remove('truncate--3');
     content.push(evidence);
 
