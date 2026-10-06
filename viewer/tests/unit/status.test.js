@@ -8,7 +8,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>');
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 
-const { TASK_STATUS, PRIORITY, BUG_STATUS, IDEA_STATUS, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
+const { TASK_STATUS, PRIORITY, BUG_STATUS, IDEA_STATUS, ISSUE_STATUS, SEVERITY, severityKey, severityMeta, severityMarker, statusMeta, priorityMeta, statusMarker, priorityMarker } = await import('../../js/components/status.js');
 
 const TASK = {
   todo: ['Todo', '○', 'neutral'],
@@ -167,4 +167,76 @@ test('the stylesheet draws every named shape, the arrow included', async () => {
   for (const name of Object.values(DRAWN)) {
     assert.ok(css.includes(`[data-shape="${name}"]`), name);
   }
+});
+
+// Issues by meaning too (§5.1): an open one is not started, one under investigation is in motion, a fixed one complete,
+// a won't-fix one dropped, a duplicate has moved on into the issue it duplicates. Order = the server's ISSUE_STATUSES.
+const ISSUE = {
+  open: ['Open', '○', 'neutral'],
+  investigating: ['Investigating', '◐', 'accent'],
+  fixed: ['Fixed', '●', 'success'],
+  wontfix: ["Won't fix", '✕', 'neutral'],
+  duplicate: ['Duplicate', '→', 'neutral'],
+};
+
+test('every issue status has the shape and tone of its meaning in the spec table (§5.1), in the server order', () => {
+  assert.deepEqual(Object.keys(ISSUE_STATUS), Object.keys(ISSUE));
+  for (const [value, [label, shape, tone]] of Object.entries(ISSUE)) {
+    assert.deepEqual(ISSUE_STATUS[value], { label, shape, tone }, value);
+    assert.deepEqual(statusMeta('issue', value), { label, shape, tone }, value);
+    assertMarker(statusMarker('issue', value), { label, shape, tone });
+  }
+  assert.equal(statusMeta('issue', 'wontfix').label, "Won't fix");
+  assert.equal(statusMeta('issue', 'duplicate').shape, '→');
+  assert.throws(() => { ISSUE_STATUS.open.label = 'x'; }, TypeError);
+});
+
+test('no two issue statuses share a shape and tone', () => {
+  const looks = Object.values(ISSUE_STATUS).map((m) => `${m.shape} ${m.tone}`);
+  assert.equal(new Set(looks).size, looks.length);
+  for (const m of Object.values(ISSUE_STATUS)) assert.ok(TONES.includes(m.tone), m.tone);
+});
+
+test('a severity looks exactly like the priority of the same name', () => {
+  assert.deepEqual(SEVERITY, PRIORITY);
+  assert.deepEqual(Object.keys(SEVERITY), Object.keys(PRIORITY));
+});
+
+test('severityKey reads a severity in any form it arrives in, and nothing else', () => {
+  const cases = [
+    ['P0', 'critical'], ['p1', 'high'], ['P2', 'medium'], ['p3', 'low'], ['High', 'high'], [' medium ', 'medium'],
+    ['critical', 'critical'], ['LOW', 'low'], ['', null], ['   ', null], [null, null], [undefined, null], ['P5', null],
+    [7, null], [{}, null], ['constructor', null], ['__proto__', null],
+  ];
+  for (const [value, key] of cases) assert.equal(severityKey(value), key, JSON.stringify(value));
+});
+
+test('severityMeta: a known severity is a copy of its row, an unknown word stays itself, no severity is null', () => {
+  const p1 = severityMeta('P1');
+  assert.deepEqual(p1, { label: 'High', shape: '▲', tone: 'orange' });
+  p1.label = 'Mutated';
+  assert.equal(SEVERITY.high.label, 'High');
+  assert.equal(severityMeta('high').label, 'High');
+  assert.deepEqual(severityMeta('P5'), { label: 'P5', shape: '○', tone: 'neutral' });
+  assert.deepEqual(severityMeta('  blocker '), { label: 'blocker', shape: '○', tone: 'neutral' });
+  for (const none of ['', '   ', null, undefined, 7, {}]) assert.equal(severityMeta(none), null, JSON.stringify(none));
+});
+
+test('severityMarker is the marker of its meta, or null when no severity is set', () => {
+  const el = severityMarker('P0');
+  assertMarker(el, { label: 'Critical', shape: '◆', tone: 'critical' });
+  assert.ok(el.matches('span.marker.marker--critical'));
+  assert.ok(el.querySelector('.marker__shape[data-shape="diamond"][aria-hidden="true"]'));
+  assert.equal(severityMarker(null), null);
+  assert.equal(severityMarker(undefined), null);
+  assert.equal(severityMarker(''), null);
+  assert.equal(severityMarker('  '), null);
+});
+
+test('a severity that carries markup is shown as text, never parsed', () => {
+  const hostile = '<img src=x onerror=alert(1)>';
+  const el = severityMarker(hostile);
+  assert.equal(el.querySelector('.marker__word').textContent, hostile);
+  assert.equal(el.querySelector('img'), null);
+  assert.equal(el.className, 'marker marker--neutral');
 });

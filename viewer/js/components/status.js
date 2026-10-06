@@ -42,7 +42,27 @@ export const IDEA_STATUS = freeze({
   dropped: ['Dropped', '✕', 'neutral'],
 });
 
-const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS, idea: IDEA_STATUS };
+// By meaning, as the spec's status table has it: an open issue is not started, one under investigation in motion, a fixed
+// one complete, a won't-fix one dropped, a duplicate has moved on into the issue it duplicates. Order = the server's.
+export const ISSUE_STATUS = freeze({
+  open: ['Open', '○', 'neutral'],
+  investigating: ['Investigating', '◐', 'accent'],
+  fixed: ['Fixed', '●', 'success'],
+  wontfix: ["Won't fix", '✕', 'neutral'],
+  duplicate: ['Duplicate', '→', 'neutral'],
+});
+
+// A severity reads exactly like the priority of the same name: Critical is one look wherever it appears.
+export const SEVERITY = freeze({
+  critical: ['Critical', '◆', 'critical'],
+  high: ['High', '▲', 'orange'],
+  medium: ['Medium', '●', 'warning'],
+  low: ['Low', '○', 'neutral'],
+});
+
+const SEVERITY_CODES = { p0: 'critical', p1: 'high', p2: 'medium', p3: 'low' };
+
+const STATUS_KINDS = { task: TASK_STATUS, bug: BUG_STATUS, idea: IDEA_STATUS, issue: ISSUE_STATUS };
 
 // None of the viewer's local fonts carries these glyphs, so the stylesheet draws each shape by name;
 // the glyph stays in the DOM as the fallback.
@@ -84,4 +104,25 @@ export function statusMarker(kind, value) {
 
 export function priorityMarker(value) {
   return marker(priorityMeta(value));
+}
+
+// Severities arrive as 'P0'…'P3' or as words, in any case and spacing; anything else is no known severity.
+export function severityKey(value) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  if (Object.hasOwn(SEVERITY_CODES, v)) return SEVERITY_CODES[v];
+  return Object.hasOwn(SEVERITY, v) ? v : null;
+}
+
+// An unknown severity word is still shown as itself; only no severity at all (missing, blank, not a string) is null.
+export function severityMeta(value) {
+  const key = severityKey(value);
+  if (key) return { ...SEVERITY[key] };
+  if (typeof value === 'string' && value.trim()) return { label: value.trim(), shape: '○', tone: 'neutral' };
+  return null;
+}
+
+export function severityMarker(value) {
+  const meta = severityMeta(value);
+  return meta ? marker(meta) : null;
 }
