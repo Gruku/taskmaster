@@ -49,6 +49,13 @@ export async function mount(root, { store, api }) {
     strip.update(summaryCounts({ tasks: store?.getBacklog?.()?.tasks, issues: openIssues, bugs: openBugs }));
   }
 
+  // Subscribed before any await, so the returned cleanup always owns it. A mount the router abandoned mid-fetch never
+  // gets that cleanup called: it drops the subscription itself once its fetches land (below) or on the next emit.
+  const unsubscribe = store?.subscribe?.('backlog', () => {
+    if (!strip.root.isConnected) { unsubscribe?.(); return; }
+    renderStrip();
+  });
+
   let notes = [];
   let items = [];
 
@@ -322,12 +329,7 @@ export async function mount(root, { store, api }) {
   renderStrip();
   renderBoard();
   await renderBand();
-
-  // A mount the router abandoned never gets its cleanup called, so a detached strip unsubscribes itself.
-  const unsubscribe = store?.subscribe?.('backlog', () => {
-    if (!strip.root.isConnected) { unsubscribe?.(); return; }
-    renderStrip();
-  });
+  if (!strip.root.isConnected) { unsubscribe?.(); return () => {}; }
 
   // Leaving with a note mid-edit: blurring its editor saves it, once, before the screen is torn down.
   return async () => {

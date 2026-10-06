@@ -538,3 +538,30 @@ for (const theme of ['dark', 'light']) {
     await expect(page.locator('.tm-empty[data-state="error"]')).toHaveCount(0);
   });
 }
+
+test('leaving with a summary fetch in flight throws nothing and paints nothing into the next screen', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await mockApi(page, summaryMocks());
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let arrived;
+  const asked = new Promise((r) => { arrived = r; });
+  await page.route((url) => url.pathname === '/api/issues', async (route) => {
+    arrived();
+    await held;
+    await route.fulfill({ json: summaryMocks()['/api/issues'] }).catch(() => {});
+  });
+  await page.goto('/#/dashboard');
+  await asked;
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.locator('.set-control[role="group"]').first()).toBeVisible({ timeout: 15_000 });
+  const landed = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/issues');
+  release();
+  await landed;
+  // Let the abandoned mount finish its remaining awaits before looking.
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+  await expect(page.locator('#screen-mount .dk-summary, #screen-mount .dk-board, #screen-mount .dk-continuity')).toHaveCount(0);
+  await expect(page.locator('#screen-mount .set-control[role="group"]').first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
