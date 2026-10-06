@@ -24,7 +24,10 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'screens/epics.css',
   'screens/bugs.css',
   'screens/continuity.css',
+  'screens/settings.css',
   'components/card.css',
+  'screens/epic-detail.css',
+  'screens/issues.css',
   'components/detail-modal.css'];
 
 function walk(dir) {

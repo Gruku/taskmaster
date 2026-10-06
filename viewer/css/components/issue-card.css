@@ -106,6 +106,12 @@
 }
 .issue-row__title { grid-column: 3; }
 .issue-row > .link-row__content { display: flex; align-items: center; gap: var(--space-sm); white-space: nowrap; }
+/* Narrow (a board column), the layout a phone gives every row: id and severity on one line, the title under them, status
+   and date wrapping. Not max-content twice: the title spans both tracks and would size them to its whole line. */
+.issue-row--narrow { grid-template-columns: minmax(0, 1fr); }
+.issue-row--narrow > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
+.issue-row--narrow .issue-row__title { grid-column: 1 / -1; }
+.issue-row--narrow > .link-row__content { flex-wrap: wrap; }
 .issue-row__when {
   font-family: var(--font-technical);
   font-weight: var(--font-technical-weight);
@@ -120,6 +126,7 @@
   .issue-row > .link-row__link { min-height: 44px; }
   .issue-card__more,
   .issue-card__ref { display: inline-flex; align-items: center; }
-  .issue-row > .link-row__link { grid-template-columns: max-content max-content; }
+  /* Not max-content twice: the title spans both tracks and would size them to its whole line, pushing the severity out. */
+  .issue-row > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
   .issue-row__title { grid-column: 1 / -1; }
 }

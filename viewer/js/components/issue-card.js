@@ -77,9 +77,11 @@ const evidenceId = (id) => `issue-evidence-${String(id ?? '').replace(/[^A-Za-z0
 /**
  * An open or investigating issue as a link-row card. The screen owns which cards are expanded: `onToggleEvidence(id)`
  * asks it to flip one and redraw. `showStatus` adds the status marker (for views that mix statuses in one list).
+ * `revealed`: the screen saw this card's evidence cut when it last drew it, so "Show all" shows at once — a redraw then
+ * neither blinks it out for a frame nor loses the focus that was on it.
  */
-export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = false, onToggleEvidence, showStatus = false,
-  now = Date.now() } = {}) {
+export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = false, revealed = false, onToggleEvidence,
+  showStatus = false, now = Date.now() } = {}) {
   const name = span('issue-card__name');
   const line = span('issue-card__line');
   line.append(span('issue-card__id', issue.id));
@@ -106,7 +108,8 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   if (text) {
     evidence = truncate(text, { lines: 3, tag: 'p', className: 'issue-card__evidence' });
     evidence.id = evidenceId(issue.id);
-    if (expanded) evidence.classList.remove('truncate--3');
+    // Both classes: `.truncate` alone is the one-line cut, so an expanded card showing all of it drops it too.
+    if (expanded) evidence.classList.remove('truncate', 'truncate--3');
     content.push(evidence);
 
     toggle = document.createElement('button');
@@ -116,7 +119,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
     toggle.setAttribute('aria-expanded', String(!!expanded));
     toggle.dataset.focus = `evidence:${issue.id}`;
     toggle.textContent = expanded ? 'Show less' : 'Show all';
-    toggle.hidden = !expanded;
+    toggle.hidden = !expanded && !revealed;
     toggle.addEventListener('click', () => onToggleEvidence?.(issue.id));
     controls.push(toggle);
   }
@@ -125,12 +128,15 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   const card = linkRow({ tag: 'article', className: 'issue-card', href: issueHref(issue.id), name, content, controls });
   card.dataset.issueId = issue.id;
   card.dataset.status = issue.status || 'open';
-  if (toggle && !expanded) revealWhenCut(card, evidence, toggle);
+  if (toggle?.hidden) revealWhenCut(card, evidence, toggle);
   return card;
 }
 
-/** A resolved (fixed, won't-fix, duplicate) issue as a one-line link row: id, severity, title, status, when. */
-export function issueRow(issue, { now = Date.now() } = {}) {
+/**
+ * A resolved (fixed, won't-fix, duplicate) issue as a one-line link row: id, severity, title, status, when.
+ * `narrow` is for a place as narrow as a phone (a board column): the title takes its own line, status and date wrap.
+ */
+export function issueRow(issue, { now = Date.now(), narrow = false } = {}) {
   const name = document.createDocumentFragment();
   name.append(span('issue-row__id', issue.id));
   const sev = severityMarker(issue.severity_label ?? issue.severity);
@@ -154,7 +160,7 @@ export function issueRow(issue, { now = Date.now() } = {}) {
   // The name is a fragment so its three parts are the link's own grid items; linkRow cannot read titles out of a
   // fragment it has already emptied, so the link's title is gathered here the way linkRow would.
   const linkTitle = [title.title, when?.title].filter(Boolean).join('\n');
-  const row = linkRow({ tag: 'div', className: 'issue-row', href: issueHref(issue.id), name, content, title: linkTitle });
+  const row = linkRow({ tag: 'div', className: narrow ? 'issue-row issue-row--narrow' : 'issue-row', href: issueHref(issue.id), name, content, title: linkTitle });
   row.dataset.issueId = issue.id;
   row.dataset.status = issue.status || '';
   return row;
