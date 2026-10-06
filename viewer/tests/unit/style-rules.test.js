@@ -18,6 +18,7 @@ export const ENFORCED = ['shell.css', 'screens/desk.css', 'components/modal.css'
   'components/toolbar.css',
   'components/right-rail.css',
   'components/column-tabs.css',
+  'components/tag-filter.css',
   'components/list-toolbar.css',
   'screens/table.css',
   'components/issue-card.css',
