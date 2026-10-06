@@ -124,6 +124,15 @@ test('Enter key on a block invokes onComponentNav', () => {
   assert.deepEqual(calls, ['ingest']);
 });
 
+test('Enter on a card link inside a block does not navigate the block', () => {
+  const host = freshHost();
+  const calls = [];
+  mountComponentDiagram(host, { components: COMPONENTS, rollup: ROLLUP, tasks: TASKS, onComponentNav: (k) => calls.push(k) });
+  const link = host.querySelector('.cd-block[data-id="ingest"] .card-task .link-row__link');
+  link.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.deepEqual(calls, []);
+});
+
 test('unassigned bucket renders a trailing dashed block', () => {
   const host = freshHost();
   mountComponentDiagram(host, {

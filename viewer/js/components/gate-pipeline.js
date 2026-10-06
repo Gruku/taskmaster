@@ -3,6 +3,7 @@
 // Exports:
 //   renderGatePipeline(task)  — HTML string; empty string when no lane.
 //   laneBadge(task)           — HTML string chip showing task.lane; '' when no lane.
+//   gateStateWords(raw)       — the server's gate_state mirror in words, or null when it is not one.
 //
 // VISUAL RULES (hard constraints from CLAUDE.md / design system):
 //   - NO colored left rails / border-left accents. Use tinted fill + full-perimeter border.
@@ -88,9 +89,35 @@ function gateStateClass(record) {
   return 'pending';
 }
 
+// The server's gate_state mirror: 'blocked@<gate>' (a gate failed) or '<gate>:<state>' with a known state.
+// Anything else (an unknown state, another shape) is null.
+function parseGateState(raw) {
+  if (typeof raw !== 'string') return null;
+  const blocked = /^blocked@([^:@]+)$/.exec(raw);
+  if (blocked) return { blocked: true, gate: blocked[1] };
+  const current = /^([^:@]+):([^:]+)$/.exec(raw);
+  if (current && Object.hasOwn(STATE_WORD, current[2])) return { blocked: false, gate: current[1], state: current[2] };
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * The server's gate_state mirror in words: 'blocked@review-gate' → 'Blocked at Review gate',
+ * 'plan-review:warn' → 'Plan review — passed with warnings'. Plain text (not escaped); null when malformed.
+ *
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+export function gateStateWords(raw) {
+  const parsed = parseGateState(raw);
+  if (!parsed) return null;
+  return parsed.blocked
+    ? `Blocked at ${gateLabel(parsed.gate)}`
+    : `${gateLabel(parsed.gate)} — ${STATE_WORD[parsed.state]}`;
+}
 
 /**
  * Render the gate pipeline tracker for a task.
@@ -120,13 +147,10 @@ export function renderGatePipeline(task) {
   // The server's gate_state mirror, in words. 'blocked@<gate>' (a gate failed) always says where the task is stuck;
   // '<gate>:<state>' only when its gate is off this lane's track (a node on the track already says it). Anything else
   // (an unknown state, another shape) is not printed.
-  const raw = typeof task.gate_state === 'string' ? task.gate_state : '';
-  const blocked = /^blocked@([^:@]+)$/.exec(raw);
-  const current = /^([^:@]+):([^:]+)$/.exec(raw);
+  const parsed = parseGateState(task.gate_state);
   let stateEl = '';
-  if (blocked) stateEl = `<span class="gp-state">Current step: Blocked at ${escapeHtml(gateLabel(blocked[1]))}</span>`;
-  else if (current && Object.hasOwn(STATE_WORD, current[2]) && !gates.includes(current[1])) {
-    stateEl = `<span class="gp-state">Current step: ${escapeHtml(gateLabel(current[1]))} — ${STATE_WORD[current[2]]}</span>`;
+  if (parsed && (parsed.blocked || !gates.includes(parsed.gate))) {
+    stateEl = `<span class="gp-state">Current step: ${escapeHtml(gateStateWords(task.gate_state))}</span>`;
   }
 
   return `<div class="gp-track">${nodes}${stateEl}</div>`;
