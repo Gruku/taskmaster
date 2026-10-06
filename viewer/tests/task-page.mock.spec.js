@@ -2,9 +2,12 @@
 // the page's one primary in row 1, a load that fails says so in words with one way on, and another writer, a reload
 // mid-edit or leaving the page (while it loads, or with Edit open) never paints over the user or loses their typing.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
 import { BOARD, DETAIL_TASK, RICH_RELATED, taskDetail } from './mock-fixtures.js';
 
+const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
 const TABLE = {
   '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
@@ -208,6 +211,67 @@ test('a load that fails says so in words and offers Try again', async ({ page })
   await block.getByRole('button', { name: 'Try again' }).click();
   await expect(h1(page)).toHaveText(DETAIL_TASK.title);
 });
+
+test('Try again says it is loading, then puts focus on the title, or on the new Try again when it fails again', async ({ page }) => {
+  await mockApi(page, TABLE);
+  await page.route('**/api/task/T-102/detail', (route) => route.fulfill({ status: 500, json: { error: 'boom' } }));
+  await page.goto('/#/task/T-102');
+  const failed = page.locator('#screen-mount .tm-empty[data-state="error"]');
+  await failed.getByRole('button', { name: 'Try again' }).focus();
+
+  // Holds the next detail read until the test releases it with the whole response to answer.
+  const hold = async () => {
+    let release;
+    const answer = new Promise((resolve) => { release = resolve; });
+    await page.route('**/api/task/T-102/detail', async (route) => route.fulfill(await answer));
+    return release;
+  };
+
+  // Fails again: the busy block shows while the read is held, then focus lands on the new Try again.
+  let release = await hold();
+  await page.keyboard.press('Enter');
+  const busy = page.locator('#screen-mount .tm-empty[aria-busy="true"][role="status"]');
+  await expect(busy).toHaveText('Loading…');
+  await expect(busy).toBeFocused();
+  release({ status: 500, json: { error: 'boom' } });
+  await expect(failed.getByRole('button', { name: 'Try again' })).toBeFocused();
+
+  // Succeeds: focus lands on the page's h1, not <body>.
+  release = await hold();
+  await page.keyboard.press('Enter');
+  await expect(busy).toBeVisible();
+  release({ json: taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED) });
+  await expect(h1(page)).toHaveText(DETAIL_TASK.title);
+  await expect(h1(page)).toBeFocused();
+});
+
+async function axe(page, selector) {
+  await page.evaluate(axeSource);
+  const result = await page.evaluate((sel) => window.axe.run(document.querySelector(sel), {
+    runOnly: { type: 'rule', values: ['color-contrast'] }, resultTypes: ['violations'],
+  }), selector);
+  return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`gates and the epic read as words in both themes (${theme})`, async ({ page }) => {
+    await open(page, '#/task/T-102', { '/api/viewer/prefs': { theme, ui: {}, screens: {} } });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    const strip = page.locator('#screen-mount [data-test="gate-pipeline"]');
+    await expect(strip).toBeVisible();
+    const words = (await strip.innerText()).replace(/\s+/g, ' ');
+    expect(words).toContain('Spec review passed');
+    expect(words).toContain('Plan review passed with warnings');
+    expect(words).toContain('Review gate pending');
+    expect(words).not.toContain('review-gate:pending');
+    const epic = page.locator('#screen-mount [data-tag="epic"]');
+    await expect(epic.locator('.td-tag__v')).toHaveText('Viewer re-skin');
+    expect(await epic.getAttribute('style')).toBeNull();
+    await expect(epic.locator('.td-swatch')).toHaveClass(/td-swatch--cat-\d/);
+    expect(await axe(page, '#screen-mount [data-test="gate-pipeline"]')).toEqual([]);
+    expect(await axe(page, '#screen-mount [data-tag="epic"]')).toEqual([]);
+  });
+}
 
 test('a refused reason goes when another writer changes that field, and stays when they change another', async ({ page }) => {
   const reason = 'Completion blocked: review-gate is still open';
