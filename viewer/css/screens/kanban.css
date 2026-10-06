@@ -208,7 +208,19 @@
   font-size: var(--size-narrator-small);
   font-weight: 600;
 }
-.kanban-col-whisper { margin-left: var(--space-sm); color: var(--foreground-subtle); font-size: var(--size-technical-small); font-weight: 400; }
+/* The whisper lives in the heading; the marker never gives way, the whisper ellipsizes when the column is narrow. */
+.kanban-col:not(.collapsed) .kanban-col-title:has(.kanban-col-whisper) { display: flex; align-items: baseline; gap: var(--space-sm); }
+.kanban-col-title:has(.kanban-col-whisper) > :first-child { flex: 0 0 auto; }
+.kanban-col-whisper {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground-subtle);
+  font-size: var(--size-technical-small);
+  font-weight: 400;
+}
 .kanban-col-count {
   flex: 0 0 auto;
   color: var(--foreground-subtle);
