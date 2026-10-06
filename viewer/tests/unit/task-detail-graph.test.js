@@ -34,16 +34,16 @@ const RELATED = {
   issues: [{ id: 'ISS-012', title: 'Card edge vanishes on the light page ground' }],
 };
 
-function mount({ task = TASK, related = RELATED } = {}) {
+function mount({ task = TASK, related = RELATED, viewState } = {}) {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const ctx = {
-    task: structuredClone(task), related: structuredClone(related), onToggleVariant: () => {},
+    task: structuredClone(task), related: structuredClone(related), onToggleVariant: () => {}, viewState,
     store: { getBacklog: () => ({ tasks: [], epics: [] }), setEtag: () => {}, refreshBoard: async () => {} },
     api: { patchTask: async () => ({}) },
   };
   const dispose = mountTaskDetailGraph(root, ctx);
-  return { root, done() { dispose(); root.remove(); } };
+  return { root, dispose, done() { dispose(); root.remove(); } };
 }
 const key = (el, k) => el.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
 const titleOf = (el) => [...el.children].find((c) => c.localName === 'title')?.textContent ?? null;
@@ -249,6 +249,84 @@ test('a node line that does not fit drops whole parts, never the status word', (
   assert.ok(line.startsWith('In progress'), line);
   assert.ok(line === 'In progress · Critical · M' || line.endsWith(' …'), line);
   assert.match(titleOf(root.querySelector('g.node--center')), /In progress · Critical · M/);
+  done();
+});
+
+test('a neighbour in progress with a priority keeps its status word whole and marks what was dropped', () => {
+  const { root, done } = mount({ related: { dependencies: [{ id: 'T-201', title: 'Busy', status: 'in-progress', priority: 'high', estimate: 'M' }] } });
+  const a = root.querySelector('a.node[href="#/task/T-201"]');
+  const line = a.querySelector('text.node-status').textContent;
+  assert.ok(line.startsWith('In progress'), line);
+  assert.ok(line.endsWith('…'), line);
+  assert.doesNotMatch(line, /progres…/);
+  assert.match(titleOf(a), /In progress · High · M$/);
+  done();
+});
+
+test('a status word the table does not know is shown whole, even when longer than the line', () => {
+  const status = 'waiting-on-vendor-signoff';
+  const { root, done } = mount({ related: { dependencies: [
+    { id: 'T-202', title: 'Alone', status },
+    { id: 'T-203', title: 'With more', status, priority: 'low' },
+  ] } });
+  assert.equal(root.querySelector('a.node[href="#/task/T-202"] text.node-status').textContent, status);
+  assert.equal(root.querySelector('a.node[href="#/task/T-203"] text.node-status').textContent, `${status}…`);
+  done();
+});
+
+test('Fullscreen says its state: Exit fullscreen and pressed while the graph fills the screen; leaving the page leaves it', () => {
+  let fsEl = null;
+  const fire = () => document.dispatchEvent(new dom.window.Event('fullscreenchange'));
+  Object.defineProperty(document, 'fullscreenEnabled', { value: true, configurable: true });
+  Object.defineProperty(document, 'fullscreenElement', { get: () => fsEl, configurable: true });
+  dom.window.Element.prototype.requestFullscreen = function () { fsEl = this; fire(); return Promise.resolve(); };
+  document.exitFullscreen = () => { fsEl = null; fire(); return Promise.resolve(); };
+  try {
+    const { root, dispose } = mount();
+    const full = root.querySelector('[data-test="graph-controls"] [data-focus="graph:fullscreen"]');
+    assert.ok(full.matches('.btn.btn--ghost.btn--sm'));
+    assert.equal(full.textContent, 'Fullscreen');
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    full.click();
+    assert.equal(fsEl, root.querySelector('.td-graph-frame'));
+    assert.equal(full.textContent, 'Exit fullscreen');
+    assert.equal(full.getAttribute('aria-pressed'), 'true');
+    full.click();
+    assert.equal(fsEl, null);
+    assert.equal(full.textContent, 'Fullscreen');
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    full.click();
+    dispose();
+    assert.equal(fsEl, null, 'unmounting the graph ends its fullscreen');
+    root.remove();
+  } finally {
+    delete document.fullscreenEnabled;
+    delete document.fullscreenElement;
+    delete dom.window.Element.prototype.requestFullscreen;
+    delete document.exitFullscreen;
+  }
+});
+
+test('a repaint keeps the open tab and the hidden context band; tabs and graph buttons carry focus keys', () => {
+  const first = mount();
+  const raw = [...first.root.querySelectorAll('.td-tab')].find((t) => t.textContent === 'Raw JSON');
+  raw.click();
+  first.root.querySelector('[data-focus="graph:hide-context"]').click();
+  assert.equal(raw.dataset.focus, 'tab:raw');
+  assert.equal(first.root.querySelector('.td-tab-panel[data-tab-panel="raw"]').dataset.focus, 'panel:raw');
+  const viewState = first.dispose.viewState();
+  first.done();
+  assert.equal(viewState.tab, 'raw');
+  assert.equal(viewState.contextHidden, true);
+
+  const { root, done } = mount({ viewState });
+  const selected = root.querySelector('.td-tab[aria-selected="true"]');
+  assert.equal(selected.textContent, 'Raw JSON');
+  assert.equal(selected.getAttribute('tabindex'), '0');
+  assert.equal(root.querySelector('.td-tab-panel[data-tab-panel="raw"]').hidden, false);
+  assert.equal(root.querySelector('.td-tab-panel[data-tab-panel="spec"]').hidden, true);
+  assert.equal(root.querySelector('[data-test="context-band"]').hidden, true);
+  assert.equal(root.querySelector('[data-focus="graph:hide-context"]').getAttribute('aria-pressed'), 'true');
   done();
 });
 

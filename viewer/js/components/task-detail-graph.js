@@ -14,11 +14,14 @@ import { h } from '../util/h.js';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let seq = 0;
 
+// `ctx.viewState` is what `dispose.viewState()` of the graph this one replaces returned: a repaint of the same task (a
+// poll, another writer) keeps the open tab, the hidden context band and where the canvas was scrolled.
 export function mountTaskDetailGraph(root, ctx) {
   if (ctx.etag) ctx.store?.setEtag?.(`task:${ctx.task.id}`, ctx.etag);
   const task = ctx.task && typeof ctx.task === 'object' ? ctx.task : {};
   const timers = new Set();
   const uid = `tdg${++seq}`;
+  const kept = ctx.viewState && typeof ctx.viewState === 'object' ? ctx.viewState : {};
   root.replaceChildren();
   root.classList.add('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
   // A node is a link to its task; on this page it navigates rather than opening a modal over this one.
@@ -31,21 +34,33 @@ export function mountTaskDetailGraph(root, ctx) {
     statusMarker('task', task.status), priorityMarker(task.priority),
   ]);
   root.appendChild(detailHead({ meta: taskMeta(task, { timers }), title: detailTitle(words(task.title)), after: [markers] }));
-  const body = h('div', { class: 'td-body' }, [renderGraphFrame(task, ctx.related, uid), renderTabs(task, uid)]);
+  const body = h('div', { class: 'td-body' }, [renderGraphFrame(task, ctx.related, uid, kept), renderTabs(task, uid, kept.tab)]);
   root.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
-  // A canvas larger than its frame opens on this task, not on its first neighbour.
+  // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
-    canvas.scrollLeft = (canvas.scrollWidth - canvas.clientWidth) / 2;
-    canvas.scrollTop = (canvas.scrollHeight - canvas.clientHeight) / 2;
+    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    canvas.scrollTop = Number.isFinite(kept.scrollTop) ? kept.scrollTop : (canvas.scrollHeight - canvas.clientHeight) / 2;
   }
+  const fullscreen = root.querySelector('[data-focus="graph:fullscreen"]');
+  const sayFullscreen = () => fullscreen?.sayState();
+  document.addEventListener('fullscreenchange', sayFullscreen);
 
-  return () => {
+  const dispose = () => {
+    document.removeEventListener('fullscreenchange', sayFullscreen);
+    // The frame is about to go: never leave the screen filled by a node that is no longer there.
+    if (document.fullscreenElement && root.contains(document.fullscreenElement)) document.exitFullscreen?.();
     for (const timer of timers) clearTimeout(timer);
     root.replaceChildren();
     root.classList.remove('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
     delete root.dataset.detailLinks;
   };
+  dispose.viewState = () => ({
+    tab: root.querySelector('.td-tab[aria-selected="true"]')?.dataset.tab ?? null,
+    contextHidden: root.querySelector('[data-test="context-band"]')?.hidden ?? false,
+    scrollLeft: canvas?.scrollLeft, scrollTop: canvas?.scrollTop,
+  });
+  return dispose;
 }
 
 // Task data is written by many hands: a field of the wrong type is shown as nothing, never as "[object Object]".
@@ -62,7 +77,7 @@ function s(tag, attrs = {}, children = []) {
   return el;
 }
 
-function renderGraphFrame(task, related, uid) {
+function renderGraphFrame(task, related, uid, kept) {
   const frame = h('div', { class: 'td-graph-frame', 'data-test': 'graph-frame' });
   // A task with no neighbours has no graph to draw: say so instead of framing one lonely node.
   if (!list(related?.dependencies).length && !list(related?.unblocks).length) {
@@ -75,7 +90,10 @@ function renderGraphFrame(task, related, uid) {
   }
   frame.appendChild(h('div', { class: 'td-graph-canvas' }, renderGraphSvg(task, related)));
   const band = renderContextBand(related, uid);
-  if (band) frame.appendChild(band);
+  if (band) {
+    band.hidden = kept.contextHidden === true;
+    frame.appendChild(band);
+  }
   const controls = renderGraphControls(frame, band);
   if (controls) frame.appendChild(controls);
   return frame;
@@ -182,17 +200,19 @@ function svgShape(shape, x, y, tone) {
 
 // SVG text cannot wrap or ellipsise itself; the caller keeps the uncut text in the node's <title>.
 function cut(text, n) { text = text || ''; return text.length > n ? text.slice(0, Math.max(1, n - 1)) + '…' : text; }
-// A line of parts that does not fit drops whole parts from its end, so the status word is never the one cut.
+// A line of parts that does not fit drops whole parts from its end. The first part (the status word) is always whole,
+// even when it alone is longer than the line: a word cut mid-way says less than one that runs into the node's edge.
 function cutParts(parts, n) {
   const line = parts.join(' · ');
-  if (line.length <= n) return line;
-  let shown = '';
-  for (const part of parts) {
-    const next = shown ? `${shown} · ${part}` : part;
+  if (line.length <= n || parts.length < 2) return line;
+  let shown = parts[0];
+  for (const part of parts.slice(1)) {
+    const next = `${shown} · ${part}`;
     if (next.length + 2 > n) break;
     shown = next;
   }
-  return shown ? `${shown} …` : cut(line, n);
+  // The mark that more was dropped takes its space when there is room for it, and hugs the last word when there is not.
+  return `${shown}${shown.length + 2 <= n ? ' …' : '…'}`;
 }
 
 function renderContextBand(related, uid) {
@@ -215,7 +235,8 @@ function renderGraphControls(frame, band) {
   const buttons = [];
   if (band) {
     const hide = h('button', {
-      type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': 'false', 'aria-controls': band.id,
+      type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': String(band.hidden), 'aria-controls': band.id,
+      'data-focus': 'graph:hide-context',
     }, 'Hide context');
     hide.addEventListener('click', () => {
       band.hidden = !band.hidden;
@@ -224,7 +245,13 @@ function renderGraphControls(frame, band) {
     buttons.push(hide);
   }
   if (document.fullscreenEnabled) {
-    const full = h('button', { type: 'button', class: 'btn btn--ghost btn--sm' }, 'Fullscreen');
+    const full = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': 'false', 'data-focus': 'graph:fullscreen' }, 'Fullscreen');
+    // Said on the button: whether the graph fills the screen, and the way back out of it.
+    full.sayState = () => {
+      const on = document.fullscreenElement === frame;
+      full.textContent = on ? 'Exit fullscreen' : 'Fullscreen';
+      full.setAttribute('aria-pressed', String(on));
+    };
     full.addEventListener('click', () => {
       if (document.fullscreenElement) document.exitFullscreen?.();
       else frame.requestFullscreen?.();
@@ -234,7 +261,7 @@ function renderGraphControls(frame, band) {
   return buttons.length ? h('div', { class: 'td-graph-controls', 'data-test': 'graph-controls' }, buttons) : null;
 }
 
-function renderTabs(task, uid) {
+function renderTabs(task, uid, keptTab) {
   const docs = [
     ['spec', 'Spec', () => renderMd(task.specification || task.description)],
     ['plan', 'Plan', () => renderMd(task.plan)],
@@ -246,15 +273,18 @@ function renderTabs(task, uid) {
   const bar = h('div', { class: 'td-tabs', role: 'tablist', 'aria-label': 'Task documents' });
   const panels = h('div', { class: 'td-tab-panels' });
   const tabs = [];
+  const first = Math.max(0, docs.findIndex(([key]) => key === keptTab));
   docs.forEach(([key, label, build], i) => {
     const tabId = `${uid}-tab-${key}`;
     const panelId = `${uid}-panel-${key}`;
     const tab = h('button', {
-      type: 'button', class: 'td-tab', role: 'tab', id: tabId, 'data-tab': key,
-      'aria-selected': String(i === 0), 'aria-controls': panelId, tabindex: i === 0 ? '0' : '-1',
+      type: 'button', class: 'td-tab', role: 'tab', id: tabId, 'data-tab': key, 'data-focus': `tab:${key}`,
+      'aria-selected': String(i === first), 'aria-controls': panelId, tabindex: i === first ? '0' : '-1',
     }, label);
-    const panel = h('div', { class: 'td-tab-panel', role: 'tabpanel', id: panelId, 'aria-labelledby': tabId, tabindex: '0', 'data-tab-panel': key }, build());
-    panel.hidden = i !== 0;
+    const panel = h('div', {
+      class: 'td-tab-panel', role: 'tabpanel', id: panelId, 'aria-labelledby': tabId, tabindex: '0', 'data-tab-panel': key, 'data-focus': `panel:${key}`,
+    }, build());
+    panel.hidden = i !== first;
     tab.addEventListener('click', () => select(i));
     tabs.push([tab, panel]);
     bar.appendChild(tab);

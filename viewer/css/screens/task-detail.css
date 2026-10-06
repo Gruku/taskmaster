@@ -483,7 +483,11 @@
 }
 /* The graph is drawn at its own size: a canvas wider or taller than the frame scrolls inside it, never the page. */
 .td-graph-canvas { overflow: auto; max-height: calc(var(--graph-canvas-h) * 1.5); }
-.td-graph-frame:fullscreen .td-graph-canvas { max-height: none; }
+/* Filling the screen, the canvas takes what the band and the controls leave and scrolls inside it: a tall graph and
+   the way back out both stay in reach. */
+.td-graph-frame:fullscreen { display: flex; flex-direction: column; }
+.td-graph-frame:fullscreen .td-graph-canvas { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+.td-graph-frame:fullscreen :is(.td-graph-context-band, .td-graph-controls) { flex: 0 0 auto; }
 .td-graph-svg { display: block; margin-inline: auto; }
 .td-graph-context-band {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm);
@@ -593,5 +597,6 @@
 
 @media (max-width: 768px) {
   .td-tabs .td-tab,
-  .td-graph-controls .btn { min-height: 44px; }
+  .td-graph-controls .btn,
+  .td-graph-context-band a.ctx-pill { min-height: 44px; }
 }

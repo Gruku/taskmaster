@@ -355,3 +355,54 @@ for (const theme of ['dark', 'light']) {
     expect(await axe(page, '#screen-mount', ['color-contrast', 'nested-interactive', 'link-name', 'svg-img-alt', 'aria-allowed-role', 'aria-required-children'])).toEqual([]);
   });
 }
+
+test('a repaint of the graph keeps the open tab, focus on it, and the hidden context band', async ({ page }) => {
+  await open(page, GRAPH);
+  await expect(graph(page)).toBeVisible();
+  const hide = page.locator('#screen-mount [data-test="graph-controls"]').getByRole('button', { name: 'Hide context' });
+  await hide.click();
+  await expect(page.locator('#screen-mount [data-test="context-band"]')).toBeHidden();
+  const raw = page.locator('#screen-mount [role="tablist"]').getByRole('tab', { name: 'Raw JSON' });
+  await raw.click();
+  await expect(raw).toBeFocused();
+
+  await renamedElsewhere(page, 'Renamed elsewhere');
+  await expect(page.locator('#screen-mount h1')).toHaveText('Renamed elsewhere');
+  await expect(raw).toHaveAttribute('aria-selected', 'true');
+  await expect(raw).toBeFocused();
+  await expect(page.locator('#screen-mount .td-tab-panel[data-tab-panel="raw"]')).toBeVisible();
+  await expect(page.locator('#screen-mount [data-test="context-band"]')).toBeHidden();
+  await expect(hide).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('at 390 the graph\'s issue links and controls are touch-sized', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, GRAPH);
+  await expect(graph(page)).toBeVisible();
+  const targets = page.locator('#screen-mount :is(.td-graph-context-band a.ctx-pill, .td-graph-controls .btn, .td-tab)');
+  expect(await targets.count()).toBeGreaterThan(2);
+  for (const box of await targets.evaluateAll((els) => els.map((el) => [el.textContent, el.getBoundingClientRect().height]))) {
+    expect(box[1], box[0]).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('fullscreen keeps a tall graph scrollable and its way out in reach, and says so on the button', async ({ page }) => {
+  await open(page, '#/task/T-105?view=B', { '/api/task/T-105/detail': taskDetail(LONG_TASK, 't1:fixture', LONG_RELATED) });
+  const full = page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]');
+  await expect(full).toHaveText('Fullscreen');
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
+  await expect(full).toHaveText('Exit fullscreen');
+  await expect(full).toHaveAttribute('aria-pressed', 'true');
+  const m = await page.evaluate(() => {
+    const canvas = document.querySelector('.td-graph-frame .td-graph-canvas');
+    const controls = document.querySelector('.td-graph-frame .td-graph-controls').getBoundingClientRect();
+    return { scrolls: canvas.scrollHeight > canvas.clientHeight, controlsBottom: controls.bottom, vh: innerHeight };
+  });
+  expect(m.scrolls, 'the tall graph scrolls inside the canvas').toBe(true);
+  expect(m.controlsBottom, 'the controls row stays on screen').toBeLessThanOrEqual(m.vh);
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+  await expect(full).toHaveText('Fullscreen');
+  await expect(full).toHaveAttribute('aria-pressed', 'false');
+});
