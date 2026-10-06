@@ -260,6 +260,31 @@ test('Adopt refuses a task that is not on the board, then adopts', async ({ page
   expect(await focusIsSensible(page)).toBe(true);
 });
 
+test('a refused Shelve is said in words under the row, the bug stays open, focus is back on Shelve', async ({ page }) => {
+  const w = bugWrites(page, (_b, n) => (n === 1
+    ? { status: 400, json: { ok: false, error: 'Error: bug B-031 is locked by another session' } }
+    : { status: 500, json: { ok: false, error: 'Traceback: boom at /api/bugs {"x":1}' } }));
+  await open(page, '#/bug/B-031', { before: w.install });
+  const row = mount(page).getByRole('group', { name: 'Bug actions' });
+  const shelve = row.getByRole('button', { name: 'Shelve' });
+  const msg = row.locator('.dp-actions__message');
+  await shelve.click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  await expect(msg).toContainText('locked by another session');
+  for (const word of ['400', '/api', '{']) await expect(msg).not.toContainText(word);
+  await expect(shelve).toBeFocused();
+  await expect(shelve).toBeEnabled();
+  await expect(row).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(statusWord(page)).toHaveText('Open');
+  await shelve.click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  await expect(msg).toHaveText('The server could not save this change. Try again in a moment.');
+  for (const word of ['500', '/api', '{', 'Traceback']) await expect(msg).not.toContainText(word);
+  await expect(shelve).toBeFocused();
+  await expect(statusWord(page)).toHaveText('Open');
+  expect(w.posts).toEqual([{ status: 'shelved' }, { status: 'shelved' }]);
+});
+
 test('while a Shelve is being saved the row is busy and a second Shelve sends nothing', async ({ page }) => {
   const posts = [];
   let release;
