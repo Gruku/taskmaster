@@ -155,7 +155,7 @@ def test_bug_list_route_matches_only_its_own_path(running_server, tmp_path):
     base, _ = running_server
     _post(f"{base}/api/bugs", {"title": "alpha", "discovered_by": "user"})
     status, body = _raw(f"{base}/api/bugsx")
-    assert not (status == 200 and body.lstrip().startswith("["))
+    assert status == 404
     assert isinstance(_get(f"{base}/api/bugs?found_in=T-102&include_archive=true"), list)
 
 
