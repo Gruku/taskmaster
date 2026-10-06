@@ -140,3 +140,47 @@ export const EPIC = {
   attention: [{ id: 'T-102', why: 'critical and in progress' }],
   tasks: BOARD.tasks.filter((t) => t.epic === 'viewer'),
 };
+
+// ---- 3b: Table + Epics + Epic detail -----------------------------------------------------------------------------------
+
+// Plan 3's review focus 1: a real backlog's volume — 27 epics, 230 tasks, ids up to 27 characters (slug ids every
+// tenth task, one very long one), every third title 120 characters, one task in ten archived, long branches.
+const LONG_WORDS = ['store', 'viewer', 'handover', 'linear', 'gate', 'index', 'board', 'theme', 'sync', 'hooks'];
+const LONG_SENTENCE = 'keep the whole sentence readable when the table has to cut it short ';
+export const LONG_IDS_BOARD = (() => {
+  const epics = Array.from({ length: 27 }, (_, i) => (i === 26
+    ? { id: 'database-native-tracking', name: 'Database-native tracking: the SQLite store becomes the one authority', status: 'active', phase: 'P1' }
+    : { id: `epic-${String(i + 1).padStart(2, '0')}`, name: `${LONG_WORDS[i % 10]} work ${i + 1}`, status: ['active', 'active', 'planned', 'done', 'archived'][i % 5], phase: 'P1' }));
+  const statuses = ['todo', 'in-progress', 'in-review', 'blocked', 'done', 'done', 'todo', 'done', 'todo', 'archived'];
+  const tasks = Array.from({ length: 230 }, (_, i) => {
+    const id = i === 229 ? 'database-native-n17-cutover' : i % 10 === 9 ? `v3-polish-${String(i).padStart(3, '0')}` : `T-${1000 + i}`;
+    const base = `${LONG_WORDS[i % 10]} task ${i + 1}`;
+    return {
+      id, title: i % 3 === 0 ? `${base} — ${LONG_SENTENCE.repeat(3)}`.slice(0, 120) : base,
+      status: statuses[i % 10], priority: ['critical', 'high', 'medium', 'low'][i % 4], epic: epics[i % 27].id, phase: 'P1',
+      area: ['viewer-ui', 'store', 'docs', 'hooks'][i % 4], estimate: ['S', 'M', 'L', '3d'][i % 4], depends_on: [],
+      ...(i % 5 === 0 ? { branch: `feat/${id}-${'long-branch-name-'.repeat(3)}end` } : {}),
+      ...(i % 4 === 0 ? { started: `2026-09-2${i % 9}T09:00:00Z` } : {}),
+    };
+  });
+  return { revision: 'r-long', cursor: 'c-long', meta: { project: 'Long fixture' },
+    phases: [{ id: 'P1', name: 'Foundation', status: 'active' }], epics, tasks };
+})();
+
+// GET /api/epic/<id> for an epic of `board`, built as backlog_server.py _epic_full_from builds it.
+export function epicPayload(board, id, extra = {}) {
+  const epic = board.epics.find((e) => e.id === id) ?? { id };
+  const tasks = board.tasks.filter((t) => t.epic === id);
+  const count = (s) => tasks.filter((t) => (t.status || 'todo') === s).length;
+  const stats = { total: tasks.length, done: count('done'), 'in-progress': count('in-progress'), 'in-review': count('in-review'),
+    todo: count('todo'), blocked: count('blocked'), archived: count('archived') };
+  stats.closeable = stats.total > 0 && stats.done + stats.archived === stats.total;
+  return {
+    description: '', docs: {}, components: {}, design_status: 'exploring', done_when: '', area: null, ...epic,
+    stats, closeable: stats.closeable, component_rollup: {},
+    attention: tasks.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, title: t.title, blocked: true, why: t.blockers || '' })),
+    tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status || 'todo', component: t.component ?? null,
+      priority: t.priority, phase: t.phase, design_change: t.design_change ?? null })),
+    ...extra,
+  };
+}
