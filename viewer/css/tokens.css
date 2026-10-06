@@ -116,6 +116,8 @@
   --space-sm: 12px;
   --space-md: 16px;
   --space-lg: 24px;
+  /* Measured by the Kanban screen (kanban.js) so its phone sticky column head clears the sticky topbar. */
+  --topbar-height: 0px;
   --space-xl: 32px;
   --space-2xl: 48px;
   --space-3xl: 64px;

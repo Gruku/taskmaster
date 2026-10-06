@@ -92,6 +92,8 @@ test('a recent card has a strong border and a New tag, and no glow', async ({ pa
   recentBoard.tasks.find((t) => t.id === 'T-102').started = new Date(Date.now() - 3_600_000).toISOString();
   // A card wide enough for all of line 1; in a narrow column "New" wraps below the id (next test).
   await board(page, { board: recentBoard, viewport: { width: 390, height: 844 } });
+  // At 390 one column shows at a time: pick T-102's from the Columns tabs.
+  await page.locator(`#kanban-col-${recentBoard.tasks.find((t) => t.id === 'T-102').status}-tab`).click();
   await page.mouse.move(0, 0);
   const recent = card(page, 'T-102');
   await expect(recent).toHaveClass(/\brecent\b/);
@@ -520,7 +522,7 @@ test('at 1440 every control in the filter bar is the chip height', async ({ page
 
 // Row 1 carries the count and Add task; row 2 keeps search, density and the labelled Group and Sort selects.
 const rowFilters = (page) => page.locator('#topbar-actions > .overflow-more');
-const colLabels = (page) => page.locator('.kanban-col-head .lbl');
+const colLabels = (page) => page.locator('.kanban-col-title');
 
 test('1440: row 1 has the count, row 2 parks nothing, Group and Sort are named selects', async ({ page }) => {
   await board(page, { viewport: { width: 1440, height: 900 } });
@@ -590,4 +592,243 @@ test('choosing Sort "Created: oldest first" saves { by: created, dir: asc }', as
   await page.getByRole('combobox', { name: 'Sort' }).selectOption({ label: 'Created: oldest first' });
   await expect.poll(() => puts.filter((p) => p?.kanban?.filters?.sort).at(-1)?.kanban.filters.sort)
     .toEqual({ by: 'created', dir: 'asc' });
+});
+
+test('at 390 with 230 tasks one column shows, nothing scrolls sideways, and the page ends with that column', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const list = page.getByRole('tablist', { name: 'Columns' });
+  await expect(list).toBeVisible();
+  for (const name of ['Blocked 23', 'Todo 92', 'In progress 46', 'In review 23', 'Done 46']) {
+    await expect(list.getByRole('tab', { name })).toHaveCount(1);
+  }
+  await expect(page.locator('.kanban-col:visible')).toHaveCount(1);
+  const m = await page.evaluate(() => {
+    const col = document.querySelector('.kanban-col:not([hidden])');
+    return { sw: document.documentElement.scrollWidth, iw: innerWidth, sh: document.documentElement.scrollHeight,
+      bottom: col.getBoundingClientRect().bottom + scrollY };
+  });
+  console.log(`390 long board page height: ${m.sh}`);
+  expect(m.sw).toBeLessThanOrEqual(m.iw);
+  expect(m.sh).toBeLessThanOrEqual(m.bottom + 64);
+  const sel = list.locator('[aria-selected="true"]');
+  const before = await sel.getAttribute('aria-controls');
+  await sel.focus();
+  await page.keyboard.press('ArrowRight');
+  const after = await list.locator('[aria-selected="true"]').getAttribute('aria-controls');
+  expect(after).not.toBe(before);
+  await expect(page.locator(`#${after}`)).toBeVisible();
+  await expect(page.locator('.kanban-col-toggle:visible')).toHaveCount(0);
+  const shadows = await page.locator('.kanban-col-head').evaluateAll((els) => els.map((e) => getComputedStyle(e).boxShadow));
+  expect(shadows.every((s) => s === 'none')).toBe(true);
+  for (const h of await list.getByRole('tab').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))) {
+    expect(h).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('at 1440 every column shows and the page does not scroll', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await expect(page.getByRole('tablist', { name: 'Columns' })).toBeHidden();
+  await expect(page.locator('.kanban-col:visible')).toHaveCount(5);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+  const todo = page.locator('#kanban-col-body-todo');
+  expect(await todo.evaluate((b) => b.scrollHeight > b.clientHeight)).toBe(true);
+});
+
+// Task 8, Part B: the collapse head, the no-match state, a poll's repaint, the keyboard walk, axe.
+const colOf = (page, key) => page.locator(`.kanban-col:has(#kanban-col-body-${key})`);
+const toggleOf = (page, key) => page.locator(`.kanban-col-toggle[data-key="${key}"]`);
+const renameTask = (page, id, title) => page.evaluate(([id, title]) => import('/js/store.js').then(({ store }) => {
+  const next = structuredClone(store.getBacklog());
+  next.revision = `r-${Date.now()}`;
+  const walk = (o) => { if (o && typeof o === 'object') { if (o.id === id && 'title' in o) o.title = title; Object.values(o).forEach(walk); } };
+  walk(next);
+  store.setBoard(next);
+}), [id, title]);
+
+test('a column head is a heading with a marker, a count and a named collapse button', async ({ page }) => {
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/api/viewer/prefs')) puts.push(r.postDataJSON()); });
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const h2 = colOf(page, 'in-review').getByRole('heading', { level: 2 });
+  await expect(h2).toContainText('In review');
+  await expect(h2).toContainText('waiting on you');
+  const t = toggleOf(page, 'in-review');
+  await expect(t).toHaveAccessibleName('Collapse In review');
+  await expect(t).toHaveAttribute('aria-expanded', 'true');
+  await t.click();
+  await expect(t).toHaveAttribute('aria-expanded', 'false');
+  await expect(t).toHaveAccessibleName('Expand In review');
+  await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
+  const cols = (o) => (o && typeof o === 'object' ? (o.kanban?.collapsed_columns ?? Object.values(o).map(cols).find(Boolean)) : undefined);
+  await expect.poll(() => cols(puts.at(-1))).toEqual(['in-review']);
+});
+
+test('a collapsed column stays collapsed across a poll, and the toggle works from the keyboard', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const t = toggleOf(page, 'in-review');
+  await t.focus();
+  await page.keyboard.press('Enter');
+  await expect(t).toHaveAttribute('aria-expanded', 'false');
+  await bumpBoard(page);
+  await expect(toggleOf(page, 'in-review')).toHaveAttribute('aria-expanded', 'false');
+  await expect(colOf(page, 'in-review')).toHaveClass(/collapsed/);
+  await expect(toggleOf(page, 'in-review')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(toggleOf(page, 'in-review')).toHaveAttribute('aria-expanded', 'true');
+  await expect(colOf(page, 'in-review')).not.toHaveClass(/collapsed/);
+});
+
+test('a search that matches nothing says so once and offers Clear filters', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await searchBox(page).fill('zzzz');
+  const empty = page.locator('.kanban-board .tm-empty');
+  await expect(empty).toHaveCount(1);
+  await expect(empty).toContainText('0 of 7 tasks match');
+  await expect(empty.getByRole('button')).toHaveCount(1);
+  await expect(empty.getByRole('button', { name: 'Clear filters' })).toBeVisible();
+  const others = page.locator('.kanban-col-body:not(:has(.tm-empty))');
+  expect(await others.count()).toBeGreaterThan(0);
+  for (const t of await others.allTextContents()) expect(t.trim()).toBe('No tasks');
+  await empty.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(searchBox(page)).toHaveValue('');
+  await expect(page.locator('.card-task')).toHaveCount(7);
+});
+
+test('a poll that redraws the board keeps focus on the same card', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  await linkOf(page, 'T-102').focus();
+  await renameTask(page, 'T-104', 'Renamed by the poll');
+  await expect(card(page, 'T-104')).toContainText('Renamed by the poll');
+  await expect(linkOf(page, 'T-102')).toBeFocused();
+  await card(page, 'T-102').locator('.card-id').focus();
+  await renameTask(page, 'T-104', 'Renamed again');
+  await expect(card(page, 'T-104')).toContainText('Renamed again');
+  await expect(card(page, 'T-102').locator('.card-id')).toBeFocused();
+});
+
+test('a poll keeps a column\'s scroll at 1440, and the chosen tab and page scroll at 390', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const todo = page.locator('#kanban-col-body-todo');
+  await todo.evaluate((b) => { b.scrollTop = 400; });
+  await bumpBoard(page);
+  await page.waitForTimeout(100);
+  expect(await page.locator('#kanban-col-body-todo').evaluate((b) => b.scrollTop)).toBe(400);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const list = page.getByRole('tablist', { name: 'Columns' });
+  await list.getByRole('tab', { name: 'In progress 46' }).click();
+  await page.evaluate(() => window.scrollTo(0, 600));
+  const tab = list.getByRole('tab', { name: 'In progress 46' });
+  await tab.focus();
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await bumpBoard(page);
+  await page.waitForTimeout(100);
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  await expect(tab).toBeFocused();
+  expect(await page.evaluate(() => scrollY)).toBe(600);
+});
+
+test('keyboard walk: row 2, phases, priority, epics, then the cards in order; Enter opens, Escape returns', async ({ page }) => {
+  await board(page, { viewport: { width: 1440, height: 900 } });
+  const order = ['[data-global-search]', '.tm-segmented button', '.kanban-field select', '.phase-chip--all',
+    '.chip[data-value="critical"]', '.chip[data-value="__all__"]', '.epic-options-btn', '.kanban-col .link-row__link', '.kanban-col .card-id'];
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  const first = new Map();
+  for (let i = 0; i < 120 && first.size < order.length; i++) {
+    await page.keyboard.press('Tab');
+    const hit = await page.evaluate((sels) => sels.find((s) => document.activeElement?.matches(s)), order);
+    if (hit && !first.has(hit)) first.set(hit, i);
+  }
+  expect([...first.keys()]).toEqual(order);
+  const idx = order.map((s) => first.get(s));
+  for (let k = 1; k < idx.length; k++) expect(idx[k]).toBeGreaterThan(idx[k - 1]);
+  const link = page.locator('.kanban-col .link-row__link').first();
+  await link.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.modal--detail')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal--detail')).toHaveCount(0);
+  await expect(link).toBeFocused();
+  // Escape with nothing open leaves the board alone, and Space on a chip presses it.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.card-task').first()).toBeVisible();
+  const crit = page.locator('.chip[data-value="critical"]');
+  await crit.focus();
+  await page.keyboard.press('Space');
+  await expect(crit).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('Escape closes only the topmost thing: Epic options first, then nothing else', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  await expect(page.locator('.epic-options')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.epic-options')).toBeHidden();
+  await expect(page.locator('.epic-options-btn')).toBeFocused();
+  await expect(page.locator('.card-task').first()).toBeVisible();
+});
+
+for (const theme of ['light', 'dark']) {
+  for (const width of [1440, 390]) {
+    test(`axe (${theme}, ${width}): the Kanban screen has no violation`, async ({ page }) => {
+      await board(page, { theme, viewport: { width, height: width > 400 ? 900 : 844 } });
+      if (width > 400) await toggleOf(page, 'done').click(); // a collapsed column is scanned too
+      await page.evaluate(axeSource);
+      const result = await page.evaluate(() => window.axe.run(document.querySelector('#screen-mount'), {
+        runOnly: { type: 'rule', values: ['color-contrast', 'nested-interactive', 'aria-allowed-attr', 'aria-valid-attr', 'aria-valid-attr-value',
+          'aria-required-attr', 'aria-required-children', 'aria-required-parent', 'aria-allowed-role', 'aria-prohibited-attr',
+          'scrollable-region-focusable', 'heading-order', 'button-name', 'link-name'] },
+        resultTypes: ['violations'],
+      }));
+      expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+    });
+  }
+}
+
+// The whisper is shown whole or not at all, and its words stay in the heading's name either way.
+const whisperState = (page) => colOf(page, 'in-review').evaluate((col) => {
+  const t = col.querySelector('.kanban-col-title');
+  const w = t.querySelector('.kanban-col-whisper');
+  const shown = !!w && getComputedStyle(w).display !== 'none' && w.getClientRects().length > 0;
+  return { shown, whisperCut: shown && w.scrollWidth > w.clientWidth, headingCut: shown && t.scrollWidth > t.clientWidth, title: t.title };
+});
+test('the In review whisper is never cut: hidden when its head is too narrow, whole when there is room, always in the name', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const h2 = colOf(page, 'in-review').getByRole('heading', { level: 2 });
+  const at1440 = await whisperState(page);
+  console.log(`1440 whisper: ${JSON.stringify(at1440)}`);
+  expect([at1440.whisperCut, at1440.headingCut]).toEqual([false, false]);
+  expect(at1440.title).toBe('In review, waiting on you');
+  await expect(h2).toHaveAccessibleName(/waiting on you/);
+  for (const key of ['blocked', 'todo', 'done']) await toggleOf(page, key).click();
+  await expect.poll(async () => (await whisperState(page)).shown).toBe(true);
+  const roomy = await whisperState(page);
+  expect([roomy.whisperCut, roomy.headingCut]).toEqual([false, false]);
+  await expect(h2).toHaveAccessibleName(/waiting on you/);
+});
+
+test('a cut column title keeps its words: every heading\'s title is its full label (Group: Epic, the long board)', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const group = page.getByRole('combobox', { name: 'Group' });
+  await group.selectOption({ label: 'Epic' });
+  await expect(group).toHaveValue('epic');
+  await expect.poll(() => colLabels(page).count()).toBeGreaterThan(1);
+  const heads = await colLabels(page).evaluateAll((ts) => ts.map((t) => ({ text: t.textContent, title: t.title, cut: t.scrollWidth > t.clientWidth })));
+  console.log(`epic headings cut: ${heads.filter((h) => h.cut).length} of ${heads.length}`);
+  for (const h of heads) expect(h.title).toBe(h.text);
+});
+
+test('390, the long board: the sticky column head stays below the sticky topbar when the page scrolls', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await page.evaluate(() => window.scrollTo(0, 1500));
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(1500);
+  const m = await page.evaluate(() => {
+    const head = document.querySelector('.kanban-col:not([hidden]) .kanban-col-head');
+    const r = head.getBoundingClientRect();
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { headTop: Math.round(r.top), barBottom: Math.round(bar.bottom), covered: !head.contains(hit) };
+  });
+  console.log(`390 sticky head: ${JSON.stringify(m)}`);
+  expect(m.headTop).toBeGreaterThanOrEqual(m.barBottom);
+  expect(m.covered).toBe(false);
 });

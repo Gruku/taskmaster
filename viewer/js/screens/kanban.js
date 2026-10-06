@@ -15,7 +15,9 @@ import { renderBundleFrame } from '../components/bundle-frame.js';
 import { epicIndex }                         from '../lib/epics.js';
 import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmAction, tmSearch, tmSegmented } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
-import { emptyState } from '../components/empty-state.js';
+import { stateBlock } from '../components/empty-state.js';
+import { statusMarker } from '../components/status.js';
+import { columnTabs } from '../components/column-tabs.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
 
 export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
@@ -219,7 +221,17 @@ export async function mount(root, { store, api, prefs }) {
 
   page.appendChild(filterBar);
 
-  // 5) Board surface
+  // 5) Phone column switcher (hides itself above 768px), then the board surface
+  let selectedCol = null;
+  const tabs = columnTabs({ label: 'Columns', columns: [], selected: null, onSelect: (key) => {
+    selectedCol = key;
+    paint();
+  } });
+  page.appendChild(tabs.el);
+  const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 768px)') : null;
+  const onMedia = () => paint();
+  mq?.addEventListener?.('change', onMedia);
+
   const board = document.createElement('div');
   board.className = 'kanban-board';
   const boardGrid = document.createElement('div');
@@ -331,82 +343,117 @@ export async function mount(root, { store, api, prefs }) {
     const groupKeyArg = state.filters.group_by === 'phase' ? phasesOrdered.map(p => p.id) : undefined;
     const groups = groupTasks(sorted, state.filters.group_by, groupKeyArg, epicsArr);
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
+    // Record what had focus inside the board so the repaint can put it back (polls, collapse, tab switch).
+    const restore = focusTarget();
+    // A poll must not throw a reader back to the top of a column they scrolled.
+    const bodyScroll = new Map([...boardGrid.querySelectorAll('.kanban-col-body')].map((b) => [b.id, b.scrollTop]));
+    const phone = !!mq?.matches && groups.length >= 2;
+    if (!groups.some((g) => g.key === selectedCol)) {
+      selectedCol = (groups.find((g) => g.tasks.length) || groups[0])?.key ?? null;
+    }
+    const phaseName = (id) => phasesArr.find((p) => p.id === id)?.name || id;
+    const colLabel = (g) => state.filters.group_by === 'phase' ? phaseName(g.key) : g.label;
+    tabs.update({
+      columns: groups.map((g) => ({ key: g.key, label: colLabel(g), count: g.tasks.length, panelId: `kanban-col-${g.key}` })),
+      selected: selectedCol,
+    });
     boardGrid.replaceChildren();
 
-    // When the whole board is empty (all tasks filtered out), show count context
-    // only in the first non-collapsed column so the message appears once.
+    // With filters set and nothing matching, the first open column says so once; the rest read "No tasks".
     const allEmpty = filtered.length === 0 && hasFilters;
     let countShown = false;
 
     for (const g of groups) {
-      const col = document.createElement('div');
+      const label = colLabel(g);
+      const col = document.createElement('section');
       col.className = 'kanban-col';
+      col.dataset.key = g.key;
+      col.id = `kanban-col-${g.key}`;
+      const titleId = `kanban-col-${g.key}-title`;
+      if (phone) {
+        col.setAttribute('role', 'tabpanel');
+        col.setAttribute('aria-labelledby', `kanban-col-${g.key}-tab`);
+        col.hidden = g.key !== selectedCol;
+      } else {
+        col.setAttribute('aria-labelledby', titleId);
+      }
       const head = document.createElement('div');
-      head.className = 'kanban-col-head ' + (state.filters.group_by === 'status' ? g.key : '');
-      const dot = document.createElement('span');
-      dot.className = 'dot';
-      const lbl = document.createElement('span');
-      lbl.className = 'lbl';
-      lbl.textContent = g.label;
+      head.className = 'kanban-col-head';
+      const title = document.createElement('h2');
+      title.className = 'kanban-col-title';
+      title.id = titleId;
+      if (state.filters.group_by === 'status') title.appendChild(statusMarker('task', g.key));
+      else title.textContent = label;
+      // A cut title keeps its words: the full group label is the heading's tooltip.
+      title.title = label;
+      head.appendChild(title);
+      if (state.filters.group_by === 'status' && g.key === 'in-review') {
+        const whisper = document.createElement('span');
+        whisper.className = 'kanban-col-whisper';
+        whisper.textContent = 'waiting on you';
+        title.appendChild(whisper);
+        // The whisper is shown whole or not at all (fitWhisper); its words stay in the name and tooltip either way.
+        title.title = `${label}, waiting on you`;
+        title.setAttribute('aria-label', title.title);
+        whisperObs.disconnect();
+        whisperObs.observe(title);
+      }
       const num = document.createElement('span');
-      num.className = 'tnum';
+      num.className = 'kanban-col-count';
       num.textContent = String(g.tasks.length);
-      head.append(dot, lbl, num);
+      head.appendChild(num);
+
+      const isCollapsed = state.collapsed.has(g.key);
       const toggleBtn = document.createElement('button');
       toggleBtn.type = 'button';
-      toggleBtn.className = 'kanban-col-toggle';
-      const isCollapsed = state.collapsed.has(g.key);
-      toggleBtn.title = isCollapsed ? 'Expand' : 'Collapse';
-      toggleBtn.textContent = isCollapsed ? '›' : '‹';
+      toggleBtn.className = 'btn btn--ghost btn--icon btn--sm kanban-col-toggle';
+      toggleBtn.dataset.key = g.key;
+      toggleBtn.setAttribute('aria-controls', `kanban-col-body-${g.key}`);
+      toggleBtn.hidden = phone;
+      toggleBtn.appendChild(icon('chevron', { size: 16 }));
+      const paintToggle = (collapsed) => {
+        toggleBtn.setAttribute('aria-expanded', String(!collapsed));
+        toggleBtn.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${label}`);
+      };
+      paintToggle(isCollapsed);
       const toggleCollapsed = () => {
         if (state.collapsed.has(g.key)) state.collapsed.delete(g.key);
         else state.collapsed.add(g.key);
         prefs.patch({ kanban: { collapsed_columns: [...state.collapsed] } });
         const nowCollapsed = state.collapsed.has(g.key);
         col.classList.toggle('collapsed', nowCollapsed);
-        toggleBtn.textContent = nowCollapsed ? '›' : '‹';
-        toggleBtn.title = nowCollapsed ? 'Expand' : 'Collapse';
+        paintToggle(nowCollapsed);
         updateGridTemplate();
       };
       toggleBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         toggleCollapsed();
       });
-      // Click anywhere on a collapsed column body re-expands it.
+      // A click anywhere on a collapsed column expands it.
       col.addEventListener('click', () => {
         if (col.classList.contains('collapsed')) toggleCollapsed();
       });
       head.appendChild(toggleBtn);
-      if (isCollapsed) col.classList.add('collapsed');
+      if (isCollapsed && !phone) col.classList.add('collapsed');
       col.appendChild(head);
 
       const colBody = document.createElement('div');
       colBody.className = 'kanban-col-body';
+      colBody.id = `kanban-col-body-${g.key}`;
       if (!g.tasks.length) {
-        // When the whole board is empty due to filters, show a count message in
-        // the first non-collapsed column so the user knows how many tasks are hidden.
-        // Other columns just show 'Nothing here' to avoid repetition.
-        if (allEmpty && !countShown && !isCollapsed) {
+        if (allEmpty && !countShown && !(isCollapsed && !phone)) {
           countShown = true;
-          const filterParts = [];
-          if (state.filters.search) filterParts.push(`search "${state.filters.search}"`);
-          if (state.filters.priorities?.length) filterParts.push(`priority: ${state.filters.priorities.join(', ')}`);
-          if (state.filters.epics?.length) filterParts.push(`epic: ${state.filters.epics.join(', ')}`);
-          if (state.filters.areas?.length) filterParts.push(`area: ${state.filters.areas.join(', ')}`);
-          if (state.filters.phase && state.filters.phase !== '__all__') filterParts.push(`phase: ${state.filters.phase}`);
-          const hidden = tasks.length;
-          const filterDesc = filterParts.length ? filterParts.join(' · ') : 'active filters';
-          colBody.appendChild(emptyState({
+          colBody.appendChild(stateBlock({
+            label: 'No match',
             headline: `0 of ${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} match`,
-            hint: `${filterDesc} — ${hidden} ${pluralize(hidden, 'task', 'tasks')} hidden`,
+            hint: filterWords(epicsArr),
             action: { label: 'Clear filters', onClick: clearAllFilters },
           }));
         } else {
-          // Honest text: only call out filters if any are active. Otherwise the
-          // column is just empty (e.g. nothing in "Done" yet).
-          colBody.appendChild(emptyState({
-            headline: hasFilters ? 'No tasks match your filters' : 'Nothing here',
-          }));
+          const p = document.createElement('p');
+          p.className = 'kanban-col-empty';
+          p.textContent = 'No tasks';
+          colBody.appendChild(p);
         }
       } else {
         for (const item of clusterBundles(g.tasks)) {
@@ -423,12 +470,76 @@ export async function mount(root, { store, api, prefs }) {
       boardGrid.appendChild(col);
     }
     updateGridTemplate();
+    for (const [id, top] of bodyScroll) { const b = top && boardGrid.querySelector(`#${CSS.escape(id)}`); if (b) b.scrollTop = top; }
+    refocus(restore, phone);
   }
+
+  // The filters in words, for the no-match hint: search text, priority words, epic names, phase name, areas.
+  function filterWords(epicsArr) {
+    const f = state.filters;
+    const parts = [];
+    if (f.search) parts.push(`search “${f.search}”`);
+    if (f.priorities?.length) parts.push(`${f.priorities.join(', ')} priority`);
+    if (f.epics?.length) parts.push(f.epics.map((id) => epicsArr.find((e) => e.id === id)?.name || id).join(', '));
+    if (f.areas?.length) parts.push(`area ${f.areas.join(', ')}`);
+    if (f.phase && f.phase !== '__all__') {
+      const phases = store.getBacklog()?.phases || [];
+      parts.push(f.phase === '__orphans__' ? 'no phase' : (phases.find((p) => p.id === f.phase)?.name || f.phase));
+    }
+    return `Filtered by ${parts.join(' · ') || 'active filters'}.`;
+  }
+
+  // What has focus inside the board or the tabs, as something the next paint can find again.
+  function focusTarget() {
+    const a = document.activeElement;
+    if (!a || a === document.body) return null;
+    if (tabs.el.contains(a)) return { tab: a.dataset.key };
+    if (!boardGrid.contains(a)) return null;
+    if (a.classList.contains('kanban-col-toggle')) return { toggle: a.dataset.key };
+    const card = a.closest('[data-task-id]');
+    const key = a.closest('.kanban-col')?.dataset.key;
+    if (card) return { taskId: card.dataset.taskId, focus: a.dataset.focus || a.closest('[data-focus]')?.dataset.focus, key };
+    return key ? { toggle: key } : null;
+  }
+
+  function refocus(t, phone) {
+    if (!t) return;
+    if (t.tab != null) return; // the tab is the same element across update(); it kept focus
+    const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : s);
+    let el = null;
+    if (t.taskId) {
+      const card = boardGrid.querySelector(`[data-task-id="${esc(t.taskId)}"]`);
+      if (card && !card.closest('[hidden]')) {
+        el = t.focus ? card.querySelector(`[data-focus="${esc(t.focus)}"]`) : null;
+        if (!el && card.matches('[data-focus], a, button')) el = card;
+        el = el || card.querySelector('[data-focus="link"], a');
+      }
+    }
+    const key = t.toggle ?? t.key;
+    if (!el && key != null) {
+      el = phone
+        ? document.getElementById(`kanban-col-${key}-tab`)
+        : boardGrid.querySelector(`.kanban-col-toggle[data-key="${esc(key)}"]`);
+    }
+    el?.focus({ preventScroll: true });
+  }
+
+  // The heading's width never depends on the whisper (it flex-grows into the head), so toggling it cannot loop.
+  function fitWhisper(title) {
+    const w = title.querySelector('.kanban-col-whisper');
+    if (!w) return;
+    w.hidden = false;
+    w.hidden = title.scrollWidth > title.clientWidth;
+  }
+  const whisperObs = new ResizeObserver((entries) => { for (const e of entries) fitWhisper(e.target); });
 
   function updateGridTemplate(animate = true) {
     // On mobile (< 768px = --bp-md), CSS handles the stacked layout;
     // skip all JS width logic so inline styles don't fight the media query.
-    if (window.matchMedia('(max-width: 768px)').matches) return;
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      for (const c of boardGrid.querySelectorAll(':scope > .kanban-col')) c.style.width = '';
+      return;
+    }
     const cols = Array.from(boardGrid.querySelectorAll(':scope > .kanban-col'));
     if (!cols.length) return;
     const isInitial = cols.some(c => !c.style.width || c.style.width === '0px');
@@ -488,10 +599,22 @@ export async function mount(root, { store, api, prefs }) {
   const resizeObs = new ResizeObserver(() => updateGridTemplate(false));
   resizeObs.observe(boardGrid);
 
+  // The phone's sticky column head sits below the sticky topbar, whose height changes with its second row.
+  const topbarEl = document.querySelector('.topbar');
+  const topbarObs = new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--topbar-height', `${topbarEl.offsetHeight}px`);
+  });
+  if (topbarEl) topbarObs.observe(topbarEl);
+
   // Cleanup
   return () => {
     unsubBacklog();
     resizeObs.disconnect();
+    whisperObs.disconnect();
+    topbarObs.disconnect();
+    document.documentElement.style.removeProperty('--topbar-height');
+    mq?.removeEventListener?.('change', onMedia);
+    tabs.destroy();
     strip.destroy();
     priRow.destroy();
     epicRow.destroy();

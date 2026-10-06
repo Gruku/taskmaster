@@ -3,7 +3,7 @@
 // leaves none of the last screen's count or primary behind.
 import { test, expect } from '@playwright/test';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD } from './mock-fixtures.js';
+import { BOARD, longBoard } from './mock-fixtures.js';
 
 const COUNT = '230 tasks · 230 visible';
 const PROBE = 'Row one probe';
@@ -81,9 +81,11 @@ test('a new route clears the count, its title and the primary', async ({ page })
 });
 
 // The page scrolls at phone width, so the topbar must stick to the viewport, not to .main (which never scrolls).
-for (const [hash, loaded] of [['#/kanban', '.card-task'], ['#/table', 'table.tbl .tbl-row']]) {
+// The phone Kanban shows one column, so it needs the long board for the page to be tall enough to scroll.
+for (const [hash, loaded, data] of [['#/kanban', '.card-task', longBoard()], ['#/table', 'table.tbl .tbl-row', null]]) {
   test(`at 390 the topbar stays at the top of a scrolled ${hash} and nothing scrolls sideways`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    if (data) await mockApi(page, { '/api/board': data, '/api/backlog': data, '/api/bugs': [] });
     await page.goto('/' + hash);
     await expect(page.locator(loaded).first()).toBeVisible();
     await page.evaluate(() => window.scrollTo(0, 3000));
