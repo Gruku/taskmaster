@@ -1,0 +1,43 @@
+/* User intent: the phone column switcher — at 768px and below a board shows one column at a time behind a row of
+   tabs with counts that scrolls inside itself; above that, or with fewer than two columns, the row is gone. */
+
+.column-tabs { display: none; }
+
+@media (max-width: 768px) {
+  .column-tabs:not([hidden]) {
+    display: flex;
+    gap: var(--space-micro);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+}
+
+.column-tabs__tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  padding: 0 var(--space-sm);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.column-tabs__tab:hover:not([aria-selected="true"]) { background: var(--ground-15); color: var(--foreground-bold); }
+.column-tabs__tab[aria-selected="true"] { background: var(--signature-glow-strong); border-color: var(--signature-dim); color: var(--foreground-bold); }
+
+.column-tabs__count {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+.column-tabs__tab[aria-selected="true"] .column-tabs__count { color: var(--foreground-default); }
