@@ -7,6 +7,7 @@ import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmQueueItem, 
 import {
   ageLabel,
   type BandModel,
+  CONNECTING,
   bandRows,
   cardMode,
   cardPosition,
@@ -187,6 +188,13 @@ export async function bandTree(
   const keep = bandRows(m, maxRows)
   const rows: RenderNode[] = []
   const task = m.task
+  if (keep.includes('connecting')) {
+    rows.push(
+      <Text color={t.fg.subtle} wrap="truncate-end">
+        {truncate(CONNECTING, width)}
+      </Text>,
+    )
+  }
   if (task !== null && keep.includes('task')) {
     // Gives way left to right: the label, then (review form) the id, so the check to do keeps at least MIN_TEXT cells of
     // its own after "waiting on you: ".
@@ -333,9 +341,13 @@ async function paneRoot(ui: Ui, rr: Rr, children: readonly RenderChildren[]): Pr
   )
 }
 
-/** What a pane shows before it has data, or when Taskmaster cannot be reached. */
-async function paneStatus(ui: Ui, rr: Rr, t: RrTokens, title: RenderNode, s: TmSnapshot | null): Promise<RenderElement> {
+/**
+ * What a pane shows before it has data, while tm is retried after a transient failure (neutral, like Loading), or when
+ * Taskmaster cannot be reached.
+ */
+async function paneStatus(ui: Ui, rr: Rr, t: RrTokens, title: RenderNode, s: TmSnapshot | null, connecting: boolean): Promise<RenderElement> {
   const { Text } = ui
+  if (connecting) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>{CONNECTING}</Text>])
   if (s === null) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>Loading…</Text>])
   return paneRoot(ui, rr, [title, node(await rr.signal({ kind: 'critical', word: 'Taskmaster unreachable', detail: s.reason }))])
 }
@@ -348,6 +360,8 @@ export type ReviewView = {
   /** The ticked check items of a task (local UI state, never Taskmaster's). */
   ticks: (taskId: string) => Promise<readonly string[]>
   detailsOpen: boolean
+  /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
+  connecting?: boolean
 }
 
 export type ReviewHandlers = {
@@ -419,7 +433,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const { Box, Text, Button, Input } = ui
   const t = await rr.tokens()
   const title = node(await rr.label({ text: 'review' }))
-  if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot)
+  if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot, v.connecting === true)
   const card = cardPosition(reviewQueue(v.snapshot, v.cursor, v.details), v.cursor, v.snapshot.queueTotal)
   const item = card.item
   if (item === null) {
@@ -638,6 +652,8 @@ export type HandoversView = {
   summaries: Readonly<Record<string, TmHandoverSummary>>
   /** The handover whose summary is expanded; it shows only while that handover is the picked one. */
   summaryOpen: string
+  /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
+  connecting?: boolean
 }
 
 export type HandoverHandlers = {
@@ -726,7 +742,7 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
   const { Box, Text, Button } = ui
   const t = await rr.tokens()
   const title = node(await rr.label({ text: 'handovers' }))
-  if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot)
+  if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot, v.connecting === true)
   const list = v.snapshot.handovers
   const picked = list.find(entry => entry.id === v.pick) ?? list[0]
   if (picked === undefined) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>No open handovers.</Text>])

@@ -77,7 +77,8 @@ export type TmSnapshot = {
   readonly handoversTotal: number
   readonly bound: TmBound | null
 }
-export type TmFault = 'none' | 'offline' | 'unreadable'
+/** `connecting`: a transient failure (server still connecting, or cold and slow) being retried: no status line, a neutral note. */
+export type TmFault = 'none' | 'offline' | 'unreadable' | 'connecting'
 /** The band's handover-written notice: the handover this session's main agent just wrote, and its Telegram-ready block. */
 export type TmHandoverNotice = { readonly id: string; readonly tldr: string; readonly path: string; readonly text: string }
 export type TmBinding = { readonly taskId: string; readonly at: number }

@@ -109,12 +109,26 @@ export type BandTask = {
   readonly meta: string
   readonly stage: string
 }
-/** `needsCapped`: the count was cut at the window with no server total (drawn `N+`); `notice`: a just-written handover's tldr. */
-export type BandModel = { readonly task: BandTask | null; readonly needsYou: number; readonly needsCapped?: boolean; readonly notice?: string }
-export type BandRow = 'task' | 'stage' | 'handover' | 'needs'
+/** The neutral note while a transient failure is retried and there is no good snapshot to show. */
+export const CONNECTING = 'Connecting to Taskmaster…'
 
-export function bandModel(s: TmSnapshot | null, notice: TmHandoverNotice | null = null): BandModel | null {
+/**
+ * `needsCapped`: the count was cut at the window with no server total (drawn `N+`); `notice`: a just-written handover's tldr;
+ * `connecting`: tm is being retried and there is no good snapshot (the band says so, neutrally).
+ */
+export type BandModel = {
+  readonly task: BandTask | null
+  readonly needsYou: number
+  readonly needsCapped?: boolean
+  readonly notice?: string
+  readonly connecting?: boolean
+}
+export type BandRow = 'connecting' | 'task' | 'stage' | 'handover' | 'needs'
+
+export function bandModel(s: TmSnapshot | null, notice: TmHandoverNotice | null = null, connecting = false): BandModel | null {
   const shown = notice === null ? {} : { notice: notice.tldr }
+  // While retrying, the last good snapshot stays; with none (or only an offline one) the band says it is connecting.
+  if (connecting && (s === null || !s.reachable)) return { task: null, needsYou: 0, connecting: true, ...shown }
   if (s === null) return notice === null ? null : { task: null, needsYou: 0, ...shown }
   const b = s.bound
   const detail = b?.detail ?? null
@@ -138,12 +152,13 @@ export function bandModel(s: TmSnapshot | null, notice: TmHandoverNotice | null 
 
 export function bandRows(m: BandModel, maxRows: number): BandRow[] {
   const wanted: BandRow[] = []
+  if (m.connecting === true) wanted.push('connecting')
   if (m.task !== null) wanted.push('task')
   if (m.notice !== undefined) wanted.push('handover')
   if (m.needsYou > 0) wanted.push('needs')
   if (m.task !== null && (m.task.review || m.task.stage !== '')) wanted.push('stage')
   const kept = new Set(wanted.slice(0, Math.max(0, maxRows)))
-  return (['task', 'stage', 'handover', 'needs'] as const).filter(row => kept.has(row))
+  return (['connecting', 'task', 'stage', 'handover', 'needs'] as const).filter(row => kept.has(row))
 }
 
 export function ageLabel(stamp: string, now: number): string {

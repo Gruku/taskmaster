@@ -266,6 +266,7 @@ Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minu
 ## 7. Failure handling
 
 - `tm` unreachable or timed out: status line `◆ tm offline`; band keeps the task row from the local binding but drops stage and needs-you lines; panes show "Taskmaster unreachable" with the reason.
+- Startup and cold-server conditions — the engine's "no connected MCP tool … on a server named …" while the server is still connecting, or the mod's own 3 s read timeout — are retried at 2, 4, 8 and 16 s (no turn end needed; collapsed with other refreshes; a success resets the backoff) before the mod reports `◆ tm offline`; meanwhile there is no status line, the panes and band say `Connecting to Taskmaster…` (neutral, like Loading) and the last good snapshot stays visible. A refusal or any other error faults at once.
 - Unparseable reply: treated as no data, status `ⓘ tm reply unreadable`, raw text to the debug log via `$.ui.log(…, { to: 'debug' })`.
 - Write refused by the server: shown on the card as a `◆` signal with the server's text; nothing retried automatically.
 - Clipboard unavailable: toast shows the path to copy by hand.

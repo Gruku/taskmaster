@@ -3,7 +3,7 @@
 import type { On } from 'claude-code'
 import type { MockClock } from 'claude-code/testing'
 
-export type McpAnswer = { text: string; isError?: boolean } | 'offline' | { hangMs: number; text?: string }
+export type McpAnswer = { text: string; isError?: boolean } | 'offline' | { hangMs: number; text?: string } | { deny: string }
 
 export type World = {
   opened: string[]
@@ -93,6 +93,7 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     world.calls.push({ tool: e.tool, args: e.args })
     const answer = world.mcp(e.tool, e.args)
     if (answer === 'offline') return { deny: 'tm: Connection closed' }
+    if ('deny' in answer) return { deny: answer.deny }
     if ('hangMs' in answer) {
       await clock.sleep(answer.hangMs)
       return { value: { content: [{ type: 'text', text: answer.text ?? 'late' }], isError: false } } as never

@@ -73,15 +73,27 @@ describe('faults', () => {
     expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeDefined()
   })
 
-  test('a hung server reads as offline after 3 s, not before', TM, async ($, on) => {
+  test('a hung server is cut at 3 s and retried (no fault meanwhile); it reads as offline only when the last retry times out', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
-    world.mcp = () => ({ hangMs: 60_000 })
+    world.mcp = () => ({ hangMs: 600_000 })
     await $.session.start(SESSION)
     await clock.settle()
     await clock.advance(2900)
     expect(world.statuses).toEqual([])
     await clock.advance(100)
+    expect(world.statuses).toEqual([undefined])
+    // runs at 0, 5, 12, 23 and 42 s, each cut 3 s later: the fifth (the last retry) ends at 45 s
+    for (const step of [2000, 3000, 4000, 3000, 8000, 3000, 16_000]) {
+      await clock.advance(step)
+      await clock.settle()
+    }
+    expect(world.statuses).not.toContain('◆ tm offline')
+    await clock.advance(2900)
+    await clock.settle()
+    expect(world.statuses).not.toContain('◆ tm offline')
+    await clock.advance(100)
+    await clock.settle()
     expect(world.statuses.at(-1)).toBe('◆ tm offline')
   })
 

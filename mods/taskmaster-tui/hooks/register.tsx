@@ -25,7 +25,7 @@ import {
   ticksOf,
 } from './model'
 import { parseHandoverWritten } from './parse'
-import { type Refresher, singleFlight } from './refresh'
+import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope } from './tm'
 
@@ -194,7 +194,7 @@ function ensureFlows($: EngineInterface): TmFlows {
   const write = (mod.write ??= writerOf($))
   mod.io ??= ioOf($)
   // One refresh at a time, scheduled off the calling hook: a turn never waits on tm.
-  if (mod.source === 'tm') mod.refresher ??= singleFlight(refreshRun, fn => host.after(0, fn))
+  if (mod.source === 'tm') mod.refresher ??= singleFlight(refreshRun, (fn, delayMs) => host.after(delayMs, fn))
   mod.flows ??= createFlows({
     host,
     write,
@@ -304,21 +304,24 @@ async function unbindIf(taskId: string): Promise<void> {
   if ((await mod.io?.readBinding())?.taskId === taskId) await unbind()
 }
 
-async function refreshRun(): Promise<void> {
+/** One refresh through the refresher an acting hook built; `final`: no retry remains, so a transient failure is reported. */
+async function refreshRun(final: boolean): Promise<RunOutcome> {
   const { host, io } = mod
-  if (host === null || io === null) return
+  if (host === null || io === null) return 'done'
   mod.detailAsked.clear()
   try {
-    const fault = await refreshOnce(host, io, mod.scope)
+    const { fault, transient } = await refreshOnce(host, io, mod.scope, final)
     if (fault !== mod.lastFault) {
       host.status(FAULT_LINE[fault])
       mod.lastFault = fault
     }
+    if (transient) return 'transient'
     // A refreshed snapshot may carry edited handovers: their summaries are read again when next shown.
     await mod.flows?.forgetSummaries()
   } catch (error) {
     host.log(`taskmaster-tui: refresh failed: ${String(error)}`)
   }
+  return 'done'
 }
 
 // Lazy reads a drawing finds missing, off the render and only through what an acting hook built (a draw builds nothing):
@@ -474,7 +477,8 @@ export const register: Register = (on, options) => {
     if (e.surface === 'mobile') return below
     await $.state.get(RR_POLARITY)
     const notice = await read($, NOTICE)
-    const model = bandModel((await dataOf($)).snapshot, notice)
+    const connecting = mod.source === 'tm' && (await read($, FAULT)) === 'connecting'
+    const model = bandModel((await dataOf($)).snapshot, notice, connecting)
     if (model === null) return below
     const ui = $.ui.resolve(e) as unknown as Ui
     const ours = await bandTree(ui, rrOf($), model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
@@ -512,6 +516,7 @@ export const register: Register = (on, options) => {
       now: await $.clock.now(),
       ticks: (taskId: string) => ticksFor($, taskId),
       detailsOpen: await read($, DETAILS_OPEN),
+      connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
     }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
@@ -539,7 +544,13 @@ export const register: Register = (on, options) => {
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
     const { snapshot, summaries } = await dataOf($)
-    const view = { snapshot, pick: await read($, PICK), summaries, summaryOpen: await read($, SUMMARY_OPEN) }
+    const view = {
+      snapshot,
+      pick: await read($, PICK),
+      summaries,
+      summaryOpen: await read($, SUMMARY_OPEN),
+      connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
+    }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {

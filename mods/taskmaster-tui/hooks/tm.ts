@@ -23,11 +23,27 @@ export const TM_TIMEOUT_MS = 3000
 export const QUEUE_WINDOW = 50
 export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
   none: undefined,
+  connecting: undefined,
   offline: '◆ tm offline',
   unreadable: 'ⓘ tm reply unreadable',
 }
 
-export class TmUnreachable extends Error {}
+/**
+ * A call that got no usable reply. `transient`: worth retrying before reporting offline — the mod's own read timeout (a cold
+ * server's first reads), or the engine saying the server is not connected yet (it connects seconds after session start).
+ */
+export class TmUnreachable extends Error {
+  constructor(
+    message: string,
+    readonly transient: boolean = false,
+  ) {
+    super(message)
+  }
+}
+
+// The engine's words for a server that has not connected (yet): `$.mcp.call: no connected MCP tool "<tool>" on a server
+// named "<server>"`. Matched narrowly: any other error stays a fault at once.
+const NOT_CONNECTED = /\bno connected MCP tool "[^"]+" on a server named "[^"]+"/
 
 export type TmScope = { readonly waitingOnly: boolean; readonly phase: string }
 export type TmIo = {
@@ -44,7 +60,13 @@ export type FetchInput = {
   readonly scope: TmScope
 }
 export type Unreadable = { readonly tool: string; readonly text: string }
-export type FetchResult = { readonly snapshot: TmSnapshot; readonly fault: TmFault; readonly unreadable: readonly Unreadable[] }
+/** `transient`: the snapshot is offline only because of a transient failure (see TmUnreachable). */
+export type FetchResult = {
+  readonly snapshot: TmSnapshot
+  readonly fault: TmFault
+  readonly unreadable: readonly Unreadable[]
+  readonly transient?: boolean
+}
 
 export async function callTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
   const stop = new AbortController()
@@ -58,8 +80,11 @@ export async function callTm(host: TmHost, tool: string, args: Record<string, un
   )
   const first = await Promise.race([work, timer])
   stop.abort()
-  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${TM_TIMEOUT_MS / 1000} s`)
-  if ('error' in first) throw new TmUnreachable(`${tool}: ${String(first.error).split('\n')[0]}`)
+  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${TM_TIMEOUT_MS / 1000} s`, true)
+  if ('error' in first) {
+    const message = String(first.error).split('\n')[0] ?? ''
+    throw new TmUnreachable(`${tool}: ${message}`, NOT_CONNECTED.test(message))
+  }
   if (first.reply.isError) throw new TmUnreachable(`${tool}: ${firstParagraph(first.reply.text) || 'the server reported an error'}`)
   return first.reply
 }
@@ -118,7 +143,9 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       taskId === null ? Promise.resolve(null) : callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
     ])
   } catch (error) {
-    return { snapshot: offlineSnapshot(input, error instanceof Error ? error.message : String(error)), fault: 'offline', unreadable: [] }
+    const reason = error instanceof Error ? error.message : String(error)
+    const transient = error instanceof TmUnreachable && error.transient
+    return { snapshot: offlineSnapshot(input, reason), fault: 'offline', unreadable: [], transient }
   }
   const [list, p0, p1, review, decide, handovers, task, pipeline] = replies
   const refused = [list, p0, p1, review, decide, handovers].find(reply => isRefusal(reply.text))
@@ -179,7 +206,11 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   }
 }
 
-export async function refreshOnce(host: TmHost, io: TmIo, scope: TmScope): Promise<TmFault> {
+/**
+ * One refresh. A transient failure while retries remain (`final` false) writes no snapshot (the last one stays drawn) and
+ * the `connecting` fault (no status line); with no retry left it is reported as offline, like any other failure.
+ */
+export async function refreshOnce(host: TmHost, io: TmIo, scope: TmScope, final = true): Promise<{ fault: TmFault; transient: boolean }> {
   const binding = await io.readBinding()
   const inferredId = binding === null ? inferTaskId([await host.branch(), baseName(await host.cwd())]) : null
   const result = await fetchSnapshot(host, {
@@ -190,9 +221,15 @@ export async function refreshOnce(host: TmHost, io: TmIo, scope: TmScope): Promi
     scope,
   })
   for (const entry of result.unreadable) host.log(`taskmaster-tui: unreadable ${entry.tool} reply: ${entry.text.slice(0, 2000)}`)
+  const transient = result.transient === true
+  if (transient && !final) {
+    host.log(`taskmaster-tui: tm not ready, retrying: ${result.snapshot.reason}`)
+    await io.setFault('connecting')
+    return { fault: 'connecting', transient }
+  }
   await io.setSnapshot(result.snapshot)
   await io.setFault(result.fault)
-  return result.fault
+  return { fault: result.fault, transient }
 }
 
 export async function loadDetail(host: TmHost, taskId: string): Promise<TmTaskDetail | null> {
