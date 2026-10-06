@@ -1,0 +1,279 @@
+/* User intent: the issue and bug detail pages' rules, moved verbatim out of the list screens' stylesheets (plan 3d Task 2); plan 3c re-skins them here. */
+
+/* ─── Issue detail (full-screen) ─── */
+
+.issue-detail {
+  padding: 14px 28px 28px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.id-crumb {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.id-back {
+  color: var(--ink-3);
+  text-decoration: none;
+  cursor: pointer;
+}
+.id-back:hover { color: var(--ink); }
+.id-crumb-sep { opacity: 0.5; }
+.id-crumb-status { color: var(--ink-2); }
+
+.id-empty {
+  padding: 40px;
+  color: var(--ink-3);
+  text-align: center;
+}
+.id-empty a { color: var(--accent); }
+
+.id-head {
+  display: flex; flex-direction: column; gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.id-meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.id-glyph { width: 18px; height: 18px; }
+.id-sev {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.id-sev[data-sev="Critical"] { color: var(--sev-critical); }
+.id-sev[data-sev="High"]     { color: var(--sev-high); }
+.id-sev[data-sev="Medium"]   { color: var(--sev-medium); }
+.id-sev[data-sev="Low"]      { color: var(--sev-low); }
+.id-id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--ink-2);
+}
+.id-status {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  color: var(--ink-3);
+}
+.id-status--investigating {
+  color: var(--accent-blue);
+  background: rgba(110, 168, 255, 0.10);
+  border: 1px solid rgba(110, 168, 255, 0.25);
+}
+.id-status--fixed {
+  color: var(--accent-green, #5fcdb8);
+  background: rgba(95, 205, 184, 0.10);
+  border: 1px solid rgba(95, 205, 184, 0.25);
+}
+.id-status--wontfix { opacity: 0.7; }
+.id-created { color: var(--ink-3); }
+
+.id-title {
+  font-family: 'Source Serif Pro', Georgia, serif;
+  font-style: italic;
+  font-size: 26px;
+  line-height: 1.25;
+  margin: 0;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.id-location {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.id-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 28px;
+  align-items: start;
+}
+
+.id-main { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.id-side { display: flex; flex-direction: column; gap: 14px; }
+
+.id-h {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  margin: 0 0 8px 0;
+  font-weight: 500;
+}
+
+.id-body {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  margin: 0;
+  white-space: pre-wrap;
+}
+.id-body code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.id-repro-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.id-side-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+
+.id-aging { margin-bottom: 10px; }
+
+.id-dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+.id-dl dt { color: var(--ink-3); }
+.id-dl dd { margin: 0; color: var(--ink); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+.id-rel-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.id-rel-pill {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: rgba(110, 168, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+.id-rel-pill:hover { border-color: var(--accent-blue); }
+.id-rel-pill--issue { color: var(--red, #d66b5f); background: rgba(214, 107, 95, 0.08); }
+.id-rel-pill--issue:hover { border-color: var(--red, #d66b5f); }
+
+/* aging bar */
+.aging-bar { display: flex; align-items: center; gap: 8px; }
+.aging-bar__track {
+  flex: 1; height: 4px; background: var(--bg-deep); border-radius: 2px; overflow: hidden;
+}
+.aging-bar__fill { height: 100%; transition: width 200ms ease; }
+.aging-bar--fresh .aging-bar__fill { background: var(--accent-green, #5fcdb8); }
+.aging-bar--aging .aging-bar__fill { background: var(--sev-high); }
+.aging-bar--stale .aging-bar__fill { background: var(--sev-critical); }
+.aging-bar__chip { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.aging-bar__chip--fresh { color: var(--accent-green, #5fcdb8); }
+.aging-bar__chip--aging { color: var(--sev-high); }
+.aging-bar__chip--stale { color: var(--sev-critical); }
+
+/* ─── Bug detail screen ─────────────────────────────────────────────────────── */
+
+.bug-detail {
+  padding: 14px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Severity badge — tinted text, no background stripe */
+.bug-detail__sev {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+/* Map severity values from the bug schema (critical/high/medium/low, case-insensitive) */
+.bug-detail__sev[data-sev="critical"],
+.bug-detail__sev[data-sev="Critical"] { color: var(--sev-critical, #e87a85); }
+.bug-detail__sev[data-sev="high"],
+.bug-detail__sev[data-sev="High"]     { color: var(--sev-high, #e8a87a); }
+.bug-detail__sev[data-sev="medium"],
+.bug-detail__sev[data-sev="Medium"]   { color: var(--sev-medium, #e8d87a); }
+.bug-detail__sev[data-sev="low"],
+.bug-detail__sev[data-sev="Low"]      { color: var(--sev-low, #7ae8a8); }
+
+/* Status pill variants for bugs */
+.bug-detail__status--open     { color: var(--ink-2); }
+.bug-detail__status--shelved  { color: var(--ink-3); }
+.bug-detail__status--fixed {
+  color: var(--accent-green, #5fcdb8);
+  background: rgba(95, 205, 184, 0.10);
+  border: 1px solid rgba(95, 205, 184, 0.25);
+}
+.bug-detail__status--adopted {
+  color: var(--accent-blue, #6ea8ff);
+  background: rgba(110, 168, 255, 0.10);
+  border: 1px solid rgba(110, 168, 255, 0.20);
+}
+.bug-detail__status--archived { opacity: 0.6; }
+
+.bug-detail__section {
+  /* plain block wrapper — no decoration */
+}
+
+/* ── Disposition action bar ── */
+
+.bug-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+/* bug-detail__action-btn extends .cmp-btn — extra specificity only for sizing */
+.bug-detail__action-btn {
+  font-size: var(--text-sm, 13px);
+}
+
+/* Promote button — accent tint so it stands out as the "escalate" action */
+.bug-detail__action-btn:last-child {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+.bug-detail__action-btn:last-child:hover {
+  border-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .bug-detail {
+    padding: 12px 16px 32px;
+  }
+
+  .id-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bug-detail__actions {
+    flex-direction: column;
+  }
+
+  .bug-detail__action-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
