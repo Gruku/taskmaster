@@ -77,14 +77,29 @@ test('at 1440 with the pane open each row stacks: the title keeps at least 200px
       const r = el.getBoundingClientRect();
       return r.left < box.left - 0.5 || r.right > box.right + 0.5;
     });
-    return { id: id.textContent, idCut: id.scrollWidth > id.clientWidth, titleW: t.width,
+    const lk = row.querySelector('.link-row__link').getBoundingClientRect();
+    const ct = row.querySelector('.link-row__content').getBoundingClientRect();
+    return { id: id.textContent, idCut: id.scrollWidth > id.clientWidth, titleW: t.width, metaBelow: ct.top >= lk.bottom - 1,
       text: title.textContent.trim().length > 0 && t.height > 0, hasTitle: title.title === title.textContent, spill };
   }));
   expect(rows.length).toBeGreaterThan(3);
   for (const r of rows) {
     expect(r.titleW, r.id).toBeGreaterThanOrEqual(200);
-    expect(r, r.id).toMatchObject({ idCut: false, text: true, hasTitle: true, spill: false });
+    expect(r, r.id).toMatchObject({ idCut: false, text: true, hasTitle: true, spill: false, metaBelow: true });
   }
+});
+
+test('at 1440 with the pane closed each row keeps its title and metadata on one line', async ({ page }) => {
+  await boot(page);
+  await expect(pane(page)).toBeHidden();
+  await page.evaluate(() => document.fonts.ready);
+  const rows = await page.locator('.ideas__list .idea-row').evaluateAll((els) => els.map((row) => ({
+    id: row.querySelector('.idea-row__id').textContent,
+    dy: Math.abs(row.querySelector('.link-row__content').getBoundingClientRect().top
+      - row.querySelector('.link-row__link').getBoundingClientRect().top),
+  })));
+  expect(rows.length).toBeGreaterThan(3);
+  for (const r of rows) expect(r.dy, r.id).toBeLessThanOrEqual(4);
 });
 
 test('a click selects in place and the address follows', async ({ page, context }) => {

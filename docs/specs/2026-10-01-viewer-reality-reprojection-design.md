@@ -239,7 +239,7 @@ These override the sections they name.
 - **§6 Issues (plan 3d).** Status `duplicate` exists server-side; it reads "Duplicate", counts as moved on (→), sits in the resolved shelf, and is a Status-view column whenever any exists.
 - **§6 Issues (plan 3d).** The stale tag shows only for open and investigating issues whose aging tier is Stale, as a warning marker ("stale 45d").
 - **§6 Issues (plan 3d).** Column taglines ("— actively under triage") are dropped; column heads are Technical labels with counts.
-- **§6 Bugs (plan 3d).** Every `BUG_STATUS` value is a filter chip; archived bugs (the flag or the status) come in through a "Show archived" toggle, as on Ideas. The default is Open + Shelved pressed. A bug with no severity shows no severity marker.
+- **§6 Bugs (plan 3d).** Every `BUG_STATUS` value but `archived` is a filter chip; archived bugs (the flag or the status) come in through a "Show archived" toggle, as on Ideas. The default is Open + Shelved pressed. A bug with no severity shows no severity marker.
 - **§6 Bugs (plan 3d).** No chip is ever "archived", so a bug whose status is archived is admitted by "Show archived" alone, whatever status chips are pressed; a bug flagged archived with another status still answers to the chips.
 - **§6 Ideas (plan 3d).** Rows are real links to `#/ideas/<id>`; a plain click selects in place and rewrites the hash with `history.replaceState`, so a new tab or a pasted link opens the same idea. An idea with no status shows no status marker.
 - **§6 Ideas (plan 3d).** The tag filter keeps today's AND semantics, compared case-insensitively. Escape closes the Tags popover and returns focus to the Tags button.
