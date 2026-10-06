@@ -152,11 +152,29 @@ test('gate_state for a gate off the lane\'s track reads as the current step in w
 });
 
 test('a gate_state not of the gate:state shape is not printed', () => {
-  for (const gate_state of ['weird', 'blocked@review-gate', 'spec-review:', ':pass', 'spec-review:sideways', 'spec-review:constructor', 'a:b:c']) {
+  for (const gate_state of ['weird', 'blocked@', 'blocked@a:b', 'blocked@a@b', 'spec-review:', ':pass', 'spec-review:sideways', 'spec-review:constructor', 'a:b:c']) {
     const root = parse(renderGatePipeline({ lane: 'express', gates: {}, gate_state }));
     assert.equal(root.querySelector('.gp-state'), null, gate_state);
     assert.ok(!root.textContent.includes(gate_state), gate_state);
   }
+});
+
+test('blocked@<gate> says where the task is stuck in words, even for a gate on the track', () => {
+  const root = parse(renderGatePipeline({
+    lane: 'full', gates: { 'review-gate': { verdict: 'fail' } }, gate_state: 'blocked@review-gate',
+  }));
+  assert.equal(root.querySelector('.gp-state').textContent, 'Current step: Blocked at Review gate');
+  assert.ok(!root.textContent.includes('@'), 'the @ string never reaches the page');
+  assert.ok(!root.textContent.includes('blocked@review-gate'));
+});
+
+test('blocked@ an unknown gate falls back to the gate name as a word, never the @ string', () => {
+  const root = parse(renderGatePipeline({ lane: 'express', gates: {}, gate_state: 'blocked@security-audit' }));
+  assert.equal(root.querySelector('.gp-state').textContent, 'Current step: Blocked at Security audit');
+  assert.ok(!root.textContent.includes('@'));
+  const markup = parse(renderGatePipeline({ lane: 'express', gates: {}, gate_state: 'blocked@<b>x</b>' }));
+  assert.equal(markup.querySelector('b'), null);
+  assert.equal(markup.querySelector('.gp-state').textContent, 'Current step: Blocked at <b>x</b>');
 });
 
 test('a gate name in gate_state is text, never markup', () => {

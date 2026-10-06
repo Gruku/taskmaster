@@ -117,12 +117,17 @@ export function renderGatePipeline(task) {
       + `<span class="gp-gate__state">${STATE_WORD[stateClass]}</span></span>`;
   }).join('');
 
-  // The server's '<gate>:<state>' mirror, in words — only when its gate is off this lane's track (a node on the track
-  // already says it). Anything else (e.g. 'blocked@<gate>', an unknown state) is not printed.
-  const current = /^([^:]+):([^:]+)$/.exec(typeof task.gate_state === 'string' ? task.gate_state : '');
-  const stateEl = current && Object.hasOwn(STATE_WORD, current[2]) && !gates.includes(current[1])
-    ? `<span class="gp-state">Current step: ${escapeHtml(gateLabel(current[1]))} — ${STATE_WORD[current[2]]}</span>`
-    : '';
+  // The server's gate_state mirror, in words. 'blocked@<gate>' (a gate failed) always says where the task is stuck;
+  // '<gate>:<state>' only when its gate is off this lane's track (a node on the track already says it). Anything else
+  // (an unknown state, another shape) is not printed.
+  const raw = typeof task.gate_state === 'string' ? task.gate_state : '';
+  const blocked = /^blocked@([^:@]+)$/.exec(raw);
+  const current = /^([^:@]+):([^:]+)$/.exec(raw);
+  let stateEl = '';
+  if (blocked) stateEl = `<span class="gp-state">Current step: Blocked at ${escapeHtml(gateLabel(blocked[1]))}</span>`;
+  else if (current && Object.hasOwn(STATE_WORD, current[2]) && !gates.includes(current[1])) {
+    stateEl = `<span class="gp-state">Current step: ${escapeHtml(gateLabel(current[1]))} — ${STATE_WORD[current[2]]}</span>`;
+  }
 
   return `<div class="gp-track">${nodes}${stateEl}</div>`;
 }
