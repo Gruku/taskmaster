@@ -274,7 +274,7 @@ test('a status word the table does not know is shown whole, even when longer tha
   done();
 });
 
-test('Fullscreen says its state: Exit fullscreen and pressed while the graph fills the screen; leaving the page leaves it', () => {
+test('Fullscreen keeps its name and is pressed while the graph fills the screen; leaving the page leaves it', () => {
   let fsEl = null;
   const fire = () => document.dispatchEvent(new dom.window.Event('fullscreenchange'));
   Object.defineProperty(document, 'fullscreenEnabled', { value: true, configurable: true });
@@ -289,7 +289,7 @@ test('Fullscreen says its state: Exit fullscreen and pressed while the graph fil
     assert.equal(full.getAttribute('aria-pressed'), 'false');
     full.click();
     assert.equal(fsEl, root.querySelector('.td-graph-frame'));
-    assert.equal(full.textContent, 'Exit fullscreen');
+    assert.equal(full.textContent, 'Fullscreen', 'the name stays; the pressed state says it');
     assert.equal(full.getAttribute('aria-pressed'), 'true');
     full.click();
     assert.equal(fsEl, null);

@@ -246,10 +246,9 @@ function renderGraphControls(frame, band) {
   }
   if (document.fullscreenEnabled) {
     const full = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': 'false', 'data-focus': 'graph:fullscreen' }, 'Fullscreen');
-    // Said on the button: whether the graph fills the screen, and the way back out of it.
+    // A toggle: its name stays "Fullscreen" and its pressed state says whether the graph fills the screen.
     full.sayState = () => {
       const on = document.fullscreenElement === frame;
-      full.textContent = on ? 'Exit fullscreen' : 'Fullscreen';
       full.setAttribute('aria-pressed', String(on));
     };
     full.addEventListener('click', () => {

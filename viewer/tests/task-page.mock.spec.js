@@ -386,13 +386,13 @@ test('at 390 the graph\'s issue links and controls are touch-sized', async ({ pa
   }
 });
 
-test('fullscreen keeps a tall graph scrollable and its way out in reach, and says so on the button', async ({ page }) => {
+test('fullscreen keeps a tall graph scrollable and its way out in reach, and its toggle reads pressed', async ({ page }) => {
   await open(page, '#/task/T-105?view=B', { '/api/task/T-105/detail': taskDetail(LONG_TASK, 't1:fixture', LONG_RELATED) });
   const full = page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]');
   await expect(full).toHaveText('Fullscreen');
   await full.click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
-  await expect(full).toHaveText('Exit fullscreen');
+  await expect(full).toHaveText('Fullscreen');
   await expect(full).toHaveAttribute('aria-pressed', 'true');
   const m = await page.evaluate(() => {
     const canvas = document.querySelector('.td-graph-frame .td-graph-canvas');
