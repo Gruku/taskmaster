@@ -6,15 +6,11 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail, taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
-const TABLE = {
-  '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
-  [DETAIL]: taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
-  'PUT /api/viewer/prefs': {},
-};
+const TABLE = taskPageMocks();
 
 let errors;
 let patches;
@@ -35,9 +31,11 @@ test.afterEach(async ({ page }) => {
 const doc = (page) => page.locator('#screen-mount.td-doc');
 const h1 = (page) => page.locator('#screen-mount h1.td-title');
 
-async function open(page, hash = '#/task/T-102', table = {}) {
+// Waits on the view's loaded heading (the brief's loaded-selectors); pass `loaded: null` for a page that never loads.
+async function open(page, hash = '#/task/T-102', table = {}, { loaded = /[?&]view=B\b/.test(hash) ? '.td-page-B h1.td-title' : '.td-page-A h1.td-title' } = {}) {
   await mockApi(page, { ...TABLE, ...table });
   await page.goto('/' + hash);
+  if (loaded) await expect(page.locator(`#screen-mount${loaded}, #screen-mount ${loaded}`).first()).toBeVisible();
 }
 
 // Another writer changes the task: the next detail read has `task`, and a poll brings a new board revision.
@@ -98,6 +96,10 @@ test('Edit sits in row 1 as the page\'s primary and the switch alone in row 2', 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(edit).toBeVisible();
   expect((await edit.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  // At 390 the primary shows its icon only, and still says "Edit" to a screen reader.
+  await expect(edit.locator('> .icon')).toBeVisible();
+  await expect(edit.locator('> span')).toBeHidden();
+  await expect(page.locator('#topbar-primary').getByRole('button', { name: /Edit/ })).toHaveCount(1);
 });
 
 test('another writer\'s change waits while a section is edited on the page, then shows', async ({ page }) => {
@@ -425,4 +427,34 @@ test('fullscreen keeps a tall graph scrollable and its way out in reach, and its
   await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
   await expect(full).toHaveText('Fullscreen');
   await expect(full).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('a repaint of the same task keeps the graph in fullscreen, on the same frame, showing the new data', async ({ page }) => {
+  await open(page, GRAPH);
+  const full = page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]');
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
+  await page.evaluate(() => { document.fullscreenElement.dataset.marked = 'before'; });
+
+  await renamedElsewhere(page, 'Renamed elsewhere');
+  await expect(page.locator('#screen-mount h1')).toHaveText('Renamed elsewhere');
+  await expect(page.locator('#screen-mount .node--center')).toHaveAttribute('aria-label', /Renamed elsewhere/);
+  const after = await page.evaluate(() => ({
+    same: document.fullscreenElement?.dataset.marked === 'before',
+    frames: document.querySelectorAll('#screen-mount .td-graph-frame').length,
+  }));
+  expect(after.same, 'the frame that fills the screen is the one the click put there').toBe(true);
+  expect(after.frames).toBe(1);
+  await expect(full).toHaveAttribute('aria-pressed', 'true');
+  await full.click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+});
+
+test('leaving the task page while the graph fills the screen leaves fullscreen', async ({ page }) => {
+  await open(page, GRAPH);
+  await page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]').click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('.td-graph-frame') ?? false)).toBe(true);
+  await page.evaluate(() => { location.hash = '#/kanban'; });
+  await expect(page.locator('#screen-mount.td-page-B')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
 });

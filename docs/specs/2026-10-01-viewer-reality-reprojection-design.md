@@ -251,3 +251,9 @@ These override the sections they name.
 - **§6 Ideas (plan 3d).** Rows are real links to `#/ideas/<id>`; a plain click selects in place and rewrites the hash with `history.replaceState`, so a new tab or a pasted link opens the same idea. An idea with no status shows no status marker.
 - **§6 Ideas (plan 3d).** The tag filter keeps today's AND semantics, compared case-insensitively. Escape closes the Tags popover and returns focus to the Tags button.
 - **§6 Ideas (plan 3d).** "New idea" is a row-1 action, not part of the filter rail.
+- **§6 detail template (plan 3c).** Task, issue and bug pages share one set of builders (`components/detail-page.js`) and the `td-*` classes; issue and bug specifics are `dp-*` in `css/screens/detail-pages.css`. The graph view keeps the page's head and `h1`.
+- **§6 graph (plan 3c).** "Depth" and "Show all" are removed, not built (they did nothing); nodes are SVG links with the status shape and word; the tabs are ARIA tabs and the raw tab is "Raw JSON".
+- **§6 issue detail (plan 3c).** Staleness on the detail page is 3d's "stale Nd" tag (`staleTag()`, the one the Issues board shows; IS-04), not a bar.
+- **§6 bug detail (plan 3c).** Bug actions are in-app forms on the shared entity form; "Mark fixed" requires a commit (the server always did) and is the page's primary action in row 1; after an action the page shows the bug's new state, and a promote opens the new issue.
+- **§5.10 gates (plan 3c).** Each gate shows its state as a visible word; the raw `gate_state` string is never printed.
+- **§5.7 leaving a page (plan 3c).** Leaving a detail page with a form open asks the form to close, exactly as leaving the detail modal does.

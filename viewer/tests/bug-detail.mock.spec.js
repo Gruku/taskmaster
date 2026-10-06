@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, BUG, BUG_FIXED, LONG_BUG } from './mock-fixtures.js';
+import { BOARD, BUG, BUG_FIXED, LONG_BUG, bugDetailMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 let errors;
@@ -25,12 +25,7 @@ test.afterEach(async ({ page }) => {
 });
 
 async function open(page, hash, { theme = 'dark', before } = {}) {
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
-    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [], '/api/issues': { issues: [] },
-    '/api/bugs/B-031': BUG, '/api/bugs/B-030': BUG_FIXED, '/api/bugs/B-1234': LONG_BUG,
-    '/api/bugs/B-999': { status: 404, json: { ok: false, error: 'unknown bug B-999' } },
-  });
+  await mockApi(page, { ...bugDetailMocks({ theme }), '/api/bugs': [], '/api/issues': { issues: [] } });
   if (before) await before();
   await page.goto(`/${hash}`);
 }
@@ -106,6 +101,8 @@ test('B-999 is not found in words; a 500 says so without the server\'s text; no 
   const busy = m.locator('.tm-empty[aria-busy="true"]');
   await expect(busy).toBeVisible();
   await expect(busy).toBeFocused();
+  // Nothing is loaded yet, so row 1 offers no primary action.
+  await expect(page.locator('#topbar-primary')).toBeEmpty();
   release();
   await expect(m.locator('h1')).toHaveText(BUG.title);
   await expect(m.locator('h1')).toBeFocused();
@@ -312,6 +309,66 @@ test('while a Shelve is being saved the row is busy and a second Shelve sends no
   await expect(statusWord(page)).toHaveText('Shelved');
   expect(posts).toEqual([{ status: 'shelved' }]);
   expect(await focusIsSensible(page)).toBe(true);
+});
+
+test('after a Shelve is saved the row stays busy until the re-read repaints the page', async ({ page }) => {
+  const posts = [];
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let current = BUG;
+  await open(page, '#/bug/B-031', { before: () => page.route('**/api/bugs/B-031', async (route) => {
+    const req = route.request();
+    if (req.method() === 'GET') {
+      if (posts.length) await held;
+      await route.fulfill({ json: current });
+      return;
+    }
+    posts.push(req.postDataJSON());
+    current = { ...BUG, status: 'shelved' };
+    await route.fulfill({ json: { ok: true, id: 'B-031' } });
+  }) });
+  const row = mount(page).getByRole('group', { name: 'Bug actions' });
+  await row.getByRole('button', { name: 'Shelve' }).click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  // The write is answered; the re-read is held. Nothing on the old row may be clickable again.
+  await page.waitForTimeout(150);
+  await expect(row).toHaveAttribute('aria-busy', 'true');
+  for (const b of await row.getByRole('button').all()) await expect(b).toBeDisabled();
+  release();
+  await expect(statusWord(page)).toHaveText('Shelved');
+  await expect(mount(page).getByRole('button', { name: 'Shelve' })).toHaveCount(0);
+  expect(posts).toEqual([{ status: 'shelved' }]);
+});
+
+test('a Shelve that throws un-busies the row, says so in words and puts focus back on Shelve', async ({ page }) => {
+  const w = bugWrites(page);
+  await open(page, '#/bug/B-031', { before: w.install });
+  const row = mount(page).getByRole('group', { name: 'Bug actions' });
+  const shelve = row.getByRole('button', { name: 'Shelve' });
+  await expect(shelve).toBeVisible();
+  // A write answered with a refusal comes back as { error }; a throw only happens before the write goes out.
+  // Make the busy mark itself throw once, so shelveBug rejects instead of answering.
+  await page.evaluate(() => {
+    const orig = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (n, v) {
+      if (n === 'aria-busy' && this.classList.contains('dp-actions')) {
+        Element.prototype.setAttribute = orig;
+        throw new Error('boom');
+      }
+      return orig.call(this, n, v);
+    };
+  });
+  await shelve.click();
+  await page.getByRole('alertdialog', { name: 'Shelve B-031?' }).getByRole('button', { name: 'Shelve' }).click();
+  const msg = row.locator('.dp-actions__message');
+  await expect(msg).toHaveText('Could not reach the server, so nothing was saved. Check that the viewer is still running.');
+  await expect(msg).not.toContainText('boom');
+  await expect(shelve).toBeFocused();
+  await expect(shelve).toBeEnabled();
+  await expect(row).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(statusWord(page)).toHaveText('Open');
+  expect(w.posts).toEqual([]);
 });
 
 for (const status of [500, 404]) {

@@ -78,22 +78,32 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     const restore = rememberView(root);
     // The graph view's own state (open tab, hidden context, canvas scroll) carries over a repaint of the graph view.
     const viewState = view === 'B' ? cleanup?.viewState?.() : undefined;
-    cleanup?.();
+    // A fullscreen graph frame stays on the page for the graph mount below to repaint inside it.
+    const keepFrame = !!viewState?.frame;
+    cleanup?.({ keepFrame });
     cleanup = null;
     const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant, view, viewState};
     if (view === 'B') {
       const mod = await import('../components/task-detail-graph.js');
       if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
+      else if (keepFrame) {
+        // Nothing replaces the kept frame after all: leave no screen filled by an abandoned page.
+        if (document.fullscreenElement && root.contains(document.fullscreenElement)) document.exitFullscreen?.();
+        root.replaceChildren();
+      }
     } else cleanup = mountTaskDetailDocument(root, ctx);
     shown = value;
     restore(root);
   }
   async function refresh() {
-    if (disposed || store.isEditing(id)) return;
+    // Nothing is painted on an early return, so a later store refresh must not pull focus to the h1.
+    if (disposed || store.isEditing(id)) { refocus = false; return; }
     const request = ++generation;
     try {
       const value = await getTaskDetailFull(id, {force: true});
-      if (!disposed && request === generation && !store.isEditing(id)) {
+      // An edit that began while the read was out paints nothing either: no focus pulled to the h1 later.
+      if (!disposed && request === generation && store.isEditing(id)) refocus = false;
+      else if (!disposed && request === generation) {
         await paint(value, request);
         if (!disposed && request === generation) {
           rememberAsLast();

@@ -22,7 +22,10 @@ export function mountTaskDetailGraph(root, ctx) {
   const timers = new Set();
   const uid = `tdg${++seq}`;
   const kept = ctx.viewState && typeof ctx.viewState === 'object' ? ctx.viewState : {};
-  root.replaceChildren();
+  // A frame filling the screen survives a repaint of its own task: fullscreen cannot be asked for again without a click.
+  const keptFrame = kept.taskId === task.id && kept.frame?.isConnected && root.contains(kept.frame) ? kept.frame : null;
+  const out = keptFrame ? document.createElement('div') : root;
+  if (!keptFrame) root.replaceChildren();
   root.classList.add('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
   // A node is a link to its task; on this page it navigates rather than opening a modal over this one.
   root.dataset.detailLinks = 'follow';
@@ -33,9 +36,11 @@ export function mountTaskDetailGraph(root, ctx) {
   const markers = h('div', { class: 'td-markers', 'data-test': 'chips' }, [
     statusMarker('task', task.status), priorityMarker(task.priority),
   ]);
-  root.appendChild(detailHead({ meta: taskMeta(task, { timers }), title: detailTitle(words(task.title)), after: [markers] }));
-  const body = h('div', { class: 'td-body' }, [renderGraphFrame(task, ctx.related, uid, kept), renderTabs(task, uid, kept.tab)]);
-  root.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
+  out.appendChild(detailHead({ meta: taskMeta(task, { timers }), title: detailTitle(words(task.title)), after: [markers] }));
+  const freshFrame = renderGraphFrame(task, ctx.related, uid, kept);
+  const body = h('div', { class: 'td-body' }, [freshFrame, renderTabs(task, uid, kept.tab)]);
+  out.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
+  if (keptFrame && !graft(root, out, keptFrame, freshFrame)) root.replaceChildren(...out.childNodes);
   // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
@@ -45,12 +50,15 @@ export function mountTaskDetailGraph(root, ctx) {
   const fullscreen = root.querySelector('[data-focus="graph:fullscreen"]');
   const sayFullscreen = () => fullscreen?.sayState();
   document.addEventListener('fullscreenchange', sayFullscreen);
+  sayFullscreen();
 
-  const dispose = () => {
+  // `{ keepFrame: true }`: the next mount repaints this same task and grafts its content around the frame.
+  const dispose = ({ keepFrame = false } = {}) => {
     document.removeEventListener('fullscreenchange', sayFullscreen);
+    for (const timer of timers) clearTimeout(timer);
+    if (keepFrame) return;
     // The frame is about to go: never leave the screen filled by a node that is no longer there.
     if (document.fullscreenElement && root.contains(document.fullscreenElement)) document.exitFullscreen?.();
-    for (const timer of timers) clearTimeout(timer);
     root.replaceChildren();
     root.classList.remove('td-doc', 'td-doc--page', 'td-page', 'td-page-B');
     delete root.dataset.detailLinks;
@@ -59,8 +67,33 @@ export function mountTaskDetailGraph(root, ctx) {
     tab: root.querySelector('.td-tab[aria-selected="true"]')?.dataset.tab ?? null,
     contextHidden: root.querySelector('[data-test="context-band"]')?.hidden ?? false,
     scrollLeft: canvas?.scrollLeft, scrollTop: canvas?.scrollTop,
+    taskId: task.id,
+    // Only a frame that fills the screen is worth keeping; otherwise a repaint simply replaces it.
+    frame: document.fullscreenElement && root.contains(document.fullscreenElement) ? document.fullscreenElement : null,
   });
   return dispose;
+}
+
+// Puts `fresh`'s content into `root` without `keep` (the live frame) ever leaving the document: along the path from
+// root down to keep, every other child is swapped for its fresh twin, and keep takes freshKeep's class and children.
+// Returns false when the two trees do not share that path's shape, so the caller replaces everything instead.
+function graft(root, fresh, keep, freshKeep) {
+  const path = (node, top) => { const p = []; for (let n = node; n && n !== top; n = n.parentNode) p.unshift(n); return p; };
+  const live = path(keep, root), twin = path(freshKeep, fresh);
+  if (live.length !== twin.length || live[0]?.parentNode !== root || twin[0]?.parentNode !== fresh) return false;
+  const parents = [root, ...live.slice(0, -1)], freshParents = [fresh, ...twin.slice(0, -1)];
+  parents.forEach((parent, i) => {
+    const before = [], after = [];
+    let seen = false;
+    for (const c of [...freshParents[i].childNodes]) { if (c === twin[i]) seen = true; else (seen ? after : before).push(c); }
+    for (const c of [...parent.childNodes]) if (c !== live[i]) c.remove();
+    live[i].before(...before);
+    live[i].after(...after);
+    if (i > 0) parent.className = freshParents[i].className;
+  });
+  keep.className = freshKeep.className;
+  keep.replaceChildren(...freshKeep.childNodes);
+  return true;
 }
 
 // Task data is written by many hands: a field of the wrong type is shown as nothing, never as "[object Object]".
@@ -247,13 +280,15 @@ function renderGraphControls(frame, band) {
   if (document.fullscreenEnabled) {
     const full = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-pressed': 'false', 'data-focus': 'graph:fullscreen' }, 'Fullscreen');
     // A toggle: its name stays "Fullscreen" and its pressed state says whether the graph fills the screen.
+    // The frame on the page may be an earlier one a repaint kept in place, so it is looked up, not closed over.
+    const liveFrame = () => full.closest('.td-graph-frame') ?? frame;
     full.sayState = () => {
-      const on = document.fullscreenElement === frame;
+      const on = document.fullscreenElement === liveFrame();
       full.setAttribute('aria-pressed', String(on));
     };
     full.addEventListener('click', () => {
       if (document.fullscreenElement) document.exitFullscreen?.();
-      else frame.requestFullscreen?.();
+      else liveFrame().requestFullscreen?.();
     });
     buttons.push(full);
   }

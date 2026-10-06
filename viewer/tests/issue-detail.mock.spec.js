@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, ISSUE, ISSUES, LONG_ISSUE } from './mock-fixtures.js';
+import { BOARD, ISSUE, ISSUES, LONG_ISSUE, issueDetailMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 let errors;
@@ -20,10 +20,7 @@ test.afterEach(async ({ page }) => {
 });
 
 async function open(page, hash, { theme = 'dark', issues = ISSUES, before } = {}) {
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {}, issues: { aging: { High: 30 } } },
-    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [], '/api/issues': issues,
-  });
+  await mockApi(page, { ...issueDetailMocks({ theme }), '/api/bugs': [], '/api/issues': issues });
   if (before) await before();
   await page.goto(`/${hash}`);
 }

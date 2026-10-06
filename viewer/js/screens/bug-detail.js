@@ -5,6 +5,7 @@ import * as api from '../api.js';
 import { claimTopbar, claimTopbarPrimary, tmAction } from '../lib/topbar.js';
 import { openModalCount, topModal } from '../components/modal.js';
 import { openMarkFixed, openAdopt, openPromote, shelveBug } from '../components/edit/bug-actions.js';
+import { describeWriteError } from '../components/edit/write-errors.js';
 import { h } from '../util/h.js';
 import { statusMarker, severityMarker } from '../components/status.js';
 import { linkRoute } from '../components/link-pills.js';
@@ -203,9 +204,13 @@ export function mount(root, { params, subpath, store }) {
         else row.removeAttribute('aria-busy');
         row.querySelectorAll('button').forEach((b) => { b.disabled = busy; });
       };
+      // undefined is a saved shelve: the row stays busy until done() repaints the page. A throw is a refusal too,
+      // said in words below, so the row never stays off and the rejection never escapes.
       let answer;
       try {
         answer = await shelveBug({ bug, onConfirm: () => setBusy(true) });
+      } catch (e) {
+        answer = { error: describeWriteError(e, { noun: 'bug' }) };
       } finally {
         shelving = false;
       }

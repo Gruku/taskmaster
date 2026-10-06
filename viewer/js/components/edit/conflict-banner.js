@@ -1,7 +1,7 @@
 // viewer/js/components/edit/conflict-banner.js
 // Surfaces 409 conflicts. Two flavors:
 //   showFieldConflict — single-field, used by inline-field.js
-//   showFullConflict  — multi-field diff, used by entity-modal.js
+//   showFullConflict  — multi-field diff, used by task-actions.js
 // User intent: when someone else changed what the user is editing, say so in words that read in both themes, name each
 // field the way the form does, offer a named choice per field, and push any open dialog down rather than cover it.
 
