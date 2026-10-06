@@ -112,7 +112,8 @@ function page(bug, { tasks, timers, act }) {
 }
 
 // Promote moves to the new issue and the button that had focus goes with this page: focus follows to the next
-// page's title (or its settled empty state) rather than falling to <body>, unless the user has already moved it.
+// page's title (or its settled empty state) rather than falling to <body>, unless the user has already moved it
+// anywhere (the sidebar included) — only focus left on <body> is taken.
 function focusNextPage(root) {
   const old = root.querySelector('h1');
   let obs = null;
@@ -123,7 +124,7 @@ function focusNextPage(root) {
     if (!target) return;
     stop();
     const active = document.activeElement;
-    if (active && active !== document.body && root.contains(active)) return;
+    if (active && active !== document.body) return;
     if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
     target.focus();
   });

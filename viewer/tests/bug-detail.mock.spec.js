@@ -354,6 +354,33 @@ test('Promote opens the new issue', async ({ page }) => {
   expect(await focusIsSensible(page)).toBe(true);
 });
 
+test('after Promote, focus the user moved to the sidebar stays there when the issue paints', async ({ page }) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await open(page, '#/bug/B-031', { before: async () => {
+    await page.route('**/api/bugs/promote', (route) => route.fulfill({ status: 201, json: { ok: true, issue_id: 'ISS-030' } }));
+    await page.route('**/api/issues', async (route) => {
+      await gate;
+      await route.fulfill({ json: { issues: [{ id: 'ISS-030', title: 'Promoted', severity: 'P1', status: 'open' }] } });
+    });
+  } });
+  await mount(page).getByRole('button', { name: 'Promote to issue' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Promote to an issue' });
+  await dlg.getByRole('textbox', { name: /Evidence/ }).fill('Recurring: 3 bugs');
+  await dlg.getByRole('button', { name: 'Promote' }).click();
+  await expect(page).toHaveURL(/#\/issue\/ISS-030$/);
+  await expect(dlg).toHaveCount(0);
+  const moved = await page.evaluate(() => {
+    const link = [...document.querySelectorAll('a[href]')].find((a) => !document.getElementById('screen-mount').contains(a) && a.offsetParent);
+    link.focus();
+    return link.getAttribute('href');
+  });
+  release();
+  await expect(page.locator('#screen-mount h1')).toHaveText('Promoted');
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('href'))).toBe(moved);
+});
+
 test('leaving the bug page with an action form open: clean closes, typed asks', async ({ page }) => {
   const w = bugWrites(page);
   await open(page, '#/bug/B-031', { before: w.install });
