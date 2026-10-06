@@ -46,8 +46,9 @@ export function mount(root, { store, subpath = [] } = {}) {
     icon: 'plus', label: 'New idea', variant: 'primary', title: 'Create a new idea',
     onClick: () => openIdeaCreateModal({ store, onCreated: loadIdeas }),
   });
-  claimTopbarPrimary()?.append(newBtn);
+  // claimTopbar() empties #topbar-primary too, so it goes first.
   const topbar = claimTopbar();
+  claimTopbarPrimary()?.append(newBtn);
   const searchBuilt = tmSearch({ placeholder: 'Search ideas…', onInput: (v) => { search = v; paint(); } });
   const searchInput = searchBuilt.input;
   topbar?.append(searchBuilt.el);

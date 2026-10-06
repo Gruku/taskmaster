@@ -39,10 +39,11 @@ async function boot(page, { theme = 'dark', width = 1440, height = 900, wait = t
 
 const rowIds = (page) => page.locator('.ideas__list .idea-row a[data-id]').evaluateAll((as) => as.map((a) => a.dataset.id));
 const link = (page, id) => page.locator(`.ideas__list a[data-id="${id}"]`);
-const rowOf = (page, id) => page.locator('.ideas__list .idea-row').filter({ has: link(page, id) });
+// The inner locator is scoped to the row, so it cannot name the list that contains the row.
+const rowOf = (page, id) => page.locator('.ideas__list .idea-row').filter({ has: page.locator(`a[data-id="${id}"]`) });
 const pane = (page) => page.locator('section.ideas-detail');
 const statusChip = (page, name) => page.getByRole('group', { name: 'Status' }).getByRole('button', { name: new RegExp(`^${name}`) });
-const tagsButton = (page) => page.locator('.tag-filter').getByRole('button').first();
+const tagsButton = (page) => page.locator('.ideas button.tag-filter');
 const tagDialog = (page) => page.getByRole('dialog', { name: 'Filter by tag' });
 const choice = (page, key) => tagDialog(page).locator(`.tag-filter__list input[type="checkbox"][value="${key}"]`);
 const setIdeas = (page, list) => page.evaluate((l) => import('/js/store.js').then(({ store }) => store.setIdeas(l)), list);
@@ -117,7 +118,7 @@ test('a list redraw while Tags is open keeps it open, its choices and its focus'
   await expect(tagDialog(page)).toBeVisible();
   await expect(choice(page, 'ux')).toBeChecked();
   await expect(choice(page, 'perf')).toBeFocused();
-  await expect(tagDialog(page).locator('.tag-filter__option').filter({ has: choice(page, 'board') })).toContainText('2');
+  await expect(tagDialog(page).locator('.tag-filter__option').filter({ has: page.locator('input[type="checkbox"][value="board"]') })).toContainText('2');
   expect(await rowIds(page)).toEqual(['IDEA-3', 'IDEA-1']);
 });
 
@@ -126,7 +127,7 @@ test('leaving Ideas with Tags open leaves nothing behind', async ({ page }) => {
   await tagsButton(page).click();
   await expect(tagDialog(page)).toBeVisible();
   await page.evaluate(() => { location.hash = '#/kanban'; });
-  await expect(page.locator('#topbar input[type="search"]')).toBeVisible();
+  await expect(page.locator('#topbar').getByRole('textbox', { name: 'Find tasks' })).toBeVisible();
   await expect(page.locator('.popover')).toHaveCount(0);
   await expect(page.locator('.tag-filter__popover')).toHaveCount(0);
   await expect(page.locator('.ideas')).toHaveCount(0);
@@ -160,7 +161,8 @@ test('keyboard walk: search, chips, Tags, Show archived, then rows newest first;
     await page.keyboard.press('Tab');
     const d = await page.evaluate(() => {
       const el = document.activeElement;
-      return el.dataset.id || (el.closest('.tag-filter') ? 'Tags' : '') || el.textContent.trim().split(/\s/)[0];
+      // A chip's label and count are adjacent spans with no space between them, so read the label alone.
+      return el.dataset.id || (el.closest('.tag-filter') ? 'Tags' : '') || (el.querySelector('.chip__label') || el).textContent.trim().split(/\s/)[0];
     });
     seen.push(d);
     if (d === 'IDEA-2') break;
@@ -214,7 +216,8 @@ test('at 390 with long data nothing scrolls sideways and every control is 44px t
   expect(m.ms).toBeLessThanOrEqual(m.mc);
   expect(m.h).toBeLessThanOrEqual(8000);
   const controls = page.locator([
-    '.ideas .tm-chip-row button', '.ideas .tag-filter > button', '.ideas .ideas__list .link-row__link',
+    // .list-filters holds every chip, More, Tags, Show archived and Clear.
+    '.ideas .list-filters button', '.ideas .ideas__list .link-row__link',
     '#topbar-primary button',
   ].join(', '));
   const heights = await controls.evaluateAll((els) => els.filter((e) => e.offsetParent).map((e) => [e.textContent.trim().slice(0, 20), e.getBoundingClientRect().height]));
