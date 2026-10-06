@@ -390,3 +390,106 @@ for (const theme of ['dark', 'light']) {
     expect(v.map((x) => `${x.id}: ${x.nodes.length} — ${x.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+// ── Review round 1 ────────────────────────────────────────────────────────────────────────────────────────────────
+
+const subcount = (page) => page.locator('.tm-subcount');
+const searchBox = (page) => page.getByPlaceholder('Filter… (prefix ! to exclude)');
+
+test('the count says how many show only while a chip, the search or a ?status= link narrows the list', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(subcount(page)).toHaveText('230 tasks');
+  await chip(page, 'Status', 'todo').click();
+  const todo = LONG_IDS_BOARD.tasks.filter((t) => t.status === 'todo').length;
+  await expect(subcount(page)).toHaveText(`230 tasks · ${todo} visible`);
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(subcount(page)).toHaveText('230 tasks');
+  await searchBox(page).fill('T-100');
+  const hits = LONG_IDS_BOARD.tasks.filter((t) => `${t.id} ${t.title || ''} ${t.branch || ''}`.toLowerCase().includes('t-100')).length;
+  await expect(subcount(page)).toHaveText(`230 tasks · ${hits} visible`);
+  await searchBox(page).fill('');
+  await expect(subcount(page)).toHaveText('230 tasks');
+});
+
+test('a ?status= link counts as narrowing; ?status=archived is no chip and changes nothing', async ({ page }) => {
+  await boot(page, { route: '#/table?status=in-progress' });
+  const ip = TABLE_BOARD.tasks.filter((t) => t.status === 'in-progress').length;
+  await expect(subcount(page)).toHaveText(`${TABLE_BOARD.tasks.length} tasks · ${ip} visible`);
+  await page.evaluate(() => { location.hash = '#/table?status=archived'; });
+  await expect(page.locator('.tbl-row')).toHaveCount(TABLE_BOARD.tasks.length);
+  await expect(page.locator('.tbl-chips .chip[aria-pressed="true"]')).toHaveCount(0);
+  await expect(subcount(page)).toHaveText(`${TABLE_BOARD.tasks.length} tasks`);
+});
+
+test('at 900 wide the no-match block and its action stay inside the frame, wherever it is scrolled', async ({ page }) => {
+  await boot(page, { width: 900, height: 800 });
+  await searchBox(page).fill('nothing-matches-this');
+  await expect(page.locator('.tbl-empty .tm-empty')).toBeVisible();
+  const inView = () => page.evaluate(() => {
+    const host = document.querySelector('.tbl-host');
+    const r = host.getBoundingClientRect();
+    const right = r.left + host.clientWidth;
+    const inside = (el) => { const b = el.getBoundingClientRect(); return b.left >= r.left - 0.5 && b.right <= right + 0.5; };
+    return { scrolls: host.scrollWidth > host.clientWidth, block: inside(host.querySelector('.tbl-empty .tm-empty')), action: inside(host.querySelector('.tbl-empty .tm-empty button')) };
+  });
+  expect(await inView()).toEqual({ scrolls: true, block: true, action: true });
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-scrolled', '');
+  expect(await inView()).toEqual({ scrolls: true, block: true, action: true });
+});
+
+test('the fade stops at classic scrollbars, and the header height is the host\'s scroll padding', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  // Headless Chromium hides scrollbars, even styled ones; a 15px right and bottom border takes the same room a classic
+  // Windows scrollbar does (offsetWidth - clientWidth counts both alike), so the arithmetic is what is checked.
+  await page.addStyleTag({ content: '.tbl-host { border-right: 15px solid transparent; border-bottom: 15px solid transparent; }' });
+  await expect.poll(() => host(page).evaluate((el) => [el.offsetWidth - el.clientWidth, el.offsetHeight - el.clientHeight])).toEqual([15, 15]);
+  await expect(page.locator('.tbl-fade')).toHaveCSS('right', '15px');
+  await expect(page.locator('.tbl-fade')).toHaveCSS('bottom', '15px');
+  const head = await page.locator('table.tbl thead').evaluate((el) => `${el.offsetHeight}px`);
+  await expect(host(page)).toHaveCSS('scroll-padding-top', head);
+});
+
+test('at 800 wide a long ID lets the title scroll away, so the other columns come into view beside a fixed ID', async ({ page }) => {
+  await boot(page, { width: 800, height: 800, board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-title-loose', '');
+  const seen = await host(page).evaluate((el) => {
+    const id = el.querySelector('.tbl-row .tbl-cell--id');
+    const status = el.querySelector('.tbl-row .tbl-cell--status');
+    el.scrollLeft = status.offsetLeft - id.offsetWidth;
+    const b = status.getBoundingClientRect();
+    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    return { status: status.contains(hit), id: Math.round(id.getBoundingClientRect().left - el.getBoundingClientRect().left) };
+  });
+  expect(seen.status).toBe(true);
+  expect(Math.abs(seen.id)).toBeLessThanOrEqual(1);
+});
+
+test('at 1440 the same long IDs keep the title fixed beside the ID', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).not.toHaveAttribute('data-title-loose', '');
+});
+
+test('with very short IDs the ID header and its sort arrow are not cut', async ({ page }) => {
+  const short = { ...TABLE_BOARD, tasks: TABLE_BOARD.tasks.slice(0, 3).map((t, i) => ({ ...t, id: `T-${i + 1}` })) };
+  await boot(page, { board: short });
+  const th = await page.locator('th[data-key="id"]').evaluate((el) => [el.scrollWidth, el.clientWidth]);
+  expect(th[0]).toBeLessThanOrEqual(th[1]);
+});
+
+test('a Shift-click on a row, or the end of a text selection in it, opens nothing', async ({ page }) => {
+  await boot(page);
+  const row = page.locator('.tbl-row[data-task-id="T-102"]');
+  await row.locator('.tbl-cell--status').click({ modifiers: ['Shift'] });
+  await page.evaluate(() => getSelection().removeAllRanges());
+  const b = await row.locator('.tbl-cell--epic > span').boundingBox();
+  await page.mouse.move(b.x + 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2, { steps: 5 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => String(getSelection()))).not.toBe('');
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal')).toHaveCount(0);
+  expect(page.context().pages()).toHaveLength(1);
+  expect(await page.evaluate(() => location.hash)).toBe('#/table');
+});

@@ -27,6 +27,7 @@
   position: relative; display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden;
   border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--card-bg);
 }
+/* scroll-padding-top (the header's height) is set from table.js. */
 .tbl-host { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
 .tbl-fade {
   position: absolute; top: 0; right: 0; bottom: 0; width: var(--space-2xl); pointer-events: none;
@@ -55,11 +56,18 @@ table.tbl {
 .tbl-row { cursor: pointer; }
 .tbl-row:hover > .tbl-cell { background: var(--card-bg-hover); }
 
-/* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. */
+/* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. The fade's right and
+   bottom offsets (the scrollbars' size) are set there too. */
 .tbl-th[data-key="id"], .tbl-cell--id { position: sticky; left: 0; z-index: 1; }
 .tbl-th[data-key="title"], .tbl-cell--title { position: sticky; z-index: 1; border-right: 1px solid var(--border-subtle); }
 .tbl-th:is([data-key="id"], [data-key="title"]) { z-index: 3; }
 .tbl-frame[data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-strong); }
+/* A frame too narrow for both: the title scrolls with the rest, under the ID, which takes the edge. */
+.tbl-frame[data-title-loose] .tbl-cell--title { position: static; }
+.tbl-frame[data-title-loose] .tbl-th[data-key="title"] { z-index: 2; }
+.tbl-frame[data-title-loose] :is(.tbl-th[data-key="id"], .tbl-cell--id) { border-right: 1px solid var(--border-subtle); }
+.tbl-frame[data-title-loose][data-scrolled] :is(.tbl-th[data-key="id"], .tbl-cell--id) { border-right-color: var(--border-strong); }
+.tbl-frame[data-title-loose][data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-subtle); }
 
 .tbl-link { display: block; min-width: 0; color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); text-decoration: none; }
 .t-id, .t-tech {
@@ -68,4 +76,7 @@ table.tbl {
 }
 code.t-tech { background: transparent; padding: 0; }
 .t-none { color: var(--foreground-subtle); }
-.tbl-empty { padding: var(--space-2xl) var(--space-lg); white-space: normal; }
+/* The block's width is the host's visible width (set from table.js) and it sticks to the left edge, so a table wider
+   than the frame never pushes it, or its one action, out of view. */
+.tbl-empty { padding: var(--space-2xl) 0; white-space: normal; }
+.tbl-empty > .tm-empty { position: sticky; left: 0; box-sizing: border-box; }

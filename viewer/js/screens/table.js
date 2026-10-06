@@ -122,12 +122,37 @@ export async function mount(root, { store, api, prefs, params }) {
   const fade = h('div', { class: 'tbl-fade', 'aria-hidden': 'true' });
   frame.append(tableHost, fade);
   screen.appendChild(frame);
+  // The measured ID column: { longest id it was measured for, its width in px }.
+  let measured = { longest: null, px: 0 };
   const cue = () => {
     frame.toggleAttribute('data-more-end', tableHost.scrollLeft + tableHost.clientWidth < tableHost.scrollWidth - 1);
     frame.toggleAttribute('data-scrolled', tableHost.scrollLeft > 0);
   };
+  // What depends on the host's size rather than its scroll: run on resize and after every paint, reads before writes.
+  const fit = () => {
+    const { clientWidth, offsetWidth, clientHeight, offsetHeight } = tableHost;
+    const headHeight = tableHost.querySelector('thead')?.offsetHeight ?? 0;
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    // The fade stops at the scrollbars, never over them.
+    fade.style.right = `${offsetWidth - clientWidth}px`;
+    fade.style.bottom = `${offsetHeight - clientHeight}px`;
+    // A link reached by Shift+Tab is scrolled into view below the sticky header, not under it.
+    tableHost.style.scrollPaddingTop = `${headHeight}px`;
+    // When ID and title together would hold most of the frame, the title scrolls with the rest and only the ID stays,
+    // so the other columns can still come into view.
+    const loose = measured.px + TITLE_MIN_REM * rem > 0.6 * clientWidth;
+    if (loose !== frame.hasAttribute('data-title-loose')) {
+      frame.toggleAttribute('data-title-loose', loose);
+      const tbl = tableHost.querySelector('table.tbl');
+      if (tbl) placeTitle(tbl);
+    }
+    // The empty/no-match block spans the part of the table the frame shows, so its action is always in reach.
+    const block = tableHost.querySelector('.tbl-empty > .tm-empty');
+    if (block) block.style.width = `${clientWidth}px`;
+    cue();
+  };
   tableHost.addEventListener('scroll', cue, { passive: true });
-  const hostObserver = window.ResizeObserver ? new ResizeObserver(cue) : null;
+  const hostObserver = window.ResizeObserver ? new ResizeObserver(fit) : null;
   hostObserver?.observe(tableHost);
 
   root.appendChild(screen);
@@ -260,20 +285,32 @@ export async function mount(root, { store, api, prefs, params }) {
     paint(); persist();
   }
 
-  // The ID column is as wide as the longest ID on screen, so no ID is ever cut; the title column sticks just after it.
-  let measured = { longest: null, px: 0 };
+  // The ID column is as wide as the longest ID on screen, and never narrower than its own header with the sort arrow,
+  // so no ID is ever cut; the title column sticks just after it.
   function sizeColumns(tbl, tasks) {
     const longest = tasks.reduce((a, t) => (String(t.id ?? '').length > a.length ? String(t.id) : a), 'ID');
     if (longest !== measured.longest) {
       const probe = h('span', { class: 't-id tbl-probe' }, longest);
       tableHost.append(probe);
-      const cs = getComputedStyle(tbl.querySelector('th[data-key="id"]'));
-      measured = { longest, px: Math.ceil(probe.getBoundingClientRect().width) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 1 };
+      const th = tbl.querySelector('th[data-key="id"]');
+      const cs = getComputedStyle(th);
+      const btn = th.querySelector('.sort-header');
+      const head = btn
+        ? [...btn.children].reduce((w, c) => w + c.getBoundingClientRect().width, 0)
+          + (parseFloat(getComputedStyle(btn).columnGap) || 0) * (btn.children.length - 1)
+        : 0;
+      const text = Math.max(probe.getBoundingClientRect().width, head);
+      measured = { longest, px: Math.ceil(text) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 1 };
       probe.remove();
     }
     tbl.querySelector('col.tbl-col--id').style.width = `${measured.px}px`;
     tbl.style.minWidth = `calc(${measured.px}px + ${FIXED_REM + TITLE_MIN_REM}rem)`;
-    for (const el of tbl.querySelectorAll('th[data-key="title"], td.tbl-cell--title')) el.style.left = `${measured.px}px`;
+    placeTitle(tbl);
+  }
+
+  function placeTitle(tbl) {
+    const left = frame.hasAttribute('data-title-loose') ? '' : `${measured.px}px`;
+    for (const el of tbl.querySelectorAll('th[data-key="title"], td.tbl-cell--title')) el.style.left = left;
   }
 
   // The table is rebuilt on every paint: where the frame was scrolled and what the keyboard was on are noted first and
@@ -358,7 +395,7 @@ export async function mount(root, { store, api, prefs, params }) {
     tableHost.replaceChildren(tbl);
     sizeColumns(tbl, tasks);
     restore(tbl, snap);
-    cue();
+    fit();
   }
 
   function paint() {
@@ -367,7 +404,8 @@ export async function mount(root, { store, api, prefs, params }) {
     const filtered = applyFilters(tasks);
     const sorted   = sortTasks(filtered);
 
-    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
+    // "n tasks", and how many show only while a chip, the search or a ?status= link narrows the list.
+    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')}${hasFilters() ? ` · ${filtered.length} visible` : ''}`;
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
     renderChipRail(backlog);
