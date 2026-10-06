@@ -145,6 +145,8 @@ export const EPIC = {
 
 // Plan 3's review focus 1: a real backlog's volume — 27 epics, 230 tasks, ids up to 27 characters (slug ids every
 // tenth task, one very long one), every third title 120 characters, one task in ten archived, long branches.
+// One active epic (`LONG_CLOSEABLE_EPIC`) has every task done or archived, so the "Closeable" path meets long data too.
+export const LONG_CLOSEABLE_EPIC = 'epic-02';
 const LONG_WORDS = ['store', 'viewer', 'handover', 'linear', 'gate', 'index', 'board', 'theme', 'sync', 'hooks'];
 const LONG_SENTENCE = 'keep the whole sentence readable when the table has to cut it short ';
 export const LONG_IDS_BOARD = (() => {
@@ -157,7 +159,7 @@ export const LONG_IDS_BOARD = (() => {
     const base = `${LONG_WORDS[i % 10]} task ${i + 1}`;
     return {
       id, title: i % 3 === 0 ? `${base} — ${LONG_SENTENCE.repeat(3)}`.slice(0, 120) : base,
-      status: statuses[i % 10], priority: ['critical', 'high', 'medium', 'low'][i % 4], epic: epics[i % 27].id, phase: 'P1',
+      status: epics[i % 27].id === LONG_CLOSEABLE_EPIC ? (i % 2 ? 'done' : 'archived') : statuses[i % 10], priority: ['critical', 'high', 'medium', 'low'][i % 4], epic: epics[i % 27].id, phase: 'P1',
       area: ['viewer-ui', 'store', 'docs', 'hooks'][i % 4], estimate: ['S', 'M', 'L', '3d'][i % 4], depends_on: [],
       ...(i % 5 === 0 ? { branch: `feat/${id}-${'long-branch-name-'.repeat(3)}end` } : {}),
       ...(i % 4 === 0 ? { started: `2026-09-2${i % 9}T09:00:00Z` } : {}),
@@ -178,7 +180,10 @@ export function epicPayload(board, id, extra = {}) {
   return {
     description: '', docs: {}, components: {}, design_status: 'exploring', done_when: '', area: null, ...epic,
     stats, closeable: stats.closeable, component_rollup: {},
-    attention: tasks.filter((t) => t.status === 'blocked').map((t) => ({ id: t.id, title: t.title, blocked: true, why: t.blockers || '' })),
+    // Blocked tasks, and any other task that names blockers (`blocked: false`), in task order.
+    attention: tasks.filter((t) => t.status === 'blocked' || t.blockers)
+      .map((t) => (t.status === 'blocked' ? { id: t.id, title: t.title, blocked: true, why: t.blockers || '' }
+        : { id: t.id, title: t.title, blocked: false, why: t.blockers })),
     tasks: tasks.map((t) => ({ id: t.id, title: t.title, status: t.status || 'todo', component: t.component ?? null,
       priority: t.priority, phase: t.phase, design_change: t.design_change ?? null })),
     ...extra,
