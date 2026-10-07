@@ -75,7 +75,8 @@
 }
 .issues-shelf__toggle:hover { background: var(--ground-15); color: var(--foreground-bold); }
 .issues-shelf__toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
-#issues-shelf-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--space-xs); }
+/* One row per line across the shelf's whole width, so a title is cut only by the shelf's edge. */
+#issues-shelf-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 #issues-shelf-list[hidden] { display: none; }
 
 .issues__notice {
