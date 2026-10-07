@@ -539,7 +539,7 @@ test('the message goes to messageHost when one is given; the glyph stays beside 
     assert.equal(root.querySelector('.if-error'), null, 'no message in the heading');
     assert.equal(root.querySelector(':scope > .if-status')?.getAttribute('aria-hidden'), 'true',
       'the saving and saved glyphs sit beside the field, where they take no line of their own, and are never read');
-    assert.deepEqual([...messageHost.children].map((el) => el.className), ['ef-error if-error'], 'the host holds the words alone');
+    assert.deepEqual([...messageHost.children].map((el) => el.className), ['ef-error if-error', 'if-said'], 'the host holds the words alone');
     ctrl.destroy();
     assert.equal(messageHost.children.length, 0);
     assert.equal(root.children.length, 0);
@@ -684,4 +684,136 @@ test('after a refused save a text editor keeps the typed text beside the reason,
     assert.equal(choice.root.querySelector('.if-error').textContent, reason);
     assert.equal(select.value, 'todo', 'the select is back on the stored value');
   } finally { text.destroy(); root.remove(); choice.done(); }
+});
+
+// The glyph is never read, so saving and saved are also said in words, politely, where the message goes.
+test('saving and saved are said in a polite status region beside the message; an error is left to the message', async () => {
+  const root = document.createElement('h2');
+  const messageHost = document.createElement('div');
+  document.body.append(root, messageHost);
+  let release;
+  let fail = false;
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'said-1', title: 'old' }, messageHost,
+    onSave: () => new Promise((ok) => { release = () => ok(fail ? { error: 'Refused' } : undefined); }),
+  });
+  try {
+    const said = messageHost.querySelector('.if-said');
+    assert.ok(said, 'the words sit with the message, not in the heading');
+    assert.equal(root.querySelector('.if-said'), null);
+    assert.equal(said.getAttribute('role'), 'status');
+    assert.equal(said.textContent, '');
+    root.querySelector('.ef-text').click();
+    const inp = root.querySelector('input.ef-text-input');
+    inp.value = 'new';
+    inp.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(said.textContent, 'Saving…');
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(said.textContent, 'Saved');
+    await new Promise((r) => setTimeout(r, 850));
+    assert.equal(said.textContent, '', 'it goes with the tick');
+
+    fail = true;
+    root.querySelector('.ef-text').click();
+    const again = root.querySelector('input.ef-text-input');
+    again.value = 'newer';
+    again.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(said.textContent, '', 'the alert says the refusal; it is not said twice');
+    ctrl.destroy();
+    assert.equal(messageHost.children.length, 0);
+  } finally { root.remove(); messageHost.remove(); }
+});
+
+// Inline there is no visible label to point at: the open control is named by its field's label.
+test('the open editor\'s control is named by its field\'s label; a control that names itself keeps its own name', () => {
+  const root = document.createElement('h2');
+  document.body.append(root);
+  const ctrl = mountInlineField(root, { schema: SCHEMA, fieldKey: 'title', entity: { id: 'name-1', title: 'Named' }, onSave: async () => {} });
+  try {
+    root.querySelector('.ef-text').click();
+    assert.equal(root.querySelector('input.ef-text-input').getAttribute('aria-label'), 'Title');
+  } finally { ctrl.destroy(); root.remove(); }
+
+  const own = {
+    read: ({ value }) => Object.assign(document.createElement('span'), { className: 'ef-text ef-editable', textContent: value }),
+    edit: () => { const i = document.createElement('input'); i.setAttribute('aria-labelledby', 'elsewhere'); return i; },
+  };
+  const host = document.createElement('div');
+  document.body.append(host);
+  const c2 = mountInlineField(host, {
+    schema: { entity: 'task', fields: [{ key: 'title', label: 'Title', renderer: own }] },
+    fieldKey: 'title', entity: { id: 'name-2', title: 'x' }, onSave: async () => {},
+  });
+  try {
+    host.querySelector('.ef-text').click();
+    assert.equal(host.querySelector('input').hasAttribute('aria-label'), false);
+  } finally { c2.destroy(); host.remove(); }
+});
+
+// Autosave runs at every pause in typing: it says only "Saved", never "Saving…". A commit says both.
+test('a debounced autosave says only "Saved"; a commit says "Saving…" then "Saved"', async () => {
+  const root = document.createElement('div');
+  const messageHost = document.createElement('div');
+  document.body.append(root, messageHost);
+  const releases = [];
+  const ctrl = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'auto-1', title: 'old' }, messageHost,
+    onSave: () => new Promise((ok) => releases.push(ok)),
+  });
+  try {
+    const said = messageHost.querySelector('.if-said');
+    const heard = [];
+    new window.MutationObserver(() => heard.push(said.textContent)).observe(said, { childList: true, characterData: true, subtree: true });
+    root.querySelector('.ef-text').click();
+    const inp = root.querySelector('input.ef-text-input');
+    inp.value = 'typed';
+    inp.dispatchEvent(new dom.window.Event('input'));
+    await new Promise((r) => setTimeout(r, 650));   // past the 600 ms debounce: the autosave is in flight
+    assert.equal(releases.length, 1);
+    assert.equal(said.textContent, '', 'no "Saving…" for an autosave');
+    releases.shift()();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(said.textContent, 'Saved');
+    assert.ok(!heard.includes('Saving…'), heard.join(' | '));
+
+    inp.value = 'committed';
+    inp.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(said.textContent, 'Saving…');
+    releases.shift()();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(said.textContent, 'Saved');
+  } finally { ctrl.destroy(); root.remove(); messageHost.remove(); }
+});
+
+// A save that goes through redraws the document (the edit ends, the task is read again): the new field says "Saved".
+test('"Saved" is carried to the field drawn in its place, said after it mounts', async () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const ctrl = mountInlineField(root, { schema: SCHEMA, fieldKey: 'title', entity: { id: 'carry-1', title: 'old' }, onSave: async () => {} });
+  const wrap = () => root.querySelector('.if-wrap');
+  try {
+    assert.equal(wrap().saved(), false);
+    root.querySelector('.ef-text').click();
+    const inp = root.querySelector('input.ef-text-input');
+    inp.value = 'new';
+    inp.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(wrap().saved(), true);
+  } finally { ctrl.destroy(); }
+  const again = mountInlineField(root, { schema: SCHEMA, fieldKey: 'title', entity: { id: 'carry-1', title: 'new' }, onSave: async () => {} });
+  try {
+    const said = root.querySelector('.if-said');
+    wrap().saySaved();
+    assert.equal(said.textContent, '', 'not in the same task as the mount, or it may never be heard');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(said.textContent, 'Saved');
+    await new Promise((r) => setTimeout(r, 850));
+    assert.equal(said.textContent, '', 'it goes with its tick');
+  } finally { again.destroy(); root.remove(); }
 });

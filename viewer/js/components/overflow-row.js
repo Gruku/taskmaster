@@ -6,7 +6,7 @@ import { icon } from './icon.js';
 import { openPopover } from './popover.js';
 
 const RELEASE_MS = 500;   // after a pointerup with no click yet: a touch tap's click comes later
-const STUCK_MS = 3000;    // after the closing press, if its release never arrives
+const MORE_PASSES = 3;    // layouts in a row while onLayout keeps widening More
 
 // How many leading items stay: all when they fit with the gaps between them; otherwise the most that fit beside
 // More, each followed by a gap.
@@ -18,6 +18,32 @@ export function fitCount(widths, available, { gap = 0, moreWidth = 0 } = {}) {
   let k = 0;
   while (k < n && used + widths[k] + gap <= available) used += widths[k++] + gap;
   return k;
+}
+
+/**
+ * A press elsewhere closed a popover and is still on its way to what it hit; nothing may move under it before its
+ * click, however long it is held. `fn` runs on the task after the press lands: its click, `RELEASE_MS` after a
+ * pointerup with no click (a drag; a touch tap's click comes later), a cancelled press, `RELEASE_MS` after a context
+ * menu (which swallows the release), or the window losing focus. Aborting the returned controller drops the wait.
+ */
+export function waitForRelease(doc, view, fn) {
+  const ac = new view.AbortController();
+  const timers = [];
+  const done = () => {
+    if (ac.signal.aborted) return;
+    ac.abort();
+    view.setTimeout(fn, 0);
+  };
+  const later = () => timers.push(view.setTimeout(done, RELEASE_MS));
+  ac.signal.addEventListener('abort', () => timers.forEach((t) => view.clearTimeout(t)));
+  const opts = { capture: true, signal: ac.signal };
+  doc.addEventListener('click', done, opts);
+  doc.addEventListener('pointercancel', done, opts);
+  doc.addEventListener('pointerup', later, { ...opts, once: true });
+  doc.addEventListener('contextmenu', later, { ...opts, once: true });
+  // The window's own blur only: an element's (focus moving to what was pressed) passes the window's capture phase.
+  view.addEventListener('blur', (e) => { if (e.target === e.currentTarget) done(); }, { signal: ac.signal });
+  return ac;
 }
 
 /**
@@ -33,7 +59,8 @@ export function fitCount(widths, available, { gap = 0, moreWidth = 0 } = {}) {
  *   sized by its children shrinks as they park and never grows back, so they never return.
  * - Children that may move are measured at their natural width (`flex-shrink: 0` while measured). Give them
  *   `flex-shrink: 0` in CSS too, or a visible one can still shrink beside a growing neighbour. A child that should flex
- *   (a search field) must be `keep`; it is measured at whatever width the row leaves it.
+ *   (a search field) must be `keep`; it is measured unshrunk like the rest, so it keeps the room of its flex basis
+ *   (or more when the row has room to spare), never just its min-width.
  * - A child whose width changes in place (a new count or label) needs `relayout()`; only the row's width and its list
  *   of children are observed.
  * - Parked children are out of the document while the popover is closed: keep references to them, or use `onLayout`.
@@ -118,39 +145,17 @@ export function overflowRow(row, {
     if (focused) more.focus({ preventScroll: true });
     mo.takeRecords();
     onLayout?.({ hidden });
-    // onLayout may have widened More (a caller's "· 2 on"); one more pass makes room for it.
-    if (!pass && !more.hidden && size(more) > moreWidth + 0.5) layout(1);
+    // onLayout may have widened More (a caller's "· 2 on"); another pass makes room for it, until More stops growing.
+    if (pass + 1 < MORE_PASSES && !more.hidden && size(more) > moreWidth + 0.5) layout(pass + 1);
   }
 
   function closed(reason) {
     popover = null;
     if (!pending || destroyed) return;
-    if (reason === 'outside') afterPress(() => layout());
-    else layout();
-  }
-
-  // A press elsewhere closed the popover and is still on its way to what it hit; nothing may move under it before
-  // its click. A touch tap's click comes after its pointerup, so the release waits for the click itself, or for a
-  // while after a pointerup with no click (a drag), or a cancelled press; a release that never comes (swallowed by a
-  // context menu) is let go after a longer while.
-  function afterPress(fn) {
+    if (reason !== 'outside') { layout(); return; }
     waiting?.abort();
-    const ac = new view.AbortController();
+    const ac = waitForRelease(doc, view, () => { if (waiting === ac) waiting = null; layout(); });
     waiting = ac;
-    const timers = [];
-    const done = () => {
-      if (ac.signal.aborted) return;
-      ac.abort();
-      if (waiting === ac) waiting = null;
-      view.setTimeout(fn, 0);
-    };
-    const later = (ms) => timers.push(view.setTimeout(done, ms));
-    ac.signal.addEventListener('abort', () => timers.forEach((t) => view.clearTimeout(t)));
-    const opts = { capture: true, signal: ac.signal };
-    doc.addEventListener('click', done, opts);
-    doc.addEventListener('pointercancel', done, opts);
-    doc.addEventListener('pointerup', () => later(RELEASE_MS), { ...opts, once: true });
-    later(STUCK_MS);
   }
 
   more.addEventListener('click', () => {

@@ -892,3 +892,53 @@ test.describe('shell robustness', () => {
     });
   }
 });
+
+// Task 2 (plan 4): a row-2 control unhidden in place changes the row's content without adding or removing a child.
+test.describe('topbar row 2: a control unhidden in place', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('is laid out again within two frames: it fits or waits behind Filters, and the row does not overflow', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/table');
+    await expect(page.locator('table.tbl')).toBeVisible();
+    await expect(page.locator('#topbar-count')).not.toBeEmpty();
+    await rowSettled(page);
+    const frames = (n) => page.evaluate((k) => new Promise((ok) => {
+      const step = (i) => (i ? requestAnimationFrame(() => step(i - 1)) : ok());
+      step(k);
+    }), n);
+    await page.evaluate(async () => {
+      // The kind of control row 2 holds: a shared .btn made by tmAction.
+      const { tmAction } = await import('/js/lib/topbar.js');
+      const probe = tmAction({ label: 'A control shown later with a long label' });
+      probe.classList.add('probe-unhidden');
+      probe.style.flexShrink = '0';
+      probe.hidden = true;
+      window.__probe = probe;
+      document.getElementById('topbar-actions').append(probe);
+    });
+    await frames(2);
+    await page.evaluate(() => { window.__probe.hidden = false; });
+    await frames(2);
+    const look = await page.locator('#topbar-actions').evaluate((row) => ({
+      over: row.scrollWidth - row.clientWidth,
+      inRow: !!row.querySelector(':scope > .probe-unhidden'),
+    }));
+    // The relayout's own writes are not news: the row comes to rest.
+    const later = await page.evaluate(() => new Promise((ok) => {
+      let records = 0;
+      const mo = new MutationObserver((r) => { records += r.length; });
+      mo.observe(document.getElementById('topbar-actions'), { childList: true, attributes: true, subtree: true });
+      let i = 10;
+      const step = () => (i-- ? requestAnimationFrame(step) : (mo.disconnect(), ok(records)));
+      requestAnimationFrame(step);
+    }));
+    expect(later).toBe(0);
+    expect(look.over).toBeLessThanOrEqual(0);
+    if (!look.inRow) {
+      await filters(page).click();
+      await expect(filtersPopover(page).locator('.probe-unhidden')).toBeVisible();
+      await page.keyboard.press('Escape');
+    }
+  });
+});

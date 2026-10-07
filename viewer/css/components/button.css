@@ -25,6 +25,8 @@
   transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
 }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* The display above would otherwise win over the hidden attribute: a button hidden by its code is not drawn. */
+.btn[hidden] { display: none; }
 
 /* Solid fills have no deeper step that keeps the label readable, so hover and press are answered by the border. */
 .btn--primary { background: var(--signature-fill); color: var(--on-accent-fill); }
