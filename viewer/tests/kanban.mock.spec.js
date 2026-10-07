@@ -400,6 +400,9 @@ async function leaveAndReturn(page, errors) {
   await expect(page.locator('table.tbl')).toBeVisible();
   await expect(page.locator('.popover')).toHaveCount(0);
   await expect(page.locator('.modal')).toHaveCount(0);
+  // The modal's scroll lock goes with it: html:has(> body.modal-open) would otherwise keep a phone page from scrolling.
+  await expect(page.locator('body.modal-open')).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowY)).not.toBe('hidden');
   expect(await page.evaluate(() => import('/js/components/popover.js').then((m) => m.openPopoverCount()))).toBe(0);
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('.card-task[data-task-id] > .link-row__link').first()).toBeVisible();
