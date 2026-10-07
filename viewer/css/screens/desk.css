@@ -97,6 +97,9 @@
 /* ── Note body + edit ───────────────────────────────────────────────────── */
 .dk-note__body { position: relative; cursor: text; max-height: 16em; overflow: hidden; }
 .dk-note.is-expanded .dk-note__body { max-height: none; }
+/* Expanded, a note takes the board's full width on a row of its own — a long line bounds its height — and sits upright,
+   since a tilt on a tall box swings its far corner into the next note. */
+.dk-note.is-expanded { grid-column: 1 / -1; transform: none; }
 .dk-note__body a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 
 /* A clamped body fades into its paper; the fade sits inside the body, so the body is its containing block. */
