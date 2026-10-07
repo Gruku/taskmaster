@@ -408,6 +408,17 @@ test('at 390 the graph\'s issue links and controls are touch-sized', async ({ pa
   }
 });
 
+test('at 390 every button, link and select in the task page\'s head, markers, gate strip and rail is touch-sized', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const offenders = await page.evaluate(() => [...document.querySelectorAll(
+    '#screen-mount :is(.td-head, .td-markers, .td-strip, .td-rail) :is(button, a[href], select)')]
+    .filter((el) => el.getClientRects().length > 0)
+    .map((el) => [`${el.localName}.${el.className} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 30)}"`, Math.round(el.getBoundingClientRect().height)])
+    .filter(([, h]) => h < 44));
+  expect(offenders).toEqual([]);
+});
+
 test('fullscreen keeps a tall graph scrollable and its way out in reach, and its toggle reads pressed', async ({ page }) => {
   await open(page, '#/task/T-105?view=B', { '/api/task/T-105/detail': taskDetail(LONG_TASK, 't1:fixture', LONG_RELATED) });
   const full = page.locator('#screen-mount [data-test="graph-controls"] [data-focus="graph:fullscreen"]');
