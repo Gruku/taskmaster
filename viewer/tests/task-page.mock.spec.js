@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, RICH_RELATED, taskDetail, taskPageMocks } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, REVIEW_TASK, RICH_RELATED, taskDetail, taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
@@ -406,6 +406,48 @@ test('at 390 the graph\'s issue links and controls are touch-sized', async ({ pa
   for (const box of await targets.evaluateAll((els) => els.map((el) => [el.textContent, el.getBoundingClientRect().height]))) {
     expect(box[1], box[0]).toBeGreaterThanOrEqual(44);
   }
+});
+
+test('at 390 the graph opens at its left edge, and this task is reached by scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, GRAPH);
+  const canvas = page.locator('#screen-mount .td-graph-canvas');
+  await expect(canvas.locator('svg.td-graph-svg')).toBeVisible();
+  const m = await canvas.evaluate((c) => ({ left: c.scrollLeft, wide: c.scrollWidth > c.clientWidth }));
+  expect(m.wide).toBe(true);
+  expect(m.left).toBe(0);
+  await canvas.evaluate((c) => { c.scrollLeft = c.scrollWidth; });
+  expect(await canvas.evaluate((c) => c.scrollLeft)).toBeGreaterThan(0);
+});
+
+test('at 390 the graph view\'s tabs stay one row that scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, GRAPH);
+  const tabs = page.locator('#screen-mount .td-tabs .td-tab');
+  await expect(tabs.first()).toBeVisible();
+  const tops = await tabs.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+  expect(new Set(tops).size, String(tops)).toBe(1);
+  for (const lines of await tabs.evaluateAll((els) => els.map((el) => el.getClientRects().length))) expect(lines).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('a skipped gate\'s name is not struck through: the word "skipped" says it', async ({ page }) => {
+  await open(page, '#/task/T-107', { '/api/task/T-107/detail': taskDetail(REVIEW_TASK) });
+  const words = page.locator('#screen-mount .gate--skipped .marker__word');
+  await expect(words.first()).toBeVisible();
+  for (const line of await words.evaluateAll((els) => els.map((el) => getComputedStyle(el).textDecorationLine))) expect(line).toBe('none');
+  await expect(page.locator('#screen-mount .gate--skipped').first()).toContainText(/skipped/i);
+});
+
+test('at 390 every button, link and select in the task page\'s head, markers, gate strip and rail is touch-sized', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const offenders = await page.evaluate(() => [...document.querySelectorAll(
+    '#screen-mount :is(.td-head, .td-markers, .td-strip, .td-rail) :is(button, a[href], select)')]
+    .filter((el) => el.getClientRects().length > 0)
+    .map((el) => [`${el.localName}.${el.className} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 30)}"`, Math.round(el.getBoundingClientRect().height)])
+    .filter(([, h]) => h < 44));
+  expect(offenders).toEqual([]);
 });
 
 test('fullscreen keeps a tall graph scrollable and its way out in reach, and its toggle reads pressed', async ({ page }) => {

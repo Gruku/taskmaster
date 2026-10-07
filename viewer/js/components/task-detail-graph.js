@@ -41,10 +41,12 @@ export function mountTaskDetailGraph(root, ctx) {
   const body = h('div', { class: 'td-body' }, [freshFrame, renderTabs(task, uid, kept.tab)]);
   out.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
   if (keptFrame && !graft(root, out, keptFrame, freshFrame)) root.replaceChildren(...out.childNodes);
-  // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it.
+  // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it. On a
+  // phone it opens at its left edge instead: centred, both side columns were cut at the frame; this task is a scroll away.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
-    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    const narrow = globalThis.matchMedia?.('(max-width: 768px)').matches;
+    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : narrow ? 0 : (canvas.scrollWidth - canvas.clientWidth) / 2;
     canvas.scrollTop = Number.isFinite(kept.scrollTop) ? kept.scrollTop : (canvas.scrollHeight - canvas.clientHeight) / 2;
   }
   const fullscreen = root.querySelector('[data-focus="graph:fullscreen"]');
@@ -233,7 +235,7 @@ function svgShape(shape, x, y, tone) {
 
 // SVG text cannot wrap or ellipsise itself; the caller keeps the uncut text in the node's <title>.
 function cut(text, n) { text = text || ''; return text.length > n ? text.slice(0, Math.max(1, n - 1)) + '…' : text; }
-// A line of parts that does not fit drops whole parts from its end. The first part (the status word) is always whole,
+// A line of parts that does not fit drops whole parts from its end, with no mark. The first part (the status word) is always whole,
 // even when it alone is longer than the line: a word cut mid-way says less than one that runs into the node's edge.
 function cutParts(parts, n) {
   const line = parts.join(' · ');
@@ -244,8 +246,8 @@ function cutParts(parts, n) {
     if (next.length + 2 > n) break;
     shown = next;
   }
-  // The mark that more was dropped takes its space when there is room for it, and hugs the last word when there is not.
-  return `${shown}${shown.length + 2 <= n ? ' …' : '…'}`;
+  // What was dropped goes cleanly: a "…" after a whole word reads as a cut word. The node's <title> keeps the full line.
+  return shown;
 }
 
 function renderContextBand(related, uid) {

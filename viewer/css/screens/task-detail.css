@@ -237,7 +237,6 @@
   letter-spacing: var(--tracking-normal);
 }
 :is(.gate--pending, .gate--skipped, .rung--empty) .marker__word { color: var(--foreground-subtle); }
-.gate--skipped .marker__word { text-decoration: line-through; }
 /* The gate's state, said beside its name. */
 .gp-gate__state {
   color: var(--foreground-subtle);
@@ -469,6 +468,11 @@
   .modal--detail .modal-actions .btn { min-height: 44px; }
   .td-strip__label { flex-basis: 100%; }
   .td-section-edit.btn--icon.btn--sm { width: 44px; height: 44px; }
+  /* Touch targets: every control in the head, the marker row, the strips and the rail is 44px tall. The ID line's
+     borderless links and copy button take the height as a hit area that a negative margin hands back, so the line
+     keeps its height; a bordered pill simply grows. */
+  .td-meta > :is(a[href], button) { display: inline-flex; align-items: center; min-height: 44px; margin-block: -14px; }
+  :is(.td-head, .td-markers, .td-strip, .td-rail) :is(.td-tag:is(a, button), .td-spec-toggle, .link-pill, .td-dep, .td-issue, .ho-status-pill) { min-height: 44px; }
 }
 
 /* ---------- Variant B — graph ---------- */
@@ -550,8 +554,11 @@
 .node-shape--success { color: var(--tone-success); }
 .node-shape--orange { color: var(--tone-orange); }
 
-.td-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
+/* One row: tabs that do not fit scroll sideways inside it, never wrap onto a second line. */
+.td-tabs { display: flex; flex-wrap: nowrap; gap: 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
 .td-tabs .td-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: var(--space-xs) var(--space-sm);
   border: 0;
   border-bottom: 2px solid transparent;
