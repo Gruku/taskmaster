@@ -56,5 +56,5 @@
 .overflow-list .chip__count { margin-left: auto; padding-left: var(--space-sm); }
 
 @media (max-width: 768px) {
-  .chip { min-height: 44px; }
+  .chip { min-height: var(--touch-target); }
 }

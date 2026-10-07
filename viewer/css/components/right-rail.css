@@ -103,5 +103,5 @@
 .rr-check > .icon { flex: 0 0 auto; color: var(--foreground-subtle); }
 
 @media (max-width: 768px) {
-  .right-rail .btn, .right-rail .ho-status-pill { min-height: 44px; }
+  .right-rail .btn, .right-rail .ho-status-pill { min-height: var(--touch-target); }
 }

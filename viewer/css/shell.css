@@ -394,7 +394,7 @@ body, .shell, .sidebar, .topbar, .main {
      must stay readable over an open drawer, and below modals (100).
      Elevation via a stronger border, no box-shadow (design rule). */
   .sidebar-collapse-btn { display: none; }
-  .sidebar-close-btn { display: inline-flex; width: 44px; height: 44px; }
+  .sidebar-close-btn { display: inline-flex; width: var(--touch-target); height: var(--touch-target); }
   .sidebar-logo { padding-right: var(--space-xs); }
   .sidebar {
     position: fixed;
@@ -417,14 +417,14 @@ body, .shell, .sidebar, .topbar, .main {
   .shell.sidebar-drawer-open .sidebar-backdrop { display: block; }
 
   /* Drawer links: 44px touch targets */
-  .sidebar-link { min-height: 44px; box-sizing: border-box; }
+  .sidebar-link { min-height: var(--touch-target); box-sizing: border-box; }
 
   /* Hamburger button — injected by sidebar.js at the start of topbar row 1.
      44px per WCAG touch-target guidance; the theme toggle matches it. */
   .topbar-hamburger,
   .btn-icon {
-    width: 44px;
-    height: 44px;
+    width: var(--touch-target);
+    height: var(--touch-target);
   }
   .topbar-hamburger {
     flex: 0 0 auto;
@@ -449,7 +449,7 @@ body, .shell, .sidebar, .topbar, .main {
   .topbar-row2 { height: 56px; }
   #page-title { font-size: var(--size-declaration-h5); }
   /* A primary with an icon shows only the icon; its aria-label still names it. */
-  .topbar-primary .btn:has(> .icon) { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .topbar-primary .btn:has(> .icon) { min-width: var(--touch-target); min-height: var(--touch-target); padding: 0; justify-content: center; }
   .topbar-primary .btn:has(> .icon) > span { display: none; }
 
   /* Main: natural height; the page scrolls, not .main. `clip`, not `hidden`: hidden would compute overflow-y to auto

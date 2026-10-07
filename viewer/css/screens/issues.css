@@ -100,7 +100,7 @@
 @media (max-width: 768px) {
   .issues-board__cols { grid-auto-flow: row; grid-auto-columns: auto; overflow-x: visible; }
   .issues-col[hidden] { display: none; }
-  .issues-shelf__toggle { min-height: 44px; }
+  .issues-shelf__toggle { min-height: var(--touch-target); }
   /* Behind tabs the selected tab already names the column (and labels the panel): its own heading would repeat
      it right underneath, so it stays only for assistive tech. */
   .issues-board:has(> .column-tabs:not([hidden])) .issues-col__head {

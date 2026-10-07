@@ -92,8 +92,8 @@
   .tm-search,
   .tm-segmented > button,
   .tm-search__clear,
-  .topbar-row2 .btn { min-height: 44px; }
+  .topbar-row2 .btn { min-height: var(--touch-target); }
   .tm-search__clear,
   .topbar-row2 .btn--icon,
-  .tm-segmented--icon > button { min-width: 44px; }
+  .tm-segmented--icon > button { min-width: var(--touch-target); }
 }

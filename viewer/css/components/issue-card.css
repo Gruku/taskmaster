@@ -129,7 +129,7 @@
   .issue-card__more,
   .issue-card__ref,
   .issue-card > .link-row__link,
-  .issue-row > .link-row__link { min-height: 44px; }
+  .issue-row > .link-row__link { min-height: var(--touch-target); }
   .issue-card__more,
   .issue-card__ref { display: inline-flex; align-items: center; }
   /* Not max-content twice: the title spans both tracks and would size them to its whole line, pushing the severity out. */

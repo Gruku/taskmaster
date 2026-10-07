@@ -35,5 +35,5 @@
 .dp-actions__message:empty { display: none; }
 .dp-actions__message { flex: 1 0 100%; color: var(--foreground-bold); }
 @media (max-width: 768px) {
-  .dp-actions .btn { flex: 1 1 100%; min-height: 44px; }
+  .dp-actions .btn { flex: 1 1 100%; min-height: var(--touch-target); }
 }
