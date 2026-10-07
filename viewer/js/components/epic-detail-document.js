@@ -60,7 +60,9 @@ function progress(stats) {
     return seg;
   }));
   const legend = h('ul', { class: 'ed-legend' }, parts.map(({ status, count }) =>
-    h('li', {}, [marker(groupMeta(status)), h('span', { class: 'ed-legend__n' }, String(count))])));
+    h('li', { 'data-status': status }, [
+      h('span', { class: `ed-legend__key ed-seg--${status}`, 'aria-hidden': 'true' }),
+      marker(groupMeta(status)), h('span', { class: 'ed-legend__n' }, String(count))])));
   return section('ed-progress', 'Progress', h('p', { class: 'ed-progress__label' }, epicProgress(stats).label), bar, legend);
 }
 

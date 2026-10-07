@@ -125,6 +125,28 @@ test('progress says closed/total and the breakdown and legend agree with the tas
   await expect(links.nth(1)).toHaveAttribute('href', '#/task/T-103');
 });
 
+for (const theme of ['dark', 'light']) {
+  test(`in ${theme} the Todo and Archived segments are different neutrals and each legend key matches its segment`, async ({ page }) => {
+    const board = { ...BOARD, tasks: [...BOARD.tasks, { id: 'T-990', title: 'Shelved', status: 'archived', epic: 'viewer' }] };
+    await boot(page, { theme, extra: { '/api/epic/viewer': epicPayload(board, 'viewer') } });
+    const got = await page.evaluate(() => {
+      const bg = (el) => el && getComputedStyle(el).backgroundColor;
+      const out = {};
+      for (const s of ['todo', 'archived']) {
+        out[s] = { seg: bg(document.querySelector(`.ed-breakdown .ed-seg--${s}`)), key: bg(document.querySelector(`.ed-legend [data-status="${s}"] .ed-legend__key`)) };
+      }
+      out.track = bg(document.querySelector('.ed-breakdown'));
+      return out;
+    });
+    expect(got.todo.seg).toBeTruthy();
+    expect(got.archived.seg).toBeTruthy();
+    expect(got.todo.seg).not.toBe(got.archived.seg);
+    expect(got.todo.seg).not.toBe(got.track);
+    expect(got.todo.key).toBe(got.todo.seg);
+    expect(got.archived.key).toBe(got.archived.seg);
+  });
+}
+
 test('a task row opens its task in the modal on the page, and peeks it inside the epic modal', async ({ page }) => {
   await boot(page);
   const row = taskRow(page.locator('.ed-tasks'), 'T-102');
