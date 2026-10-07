@@ -41,10 +41,12 @@ export function mountTaskDetailGraph(root, ctx) {
   const body = h('div', { class: 'td-body' }, [freshFrame, renderTabs(task, uid, kept.tab)]);
   out.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
   if (keptFrame && !graft(root, out, keptFrame, freshFrame)) root.replaceChildren(...out.childNodes);
-  // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it.
+  // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it. On a
+  // phone it opens at its left edge instead: centred, both side columns were cut at the frame; this task is a scroll away.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
-    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    const narrow = globalThis.matchMedia?.('(max-width: 768px)').matches;
+    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : narrow ? 0 : (canvas.scrollWidth - canvas.clientWidth) / 2;
     canvas.scrollTop = Number.isFinite(kept.scrollTop) ? kept.scrollTop : (canvas.scrollHeight - canvas.clientHeight) / 2;
   }
   const fullscreen = root.querySelector('[data-focus="graph:fullscreen"]');

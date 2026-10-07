@@ -408,6 +408,29 @@ test('at 390 the graph\'s issue links and controls are touch-sized', async ({ pa
   }
 });
 
+test('at 390 the graph opens at its left edge, and this task is reached by scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, GRAPH);
+  const canvas = page.locator('#screen-mount .td-graph-canvas');
+  await expect(canvas.locator('svg.td-graph-svg')).toBeVisible();
+  const m = await canvas.evaluate((c) => ({ left: c.scrollLeft, wide: c.scrollWidth > c.clientWidth }));
+  expect(m.wide).toBe(true);
+  expect(m.left).toBe(0);
+  await canvas.evaluate((c) => { c.scrollLeft = c.scrollWidth; });
+  expect(await canvas.evaluate((c) => c.scrollLeft)).toBeGreaterThan(0);
+});
+
+test('at 390 the graph view\'s tabs stay one row that scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, GRAPH);
+  const tabs = page.locator('#screen-mount .td-tabs .td-tab');
+  await expect(tabs.first()).toBeVisible();
+  const tops = await tabs.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+  expect(new Set(tops).size, String(tops)).toBe(1);
+  for (const lines of await tabs.evaluateAll((els) => els.map((el) => el.getClientRects().length))) expect(lines).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test('at 390 every button, link and select in the task page\'s head, markers, gate strip and rail is touch-sized', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page);

@@ -555,8 +555,11 @@
 .node-shape--success { color: var(--tone-success); }
 .node-shape--orange { color: var(--tone-orange); }
 
-.td-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
+/* One row: tabs that do not fit scroll sideways inside it, never wrap onto a second line. */
+.td-tabs { display: flex; flex-wrap: nowrap; gap: 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
 .td-tabs .td-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: var(--space-xs) var(--space-sm);
   border: 0;
   border-bottom: 2px solid transparent;
