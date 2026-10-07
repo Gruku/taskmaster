@@ -35,17 +35,3 @@
   line-height: var(--leading-body);
 }
 .tm-empty > .btn { margin-top: var(--space-xs); }
-.tm-empty__action {
-  margin-top: var(--space-micro);
-  padding: var(--space-micro) var(--space-sm);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--foreground-bold);
-  font-size: var(--size-narrator-whisper);
-  cursor: pointer;
-}
-.tm-empty__action:hover {
-  background: var(--card-bg-hover);
-  border-color: var(--foreground-subtle);
-}
