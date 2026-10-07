@@ -257,3 +257,10 @@ These override the sections they name.
 - **§6 bug detail (plan 3c).** Bug actions are in-app forms on the shared entity form; "Mark fixed" requires a commit (the server always did) and is the page's primary action in row 1; after an action the page shows the bug's new state, and a promote opens the new issue.
 - **§5.10 gates (plan 3c).** Each gate shows its state as a visible word; the raw `gate_state` string is never printed.
 - **§5.7 leaving a page (plan 3c).** Leaving a detail page with a form open asks the form to close, exactly as leaving the detail modal does.
+- **§6 Kanban card (plan 3a).** The card's id is a copy control on line 1; the link carries the id (visually hidden) and the title, so the whole card is one link.
+- **§6 Kanban filters (plan 3a).** Priority chips leave topbar row 2 for the board's filter bar beside the epic chips; row 2 keeps search, density, Group and Sort.
+- **§6 Kanban epic row (plan 3a).** The epic row shows every in-scope epic (pinned first) on one line with More; pins, order and archived epics live in an "Epic options" popover; every filter count is open tasks.
+- **§6 Kanban phase filter (plan 3a).** The phase filter is a one-line strip on an overflow row (All, the current phase and a pressed phase never park), archived phases in a menu; the carousel is gone.
+- **§6 Kanban on a phone (plan 3a).** The phone Columns tablist scrolls sideways inside itself (a tab cannot be parked behind More).
+- **§4 row 1 (plan 3a).** `claimTopbarPrimary()` clears the slot it hands over; `setTopbarCount()` puts the count's full text in its title; at ≤768px a primary with an icon shows its icon only.
+- **§3.2 categorical palette (plan 3a, user decision).** Swatches come from `--cat-N` by position, unless an epic record's own `color` names a swatch 1–6 (`3`, `'cat-3'`, `'--cat-3'`); a hex or any other value is ignored.
