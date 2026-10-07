@@ -3,7 +3,7 @@
 // the task the same way every time: one marker size on first open, after a redraw and on the full page, no meta line.
 import { test, expect } from '@playwright/test';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, RICH_RELATED, LONG_TASK, LONG_RELATED, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, RICH_RELATED, LONG_TASK, LONG_RELATED, taskDetail, kanbanMocks } from './mock-fixtures.js';
 
 const DETAILS = {
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
@@ -17,12 +17,9 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 async function board(page, { theme = 'dark', table = {} } = {}) {
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
-    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
-    ...DETAILS, ...table,
-  });
+  await mockApi(page, { ...kanbanMocks({ theme }), ...DETAILS, ...table });
   await page.goto('/#/kanban');
+  await expect(page.locator('.card-task[data-task-id] > .link-row__link').first()).toBeVisible();
   await expect(card(page, 'T-102')).toBeVisible();
 }
 
