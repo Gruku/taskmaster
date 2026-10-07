@@ -62,6 +62,12 @@ async function boundBand($: Engine, on: On, over: Over, store: Record<string, un
   return { clock, world }
 }
 
+const LIST_031 = [
+  '**1 tasks:**',
+  '- `tm-audit-031` — Handover auto-supersede (keeps newest) (P1, tm-audit, in-review)',
+  '    waiting-on-human: Open the viewer and confirm one open handover per thread.',
+].join('\n')
+
 const REORDERED = [
   '**2 tasks:**',
   '- `tm-audit-031` — Handover auto-supersede (keeps newest) (critical, tm-audit, in-review)',
@@ -143,6 +149,28 @@ describe('sign off', () => {
     expect(writes(world)).toHaveLength(2)
   })
 
+  test('after a timed-out sign-off, y sends nothing more on that task until the first call answers', TM, async ($, on) => {
+    let asked = 0
+    const { world, ui, clock } = await openQueue($, on, {
+      backlog_complete_task: () => (asked++ === 0 ? { hangMs: 60_000, text: R.GATE_REFUSAL } : R.GATE_REFUSAL),
+    })
+    await ui.press({ key: 'done' })
+    await ui.press({ key: 'confirm-yes' })
+    await clock.advance(15_000)
+    await clock.settle()
+    await ui.press({ key: 'done' })
+    await ui.press({ key: 'confirm-yes' })
+    await clock.settle()
+    expect(writes(world)).toEqual([SIGNED])
+    expect(world.toasts.join('\n')).toMatch(/has not answered yet/)
+    await clock.advance(45_000)
+    await clock.settle()
+    await ui.press({ key: 'done' })
+    await ui.press({ key: 'confirm-yes' })
+    await clock.settle()
+    expect(writes(world)).toEqual([SIGNED, SIGNED])
+  })
+
   test('the band signs off the bound in-review task with the same call and lets the binding go', TM, async ($, on) => {
     const { clock, world } = await boundBand($, on, { backlog_complete_task: () => R.COMPLETED })
     await $.session.start(SESSION)
@@ -194,14 +222,15 @@ describe('back to agent', () => {
     expect(world.fills).toEqual([`Back to ${ID}`])
   })
 
-  test('clearing a human_action that was already empty answers "(not persisted)", and that is a success', TM, async ($, on) => {
+  test('a clear of the human_action the card shows that answers "(not persisted)" did not save (legacy store): refused', TM, async ($, on) => {
     const again = SCRATCH.replies.back_clear_again.text
     const { world, ui, clock } = await openQueue($, on, { backlog_update_task: args => (args.field === 'human_action' ? again : backOk(args)) })
     await ui.press({ key: 'back' })
     await ui.input({ key: 'note', text: 'x' })
     await clock.settle()
     expect(writes(world)).toHaveLength(3)
-    expect(world.closed).toEqual(['tm-review'])
+    expect(world.closed).toEqual([])
+    expect(world.toasts.join('\n')).toMatch(/human_action: Taskmaster did not save it/)
   })
 
   test('it stops at the first refusal, names the step, keeps the pane open, and the prompt still holds the note', TM, async ($, on) => {
@@ -217,17 +246,48 @@ describe('back to agent', () => {
     expect(world.fills).toEqual([`Back to ${ID}: tighten the copy`])
   })
 
-  test('a clear that does not persist after the note was recorded names human_action; the note is in the prompt', TM, async ($, on) => {
+  test('a refused status still asks for a refresh', TM, async ($, on) => {
+    const { world, ui, clock } = await openQueue($, on, { backlog_update_task: () => 'Error: store is read-only' })
+    const lists = () => world.calls.filter(c => c.tool === 'backlog_list_tasks').length
+    const before = lists()
+    await ui.press({ key: 'back' })
+    await ui.input({ key: 'note', text: 'x' })
+    await clock.settle()
+    expect(lists()).toBe(before + 1)
+  })
+
+  test('a refusal after the status landed drops the card (no longer waiting, so d cannot sign it off), toasts the step, refreshes', TM, async ($, on) => {
+    const moved = { status: false }
     const { world, ui, clock } = await openQueue($, on, {
-      backlog_update_task: args => (args.field === 'human_action' ? 'Error: store is read-only' : backOk(args)),
+      backlog_list_tasks: () => (moved.status ? LIST_031 : R.LIST_IN_REVIEW),
+      backlog_update_task: args => {
+        if (args.field === 'status') moved.status = true
+        return args.field === 'human_action' ? 'Error: store is read-only' : backOk(args)
+      },
     })
+    const lists = () => world.calls.filter(c => c.tool === 'backlog_list_tasks').length
+    const before = lists()
     await ui.press({ key: 'back' })
     await ui.input({ key: 'note', text: 'tighten the copy' })
     await clock.settle()
     expect(writes(world)).toEqual([STATUS, NOTE('tighten the copy'), CLEAR])
-    expect(await shown(ui)).toMatch(/human_action: Error: store is read-only/)
+    expect(lists()).toBe(before + 1)
+    expect(await ui.find({ type: 'Text', text: ID })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'tm-audit-031' })).toBeDefined()
+    expect(world.toasts.join('\n')).toMatch(new RegExp(`${ID}.*human_action: Error: store is read-only`))
     expect(world.closed).toEqual([])
     expect(world.fills).toEqual([`Back to ${ID}: tighten the copy`])
+  })
+
+  test('a status write with no answer in 15 s drops the card too: it may have moved', TM, async ($, on) => {
+    const { world, ui, clock } = await openQueue($, on, { backlog_update_task: () => ({ hangMs: 60_000, text: 'late' }) })
+    await ui.press({ key: 'back' })
+    await ui.input({ key: 'note', text: 'x' })
+    await clock.advance(15_000)
+    await clock.settle()
+    expect(writes(world)).toEqual([STATUS])
+    expect(await ui.find({ type: 'Text', text: ID })).toBeUndefined()
+    expect(world.toasts.join('\n')).toMatch(/status: Taskmaster unreachable: backlog_update_task: no reply within 15 s — it may still have been saved/)
   })
 
   test('band a opens the note on the bound task, and the note goes back on that task', TM, async ($, on) => {
@@ -245,10 +305,57 @@ describe('back to agent', () => {
   })
 })
 
+describe('one task, two surfaces', () => {
+  async function both($: Engine, on: On, over: Over) {
+    const { clock, world } = await boundBand($, on, over)
+    await $.session.start(SESSION)
+    await clock.settle()
+    const band = await $.ui.mount({ plugin: PLUGIN, ...BAND, surface: 'terminal' })
+    await $.command.run(command('tm-review'))
+    await clock.settle()
+    const review = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review'), surface: 'terminal' })
+    await clock.settle()
+    return { clock, world, band, review }
+  }
+
+  test('band d, then the pane sends the task back: when it returns to review the band is not still armed', TM, async ($, on) => {
+    const { clock, world, band, review } = await both($, on, { backlog_update_task: backOk, backlog_complete_task: () => R.COMPLETED })
+    await band.press({ key: 'band-done' })
+    expect(await band.find({ type: 'Button', key: 'band-yes' })).toBeDefined()
+    await review.press({ key: 'back' })
+    await review.input({ key: 'note', text: 'x' })
+    await clock.settle()
+    // The server still answers the task in review (it came back): the refresh draws its review row again.
+    await $.turn.complete({ answer: '', reason: 'end_turn' } as never)
+    await clock.settle()
+    await band.redraw()
+    expect(await band.find({ type: 'Button', key: 'band-done' })).toBeDefined()
+    expect(await band.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
+    expect(writes(world).filter(c => c.tool === 'backlog_complete_task')).toEqual([])
+  })
+
+  test('a band refusal disarms the pane confirm on the same task, and a pane refusal the band confirm', TM, async ($, on) => {
+    const { clock, world, band, review } = await both($, on, { backlog_complete_task: () => R.GATE_REFUSAL })
+    await review.press({ key: 'done' })
+    await band.press({ key: 'band-done' })
+    await band.press({ key: 'band-yes' })
+    await clock.settle()
+    await review.redraw()
+    expect(await review.find({ type: 'Button', key: 'confirm-yes' })).toBeUndefined()
+    await band.press({ key: 'band-done' })
+    await review.press({ key: 'done' })
+    await review.press({ key: 'confirm-yes' })
+    await clock.settle()
+    await band.redraw()
+    expect(await band.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
+    expect(writes(world)).toEqual([SIGNED, SIGNED])
+  })
+})
+
 describe('tmActions and flows, directly', () => {
   test('a status that did not persist is a refusal; a thrown error says unreachable', async () => {
     const lost = tmActions(async () => ({ text: R.NOT_PERSISTED, isError: false }))
-    expect(await lost.backToAgent('x-001', '')).toEqual({ ok: false, refusal: `status: Taskmaster did not save it: ${R.NOT_PERSISTED}` })
+    expect(await lost.backToAgent('x-001', '', 'Check it')).toEqual({ ok: false, refusal: `status: Taskmaster did not save it: ${R.NOT_PERSISTED}` })
     const down = tmActions(async () => {
       throw new Error('backlog_complete_task: tm: Connection closed')
     })
@@ -258,7 +365,21 @@ describe('tmActions and flows, directly', () => {
   test('No change to … reads as success; a warning paragraph after the receipt is ignored', async () => {
     const replies = [R.WITH_WARNING, R.KEYWORD_UPDATED, R.NO_CHANGE]
     const calm = tmActions(async () => ({ text: replies.shift() ?? '', isError: false }))
-    expect(await calm.backToAgent('tm-audit-031', 'note')).toEqual({ ok: true })
+    expect(await calm.backToAgent('tm-audit-031', 'note', '')).toEqual({ ok: true })
+  })
+
+  test('"(not persisted)" on the clear is success only when the known human_action was already empty', async () => {
+    const replies = (clear: string) => {
+      const answers = [R.updated('fx-001', 'status', 'in-progress'), clear]
+      return tmActions(async () => ({ text: answers.shift() ?? '', isError: false }))
+    }
+    const again = SCRATCH.replies.back_clear_again.text
+    expect(await replies(again).backToAgent('fx-001', '', '')).toEqual({ ok: true })
+    expect(await replies(again).backToAgent('fx-001', '', 'Check the scratch thing')).toMatchObject({
+      ok: false,
+      refusal: `human_action: Taskmaster did not save it: ${again}`,
+      mayHaveMoved: true,
+    })
   })
 
   test('a second y, while the first write is in flight or after it landed, sends nothing (pane and band)', async () => {

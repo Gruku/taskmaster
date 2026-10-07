@@ -538,7 +538,7 @@ export const register: Register = (on, options) => {
         confirmDone: id => act(f => f.confirmDone(id)),
         cancel: () => act(f => f.cancel()),
         askNote: id => act(f => f.askNote(id)),
-        sendBack: (id, note) => act(f => f.sendBack(id, note)),
+        sendBack: (id, note, humanAction) => act(f => f.sendBack(id, note, humanAction)),
         skip: id => act(f => f.skip(id)),
         fill: text => act(f => f.fill(text)),
         toggleTick: (id, item) => act(f => f.toggleTick(id, item)),

@@ -34,11 +34,13 @@ export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
 /**
  * A call that got no usable reply. `transient`: worth retrying before reporting offline — the mod's own read timeout (a cold
  * server's first reads), or the engine saying the server is not connected yet (it connects seconds after session start).
+ * `pending`: on the mod's own timeout, the call itself, still running (a write may still land); settles when it does.
  */
 export class TmUnreachable extends Error {
   constructor(
     message: string,
     readonly transient: boolean = false,
+    readonly pending?: Promise<unknown>,
   ) {
     super(message)
   }
@@ -84,7 +86,7 @@ async function bounded(host: TmHost, tool: string, args: Record<string, unknown>
   )
   const first = await Promise.race([work, timer])
   stop.abort()
-  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${ms / 1000} s`, true)
+  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${ms / 1000} s`, true, work)
   if ('error' in first) {
     const message = String(first.error).split('\n')[0] ?? ''
     throw new TmUnreachable(`${tool}: ${message}`, NOT_CONNECTED.test(message))
