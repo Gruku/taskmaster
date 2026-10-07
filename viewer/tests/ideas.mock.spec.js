@@ -320,3 +320,17 @@ for (const theme of ['dark', 'light']) {
     expect(result.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+test('at 1440 the pane sits beside the list with no Back to ideas, and every pane value is one size', async ({ page }) => {
+  await boot(page, { hash: '#/ideas/IDEA-1' });
+  await expect(page.locator('.ideas-detail__dl')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back to ideas' })).toBeHidden();
+  const sizes = await page.locator('.ideas-detail__dl dd').evaluateAll((dds) => dds.map((dd) => {
+    const leaf = dd.querySelector('.marker, .list-tag') || dd.firstElementChild || dd;
+    return getComputedStyle(leaf).fontSize;
+  }));
+  expect(sizes.length).toBeGreaterThan(1);
+  expect(new Set(sizes).size).toBe(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('button', { name: 'Back to ideas' })).toBeVisible();
+});
