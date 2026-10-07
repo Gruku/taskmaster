@@ -209,10 +209,9 @@ const ALL_SCENES = [
   } }],
   // Plan 3a: the Kanban itself (kanbanMocks' board, or longBoard() routed over it) and the detail modal's refused title.
   ['kanban-board', { open: openKanban, scope: '#screen-mount' }],
-  ['kanban-collapsed', { open: openKanban, scope: '#screen-mount', drive: async (p) => {
-    const toggle = p.locator('.kanban-col button[aria-label^="Collapse"]').first();
-    if (await toggle.isVisible()) await toggle.click();
-  } }],
+  // At phone width one column shows behind the Columns tabs and there is no collapse control: skipped there, said so.
+  ['kanban-collapsed', { open: openKanban, scope: '#screen-mount', skipAt: { m: 'no collapse control at phone width (columns sit behind tabs)' },
+    drive: async (p) => { await p.locator('.kanban-col button[aria-label^="Collapse"]').first().click(); } }],
   ['kanban-long', { open: openKanban, routes: longKanban, scope: 'body' }],
   ['kanban-epic-more', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
     await p.locator('.kanban-filters__epic .overflow-more').click();
@@ -457,6 +456,7 @@ try {
     for (const [vk, w, h] of VIEWPORTS) {
       for (const [name, scene] of SCENES) {
         const key = `${name}.${theme}.${vk}`;
+        if (scene.skipAt?.[vk]) { console.log(`${key} skipped: ${scene.skipAt[vk]}`); continue; }
         const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, colorScheme: theme,
           reducedMotion: 'reduce', serviceWorkers: 'block' });
         await ctx.addInitScript((t) => { try { localStorage.setItem('tm.theme', t); } catch { /* storage unavailable */ } }, theme);
