@@ -18,6 +18,8 @@
 .dk-stat__n {
   font-family: var(--font-technical); font-weight: var(--font-technical-weight);
   font-size: var(--size-declaration-h4); color: var(--foreground-bold);
+  /* The link cue link rows give: an underline on the number says the tile opens a filtered list. */
+  text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em;
 }
 .dk-stat__label {
   font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);

@@ -661,3 +661,13 @@ for (const width of [1440, 390]) {
     expect(after - before).toBeLessThanOrEqual(geo.me.b - geo.me.t);
   });
 }
+
+// Final review: nothing said the four count tiles were links — the number carries the link-row underline cue.
+test('each count tile is a link whose number is underlined', async ({ page }) => {
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  const tiles = page.locator('.dk-summary a.dk-stat');
+  await expect(tiles).toHaveCount(4);
+  const lines = await tiles.evaluateAll((els) => els.map((a) => getComputedStyle(a.querySelector('.dk-stat__n')).textDecorationLine));
+  for (const l of lines) expect(l).toContain('underline');
+});
