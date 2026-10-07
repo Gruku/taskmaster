@@ -34,7 +34,10 @@ test('entries are 16, 32, 48 and 256 px, with 256 stored as 0', () => {
   const list = entries(readFileSync(ICO));
   assert.deepEqual(list.map((e) => e.width), [16, 32, 48, 0]);
   assert.deepEqual(list.map((e) => e.height), [16, 32, 48, 0]);
-  for (const e of list) assert.equal(e.bpp, 32);
+  for (const e of list) {
+    assert.equal(e.bpp, 32);
+    assert.equal(e.planes, 1);
+  }
 });
 
 test('each entry points at a PNG inside the file whose IHDR matches the entry', () => {
@@ -52,6 +55,14 @@ test('each entry points at a PNG inside the file whose IHDR matches the entry', 
     assert.equal(png.readUInt32BE(16), SIZES[i], `entry ${i} IHDR width`);
     assert.equal(png.readUInt32BE(20), SIZES[i], `entry ${i} IHDR height`);
     assert.equal(png.readUInt8(25), 6, `entry ${i} is RGBA`);
+    // A payload cut short still starts like a PNG; only its last chunk shows it is whole.
+    assert.equal(png.toString('latin1', png.length - 8, png.length - 4), 'IEND', `entry ${i} ends with IEND`);
   });
   assert.equal(expected, buf.length, 'no trailing bytes');
+});
+
+test('the generator says it needs the viewer packages installed first (it drives Playwright)', () => {
+  const src = readFileSync(join(here, '../../tools/gen-favicon.mjs'), 'utf8');
+  const header = src.slice(0, src.indexOf('\nimport '));
+  assert.match(header, /npm --prefix viewer install/);
 });

@@ -1,6 +1,7 @@
 // User intent: build the project's real multi-size favicon.ico from the approved Board artwork by machine, so the icon is never hand-exported.
 // Usage: node viewer/tools/gen-favicon.mjs   (rewrites viewer/vendor/favicon.ico in place from vendor/icon.svg, icon-16.svg and icon-32.svg)
 //        node viewer/tools/gen-favicon.mjs --png <dir>   also writes each size as <dir>/favicon-<size>.png for inspection
+// Needs `npm --prefix viewer install` first: it renders the SVGs in Playwright's Chromium.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

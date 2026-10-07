@@ -214,6 +214,15 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
 }
 
 // Task 7: the epic count lives in topbar row 1 and adds " · m visible" only while the search narrows the list.
+test('#/epics is titled Epics, its nav item is the current page, and nothing throws', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await boot(page);
+  await expect(page.locator('#page-title')).toHaveText('Epics');
+  await expect(page.locator('.sidebar-link.active')).toHaveAttribute('data-key', 'epics');
+  expect(errors).toEqual([]);
+});
+
 test('the epic count is in topbar row 1 and says how many the search leaves; Epics has no primary', async ({ page }) => {
   await boot(page);
   const count = page.locator('#topbar-count');

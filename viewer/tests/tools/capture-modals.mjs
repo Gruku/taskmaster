@@ -5,10 +5,12 @@
 //
 // Usage: node viewer/tests/tools/capture-modals.mjs <out-dir> [--only=name,name] [--themes=dark,light] [--widths=d,m] [--port=8799]
 //   writes <out-dir>/<scene>.<theme>.<d|m>.png and <out-dir>/metrics.json (keys "<scene>.<theme>.<d|m>").
+//   Exits 2 on a bad option or a port in use, before anything is written; Ctrl+C stops the file server too.
 import { chromium } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mockApi, unmockedWrites } from '../mock-api.js';
@@ -40,7 +42,6 @@ const PORT = Number(flag('port')?.[0] ?? 8799);
 if (!Number.isInteger(PORT) || PORT <= 0) usage('--port: expected a port number');
 const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = path.resolve(OUT_ARG);
-fs.mkdirSync(OUT, { recursive: true });
 
 // Twelve more epics, so the Table's Epic chips overflow behind More; the last four have no task and show disabled.
 const EPICS = [
@@ -87,7 +88,7 @@ const TABLE = {
   '/api/task/T-103/detail': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
   '/api/epic/viewer': F.epicPayload(BOARD, 'viewer', { design_status: 'locked', done_when: 'All screens pass the audit in both themes.', description: F.EPIC.description }),
   '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
-  '/api/issues': { issues: F.LIST_ISSUES },
+  '/api/issues': { issues: F.ISSUES },
 };
 const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
 // Plan 3e: Sessions, Archived and Dashboard read the same builders plan 4 reuses; prefs (the loop's theme) and the board stay as above.
@@ -193,7 +194,8 @@ const openShelf = async (p) => {
   if ((await t.getAttribute('aria-expanded')) !== 'true') await t.click();
 };
 
-// [name, { open, drive?, routes?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default).
+// [name, { open, drive?, routes?, mocks?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default);
+// mocks({ theme }) → the scene's own mockApi table, used instead of the default one (prefs included).
 const ALL_SCENES = [
   ['detail-rich', { open: openCard('T-102') }],
   // The rail's last panel in view: beside the body on a wide dialog, below it on a narrow one.
@@ -274,8 +276,16 @@ const ALL_SCENES = [
     const input = ctl(p.locator('.modal--form'), 'depends_on');
     // Mid-dialog, so the list has room on either side and the field is not half under the footer.
     await input.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-    // A scroll still running when the list opens would close it (as any scroll of the dialog does).
-    await p.waitForTimeout(300);
+    // A scroll still running when the list opens would close it (as any scroll of the dialog does): wait until the
+    // field sits still for two animation frames.
+    await input.evaluate((el) => new Promise((done) => {
+      let last = null;
+      const tick = () => {
+        const top = el.getBoundingClientRect().top;
+        if (top === last) done(); else { last = top; requestAnimationFrame(tick); }
+      };
+      requestAnimationFrame(tick);
+    }));
     await input.fill('T-1');
     await p.getByRole('listbox', { name: 'Depends on suggestions' }).waitFor();
   } }],
@@ -351,14 +361,14 @@ const ALL_SCENES = [
   ['issues-list', { open: openIssues(), drive: issuesView('List'), scope: '#screen-mount' }],
   // ISS-001's evidence runs past three lines: the shot is its clamped evidence with Show all showing (at 390 its column
   // sits behind the Investigating tab).
-  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.LIST_ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
+  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
     const iss = p.locator('.issue-card[data-issue-id="ISS-001"]');
     if (!(await iss.isVisible())) await p.getByRole('tab', { name: /^Investigating/ }).click();
     await iss.locator('.issue-card__more').waitFor({ state: 'visible' });
     await iss.scrollIntoViewIfNeeded();
   } }],
   ['issues-long', { open: openIssues(), routes: listRoute('issues', F.LONG_ISSUES, 'issues'), fullPage: true, scope: '#screen-mount' }],
-  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LIST_BUGS), scope: '#screen-mount',
+  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.BUGS), scope: '#screen-mount',
     drive: (p) => p.getByRole('button', { name: /^Show archived/ }).click() }],
   ['bugs-long', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LONG_BUGS), fullPage: true, scope: '#screen-mount' }],
   ['ideas-list', { open: openScreen('#/ideas/IDEA-1', '.ideas :text("IDEA-1"):visible'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: '#screen-mount' }],
@@ -409,6 +419,22 @@ if (unknownScenes.length || (ONLY && !ONLY.length)) usage(`--only: unknown scene
 const SCENES = ALL_SCENES.filter(([name]) => !ONLY || ONLY.includes(name));
 const VIEWPORTS = [['d', 1440, 900], ['m', 390, 844]].filter(([vk]) => WIDTHS.includes(vk));
 
+// A port someone else holds would serve their files (or nothing) to the browser; refuse before starting anything.
+const answers = (port) => new Promise((ok) => {
+  const sock = net.connect({ port, host: '127.0.0.1' });
+  sock.setTimeout(1000);
+  sock.once('connect', () => { sock.destroy(); ok(true); });
+  sock.once('timeout', () => { sock.destroy(); ok(false); });
+  sock.once('error', () => ok(false));
+});
+const bindable = (port) => new Promise((ok) => {
+  const probe = net.createServer();
+  probe.once('error', () => ok(false));
+  probe.listen(port, '127.0.0.1', () => probe.close(() => ok(true)));
+});
+if ((await answers(PORT)) || !(await bindable(PORT))) usage(`port ${PORT} is in use; pass --port=<free port>`);
+fs.mkdirSync(OUT, { recursive: true });
+
 // The full page scrolls inside the app frame, not the document, so a full-page screenshot alone stops at the fold:
 // the viewport is grown by the longest inner scroll first.
 async function growToContent(page, w, h) {
@@ -443,15 +469,25 @@ async function axe(page, scope) {
   }, scope);
 }
 
-const server = spawn(process.execPath, [path.join(here, 'static-server.mjs'), String(PORT)], { stdio: 'ignore' });
+const server = spawn(process.execPath, [path.join(here, 'static-server.mjs'), String(PORT)], { stdio: ['ignore', 'ignore', 'pipe'] });
+let serverErr = '';
+server.stderr.on('data', (d) => { serverErr += d; });
+let serverGone = false;
+server.on('exit', () => { serverGone = true; });
 const stop = () => { try { server.kill(); } catch { /* already gone */ } };
 process.on('exit', stop);
+// Ctrl+C (or a kill) mid-run must not leave the file server holding the port.
+process.on('SIGINT', () => { stop(); process.exit(130); });
+process.on('SIGTERM', () => { stop(); process.exit(143); });
 let up = false;
-for (let i = 0; i < 50 && !up; i++) {
+for (let i = 0; i < 50 && !up && !serverGone; i++) {
   try { up = (await fetch(`${BASE}/index.html`)).ok; } catch { /* not yet */ }
   if (!up) await new Promise((ok) => setTimeout(ok, 200));
 }
-if (!up) { console.error(`static server did not start on ${PORT}`); process.exit(1); }
+if (!up) {
+  console.error(`static server did not start on ${PORT}${serverErr.trim() ? `:\n${serverErr.trim()}` : ''}`);
+  process.exit(1);
+}
 
 const browser = await chromium.launch();
 const results = {};
@@ -470,7 +506,7 @@ try {
         page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message.slice(0, 200)}`));
         page.on('dialog', (d) => { errors.push(`[native dialog] ${d.message()}`); d.dismiss(); });
         try {
-          await mockApi(page, { '/api/viewer/prefs': { theme, ui: {}, screens: {} }, ...TABLE });
+          await mockApi(page, scene.mocks ? scene.mocks({ theme }) : { '/api/viewer/prefs': { theme, ui: {}, screens: {} }, ...TABLE });
           await bugsByTask(page);
           await scene.routes?.(page);
           await scene.open(page);

@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, DONE_TASK, LONG_TASK, LONG_RELATED, REVIEW_TASK, RICH_RELATED, taskDetail, taskPageMocks } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, DONE_TASK, EMPTY_TASK, LONG_TASK, LONG_RELATED, REVIEW_TASK, RICH_RELATED, RICH_TASK, taskDetail, taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const DETAIL = '/api/task/T-102/detail';
@@ -83,6 +83,45 @@ test('the view switch shows the view on screen and saves the choice', async ({ p
 
   await page.locator('#topbar-actions .tm-segmented').getByRole('button', { name: 'Graph' }).click();
   await expect(pressed).toHaveText('Graph');
+});
+
+test('the document shows the id, meta, title, the status and priority markers and the sections; the graph has one centre node and the same rail', async ({ page }) => {
+  await open(page);
+  const mount = page.locator('#screen-mount');
+  await expect(mount.locator('[data-test="task-id"]')).toContainText('T-102');
+  await expect(mount.locator('[data-test="meta"]')).toBeVisible();
+  await expect(mount.locator('[data-test="title"]')).toHaveText(DETAIL_TASK.title);
+  for (const field of ['status', 'priority']) {
+    const marker = mount.locator(`[data-test="chips"] [data-field="${field}"] .marker`);
+    await expect(marker.locator('.marker__shape')).toHaveCount(1);
+    await expect(marker.locator('.marker__word')).not.toBeEmpty();
+  }
+  await expect(mount.locator('[data-test="sec-spec"]')).toBeVisible();
+  await expect(mount.locator('[data-test="sec-notes"]')).toBeVisible();
+  const panels = async () => mount.locator('[data-test="rail"] .td-panel').count();
+  const documentPanels = await panels();
+  expect(documentPanels).toBeGreaterThan(0);
+
+  await page.locator('#topbar-actions .tm-segmented').getByRole('button', { name: 'Graph' }).click();
+  await expect(graph(page)).toBeVisible();
+  await expect(mount.locator('[data-test="graph-svg"] .node-rect.center')).toHaveCount(1);
+  await mount.locator('[role="tablist"]').getByRole('tab', { name: 'Anchors' }).click();
+  await expect(mount.locator('[data-tab-panel="anchors"] .td-anchor-pill')).toHaveText(RICH_TASK.anchors);
+  expect(await panels()).toBe(documentPanels);
+});
+
+test('a task with nothing to draw says so in the graph view', async ({ page }) => {
+  await open(page, '#/task/T-104?view=B', { '/api/task/T-104/detail': taskDetail(EMPTY_TASK) });
+  await expect(page.locator('#screen-mount [data-test="graph-frame"] .tm-empty__headline')).toHaveText('No dependencies to draw');
+});
+
+test('a held claim puts the lock banner on the page; without one there is none', async ({ page }) => {
+  const claim = { state: 'held', expired: false, holder: 'peer', expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+  await open(page, '#/task/T-102', { [DETAIL]: { ...taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED), claim } });
+  await expect(page.locator('#screen-mount [data-test="lock-banner"]')).toContainText('Locked by peer');
+  await page.evaluate(() => { location.hash = '#/task/T-101'; });
+  await expect(h1(page)).toHaveText(DONE_TASK.title);
+  await expect(page.locator('#screen-mount [data-test="lock-banner"]')).toHaveCount(0);
 });
 
 test('Edit sits in row 1 as the page\'s primary and the switch alone in row 2', async ({ page }) => {

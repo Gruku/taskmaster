@@ -63,8 +63,8 @@ test('the strip counts from the board, issues and bugs, and each count is a link
   await expect(page.locator('.dk-desk > :first-child')).toHaveClass(/dk-summary/);
   await expect(strip.getByRole('link', { name: '2 In progress' })).toHaveAttribute('href', '#/table?status=in-progress');
   await expect(strip.getByRole('link', { name: '1 Waiting on you' })).toHaveAttribute('href', '#/table?status=in-review');
-  await expect(strip.getByRole('link', { name: '3 Open issues' })).toHaveAttribute('href', '#/issues');
-  await expect(strip.getByRole('link', { name: '2 Open bugs' })).toHaveAttribute('href', '#/bugs');
+  await expect(strip.getByRole('link', { name: '8 Open issues' })).toHaveAttribute('href', '#/issues');
+  await expect(strip.getByRole('link', { name: '3 Open bugs' })).toHaveAttribute('href', '#/bugs');
   await expect(strip.getByRole('link')).toHaveCount(4);
   await strip.getByRole('link', { name: /Open issues/ }).click();
   await expect(page).toHaveURL(/#\/issues$/);
@@ -95,7 +95,7 @@ test('a read that fails leaves the other counts', async ({ page }) => {
   await expect(issues.locator('.dk-stat__n')).toHaveText('—');
   await expect(issues).toHaveAttribute('title', 'Not loaded');
   await expect(strip.getByRole('link', { name: '1 Waiting on you' })).toBeVisible();
-  await expect(strip.getByRole('link', { name: '2 Open bugs' })).toBeVisible();
+  await expect(strip.getByRole('link', { name: '3 Open bugs' })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -136,7 +136,7 @@ for (const theme of ['dark', 'light']) {
     await openDesk(page, summaryMocks({ theme }));
     await page.goto('/#/dashboard');
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-    await expect(summary(page).getByRole('link', { name: '3 Open issues' })).toBeVisible();
+    await expect(summary(page).getByRole('link', { name: '8 Open issues' })).toBeVisible();
     await page.evaluate(axeSource);
     const result = await page.evaluate(() => window.axe.run(document.querySelector('.dk-summary'), { resultTypes: ['violations'] }));
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);

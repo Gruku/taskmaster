@@ -33,6 +33,7 @@ test('a card is a link: Enter opens the task, Escape hands focus back, Ctrl+clic
   const dialog = page.locator('.modal--detail');
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.modal-eyebrow')).toHaveText('T-102');
+  expect(await page.evaluate(() => location.hash), 'the dialog is an overlay, not a route').toBe('#/kanban');
   await page.keyboard.press('Escape');
   await expect(page.locator('.modal')).toHaveCount(0);
   await expect(link).toBeFocused();
@@ -57,6 +58,15 @@ test('the copy-id control copies and never opens the task', async ({ page }) => 
   // Give a wrongly opened dialog the time it takes a real one to load before saying there is none.
   await page.waitForTimeout(300);
   await expect(page.locator('.modal')).toHaveCount(0);
+});
+
+test('with Detail view set to the full page, a card opens the task page and no dialog', async ({ page }) => {
+  await mockApi(page, { ...kanbanMocks(), '/api/viewer/prefs': { theme: 'dark', ui: { detail_view_mode: 'full' }, screens: {} } });
+  await page.goto('/#/kanban');
+  await linkOf(page, 'T-102').click();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/task/T-102');
+  await expect(page.locator('#screen-mount h1.td-title')).toHaveText(DETAIL_TASK.title);
+  await expect(page.locator('.modal--detail')).toHaveCount(0);
 });
 
 test('a 120-character title is clamped to three lines and the id never breaks', async ({ page }) => {

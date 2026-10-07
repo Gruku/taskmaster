@@ -150,20 +150,19 @@ test('a refused title leaves the body where the reader scrolled it and the edito
 test('the marker row keeps one size through a redraw and matches the full page', async ({ page }) => {
   await board(page);
   const dialog = await openCard(page, 'T-102');
+  await expect.poll(async () => (await markerSize(dialog)).height ?? 0).toBeGreaterThan(0);
   const first = await markerSize(dialog);
 
+  // A redraw replaces the row: a measure taken as it goes reads a detached node (no font size, no marker), so each
+  // later size is read until the row in the document has it.
   await renamedElsewhere(page, 'Renamed elsewhere');
   await expect(titleOf(dialog)).toHaveText('Renamed elsewhere');
-  const redrawn = await markerSize(dialog);
+  await expect.poll(() => markerSize(dialog), { message: 'after another writer\'s change' }).toEqual(first);
 
   await page.goto('/#/task/T-102');
   const doc = page.locator('#screen-mount.td-doc');
   await expect(doc.locator('h1.td-title')).toBeVisible();
-  const full = await markerSize(doc);
-
-  expect(first.height).toBeGreaterThan(0);
-  expect(redrawn, 'after another writer\'s change').toEqual(first);
-  expect(full, 'on the full page').toEqual(first);
+  await expect.poll(() => markerSize(doc), { message: 'on the full page' }).toEqual(first);
 });
 
 test('the modal has no meta line; the page keeps it', async ({ page }) => {

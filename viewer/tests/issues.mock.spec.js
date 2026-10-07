@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { issuesMocks, LIST_ISSUES, LONG_ISSUES, DETAIL_TASK } from './mock-fixtures.js';
+import { issuesMocks, ISSUES, LONG_ISSUES, DETAIL_TASK } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -46,7 +46,9 @@ const pollBoard = (page) => page.evaluate(() => import('/js/store.js').then(({ s
   next.revision = 'r-poll';
   store.setBoard(next);
 }));
-const withoutIds = (...ids) => LIST_ISSUES.filter((i) => !ids.includes(i.id));
+const withoutIds = (...ids) => ISSUES.filter((i) => !ids.includes(i.id));
+// The open and investigating cards of ISSUES in board order: the Investigating column, then Open.
+const ACTIVE = ['ISS-001', 'ISS-012', 'ISS-013', 'ISS-1234', 'ISS-002', 'ISS-003', 'ISS-004', 'ISS-011'];
 
 // Row 2 holds the View group, or parks it behind Filters when it does not fit: either way, pick a view by its name.
 async function pickView(page, name) {
@@ -66,11 +68,11 @@ test('the Hybrid board shows Investigating and Open as columns, resolved issues 
   await boot(page);
   await expect(page.locator('section.issues-col')).toHaveCount(2);
   await expect(colNames(page)).toHaveText(['Investigating', 'Open']);
-  await expect(page.locator('.issues-col .issues-col__count')).toHaveText(['1', '3']);
-  expect(await cardIds(page)).toEqual(['ISS-001', 'ISS-002', 'ISS-003', 'ISS-004']);
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues');
+  await expect(page.locator('.issues-col .issues-col__count')).toHaveText(['4', '4']);
+  expect(await cardIds(page)).toEqual(ACTIVE);
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues');
   const toggle = page.locator('.issues-shelf__toggle');
-  await expect(toggle).toHaveText('Resolved · 3 issues');
+  await expect(toggle).toHaveText('Resolved · 4 issues');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toHaveAttribute('aria-controls', 'issues-shelf-list');
   await expect(page.locator('#issues-shelf-list')).toBeHidden();
@@ -78,20 +80,20 @@ test('the Hybrid board shows Investigating and Open as columns, resolved issues 
   await page.keyboard.press('Enter');
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   const rows = page.locator('#issues-shelf-list .issue-row');
-  await expect(rows).toHaveCount(3);
-  await expect(rows.locator('.link-row__content .marker__word')).toHaveText(['Fixed', "Won't fix", 'Duplicate']);
+  await expect(rows).toHaveCount(4);
+  await expect(rows.locator('.link-row__content .marker__word')).toHaveText(['Fixed', 'Fixed', "Won't fix", 'Duplicate']);
   // An open shelf stays open through a redraw.
   await pollBoard(page);
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(4);
 });
 
 test('a severity is a word and a shape', async ({ page }) => {
   await boot(page);
   const words = await page.locator('.issue-card__line .marker__word').allTextContents();
-  expect(words.length).toBe(4);
+  expect(words.length).toBe(8);
   for (const w of words) expect(['Critical', 'High', 'Medium', 'Low']).toContain(w);
-  await expect(page.locator('.issue-card__line .marker__shape')).toHaveCount(4);
+  await expect(page.locator('.issue-card__line .marker__shape')).toHaveCount(8);
   const text = (await page.locator('#screen-mount').innerText()) + (await page.locator('#topbar').innerText());
   expect(text).not.toMatch(/\bP[0-3]\b/);
 });
@@ -109,20 +111,26 @@ test('a card opens its issue and its task link opens the task', async ({ page })
   expect(await page.evaluate(() => location.hash)).not.toBe('#/issue/ISS-001');
 });
 
+test('a card says how many unfinished tasks its issue blocks, and a card that blocks none says nothing', async ({ page }) => {
+  await boot(page);
+  await expect(card(page, 'ISS-001').locator('.issue-card__blocks')).toHaveText('Blocks 1 task');
+  await expect(card(page, 'ISS-004').locator('.issue-card__blocks')).toHaveCount(0);
+});
+
 test('search and the chips filter, and say how many', async ({ page }) => {
   const puts = await boot(page);
   const search = page.getByRole('textbox', { name: 'Search issues' });
   await search.fill('mutex');
-  await expect.poll(() => cardIds(page)).toEqual(['ISS-002']);
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues · 1 visible');
+  await expect.poll(() => cardIds(page)).toEqual(['ISS-013', 'ISS-002']);
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues · 2 visible');
   await expect(page.locator('.issues-shelf')).toBeHidden();
   await search.fill('');
-  await expect.poll(() => cardIds(page)).toEqual(['ISS-001', 'ISS-002', 'ISS-003', 'ISS-004']);
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues');
+  await expect.poll(() => cardIds(page)).toEqual(ACTIVE);
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues');
 
   await chip(page, 'Component', 'store').click();
   await expect.poll(() => cardIds(page)).toEqual(['ISS-002']);
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues · 1 visible');
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues · 1 visible');
   const promoted = page.getByRole('button', { name: /^From a bug/ });
   await expect(promoted.locator('.chip__count')).toHaveText('1');
   await promoted.click();
@@ -133,10 +141,10 @@ test('search and the chips filter, and say how many', async ({ page }) => {
   const clear = page.locator('.list-filters__clear');
   await expect(clear).toBeVisible();
   await clear.click();
-  await expect.poll(() => cardIds(page)).toEqual(['ISS-001', 'ISS-002', 'ISS-003', 'ISS-004']);
+  await expect.poll(() => cardIds(page)).toEqual(ACTIVE);
   await expect(clear).toBeHidden();
   await expect(promoted).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues');
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues');
   await expect.poll(() => lastIssuesPrefs(puts).promotedFromBug).toBe(false);
 });
 
@@ -146,9 +154,9 @@ test('no match offers to clear, and an empty list says so', async ({ page }) => 
   await page.getByRole('textbox', { name: 'Search issues' }).fill('contrast');
   await expect(page.getByText('No issues match these filters.')).toBeVisible();
   await expect(page.locator('.issues-board')).toBeHidden();
-  await expect(page.locator('#topbar-count')).toHaveText('7 issues · 0 visible');
+  await expect(page.locator('#topbar-count')).toHaveText('12 issues · 0 visible');
   await page.locator('.issues__state').getByRole('button', { name: 'Clear filters' }).click();
-  await expect.poll(() => cardIds(page)).toEqual(['ISS-001', 'ISS-002', 'ISS-003', 'ISS-004']);
+  await expect.poll(() => cardIds(page)).toEqual(ACTIVE);
   await expect(page.getByRole('textbox', { name: 'Search issues' })).toHaveValue('');
   await setIssues(page, []);
   await expect(page.getByText('No issues recorded yet.')).toBeVisible();
@@ -156,13 +164,13 @@ test('no match offers to clear, and an empty list says so', async ({ page }) => 
 });
 
 test('a severity at zero is disabled but a pressed one can be released', async ({ page }) => {
-  await boot(page, { '/api/issues': { issues: withoutIds('ISS-002') } });
+  await boot(page, { '/api/issues': { issues: withoutIds('ISS-002', 'ISS-013') } });
   await expect(chip(page, 'Severity', 'Critical')).toBeDisabled();
   const high = chip(page, 'Severity', 'High');
   await high.click();
   await expect(high).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(() => cardIds(page)).toEqual(['ISS-001']);
-  await setIssues(page, withoutIds('ISS-002', 'ISS-001', 'ISS-005'));
+  await expect.poll(() => cardIds(page)).toEqual(['ISS-001', 'ISS-012', 'ISS-1234', 'ISS-011']);
+  await setIssues(page, withoutIds('ISS-002', 'ISS-013', 'ISS-001', 'ISS-005', 'ISS-011', 'ISS-012', 'ISS-1234'));
   await expect(high.locator('.chip__count')).toHaveText('0');
   await expect(high).toBeEnabled();
   await expect(high).toHaveAttribute('aria-pressed', 'true');
@@ -188,7 +196,7 @@ test('the View switcher is labelled and remembered', async ({ page }) => {
   await expect(colNames(page)).toHaveText(['Open', 'Investigating', 'Fixed', "Won't fix"]);
   await group.getByRole('button', { name: 'List' }).click();
   await expect(colNames(page)).toHaveText(['Open and investigating']);
-  expect(await cardIds(page)).toEqual(['ISS-001', 'ISS-002', 'ISS-003', 'ISS-004']);
+  expect(await cardIds(page)).toEqual(ACTIVE);
   await expect.poll(() => lastIssuesPrefs(puts).view).toBe('C');
 });
 
@@ -448,7 +456,7 @@ test('keyboard walk: search, the View group, the chips, From a bug, then the car
     }));
   }
   expect(names).toEqual(['Hybrid', 'Status', 'Severity', 'List', 'Critical', 'High', 'Medium', 'Low', 'store', 'viewer',
-    'From a bug', 'card ISS-001', 'Show all', 'T-102', 'card ISS-002']);
+    'From a bug', 'card ISS-001', 'Show all', 'T-102', 'card ISS-012']);
 
   // A chip group's More: Escape closes only its popover and gives focus back to More.
   await page.setViewportSize({ width: 390, height: 844 });
@@ -476,12 +484,12 @@ test('leaving Issues while its issues are still loading leaves nothing behind', 
   await expect(page.locator('#page-title')).toHaveText('Kanban');
   await expect(page.locator('.issues')).toHaveCount(0);
   const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/issues');
-  await held.fulfill({ json: { issues: LIST_ISSUES } });
+  await held.fulfill({ json: { issues: ISSUES } });
   await answered;
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
   await expect(page.locator('.issue-card')).toHaveCount(0);
   await expect(page.locator('.issues')).toHaveCount(0);
-  await setIssues(page, LIST_ISSUES);
+  await setIssues(page, ISSUES);
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
   await expect(page.locator('.issue-card')).toHaveCount(0);
   await expect(page.locator('#page-title')).toHaveText('Kanban');
@@ -505,17 +513,17 @@ test('a search typed just before leaving never writes into the next screen', asy
 test('only the latest load is applied: an older reply never overwrites a newer list or says it failed', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, issuesMocks());
-  const fresh = [...LIST_ISSUES, { id: 'ISS-008', title: 'Found since the last visit', status: 'open', severity: 'P2', severity_label: 'Medium' }];
+  const fresh = [...ISSUES, { id: 'ISS-008', title: 'Found since the last visit', status: 'open', severity: 'P2', severity_label: 'Medium' }];
   let mode = 'ok';
   const held = [];
   await page.route((url) => url.pathname === '/api/issues', (route) => {
-    if (mode === 'ok') return route.fulfill({ json: { issues: LIST_ISSUES } });
+    if (mode === 'ok') return route.fulfill({ json: { issues: ISSUES } });
     if (mode === 'fail') return route.fulfill({ status: 500, json: { ok: false, error: 'locked' } });
     if (mode === 'hold') { held.push(route); return undefined; }
     return route.fulfill({ json: { issues: fresh } });
   });
   await page.goto('/#/issues');
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('#page-title')).toHaveText('Kanban');
   mode = 'fail';
@@ -529,28 +537,28 @@ test('only the latest load is applied: an older reply never overwrites a newer l
   mode = 'fresh';
   await page.evaluate(() => document.querySelector('.issues__notice button').click());
   await expect(card(page, 'ISS-008')).toBeVisible();
-  await held[0].fulfill({ json: { issues: LIST_ISSUES } });
+  await held[0].fulfill({ json: { issues: ISSUES } });
   await held[1].fulfill({ status: 500, json: { ok: false, error: 'locked' } });
   await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
   await expect(card(page, 'ISS-008')).toBeVisible();
-  await expect(page.locator('#topbar-count')).toHaveText('8 issues');
+  await expect(page.locator('#topbar-count')).toHaveText('13 issues');
   await expect(notice).toBeHidden();
 });
 
 test('returning to Issues reads them again', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page, issuesMocks());
-  let answer = LIST_ISSUES;
+  let answer = ISSUES;
   let gets = 0;
   await page.route((url) => url.pathname === '/api/issues', (route) => { gets += 1; return route.fulfill({ json: { issues: answer } }); });
   await page.goto('/#/issues');
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('#page-title')).toHaveText('Kanban');
-  answer = [...LIST_ISSUES, { id: 'ISS-008', title: 'Found since the last visit', status: 'open', severity: 'P2', severity_label: 'Medium' }];
+  answer = [...ISSUES, { id: 'ISS-008', title: 'Found since the last visit', status: 'open', severity: 'P2', severity_label: 'Medium' }];
   await page.evaluate(() => { location.hash = '#/issues'; });
   await expect(card(page, 'ISS-008')).toBeVisible();
-  await expect(page.locator('#topbar-count')).toHaveText('8 issues');
+  await expect(page.locator('#topbar-count')).toHaveText('13 issues');
   expect(gets).toBe(2);
 });
 
@@ -560,13 +568,13 @@ test('a failed load is said in words', async ({ page }) => {
   await mockApi(page, issuesMocks());
   await page.route((url) => url.pathname === '/api/issues', (route) => (++calls === 1
     ? route.fulfill({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } })
-    : route.fulfill({ json: { issues: LIST_ISSUES } })));
+    : route.fulfill({ json: { issues: ISSUES } })));
   await page.goto('/#/issues');
   await expect(page.getByText('Could not load issues.')).toBeVisible();
   const text = (await page.locator('#screen-mount').innerText()) + (await page.locator('#topbar').innerText());
   for (const bad of ['500', '/api', 'sqlite3', '{']) expect(text).not.toContain(bad);
   await page.getByRole('button', { name: 'Try again' }).click();
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
   expect(calls).toBe(2);
 });
 
@@ -576,27 +584,27 @@ test('a failed refresh keeps the list loaded earlier and says so', async ({ page
   let fail = false;
   await page.route((url) => url.pathname === '/api/issues', (route) => (fail
     ? route.fulfill({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } })
-    : route.fulfill({ json: { issues: LIST_ISSUES } })));
+    : route.fulfill({ json: { issues: ISSUES } })));
   await page.goto('/#/issues');
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('#page-title')).toHaveText('Kanban');
   fail = true;
   await page.evaluate(() => { location.hash = '#/issues'; });
   const notice = page.locator('.issues__notice[role="status"]');
   await expect(notice).toContainText('Could not refresh issues — showing the list loaded earlier.');
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
   fail = false;
   await notice.getByRole('button', { name: 'Try again' }).click();
   await expect(notice).toBeHidden();
-  await expect(page.locator('.issues-col .issue-card')).toHaveCount(4);
+  await expect(page.locator('.issues-col .issue-card')).toHaveCount(8);
 });
 
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): no contrast, nesting, scrolling-region, heading or aria violation on the board and the topbar`, async ({ page }) => {
     await boot(page, { theme });
     await page.locator('.issues-shelf__toggle').click();
-    await expect(page.locator('#issues-shelf-list .issue-row')).toHaveCount(3);
+    await expect(page.locator('#issues-shelf-list .issue-row')).toHaveCount(4);
     await page.evaluate(() => document.fonts.ready);
     await page.evaluate(axeSource);
     const result = await page.evaluate(async () => {

@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { bugsMocks, LIST_BUGS, LONG_BUGS, DETAIL_TASK } from './mock-fixtures.js';
+import { bugsMocks, BUGS, LONG_BUGS, DETAIL_TASK } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -40,10 +40,10 @@ const row = (page, id) => page.locator(`.bug-row[data-bug-id="${id}"]`);
 
 test('rows are links and the default shows open and shelved bugs', async ({ page }) => {
   await boot(page);
-  expect(await rowIds(page)).toEqual(['B-031', 'B-030', 'B-028']);
+  expect(await rowIds(page)).toEqual(['B-031', 'B-032', 'B-1234', 'B-028']);
   const link = page.getByRole('link', { name: /B-031/ });
   await expect(link).toHaveAttribute('href', '#/bug/B-031');
-  await expect(page.locator('#topbar-count')).toHaveText('5 bugs · 3 visible');
+  await expect(page.locator('#topbar-count')).toHaveText('7 bugs · 4 visible');
   await link.focus();
   await page.keyboard.press('Enter');
   await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/bug/B-031');
@@ -52,11 +52,11 @@ test('rows are links and the default shows open and shelved bugs', async ({ page
 test('every status is a chip and a fixed bug can be found', async ({ page }) => {
   const puts = await boot(page);
   await statusChip(page, 'Fixed').click();
-  await expect.poll(() => rowIds(page)).toEqual(['B-029']);
+  await expect.poll(() => rowIds(page)).toEqual(['B-030', 'B-029']);
   await expect.poll(() => lastBugsPrefs(puts)?.statuses).toEqual(['fixed']);
   expect(lastBugsPrefs(puts)).not.toHaveProperty('filters');
   await statusChip(page, 'Adopted').click({ modifiers: ['Shift'] });
-  await expect.poll(() => rowIds(page)).toEqual(['B-029', 'B-027']);
+  await expect.poll(() => rowIds(page)).toEqual(['B-030', 'B-029', 'B-027']);
 });
 
 test('Show archived brings archived bugs in, marked', async ({ page }) => {
@@ -64,16 +64,16 @@ test('Show archived brings archived bugs in, marked', async ({ page }) => {
   const toggle = page.getByRole('button', { name: /^Show archived/ });
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-  // Archived bugs answer to the status chips like any other: B-026 is a fixed bug, so Fixed shows it.
+  // Archived bugs answer to the status chips like any other: B-026 is a fixed bug, so Fixed shows it beside B-030 and B-029.
   await statusChip(page, 'Fixed').click();
-  await expect.poll(() => rowIds(page)).toEqual(['B-029', 'B-026']);
+  await expect.poll(() => rowIds(page)).toEqual(['B-030', 'B-029', 'B-026']);
   await expect(row(page, 'B-026').locator('.list-tag')).toHaveText('Archived');
   await expect(row(page, 'B-026')).toHaveClass(/bug-row--archived/);
-  await expect(page.locator('#topbar-count')).toHaveText('6 bugs · 2 visible');
+  await expect(page.locator('#topbar-count')).toHaveText('8 bugs · 3 visible');
 });
 
 test('a bug whose status is archived is reachable: Show archived brings it in with the default chips', async ({ page }) => {
-  await boot(page, { '/api/bugs': [...LIST_BUGS, { id: 'B-040', title: 'Retired bug', status: 'archived', discovered: '2026-01-01' }] });
+  await boot(page, { '/api/bugs': [...BUGS, { id: 'B-040', title: 'Retired bug', status: 'archived', discovered: '2026-01-01' }] });
   await expect(row(page, 'B-040')).toHaveCount(0);
   await page.getByRole('button', { name: /^Show archived/ }).click();
   await expect(row(page, 'B-040')).toBeVisible();
@@ -82,9 +82,9 @@ test('a bug whose status is archived is reachable: Show archived brings it in wi
 
 test('a severity is a marker and an unset one is nothing', async ({ page }) => {
   await boot(page);
-  await expect(row(page, 'B-031').locator('.bug-row__severity .marker__word')).toHaveText('High');
-  await expect(row(page, 'B-030').locator('.marker')).toHaveCount(1);
-  await expect(row(page, 'B-030').locator('.marker__word')).toHaveText('Open');
+  await expect(row(page, 'B-031').locator('.bug-row__severity .marker__word')).toHaveText('Medium');
+  await expect(row(page, 'B-032').locator('.marker')).toHaveCount(1);
+  await expect(row(page, 'B-032').locator('.marker__word')).toHaveText('Open');
 });
 
 test('Sort is a labelled select', async ({ page }) => {
@@ -92,7 +92,7 @@ test('Sort is a labelled select', async ({ page }) => {
   const sort = page.getByLabel('Sort');
   expect(await sort.evaluate((el) => el.id)).toBe('bugs-sort');
   await sort.selectOption({ label: 'Severity' });
-  await expect.poll(() => rowIds(page)).toEqual(['B-031', 'B-028', 'B-030']);
+  await expect.poll(() => rowIds(page)).toEqual(['B-031', 'B-1234', 'B-028', 'B-032']);
   await expect.poll(() => lastBugsPrefs(puts)?.sort).toBe('severity');
 });
 
@@ -119,7 +119,7 @@ test('keyboard walk: search, Sort, the Status chips, Show archived, Clear, then 
     }));
   }
   expect(names).toEqual(['Sort', 'Open', 'Fixed', 'Adopted', 'Shelved', 'Show archived', 'Clear filters',
-    'row B-031', 'found in T-102', 'row B-030']);
+    'row B-031', 'found in T-102', 'row B-032']);
 });
 
 test('a failed load is said in words and can be tried again', async ({ page }) => {
@@ -129,13 +129,13 @@ test('a failed load is said in words and can be tried again', async ({ page }) =
   // Registered after mockApi, so it answers first: the first call fails, the second has the list.
   await page.route((url) => url.pathname === '/api/bugs', (route) => (++calls === 1
     ? route.fulfill({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } })
-    : route.fulfill({ json: LIST_BUGS })));
+    : route.fulfill({ json: BUGS })));
   await page.goto('/#/bugs');
   await expect(page.getByText('Could not load bugs.')).toBeVisible();
   const text = (await page.locator('#screen-mount').innerText()) + (await page.locator('#topbar').innerText());
   for (const bad of ['500', '/api', 'sqlite3', '{']) expect(text).not.toContain(bad);
   await page.getByRole('button', { name: 'Try again' }).click();
-  await expect(page.locator('.bugs__list .bug-row')).toHaveCount(3);
+  await expect(page.locator('.bugs__list .bug-row')).toHaveCount(4);
   expect(calls).toBe(2);
 });
 
@@ -145,9 +145,9 @@ test('no match offers to clear', async ({ page }) => {
   await search.fill('zzz');
   await expect(page.getByText('No bugs match these filters.')).toBeVisible();
   await page.locator('.bugs__state').getByRole('button', { name: 'Clear filters' }).click();
-  await expect.poll(() => rowIds(page)).toEqual(['B-031', 'B-030', 'B-029', 'B-028', 'B-027']);
+  await expect.poll(() => rowIds(page)).toEqual(['B-031', 'B-030', 'B-032', 'B-1234', 'B-029', 'B-028', 'B-027']);
   await expect(search).toHaveValue('');
-  await expect(page.locator('#topbar-count')).toHaveText('5 bugs');
+  await expect(page.locator('#topbar-count')).toHaveText('7 bugs');
   await expect(page.locator('.list-filters__clear')).toBeHidden();
 });
 

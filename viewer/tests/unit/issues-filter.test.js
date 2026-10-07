@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { issueSeverity, isResolvedIssue, issueMatchesSearch, filterIssues } from '../../js/util/issues-filter.js';
-import { LIST_ISSUES } from '../mock-fixtures.js';
+import { ISSUES } from '../mock-fixtures.js';
 
 const ids = (issues) => issues.map((i) => i.id);
 
@@ -52,21 +52,22 @@ test('issueMatchesSearch: an empty or blank term matches everything', () => {
 });
 
 test('filterIssues: no filter keeps every issue in order', () => {
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES)), ids(LIST_ISSUES));
+  assert.deepEqual(ids(filterIssues(ISSUES)), ids(ISSUES));
   assert.deepEqual(filterIssues(null), []);
 });
 
 test('filterIssues by severity, component and the promoted toggle', () => {
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { severities: ['high'] })), ['ISS-001', 'ISS-005']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { components: ['store'] })), ['ISS-002']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { promotedOnly: true })), ['ISS-002']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { search: 'mutex' })), ['ISS-002']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { severities: ['high'] })), ['ISS-001', 'ISS-005', 'ISS-011', 'ISS-012', 'ISS-1234']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { components: ['store'] })), ['ISS-002']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { promotedOnly: true })), ['ISS-002']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { search: 'mutex' })), ['ISS-002', 'ISS-013']);
 });
 
 test('filterIssues: OR within a group, AND across groups', () => {
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { severities: ['high', 'medium'] })), ['ISS-001', 'ISS-003', 'ISS-005', 'ISS-007']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { components: ['viewer', 'store'] })), ['ISS-001', 'ISS-002', 'ISS-003']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { severities: ['high', 'medium'], components: ['viewer'] })), ['ISS-001', 'ISS-003']);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { severities: ['critical'], components: ['viewer'] })), []);
-  assert.deepEqual(ids(filterIssues(LIST_ISSUES, { severities: ['critical'], promotedOnly: true, search: 'writer' })), ['ISS-002']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { severities: ['high', 'medium'] })),
+    ['ISS-001', 'ISS-003', 'ISS-005', 'ISS-007', 'ISS-009', 'ISS-011', 'ISS-012', 'ISS-1234']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { components: ['viewer', 'store'] })), ['ISS-001', 'ISS-002', 'ISS-003']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { severities: ['high', 'medium'], components: ['viewer'] })), ['ISS-001', 'ISS-003']);
+  assert.deepEqual(ids(filterIssues(ISSUES, { severities: ['critical'], components: ['viewer'] })), []);
+  assert.deepEqual(ids(filterIssues(ISSUES, { severities: ['critical'], promotedOnly: true, search: 'writer' })), ['ISS-002']);
 });

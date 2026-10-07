@@ -3,10 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BUG_SORTS, isArchivedBug, bugPrefs, filterBugs, sortBugs, bugStatusChips } from '../../js/util/bugs-filter.js';
-import { LIST_BUGS } from '../mock-fixtures.js';
+import { BUGS } from '../mock-fixtures.js';
 
 const ids = (bugs) => bugs.map((b) => b.id);
-const nonArchived = LIST_BUGS.filter((b) => !b.archived);
+const nonArchived = BUGS.filter((b) => !b.archived);
 
 test('BUG_SORTS names the four sorts in order', () => {
   assert.deepEqual(BUG_SORTS.map((s) => s.value), ['newest', 'oldest', 'severity', 'id']);
@@ -39,14 +39,14 @@ test('bugPrefs: saved statuses are kept and an unknown sort is newest', () => {
 });
 
 test('filterBugs: archived bugs only when asked; fixed bugs are there', () => {
-  const all = ids(filterBugs(LIST_BUGS));
+  const all = ids(filterBugs(BUGS));
   assert.ok(!all.includes('B-026'));
   assert.ok(all.includes('B-029'));
-  assert.ok(ids(filterBugs(LIST_BUGS, { archived: true })).includes('B-026'));
+  assert.ok(ids(filterBugs(BUGS, { archived: true })).includes('B-026'));
 });
 
 test('filterBugs: a bug whose status is archived matches no chip, so Show archived admits it whatever chips are pressed', () => {
-  const withStatusArchived = [...LIST_BUGS, { id: 'B-040', title: 'Retired', status: 'archived' }];
+  const withStatusArchived = [...BUGS, { id: 'B-040', title: 'Retired', status: 'archived' }];
   const statuses = ['open', 'shelved'];
   assert.ok(!ids(filterBugs(withStatusArchived, { statuses })).includes('B-040'));
   assert.ok(ids(filterBugs(withStatusArchived, { statuses, archived: true })).includes('B-040'));
@@ -55,18 +55,18 @@ test('filterBugs: a bug whose status is archived matches no chip, so Show archiv
 });
 
 test('filterBugs: statuses narrow, empty means every status', () => {
-  assert.deepEqual(ids(filterBugs(LIST_BUGS, { statuses: ['open'] })), ['B-031', 'B-030']);
-  assert.equal(filterBugs(LIST_BUGS, { statuses: [] }).length, 5);
+  assert.deepEqual(ids(filterBugs(BUGS, { statuses: ['open'] })), ['B-031', 'B-032', 'B-1234']);
+  assert.equal(filterBugs(BUGS, { statuses: [] }).length, 7);
 });
 
 test('filterBugs: search is trimmed, case-insensitive, over id, title and components', () => {
-  assert.deepEqual(ids(filterBugs(LIST_BUGS, { search: '  STORE ' })), ['B-029']);
-  assert.deepEqual(ids(filterBugs(LIST_BUGS, { search: 'b-028' })), ['B-028']);
-  assert.deepEqual(ids(filterBugs(LIST_BUGS, { search: 'phase strip' })), ['B-030']);
+  assert.deepEqual(ids(filterBugs(BUGS, { search: '  STORE ' })), ['B-029']);
+  assert.deepEqual(ids(filterBugs(BUGS, { search: 'b-028' })), ['B-028']);
+  assert.deepEqual(ids(filterBugs(BUGS, { search: 'phase strip' })), ['B-030']);
 });
 
 test('sortBugs: severity is critical → low → unset, each then newest', () => {
-  assert.deepEqual(ids(sortBugs(nonArchived, 'severity')), ['B-029', 'B-031', 'B-027', 'B-028', 'B-030']);
+  assert.deepEqual(ids(sortBugs(nonArchived, 'severity')), ['B-029', 'B-031', 'B-1234', 'B-027', 'B-028', 'B-030', 'B-032']);
 });
 
 test('sortBugs: newest and oldest by discovered, undated last; returns a new array', () => {
@@ -91,7 +91,7 @@ test('bugStatusChips: present statuses in table order, a pressed absent one at 0
   const chips = bugStatusChips(nonArchived, ['promoted']);
   assert.deepEqual(chips.map((c) => c.value), ['open', 'fixed', 'adopted', 'promoted', 'shelved']);
   assert.deepEqual(chips.find((c) => c.value === 'promoted'), { value: 'promoted', label: 'Promoted', count: 0, pressed: true });
-  assert.deepEqual(chips.find((c) => c.value === 'open'), { value: 'open', label: 'Open', count: 2, pressed: false });
+  assert.deepEqual(chips.find((c) => c.value === 'open'), { value: 'open', label: 'Open', count: 3, pressed: false });
 });
 
 test('bugStatusChips: unknown statuses follow alphabetically; archived is never a chip', () => {

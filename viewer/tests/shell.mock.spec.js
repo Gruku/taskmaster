@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, LONG_ISSUES, dashboardMocks, taskDetail } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -405,6 +405,82 @@ test('sidebar collapse keeps its label in step with its state', async ({ page })
   await expect.poll(() => page.locator('#sidebar').evaluate((el) => el.offsetWidth)).toBe(56);
 });
 
+// The shell is exactly the viewport, the topbar sticks at its top, and the window never scrolls: what scrolls is
+// inside the slot below the topbar, or the slot itself.
+test.describe('shell layout at 1280×720', () => {
+  test.use({ viewport: { width: 1280, height: 720 } });
+
+  test('the shell and .main are exactly the viewport tall', async ({ page }) => {
+    await page.goto('/#/dashboard');
+    await expect(page.locator('#page-title')).toHaveText('Dashboard');
+    const dims = await page.evaluate(() => ({
+      main: document.querySelector('.main').getBoundingClientRect().height,
+      shell: document.querySelector('.shell').getBoundingClientRect().height,
+      sizing: getComputedStyle(document.querySelector('.main')).boxSizing,
+    }));
+    expect(dims).toEqual({ main: 720, shell: 720, sizing: 'border-box' });
+  });
+
+  test('the topbar sticks at the top of .main on its own ground', async ({ page }) => {
+    await page.goto('/#/issues');
+    await expect(page.locator('#page-title')).toHaveText('Issues');
+    const cs = await page.locator('#topbar').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { position: s.position, top: s.top, painted: s.backgroundColor !== 'rgba(0, 0, 0, 0)' };
+    });
+    expect(cs).toEqual({ position: 'sticky', top: '0px', painted: true });
+  });
+
+  // Where the slot sits, whether .main or the window scrolls, and for the slot and the element `scroller` names:
+  // its overflow-y, whether its content is taller than it, and whether its scrollTop actually moves when set.
+  const frame = (page, scroller) => page.evaluate((sel) => {
+    const slot = document.querySelector('#screen-mount');
+    const main = document.querySelector('.main');
+    window.scrollTo(0, 200);
+    const moves = (el) => {
+      const before = el.scrollTop;
+      el.scrollTop = before + 50;
+      const moved = el.scrollTop !== before;
+      el.scrollTop = before;
+      return moved;
+    };
+    const scroll = (el) => ({ overflowY: getComputedStyle(el).overflowY, taller: el.scrollHeight > el.clientHeight, moves: moves(el) });
+    const box = slot.getBoundingClientRect();
+    return {
+      slotTop: Math.round(box.top), topbarBottom: Math.round(document.querySelector('#topbar').getBoundingClientRect().bottom),
+      slotBottom: Math.round(box.bottom), mainFits: main.scrollHeight <= main.clientHeight, windowY: window.scrollY,
+      slot: scroll(slot), scroller: scroll(document.querySelector(sel)),
+    };
+  }, scroller);
+
+  test('on #/issues with more than fits, .issues is the scroller: the slot under the topbar has nothing to scroll, nor has the window', async ({ page }) => {
+    await page.route((url) => url.pathname === '/api/issues', (route) => route.fulfill({ json: { issues: LONG_ISSUES } }));
+    await page.goto('/#/issues');
+    await expect(page.locator('.issues-col .issue-card').first()).toBeVisible();
+    await page.locator('.issues-shelf__toggle').click();
+    await expect(page.locator('#issues-shelf-list .issue-row').first()).toBeVisible();
+    const f = await frame(page, '#screen-mount > section.issues');
+    expect(f.slotTop).toBe(f.topbarBottom);
+    expect(f).toMatchObject({ slotBottom: 720, mainFits: true, windowY: 0 });
+    expect(f.scroller, '.issues overflows and scrolls').toEqual({ overflowY: 'auto', taller: true, moves: true });
+    expect(f.slot, 'the slot').toMatchObject({ taller: false, moves: false });
+  });
+
+  test('on #/dashboard with more than fits, the slot is the desk and scrolls; the window does not', async ({ page }) => {
+    for (const [path, json] of Object.entries(dashboardMocks())) {
+      if (path.startsWith('/api/') && !['/api/viewer/prefs', '/api/board', '/api/backlog'].includes(path)) {
+        await page.route((url) => url.pathname === path, (route) => route.fulfill({ json }));
+      }
+    }
+    await page.goto('/#/dashboard');
+    await expect(page.locator('#screen-mount.dk-desk .dk-note').first()).toBeVisible();
+    const f = await frame(page, '#screen-mount.dk-desk');
+    expect(f.slotTop).toBe(f.topbarBottom);
+    expect(f).toMatchObject({ slotBottom: 720, mainFits: true, windowY: 0 });
+    expect(f.scroller, 'the desk overflows and scrolls').toEqual({ overflowY: 'auto', taller: true, moves: true });
+  });
+});
+
 test.describe('mobile drawer', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
@@ -497,14 +573,16 @@ test.describe('mobile drawer', () => {
   });
 });
 
+// Every icon link must deliver an image; another link beside the ICO (an SVG, say) is fine.
 test('the tab icon is the pixel-fitted ICO, a real file the server can deliver', async ({ page }) => {
   await page.goto('/#/kanban');
-  const hrefs = await page.locator('link[rel="icon"]').evaluateAll((links) => links.map((l) => l.href));
-  expect(hrefs.map((h) => new URL(h).pathname)).toEqual(['/vendor/favicon.ico']);
-  for (const href of hrefs) {
+  const links = await page.locator('link[rel~="icon"]').evaluateAll((all) => all.map((l) => ({ href: l.href, sizes: l.getAttribute('sizes') })));
+  for (const { href } of links) {
     const res = await page.request.get(href);
     expect(res.status(), href).toBe(200);
+    expect(res.headers()['content-type'], href).toMatch(/^image\//);
   }
+  expect(links.find((l) => new URL(l.href).pathname === '/vendor/favicon.ico')?.sizes).toBe('16x16 32x32 48x48 256x256');
 });
 
 // Topbar row 2 stays on one line: what does not fit waits behind "Filters".
