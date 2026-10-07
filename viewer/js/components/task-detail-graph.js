@@ -233,7 +233,7 @@ function svgShape(shape, x, y, tone) {
 
 // SVG text cannot wrap or ellipsise itself; the caller keeps the uncut text in the node's <title>.
 function cut(text, n) { text = text || ''; return text.length > n ? text.slice(0, Math.max(1, n - 1)) + '…' : text; }
-// A line of parts that does not fit drops whole parts from its end. The first part (the status word) is always whole,
+// A line of parts that does not fit drops whole parts from its end, with no mark. The first part (the status word) is always whole,
 // even when it alone is longer than the line: a word cut mid-way says less than one that runs into the node's edge.
 function cutParts(parts, n) {
   const line = parts.join(' · ');
@@ -244,8 +244,8 @@ function cutParts(parts, n) {
     if (next.length + 2 > n) break;
     shown = next;
   }
-  // The mark that more was dropped takes its space when there is room for it, and hugs the last word when there is not.
-  return `${shown}${shown.length + 2 <= n ? ' …' : '…'}`;
+  // What was dropped goes cleanly: a "…" after a whole word reads as a cut word. The node's <title> keeps the full line.
+  return shown;
 }
 
 function renderContextBand(related, uid) {

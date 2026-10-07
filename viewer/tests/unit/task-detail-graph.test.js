@@ -247,18 +247,18 @@ test('a node line that does not fit drops whole parts, never the status word', (
   const { root, done } = mount();
   const line = root.querySelector('g.node--center text.node-status').textContent;
   assert.ok(line.startsWith('In progress'), line);
-  assert.ok(line === 'In progress · Critical · M' || line.endsWith(' …'), line);
+  assert.ok(['In progress · Critical · M', 'In progress · Critical', 'In progress'].includes(line), line);
   assert.match(titleOf(root.querySelector('g.node--center')), /In progress · Critical · M/);
   done();
 });
 
-test('a neighbour in progress with a priority keeps its status word whole and marks what was dropped', () => {
+test('a neighbour in progress with a priority keeps its status word whole and drops the rest cleanly', () => {
   const { root, done } = mount({ related: { dependencies: [{ id: 'T-201', title: 'Busy', status: 'in-progress', priority: 'high', estimate: 'M' }] } });
   const a = root.querySelector('a.node[href="#/task/T-201"]');
   const line = a.querySelector('text.node-status').textContent;
   assert.ok(line.startsWith('In progress'), line);
-  assert.ok(line.endsWith('…'), line);
-  assert.doesNotMatch(line, /progres…/);
+  assert.ok(['In progress · High', 'In progress'].includes(line), line);
+  assert.doesNotMatch(line, /…/);
   assert.match(titleOf(a), /In progress · High · M$/);
   done();
 });
@@ -270,7 +270,7 @@ test('a status word the table does not know is shown whole, even when longer tha
     { id: 'T-203', title: 'With more', status, priority: 'low' },
   ] } });
   assert.equal(root.querySelector('a.node[href="#/task/T-202"] text.node-status').textContent, status);
-  assert.equal(root.querySelector('a.node[href="#/task/T-203"] text.node-status').textContent, `${status}…`);
+  assert.equal(root.querySelector('a.node[href="#/task/T-203"] text.node-status').textContent, status);
   done();
 });
 
