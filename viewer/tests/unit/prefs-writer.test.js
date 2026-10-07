@@ -3,14 +3,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPrefsWriter, deepMerge } from '../../js/lib/prefs-writer.js';
 
-// One pending timer at a time, fired by hand.
+// Timers fired by hand, all at once; `delays()` names how long each pending one asked for.
 function fakeTimers() {
   let next = 1;
   const timers = new Map();
+  const delays = new Map();
   return {
-    set: (fn) => { const id = next++; timers.set(id, fn); return id; },
+    set: (fn, ms) => { const id = next++; timers.set(id, fn); delays.set(id, ms); return id; },
     clear: (id) => { timers.delete(id); },
     pending: () => timers.size,
+    delays: () => [...timers.keys()].map((id) => delays.get(id)),
     fire() {
       const all = [...timers.values()];
       timers.clear();
@@ -23,7 +25,7 @@ const settle = () => new Promise((r) => setImmediate(r));
 function harness(save) {
   const t = fakeTimers();
   const errors = [];
-  const writer = createPrefsWriter({ save, delayMs: 400, setTimer: t.set, clearTimer: t.clear, onError: (e) => errors.push(e) });
+  const writer = createPrefsWriter({ save, delayMs: 400, setTimer: t.set, clearTimer: t.clear, onError: (e, info) => errors.push({ e, ...info }) });
   return { t, writer, errors };
 }
 
@@ -90,35 +92,180 @@ test('a patch queued during a save still waits out its own debounce', async () =
   assert.deepEqual(saved, [{ theme: 'dark' }, { card_density: 'compact' }]);
 });
 
-test('a failed save is reported and does not take a later patch with it', async () => {
+test('a failed save is retried with newer patches merged over it, newest wins, and given up after three tries', async () => {
   const saved = [];
-  let fail = true;
-  const { t, writer, errors } = harness(async (p) => {
-    saved.push(p);
-    if (fail) { fail = false; throw new Error('PUT /api/viewer/prefs → 500'); }
+  let failing = true;
+  const { t, writer, errors } = harness(async (p, opts) => {
+    saved.push({ p: structuredClone(p), opts });
+    if (failing) throw new Error('PUT /api/viewer/prefs → 500');
   });
-  writer.queue({ theme: 'light' });
+  writer.queue({ theme: 'light', ui: { a: 1 } });
   t.fire();
-  writer.queue({ ui: { sidebar_collapsed: true } });
   await settle();
+  assert.equal(saved.length, 1);
+  assert.deepEqual(t.delays(), [800]);             // the first retry waits retryDelayMs(1)
+  assert.equal(errors.length, 0);                  // not given up yet: nothing reported
+  writer.queue({ theme: 'dark' });                 // while the retry waits
+  assert.deepEqual(t.delays(), [800]);             // it rides the retry rather than jumping ahead of it
+  t.fire();
+  await settle();
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved[1].p, { theme: 'dark', ui: { a: 1 } });
+  t.fire(); await settle();
+  t.fire(); await settle();
+  assert.equal(saved.length, 4);                   // the first save and three retries
   assert.equal(errors.length, 1);
-  t.fire();
-  await settle();
-  assert.deepEqual(saved, [{ theme: 'light' }, { ui: { sidebar_collapsed: true } }]);
+  assert.deepEqual(errors[0].dropped, { theme: 'dark', ui: { a: 1 } });
+  assert.match(String(errors[0].e), /500/);
+  assert.equal(t.pending(), 0);
+  t.fire(); await settle();
+  assert.equal(saved.length, 4);                   // no further save
+  // A later patch starts a fresh count: it fails, and is retried rather than given up at once.
+  writer.queue({ card_density: 'compact' });
+  t.fire(); await settle();
+  assert.equal(saved.length, 5);
+  assert.deepEqual(saved[4].p, { card_density: 'compact' });
+  assert.equal(errors.length, 1);
+  assert.equal(t.pending(), 1);
+  failing = false;
+  t.fire(); await settle();
+  assert.deepEqual(saved[5].p, { card_density: 'compact' });
+  assert.equal(t.pending(), 0);
   assert.equal(errors.length, 1);
 });
 
-test('a save that throws synchronously is reported the same way', async () => {
+test('a success resets the failure count', async () => {
   let calls = 0;
-  const { t, writer, errors } = harness(() => { calls++; if (calls === 1) throw new Error('boom'); return Promise.resolve(); });
+  const fails = new Set([1, 2, 3, 5, 6, 7]);      // attempt 4 succeeds, so attempts 5–7 are a new run of three
+  const { t, writer, errors } = harness(async () => { calls++; if (fails.has(calls)) throw new Error('down'); });
+  writer.queue({ theme: 'light' });
+  for (let i = 0; i < 4; i++) { t.fire(); await settle(); }
+  assert.equal(calls, 4);
+  assert.equal(errors.length, 0);
+  writer.queue({ theme: 'dark' });
+  for (let i = 0; i < 4; i++) { t.fire(); await settle(); }
+  assert.equal(calls, 8);                          // 5, 6, 7 fail; 8 is the third retry and succeeds
+  assert.equal(errors.length, 0);
+});
+
+test('a save that throws synchronously is retried the same way', async () => {
+  const saved = [];
+  const { t, writer, errors } = harness((p) => { saved.push(p); if (saved.length === 1) throw new Error('boom'); return Promise.resolve(); });
   writer.queue({ theme: 'light' });
   t.fire();
   await settle();
-  assert.equal(errors.length, 1);
-  writer.queue({ theme: 'dark' });
   t.fire();
   await settle();
-  assert.equal(calls, 2);
+  assert.deepEqual(saved, [{ theme: 'light' }, { theme: 'light' }]);
+  assert.equal(errors.length, 0);
+});
+
+test('flush sends what is pending at once with keepalive, even during a save', async () => {
+  const calls = [];
+  const { t, writer } = harness((p, opts) => { calls.push([structuredClone(p), opts]); return new Promise(() => {}); });
+  writer.queue({ theme: 'light' });
+  t.fire();                                        // the first save is held open
+  writer.queue({ x: 1 });
+  writer.flush();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1], [{ x: 1 }, { keepalive: true }]);
+  assert.equal(t.pending(), 0);                    // its debounce is cleared: it is not sent twice
+  writer.flush();                                  // nothing pending: nothing sent
+  assert.equal(calls.length, 2);
+});
+
+test('flush with nothing pending calls nothing', async () => {
+  const calls = [];
+  const { writer } = harness(async (p, opts) => { calls.push([p, opts]); });
+  writer.flush();
+  assert.deepEqual(calls, []);
+});
+
+test('flush sends a batch waiting for its retry, and does not retry it again', async () => {
+  const calls = [];
+  const { t, writer, errors } = harness(async (p, opts) => { calls.push([structuredClone(p), opts]); throw new Error('down'); });
+  writer.queue({ theme: 'light' });
+  t.fire();
+  await settle();
+  writer.queue({ ui: { a: 1 } });
+  writer.flush();
+  assert.deepEqual(calls[1], [{ theme: 'light', ui: { a: 1 } }, { keepalive: true }]);
+  assert.equal(t.pending(), 0);
+  await settle();
+  t.fire(); await settle();
+  assert.equal(calls.length, 2);
+  assert.equal(errors.length, 1);                  // the page is going away: what flush could not send is given up
+  assert.deepEqual(errors[0].dropped, { theme: 'light', ui: { a: 1 } });
+});
+
+// The page survives its pagehide (bfcache): a save in flight when flush() sent newer values fails afterwards.
+function flushedDuringSave() {
+  const calls = [];
+  let rejectFirst;
+  const h = harness((p, opts) => {
+    calls.push([structuredClone(p), opts]);
+    if (calls.length === 1) return new Promise((_, no) => { rejectFirst = no; });
+    return Promise.resolve();
+  });
+  return { ...h, calls, reject: (e) => rejectFirst(e) };
+}
+
+test('a save that fails after flush sent newer values retries only the keys flush did not cover', async () => {
+  const { t, writer, errors, calls, reject } = flushedDuringSave();
+  writer.queue({ theme: 'light', ui: { a: 1 } });
+  t.fire();                                        // save A is in flight
+  writer.queue({ theme: 'dark' });
+  writer.flush();                                  // sends B = { theme: 'dark' }
+  assert.deepEqual(calls[1], [{ theme: 'dark' }, { keepalive: true }]);
+  reject(new Error('PUT /api/viewer/prefs → 500'));
+  await settle();
+  assert.deepEqual(t.delays(), [800]);             // one failure since the flush reset the count
+  t.fire(); await settle();
+  // ui.a had nothing newer sent; the older theme never lands over the flushed one.
+  assert.deepEqual(calls[2], [{ ui: { a: 1 } }, { keepalive: false }]);
+  for (let i = 0; i < 4; i++) { t.fire(); await settle(); }
+  assert.equal(calls.length, 3);
+  assert.equal(errors.length, 0);
+});
+
+test('a failed save whose every key a flush replaced is not sent again and loses nothing', async () => {
+  const { t, writer, errors, calls, reject } = flushedDuringSave();
+  writer.queue({ theme: 'light', ui: { a: 1 } });
+  t.fire();
+  writer.queue({ theme: 'dark', ui: { a: 2, b: 3 } });
+  writer.flush();
+  reject(new Error('down'));
+  await settle();
+  for (let i = 0; i < 4; i++) { t.fire(); await settle(); }
+  assert.equal(calls.length, 2);
+  assert.equal(errors.length, 0);
+  assert.equal(t.pending(), 0);
+  // A patch queued afterwards still goes out normally.
+  writer.queue({ card_density: 'compact' });
+  t.fire(); await settle();
+  assert.deepEqual(calls[2], [{ card_density: 'compact' }, { keepalive: false }]);
+});
+
+test('what a failed save had left over goes under a patch queued after the flush', async () => {
+  const { t, writer, calls, reject } = flushedDuringSave();
+  writer.queue({ theme: 'light', ui: { a: 1, c: 1 } });
+  t.fire();
+  writer.queue({ theme: 'dark', ui: { c: 2 } });
+  writer.flush();
+  writer.queue({ ui: { a: 5 } });                  // newer than A's ui.a
+  reject(new Error('down'));
+  await settle();
+  t.fire(); await settle();
+  assert.deepEqual(calls[2], [{ ui: { a: 5 } }, { keepalive: false }]);
+});
+
+test('a regular save uses no keepalive', async () => {
+  const calls = [];
+  const { t, writer } = harness(async (p, opts) => { calls.push(opts); });
+  writer.queue({ theme: 'light' });
+  t.fire();
+  await settle();
+  assert.deepEqual(calls, [{ keepalive: false }]);
 });
 
 test('the caller\'s patch objects are not mutated by later merges', async () => {

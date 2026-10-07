@@ -5,6 +5,7 @@ import { beginMeasure, endMeasure } from './lib/measure.js';
 
 async function http(method, path, body, options = {}) {
   const init = { method, headers: {...options.headers}, cache: 'no-store' };
+  if (options.keepalive) init.keepalive = true;
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -109,7 +110,8 @@ export const api = {
   board: (since) => http('GET', '/api/board' + (since ? `?since=${encodeURIComponent(since)}` : ''), undefined,
     {headers: since ? {'If-None-Match': `"${since}"`} : {}}),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
-  savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
+  // `keepalive` lets the save outlive the page (sent on pagehide).
+  savePrefs:       (p, { keepalive = false } = {}) => http('PUT', '/api/viewer/prefs', p, { keepalive }),
   getTask,
   getEpic,
   getTaskRelated,
@@ -181,16 +183,6 @@ export async function getSessionDetail(sid) {
 
 export async function listThreads() {
   return http('GET', '/api/threads');
-}
-
-export async function savePrefs(patch) {
-  const r = await fetch('/api/viewer/prefs', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!r.ok) throw new Error(`savePrefs: ${r.status}`);
-  return r.json();
 }
 
 // --- Issues ----------------------------------------------------------------

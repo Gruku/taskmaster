@@ -119,7 +119,6 @@ export function mount(root, { params, subpath, store, prefs }) {
     }
     if (hit) render();
   };
-  window.addEventListener('viewer:handover-status-changed', onStatusChanged);
 
   function kindChips(sessionCount = 0, handoverCount = 0) {
     return [
@@ -244,6 +243,8 @@ export function mount(root, { params, subpath, store, prefs }) {
     renderBoard();
   }, () => {});
 
+  // Last, just before the disposer goes back: a mount that throws earlier leaves no window listener behind.
+  window.addEventListener('viewer:handover-status-changed', onStatusChanged);
   return () => {
     alive = false;
     window.removeEventListener('viewer:handover-status-changed', onStatusChanged);

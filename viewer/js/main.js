@@ -28,10 +28,12 @@ registerScreen('/settings',   () => import('./screens/settings.js'));
 // Prefs writer with debounce — screens call `prefs.patch({...})`.
 // Patches inside one debounce window are merged, so none of them is dropped.
 const prefsWriter = createPrefsWriter({
-  save: (patchObj) => api.savePrefs(patchObj),
+  save: (p, o) => api.savePrefs(p, o),
   delayMs: PREFS_DEBOUNCE_MS,
-  onError: (e) => console.error('savePrefs failed', e),
+  onError: (e, { dropped }) => console.error('preferences not saved', dropped, e),
 });
+// A choice made just before the tab closes or navigates away is still inside its debounce window.
+window.addEventListener('pagehide', () => prefsWriter.flush());
 const prefs = {
   patch(patchObj) {
     // Apply locally for instant UI feedback.

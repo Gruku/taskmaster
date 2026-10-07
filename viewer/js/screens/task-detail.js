@@ -3,7 +3,6 @@ import { mountTaskDetailDocument, rememberView } from '../components/task-detail
 import { stateBlock } from '../components/empty-state.js';
 import { openModalCount, topModal } from '../components/modal.js';
 import { claimTopbar } from '../lib/topbar.js';
-import { deepMerge } from '../lib/prefs-writer.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: null };
 
@@ -42,9 +41,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     // From here the choice is the saved one; an address still naming the other view would undo it on reload.
     if (urlView) history.replaceState(history.state, '', `#/task/${encodeURIComponent(id)}`);
     if (shown) await paint(shown, generation);
-    const patch = { screens: { task_detail: { view: next } } };
-    store.setPrefs(deepMerge(structuredClone(store.getPrefs() || {}), patch));
-    try { await api.savePrefs(patch); } catch (e) { console.error('savePrefs failed', e); }
+    prefs?.patch({ screens: { task_detail: { view: next } } });
   };
 
   // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has
@@ -117,6 +114,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         cleanup = null;
         shown = null;
         claimTopbar();
+        // The remembered task is gone: forgotten, so the next bare #/task says "No task open" instead of coming back here.
+        if (e?.code === 404 && store?.getPrefs?.()?.ui?.last_task_id === id) prefs?.patch?.({ ui: { last_task_id: null } });
         // Said in words: the request, its status and the server's text are never shown on the page.
         root.replaceChildren(stateBlock(e?.code === 404
           ? { state: 'missing', label: id, headline: 'Task not found', hint: 'It may have been archived, renamed or removed.', action: TO_KANBAN }

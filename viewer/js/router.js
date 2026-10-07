@@ -4,6 +4,7 @@
 //   #/task/T-148
 
 import { claimTopbar } from './lib/topbar.js';
+import { stateBlock } from './components/empty-state.js';
 
 const screens = new Map();   // path-prefix → loader (() => Promise<module>)
 let currentCleanup = null;
@@ -43,15 +44,15 @@ function parseHash() {
   return { path, params, segments };
 }
 
-// What the mount shows when a screen cannot be loaded or opened.
-function failureStub(headline, error) {
-  const stub = document.createElement('div');
-  stub.className = 'stub';
-  const meta = document.createElement('div');
-  meta.className = 'stub-meta';
-  meta.textContent = error?.message || String(error);
-  stub.append(headline, meta);
-  return stub;
+// What the mount shows when a screen cannot be loaded or opened: words, never the error (it goes to the console).
+function failureBlock() {
+  return stateBlock({ state: 'error', label: 'Could not open', headline: 'This screen could not be opened.',
+    hint: 'Reload the page. If it keeps happening, restart the viewer.', action: { label: 'Go to the dashboard', href: '#/dashboard' } });
+}
+
+// The sidebar follows every outcome: the screen's own item, or none when its module never arrived.
+function announce(path, params, mod) {
+  document.dispatchEvent(new CustomEvent('route:changed', { detail: { path, params, sidebarKey: mod?.meta?.sidebarKey ?? null } }));
 }
 
 async function go() {
@@ -88,7 +89,9 @@ async function go() {
   } catch (e) {
     if (seq !== navSeq) return; // stale
     console.error('screen load failed', e);
-    mountEl.replaceChildren(failureStub(`Failed to load screen: ${matchPrefix}`, e));
+    titleEl.textContent = 'Could not open';
+    mountEl.replaceChildren(failureBlock());
+    announce(path, params, null);
     return;
   }
   if (seq !== navSeq) return; // stale
@@ -108,14 +111,14 @@ async function go() {
     console.error('screen mount failed', e);
     // Drop whatever the screen built before it threw.
     claimTopbar();
-    mountEl.replaceChildren(failureStub(`Failed to open screen: ${matchPrefix}`, e));
+    mountEl.replaceChildren(failureBlock());
+    announce(path, params, mod);
     return;
   }
   if (seq !== navSeq) return; // stale
   currentCleanup = cleanup;
 
-  // Notify sidebar to update active state.
-  document.dispatchEvent(new CustomEvent('route:changed', { detail: { path, params, sidebarKey: mod.meta?.sidebarKey } }));
+  announce(path, params, mod);
 }
 
 export function navigate(hash) {
