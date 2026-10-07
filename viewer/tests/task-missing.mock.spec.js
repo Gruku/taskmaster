@@ -102,3 +102,20 @@ test('a missing task is not remembered as the last one opened; a real one is', a
   await expect(page.locator('#screen-mount')).toContainText('A real task');
   expect(await page.evaluate(() => location.hash)).toBe('#/task/REAL-1');
 });
+
+test('a remembered task that no longer exists is forgotten', async ({ page }) => {
+  await mockApi(page, {
+    '/api/viewer/prefs': { theme: 'dark', ui: { last_task_id: 'T-999' }, screens: {} },
+    '/api/task/T-999/detail': { status: 404, json: { error: 'not found' } },
+  });
+  const puts = [];
+  page.on('request', (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/viewer/prefs')) puts.push(JSON.parse(r.postData())); });
+  await page.goto('/#/task');
+  await expect(page.locator('#screen-mount .tm-empty[data-state="missing"]')).toBeVisible();
+  await expect(page.locator('#screen-mount .tm-empty__label')).toHaveText('T-999');
+  await expect.poll(() => puts.some((p) => p.ui && 'last_task_id' in p.ui && p.ui.last_task_id === null)).toBe(true);
+  // The next bare #/task has nothing to follow.
+  await page.evaluate(() => { location.hash = '#/task'; });
+  await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('No task open');
+  expect(await page.evaluate(() => location.hash)).toBe('#/task');
+});

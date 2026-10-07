@@ -147,8 +147,21 @@ export function mountSidebar(el, { store, prefs }) {
     hamburger.title = label;
   }
 
+  // Tab wraps at the drawer's ends: past its last stop the browser would otherwise leave the page for its own chrome.
   function onDrawerKeydown(e) {
-    if (e.key === 'Escape') closeDrawer();
+    if (e.key === 'Escape') { closeDrawer(); return; }
+    if (e.key !== 'Tab') return;
+    const stops = [...el.querySelectorAll('a[href], button:not([disabled])')].filter((n) => n.checkVisibility());
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    const at = document.activeElement;
+    const to = !el.contains(at) ? (e.shiftKey ? last : first)
+      : !e.shiftKey && at === last ? first
+      : e.shiftKey && at === first ? last
+      : null;
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
   }
 
   function openDrawer() {
@@ -162,13 +175,16 @@ export function mountSidebar(el, { store, prefs }) {
 
   // Safe to call when the drawer is not open (link clicks on desktop, teardown): focus
   // goes back to the hamburger, the drawer's opener, only when a drawer really closed.
-  function closeDrawer() {
+  // `widening`: the drawer becomes the desktop sidebar, so it stays reachable and focus stays where it is
+  // (the hamburger is about to go).
+  function closeDrawer({ widening = false } = {}) {
     const wasOpen = shell.classList.contains('sidebar-drawer-open');
     shell.classList.remove('sidebar-drawer-open');
     document.removeEventListener('keydown', onDrawerKeydown);
     if (mainEl) mainEl.inert = false;
-    if (hamburger) el.inert = true;
     syncHamburger(false);
+    if (widening) return;
+    if (hamburger) el.inert = true;
     if (wasOpen) hamburger?.focus();
   }
 
@@ -204,7 +220,7 @@ export function mountSidebar(el, { store, prefs }) {
   }
 
   function detachMobileChrome() {
-    closeDrawer();
+    closeDrawer({ widening: true });
     if (hamburger) {
       hamburger.removeEventListener('click', toggleDrawer);
       hamburger.remove();

@@ -778,3 +778,115 @@ for (const route of ['#/kanban', '#/archived']) {
     expect(errors).toEqual([]);
   });
 }
+
+// Plan 4 Task 1: preferences survive a closing tab; the phone drawer and banner behave.
+test.describe('shell robustness', () => {
+  test('a pending preference is sent with keepalive when the page is hidden', async ({ page }) => {
+    // What the page asked fetch for: Playwright's request object does not carry `keepalive`.
+    await page.addInitScript(() => {
+      const real = window.fetch;
+      window.__prefPuts = [];
+      window.fetch = (input, init) => {
+        if (init?.method === 'PUT' && String(input).endsWith('/api/viewer/prefs')) window.__prefPuts.push({ body: init.body, keepalive: !!init.keepalive });
+        return real.call(window, input, init);
+      };
+    });
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto('/#/settings');
+    const toggle = page.locator('#theme-toggle');
+    await expect(toggle).toBeEnabled();
+    await expect(page.locator('.sidebar-link.active')).toHaveCount(1);
+    await page.waitForTimeout(600);   // boot's own preference writes are out of the debounce window
+    const puts = [];
+    page.on('request', (r) => { if (r.method() === 'PUT' && r.url().endsWith('/api/viewer/prefs')) puts.push({ at: Date.now(), body: r.postData() }); });
+    const clicked = Date.now();
+    await toggle.click();
+    await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide')));
+    expect(Date.now() - clicked).toBeLessThan(100 + 300);   // the click and the event, well inside the debounce
+    await expect.poll(() => puts.filter((p) => JSON.parse(p.body).theme === 'light').length).toBe(1);
+    const sent = puts.find((p) => JSON.parse(p.body).theme === 'light');
+    expect(sent.at - clicked).toBeLessThan(400);
+    expect(await page.evaluate(() => window.__prefPuts.filter((p) => JSON.parse(p.body).theme === 'light'))).toEqual([
+      expect.objectContaining({ keepalive: true }),
+    ]);
+    // The debounce it replaced does not send it a second time.
+    await page.waitForTimeout(700);
+    expect(puts.filter((p) => JSON.parse(p.body).theme === 'light')).toHaveLength(1);
+  });
+
+  test.describe('at phone width', () => {
+    test.use({ viewport: { width: 390, height: 844 } });
+
+    test('with the phone drawer open, Tab stays in the drawer', async ({ page }) => {
+      await page.goto('/#/kanban');
+      await page.locator('.topbar-hamburger').click();
+      await expect(page.locator('.sidebar-link').first()).toBeFocused();
+      const inDrawer = () => page.evaluate(() => {
+        const a = document.activeElement;
+        return a?.closest?.('#sidebar') ? 'drawer' : a === document.body ? 'body' : a?.id || a?.className || a?.tagName;
+      });
+      for (const key of ['Tab', 'Shift+Tab']) {
+        for (let i = 0; i < 30; i++) {
+          await page.keyboard.press(key);
+          expect(await inDrawer(), `${key} ${i + 1}`).toBe('drawer');
+        }
+      }
+    });
+
+    test('a banner over a phone page adds no extra scroll', async ({ page }) => {
+      await page.goto('/#/settings');
+      await expect(page.locator('#page-title')).toHaveText('Settings');
+      // The content's own height: .main itself stretches to the shell's min-height, which would hide the extra scroll.
+      const S = await page.evaluate(() => {
+        const main = document.querySelector('.main');
+        return Math.max(...[...main.children].map((c) => c.getBoundingClientRect().bottom)) - main.getBoundingClientRect().top;
+      });
+      await page.evaluate(async () => {
+        const { showFieldConflict } = await import('/js/components/edit/conflict-banner.js');
+        showFieldConflict({ entityKind: 'task', entityId: 'T-1', fieldKey: 'title', fieldLabel: 'Title', localValue: 'a', currentValue: 'b', onKeepMine: async () => {}, onUseServer: () => {} });
+      });
+      const banner = page.locator('#conflict-banner-host > *').first();
+      await expect(banner).toBeVisible();
+      await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+      const B = await banner.evaluate((el) => el.getBoundingClientRect().height);
+      expect(B).toBeGreaterThan(0);
+      const { scrollHeight, innerHeight } = await page.evaluate(() => ({ scrollHeight: document.documentElement.scrollHeight, innerHeight }));
+      expect(scrollHeight).toBeLessThanOrEqual(Math.max(innerHeight, S + B) + 1);
+    });
+
+    test('widening the window with the drawer open leaves focus on something visible', async ({ page }) => {
+      await page.goto('/#/kanban');
+      await page.locator('.topbar-hamburger').click();
+      const second = page.locator('.sidebar-link').nth(1);
+      await second.focus();
+      await expect(second).toBeFocused();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+      const focus = await page.evaluate(() => {
+        const a = document.activeElement;
+        return { connected: !!a?.isConnected, body: a === document.body, hamburger: !!a?.matches?.('.topbar-hamburger'), visible: !!a?.checkVisibility?.() };
+      });
+      expect(focus).toEqual({ connected: true, body: false, hamburger: false, visible: true });
+    });
+  });
+
+  // One layout shift budget per first load: under 0.1 (the "good" CLS threshold) is accepted.
+  for (const route of ['#/kanban', '#/table']) {
+    test(`the first load of ${route} shifts its layout less than 0.1`, async ({ page }) => {
+      await mockApi(page, withContent());
+      await page.goto('/' + route);
+      await expect(page.locator('#topbar-actions .tm-search')).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(500);
+      const cls = await page.evaluate(() => new Promise((ok) => {
+        let sum = 0;
+        new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) if (!e.hadRecentInput) sum += e.value;
+        }).observe({ type: 'layout-shift', buffered: true });
+        setTimeout(() => ok(sum), 100);
+      }));
+      console.log(`CLS ${route}: ${cls.toFixed(4)}`);
+      expect(cls).toBeLessThan(0.1);
+    });
+  }
+});

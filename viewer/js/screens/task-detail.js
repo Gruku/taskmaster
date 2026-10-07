@@ -114,6 +114,8 @@ export function mount(root, { params, store, api, prefs, subpath }) {
         cleanup = null;
         shown = null;
         claimTopbar();
+        // The remembered task is gone: forgotten, so the next bare #/task says "No task open" instead of coming back here.
+        if (e?.code === 404 && store?.getPrefs?.()?.ui?.last_task_id === id) prefs?.patch?.({ ui: { last_task_id: null } });
         // Said in words: the request, its status and the server's text are never shown on the page.
         root.replaceChildren(stateBlock(e?.code === 404
           ? { state: 'missing', label: id, headline: 'Task not found', hint: 'It may have been archived, renamed or removed.', action: TO_KANBAN }
