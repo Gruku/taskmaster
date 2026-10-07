@@ -2,6 +2,9 @@
    dimmed unless pressed, the row never wraps and what does not fit lists behind "More"; touch-sized on a phone. */
 
 .chip-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+/* A bare group of chips handed to the topbar's row 2: shell.css keeps it on one line there and wraps it once it is
+   parked behind Filters, so a long group never scrolls the popover sideways. */
+.tm-chip-row { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; gap: var(--space-micro); min-width: 0; }
 .chip-row__label {
   flex: none;
   white-space: nowrap;
