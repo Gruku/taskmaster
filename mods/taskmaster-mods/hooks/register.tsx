@@ -5,7 +5,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { TmBandMode, TmBinding, TmCursor, TmFault, TmHandoverNotice, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
-import { demoActions, readOnlyActions } from './actions'
+import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
 import { DEMO_DETAILS, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
@@ -27,7 +27,7 @@ import {
 import { parseHandoverWritten } from './parse'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
-import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope } from './tm'
+import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
@@ -198,11 +198,12 @@ function ensureFlows($: EngineInterface): TmFlows {
   mod.flows ??= createFlows({
     host,
     write,
-    actions: mod.source === 'demo' ? demoActions() : readOnlyActions(),
+    actions: mod.source === 'demo' ? demoActions() : tmActions((tool, args) => writeTm(host, tool, args)),
     afterWrite: (taskId, outcome) => {
       if (outcome === 'done') void unbindIf(taskId)
       mod.refresher?.request()
     },
+    boundId: () => boundTaskId($),
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id) } : {}),
@@ -302,6 +303,16 @@ async function unbind(): Promise<void> {
 
 async function unbindIf(taskId: string): Promise<void> {
   if ((await mod.io?.readBinding())?.taskId === taskId) await unbind()
+}
+
+/**
+ * The task the band's d and a may act on (ruling F1): tm, this session's binding, never a queue or branch lookup; demo, the
+ * seeded bound task (demo has no binding).
+ */
+async function boundTaskId($: EngineInterface): Promise<string | null> {
+  if (mod.source === 'tm') return (await read($, BINDING))?.taskId ?? null
+  const bound = (await dataOf($)).snapshot?.bound ?? null
+  return bound === null || bound.inferred ? null : bound.taskId
 }
 
 /** One refresh through the refresher an acting hook built; `final`: no retry remains, so a transient failure is reported. */
@@ -487,7 +498,7 @@ export const register: Register = (on, options) => {
       askDone: id => act(f => f.bandAskDone(id)),
       confirmDone: id => act(f => f.bandConfirmDone(id)),
       cancel: () => act(f => f.bandCancel()),
-      sendBack: id => act(f => f.openReview(id, 'note')),
+      sendBack: id => act(f => f.bandSendBack(id)),
       copyNotice: surface => act(f => (notice === null ? Promise.resolve() : f.copyNotice(notice, surface))),
     })
     const { Box } = ui
@@ -527,7 +538,7 @@ export const register: Register = (on, options) => {
         confirmDone: id => act(f => f.confirmDone(id)),
         cancel: () => act(f => f.cancel()),
         askNote: id => act(f => f.askNote(id)),
-        sendBack: (id, note) => act(f => f.sendBack(id, note)),
+        sendBack: (id, note, humanAction) => act(f => f.sendBack(id, note, humanAction)),
         skip: id => act(f => f.skip(id)),
         fill: text => act(f => f.fill(text)),
         toggleTick: (id, item) => act(f => f.toggleTick(id, item)),

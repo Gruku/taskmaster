@@ -198,7 +198,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
 - The check is shown in full (the pane scrolls if long).
 - `d` → inline confirm row `done <id>?  y: yes  n: no` (focus starts on `n`, so Enter cancels; with unticked items it reads `1 of 2 unchecked — done anyway?`) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
-- `a` → an `Input` "note for the agent" → `backlog_update_task(id, status, in-progress)`, clear `human_action`, record the note with `backlog_note` → close the pane and `$.prompt.fill` "Back to <id>: <note>" (not submitted).
+- `a` → an `Input` "note for the agent" → `backlog_update_task(id, status, in-progress)`, then the note as the task's `next_step` (`Back from review: <note>`, plan deviation 4; skipped when blank), then clear `human_action` → close the pane and `$.prompt.fill` "Back to <id>: <note>" (not submitted). It stops at the first refusal and names the step; the prompt still gets the note. A refusal past the status move, or a write with no answer in 15 s, drops the card (the task may no longer be waiting) and toasts the refusal; every failure asks for a refresh.
 - `s` → next card; `o` → `$.prompt.fill("Look at <id>")` and the pane stays open. Only "back to agent" closes the pane.
 - `v` → open this task in the Taskmaster viewer (`backlog_open_viewer`; the review mode of §6.5 once it exists, the task view until then). `c` → `$.ui.copy` the check text (toast; path-less fallback toast on `no-clipboard`).
 - After the last card: "Queue clear" with the pass tally.
@@ -220,7 +220,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 | Action | Tool | Server enforcement relied on |
 |---|---|---|
 | done | `backlog_complete_task` | refuses unpassed blocking gates and open `found_in` bugs; clears `human_action`; closes handovers; changelog entry via `done` text |
-| back to agent | `backlog_update_task` (status) + `backlog_update_task` (`human_action` "") + `backlog_note` | legal `in-review → in-progress` transition |
+| back to agent | `backlog_update_task` (status) + `backlog_update_task` (`next_step` note) + `backlog_update_task` (`human_action` "") | legal `in-review → in-progress` transition |
 | resolve decision | none in v1 — prompt fill to the decision skill | skill owns it |
 
 Every write is one explicit key plus confirmation (`y` for done). No bulk actions in v1.
@@ -269,6 +269,7 @@ Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minu
 - Startup and cold-server conditions — the engine's "no connected MCP tool … on a server named …" while the server is still connecting, or the mod's own 3 s read timeout — are retried at 2, 4, 8 and 16 s (no turn end needed; collapsed with other refreshes; a success resets the backoff) before the mod reports `◆ tm offline`; meanwhile there is no status line, the panes and band say `Connecting to Taskmaster…` (neutral, like Loading) and the last good snapshot stays visible. A refusal or any other error faults at once.
 - Unparseable reply: treated as no data, status `ⓘ tm reply unreadable`, raw text to the debug log via `$.ui.log(…, { to: 'debug' })`.
 - Write refused by the server: shown on the card as a `◆` signal with the server's text; nothing retried automatically.
+- Known gap (predates Task 4, no pre-check for now): `d` on a stale snapshot can still complete a task the agent has already moved to `in-progress`, since `backlog_complete_task` accepts `in-progress`.
 - Clipboard unavailable: toast shows the path to copy by hand.
 - Pane not placed (narrow, unasked): only user-initiated opens are used, so this shouldn't occur; if `isPlaced` is false, toast "widen the terminal".
 - Any `ui.render` hook that lacks data returns `next(e)` (band) or a plain "Loading…" (pane); never throws.

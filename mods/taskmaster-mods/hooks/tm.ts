@@ -1,5 +1,6 @@
-// User intent: the one door to the Taskmaster MCP server — every call bounded to 3 s and every reply read by a pure parser —
-// so the surfaces never hang on tm, and a missing server or an unreadable reply degrades to a fault instead of a crash.
+// User intent: the one door to the Taskmaster MCP server — every read bounded to 3 s, every write to 15 s, and every reply
+// read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable reply degrades to a fault
+// instead of a crash.
 import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
@@ -19,6 +20,8 @@ import {
 } from './parse'
 
 export const TM_TIMEOUT_MS = 3000
+/** A write may queue behind the store's writer (ruling F14); it is never retried, so it gets longer than a read. */
+export const TM_WRITE_TIMEOUT_MS = 15_000
 /** Every refresh reads a window of the first 50 rows (ruling F2); counts come from the server's totals, not the rows. */
 export const QUEUE_WINDOW = 50
 export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
@@ -31,11 +34,13 @@ export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
 /**
  * A call that got no usable reply. `transient`: worth retrying before reporting offline — the mod's own read timeout (a cold
  * server's first reads), or the engine saying the server is not connected yet (it connects seconds after session start).
+ * `pending`: on the mod's own timeout, the call itself, still running (a write may still land); settles when it does.
  */
 export class TmUnreachable extends Error {
   constructor(
     message: string,
     readonly transient: boolean = false,
+    readonly pending?: Promise<unknown>,
   ) {
     super(message)
   }
@@ -68,9 +73,10 @@ export type FetchResult = {
   readonly transient?: boolean
 }
 
-export async function callTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
+/** One call bounded to `ms`: no reply in time, or an engine error, throws TmUnreachable; the reply comes back as given. */
+async function bounded(host: TmHost, tool: string, args: Record<string, unknown>, ms: number): Promise<TmReply> {
   const stop = new AbortController()
-  const timer = host.sleep(TM_TIMEOUT_MS, stop.signal).then(
+  const timer = host.sleep(ms, stop.signal).then(
     () => 'timeout' as const,
     () => 'cancelled' as const,
   )
@@ -80,13 +86,23 @@ export async function callTm(host: TmHost, tool: string, args: Record<string, un
   )
   const first = await Promise.race([work, timer])
   stop.abort()
-  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${TM_TIMEOUT_MS / 1000} s`, true)
+  if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${ms / 1000} s`, true, work)
   if ('error' in first) {
     const message = String(first.error).split('\n')[0] ?? ''
     throw new TmUnreachable(`${tool}: ${message}`, NOT_CONNECTED.test(message))
   }
-  if (first.reply.isError) throw new TmUnreachable(`${tool}: ${firstParagraph(first.reply.text) || 'the server reported an error'}`)
   return first.reply
+}
+
+export async function callTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
+  const reply = await bounded(host, tool, args, TM_TIMEOUT_MS)
+  if (reply.isError) throw new TmUnreachable(`${tool}: ${firstParagraph(reply.text) || 'the server reported an error'}`)
+  return reply
+}
+
+/** A write: bounded to 15 s; an isError reply comes back to the caller, whose refusal shows the server's own text. */
+export function writeTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
+  return bounded(host, tool, args, TM_WRITE_TIMEOUT_MS)
 }
 
 function offlineSnapshot(input: FetchInput, reason: string): TmSnapshot {

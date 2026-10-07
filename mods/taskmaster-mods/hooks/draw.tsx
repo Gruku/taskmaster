@@ -369,7 +369,8 @@ export type ReviewHandlers = {
   confirmDone: (id: string) => void
   cancel: () => void
   askNote: (id: string) => void
-  sendBack: (id: string, note: string) => void
+  /** `humanAction`: the check the card shows, so the clear can tell an already-empty one from a failed clear. */
+  sendBack: (id: string, note: string, humanAction: string) => void
   skip: (id: string) => void
   fill: (text: string) => void
   toggleTick: (id: string, item: string) => void
@@ -599,7 +600,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
         placeholder="what should change"
         submitLabel="send back"
         autoFocus
-        onSubmit={value => on.sendBack(item.id, value)}
+        onSubmit={value => on.sendBack(item.id, value, action)}
       />,
       chipRow(ui, [cancel.el]),
     ]
