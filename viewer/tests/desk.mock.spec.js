@@ -627,3 +627,47 @@ test('at 390px the "+N older" control of the real dashboard is at least 44px tal
   await expect(older).toBeVisible({ timeout: 15_000 });
   expect((await older.boundingBox()).height).toBeGreaterThanOrEqual(44);
 });
+
+// Final review: an expanded note stayed in its column — a ~2,400px strip at 1440 (5,000px at 390) beside empty columns,
+// overlapping a neighbour. Expanded, it takes the board's full width, sits upright, and nothing intersects it.
+for (const width of [1440, 390]) {
+  test(`an expanded note spans the notes grid and overlaps no other note (${width})`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openDesk(page, deskRoutes({ notes: { notes: [...NOTES.notes, LONG_NOTE] } }));
+    await page.goto('/#/dashboard');
+    const card = note(page, 'NOTE-099');
+    await expect(card).toBeVisible();
+    const bandTop = () => page.locator('.dk-continuity').evaluate((el) => el.getBoundingClientRect().top + scrollY);
+    const before = await bandTop();
+    await card.getByRole('button', { name: 'Show more' }).click();
+    await expect(card).toHaveClass(/is-expanded/);
+    const geo = await page.evaluate(() => {
+      const box = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+      const board = document.querySelector('.dk-board');
+      const cs = getComputedStyle(board);
+      const inner = box(board);
+      inner.l += parseFloat(cs.paddingLeft); inner.r -= parseFloat(cs.paddingRight);
+      const me = document.querySelector('.dk-note[data-note-id="NOTE-099"]');
+      const others = [...board.querySelectorAll('.dk-note')].filter((n) => n !== me).map(box);
+      return { board: inner, me: box(me), others };
+    });
+    expect(Math.abs(geo.me.l - geo.board.l)).toBeLessThanOrEqual(2);
+    expect(Math.abs(geo.me.r - geo.board.r)).toBeLessThanOrEqual(2);
+    for (const o of geo.others) {
+      const hit = o.l < geo.me.r && o.r > geo.me.l && o.t < geo.me.b && o.b > geo.me.t;
+      expect(hit).toBe(false);
+    }
+    const after = await bandTop();
+    expect(after - before).toBeLessThanOrEqual(geo.me.b - geo.me.t);
+  });
+}
+
+// Final review: nothing said the four count tiles were links — the number carries the link-row underline cue.
+test('each count tile is a link whose number is underlined', async ({ page }) => {
+  await openDesk(page, summaryMocks());
+  await page.goto('/#/dashboard');
+  const tiles = page.locator('.dk-summary a.dk-stat');
+  await expect(tiles).toHaveCount(4);
+  const lines = await tiles.evaluateAll((els) => els.map((a) => getComputedStyle(a.querySelector('.dk-stat__n')).textDecorationLine));
+  for (const l of lines) expect(l).toContain('underline');
+});

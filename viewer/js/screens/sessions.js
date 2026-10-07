@@ -1,7 +1,7 @@
 // User intent: the Sessions screen — open threads as link cards, then a timeline of sessions and their handovers whose
 // rows are real buttons that lead with a readable title; chips and search narrow it (search hides, never dims), and
 // the row picked opens beside the timeline in the right rail, which gives focus back to that row when it closes.
-import { renderTimeline, kindLabel } from '../components/timeline.js';
+import { renderTimeline, kindLabel, sessionTimeLine } from '../components/timeline.js';
 import { RightRail, statusPill, HO_STATUS_LABEL } from '../components/right-rail.js';
 import { icon } from '../components/icon.js';
 import { chipRow } from '../components/chips.js';
@@ -11,7 +11,7 @@ import { listSessions, getSessionDetail, listThreads } from '../api.js';
 import { claimTopbar, setTopbarCount, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
-import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
+import { formatRelative } from '../lib/time.js';
 import { bindCopy } from '../lib/copy.js';
 import { truncate } from '../lib/text.js';
 import { h } from '../util/h.js';
@@ -342,19 +342,8 @@ export async function openHandoverDetail(rail, hid, state, opener = null) {
   if (el) state.onRailOpen?.({ kind: 'handover', id: hid });
 }
 
-function railSessionTimeLine(s) {
-  const isDateOnly = s.time_resolution === 'date-only';
-  if (isDateOnly) {
-    return formatAbsolute(s.start, { time: false });
-  }
-  const startFmt = formatAbsolute(s.start, { date: false });
-  const endFmt   = formatAbsolute(s.end,   { date: false });
-  let timeLine = (startFmt === endFmt) ? startFmt : `${startFmt} → ${endFmt}`;
-  if (s.duration > 0) {
-    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
-  }
-  return timeLine;
-}
+// The rail shares the timeline's formatter so the two never disagree about a session's span.
+const railSessionTimeLine = sessionTimeLine;
 
 const taskLinks = (ids) => (ids || []).length
   ? ids.map(id => h('a', { class: 'rr-task', href: `#/task/${encodeURIComponent(id)}` }, String(id)))
