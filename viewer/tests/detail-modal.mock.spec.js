@@ -130,6 +130,23 @@ test('a refused title stays in view with the body scrolled to the end', async ({
   await expect(dialog.locator('.td-title-message')).toHaveCount(1);
 });
 
+test('a refused title leaves the body where the reader scrolled it and the editor open', async ({ page }) => {
+  await board(page, { table: { 'PATCH /api/tasks/T-105': { status: 409, json: { ok: false, error: 'Titles are frozen during review' } } } });
+  const dialog = await openCard(page, 'T-105');
+  const body = dialog.locator('.modal-body');
+  // Midway, not at the end: at the end the browser clamps scrollTop by however much the header grows while editing.
+  const before = await body.evaluate((el) => { el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2); return el.scrollTop; });
+  expect(before).toBeGreaterThan(0);
+  const heading = titleOf(dialog);
+  await heading.locator('.ef-editable').click();
+  await heading.locator('input').fill('Renamed while frozen');
+  await heading.locator('input').press('Enter');
+  await expect(page.locator('.modal--detail > .td-title-message .if-error')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await body.evaluate((el) => el.scrollTop), 'scrollTop after the refusal').toBe(before);
+  await expect(heading.locator('input')).toHaveValue('Renamed while frozen');
+});
+
 test('the marker row keeps one size through a redraw and matches the full page', async ({ page }) => {
   await board(page);
   const dialog = await openCard(page, 'T-102');
