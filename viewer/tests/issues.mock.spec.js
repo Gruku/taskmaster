@@ -385,6 +385,54 @@ test('at 1440 every column shows, each at least 280px wide', async ({ page }) =>
   console.log('issues columns at 1440 scroll inside the board:', m.inside);
 });
 
+test('resolved rows read like the cards: card title size, a column row wraps its title in card padding, shelf rows span the shelf', async ({ page }) => {
+  await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
+  await page.locator('.issues-shelf__toggle').click();
+  await expect(page.locator('#issues-shelf-list .issue-row').first()).toBeVisible();
+  const shelf = await page.evaluate(() => {
+    const list = document.getElementById('issues-shelf-list').getBoundingClientRect();
+    const cardTitle = getComputedStyle(document.querySelector('.issue-card__title'));
+    return { cardSize: cardTitle.fontSize, cardWeight: cardTitle.fontWeight, list: list.width,
+      rows: [...document.querySelectorAll('#issues-shelf-list .issue-row')].map((r) => ({ w: r.getBoundingClientRect().width,
+        size: getComputedStyle(r.querySelector('.issue-row__title')).fontSize, weight: getComputedStyle(r.querySelector('.issue-row__title')).fontWeight })) };
+  });
+  for (const r of shelf.rows) {
+    expect(r.size).toBe(shelf.cardSize);
+    expect(r.weight).toBe(shelf.cardWeight);
+    expect(r.w).toBeGreaterThanOrEqual(shelf.list - 1);
+  }
+  await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Status' }).click();
+  await expect(page.locator('.issues-col .issue-row--narrow').first()).toBeVisible();
+  const col = await page.evaluate(() => {
+    const card = getComputedStyle(document.querySelector('.issues-col .issue-card'));
+    return { cardPad: card.padding, cardRadius: card.borderRadius, cardSize: getComputedStyle(document.querySelector('.issue-card__title')).fontSize,
+      rows: [...document.querySelectorAll('.issues-col .issue-row--narrow')].map((r) => {
+        const s = getComputedStyle(r); const t = getComputedStyle(r.querySelector('.issue-row__title'));
+        return { pad: s.padding, radius: s.borderRadius, size: t.fontSize, ws: t.whiteSpace };
+      }) };
+  });
+  expect(col.rows.length).toBeGreaterThan(0);
+  for (const r of col.rows) expect(r).toEqual({ pad: col.cardPad, radius: col.cardRadius, size: col.cardSize, ws: 'normal' });
+});
+
+test('at 1440×900 the long board fits the viewport: the Open column scrolls inside itself and the shelf stays in view', async ({ page }) => {
+  await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
+  await expect(page.locator('#issues-col-open .issue-card')).toHaveCount(9);
+  const m = await page.evaluate(() => {
+    const root = document.querySelector('.issues');
+    const list = document.querySelector('#issues-col-open .issues-col__list');
+    const shelf = document.querySelector('.issues-shelf__toggle').getBoundingClientRect();
+    return { doc: document.documentElement.scrollHeight, inner: innerHeight,
+      rootScroll: root.scrollHeight - root.clientHeight, listScroll: list.scrollHeight - list.clientHeight,
+      listOverflow: getComputedStyle(list).overflowY, shelfBottom: shelf.bottom };
+  });
+  expect(m.doc).toBeLessThanOrEqual(m.inner);
+  expect(m.rootScroll).toBeLessThanOrEqual(1);
+  expect(m.listOverflow).toBe('auto');
+  expect(m.listScroll).toBeGreaterThan(0);
+  expect(m.shelfBottom).toBeLessThanOrEqual(m.inner);
+});
+
 test('keyboard walk: search, the View group, the chips, From a bug, then the cards and their controls', async ({ page }) => {
   await boot(page);
   await expect(card(page, 'ISS-001').locator('.issue-card__more')).toBeVisible();

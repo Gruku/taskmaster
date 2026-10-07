@@ -75,7 +75,8 @@
 }
 .issues-shelf__toggle:hover { background: var(--ground-15); color: var(--foreground-bold); }
 .issues-shelf__toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
-#issues-shelf-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--space-xs); }
+/* One row per line across the shelf's whole width, so a title is cut only by the shelf's edge. */
+#issues-shelf-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 #issues-shelf-list[hidden] { display: none; }
 
 .issues__notice {
@@ -84,6 +85,16 @@
   gap: var(--space-sm);
   color: var(--foreground-default);
   font-size: var(--size-narrator-small);
+}
+
+/* Beside a desktop slot the board is the Kanban pattern: it shrinks to the height left under the toolbar (never below a
+   readable floor), each column's list scrolls inside itself, and the shelf below stays in view. */
+@media (min-width: 769px) {
+  .issues-board { flex: 0 1 auto; min-height: 320px; }
+  .issues-board__cols { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .issues-col { min-height: 0; }
+  .issues-col__head { flex: 0 0 auto; }
+  .issues-col__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 }
 
 @media (max-width: 768px) {

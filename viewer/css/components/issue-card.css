@@ -104,13 +104,19 @@
   font-size: var(--size-technical-small);
   white-space: nowrap;
 }
-.issue-row__title { grid-column: 3; }
+.issue-row__title {
+  grid-column: 3;
+  font-family: var(--font-narrator);
+  font-weight: 600;
+  font-size: var(--size-narrator-small);
+}
 .issue-row > .link-row__content { display: flex; align-items: center; gap: var(--space-sm); white-space: nowrap; }
 /* Narrow (a board column), the layout a phone gives every row: id and severity on one line, the title under them, status
    and date wrapping. Not max-content twice: the title spans both tracks and would size them to its whole line. */
-.issue-row--narrow { grid-template-columns: minmax(0, 1fr); }
-.issue-row--narrow > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
-.issue-row--narrow .issue-row__title { grid-column: 1 / -1; }
+.issue-row--narrow { grid-template-columns: minmax(0, 1fr); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-lg); }
+.issue-row--narrow > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); align-items: center; row-gap: var(--space-micro); }
+/* In a column the row reads like its neighbouring cards: the title wraps instead of being cut to one line. */
+.issue-row--narrow .issue-row__title { grid-column: 1 / -1; white-space: normal; overflow-wrap: break-word; }
 .issue-row--narrow > .link-row__content { flex-wrap: wrap; }
 .issue-row__when {
   font-family: var(--font-technical);

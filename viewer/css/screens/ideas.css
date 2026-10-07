@@ -114,15 +114,16 @@
   text-transform: uppercase;
   color: var(--foreground-subtle);
 }
-.ideas-detail__dl dd { margin: 0; min-width: 0; color: var(--foreground-default); }
+.ideas-detail__dl dd { margin: 0; min-width: 0; color: var(--foreground-default); font-size: var(--size-technical-small); }
 .ideas-detail__tags { display: inline-flex; flex-wrap: wrap; gap: var(--space-micro); }
-.ideas-detail__back { display: none; align-self: flex-start; }
+/* Two classes so .btn's display, wherever its sheet loads, cannot show it beside the list. */
+.btn.ideas-detail__back { display: none; align-self: flex-start; }
 .ideas-detail__back .icon { transform: rotate(180deg); }
 
 @media (max-width: 768px) {
   .ideas__content--detail-open { grid-template-columns: minmax(0, 1fr); }
   .ideas__content--detail-open .ideas__list { display: none; }
-  .ideas-detail__back { display: inline-flex; min-height: 44px; }
+  .btn.ideas-detail__back { display: inline-flex; min-height: 44px; }
   .ideas-detail__grid { grid-template-columns: minmax(0, 1fr); }
   .idea-row { grid-template-columns: minmax(0, 1fr); }
   .idea-row > .link-row__link { min-height: 44px; }
