@@ -33,6 +33,8 @@
   color: var(--foreground-bold);
   font-family: var(--font-narrator);
   font-size: var(--size-narrator-small);
+  /* A placeholder longer than the box (the phone's) says it is cut; the input already clips (Chromium computes clip). */
+  text-overflow: ellipsis;
 }
 .tm-search > input::placeholder { color: var(--foreground-subtle); }
 .tm-search__clear { display: none; }

@@ -317,6 +317,17 @@ test('at 390 Epic options sits on the epic line, not on a row of its own', async
   expect(m.sideways).toBe(0);
 });
 
+test('at 390 a search placeholder too long for the box ends in an ellipsis', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const s = await searchBox(page).evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { textOverflow: cs.textOverflow, overflowX: cs.overflowX, cut: el.scrollWidth > el.clientWidth || !!el.placeholder };
+  });
+  expect(s.textOverflow).toBe('ellipsis');
+  expect(['hidden', 'clip'], 'the input clips its text').toContain(s.overflowX);
+  expect(s.cut).toBe(true);
+});
+
 test('an epic\'s count is the same on its chip and in Epic options, and the label says what it counts', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
   // A chip that does not fit is parked in the Epic row's More list.
