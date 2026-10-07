@@ -13,20 +13,25 @@ const rows = new WeakMap();   // #topbar-actions → its overflowRow, installed 
 function topbarRow(root) {
   let row = rows.get(root);
   if (row) return row;
-  row = overflowRow(root, { moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search') });
+  let mo = null;
+  // Every layout writes each child's flex-shrink while it measures; those writes are its own, not news.
+  row = overflowRow(root, {
+    moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search'),
+    onLayout: () => mo?.takeRecords(),
+  });
   rows.set(root, row);
   // A count or label rewritten in place, or a control unhidden in place (hidden, a class, a style), changes its
   // control's width, which the row does not watch. Its own moves (children of the row itself), the row's and Filters'
   // own attributes, Filters' count and the open popover are left out, or a layout would retrigger itself; so are the
-  // writes of the relayout itself (it sets each child's flex-shrink while it measures).
+  // writes of every layout itself (dropped in onLayout above).
   const view = root.ownerDocument.defaultView;
   if (view.MutationObserver && view.requestAnimationFrame) {
     let frame = 0;
     const grown = (r) => r.target !== root && !row.more.contains(r.target)
       && !(r.target.nodeType === 1 ? r.target : r.target.parentElement)?.closest('.popover');
-    const mo = new view.MutationObserver((records) => {
+    mo = new view.MutationObserver((records) => {
       if (frame || !records.some(grown)) return;
-      frame = view.requestAnimationFrame(() => { frame = 0; row.relayout(); mo.takeRecords(); });
+      frame = view.requestAnimationFrame(() => { frame = 0; row.relayout(); });
     });
     mo.observe(root, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
   }

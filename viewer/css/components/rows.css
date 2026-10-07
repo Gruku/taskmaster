@@ -41,7 +41,7 @@
 @media (max-width: 768px) {
   .sort-header { min-height: 44px; }
   .link-row__controls :is(button, a[href], input, select, [role="button"]) { min-height: 44px; min-width: 44px; }
-  .link-row__controls a[href] { display: inline-flex; align-items: center; justify-content: center; }
+  .link-row__controls a[href]:not([hidden]) { display: inline-flex; align-items: center; justify-content: center; }
 }
 
 /* ── Cut text ── truncate() puts the full text in title. */

@@ -143,7 +143,7 @@ test('More carries the icon it is given', () => {
   ov.destroy();
 });
 
-test('waitForRelease: focus leaving an element for what was pressed is not the window losing focus', (t) => {
+test('waitForRelease: its window blur listener is not a capture listener, so an element losing focus to what was pressed does not release', (t) => {
   const r = release(t);
   const b = document.createElement('button');
   document.body.append(b);

@@ -793,12 +793,12 @@ test.describe('topbar row 2: a control unhidden in place', () => {
       const step = (i) => (i ? requestAnimationFrame(() => step(i - 1)) : ok());
       step(k);
     }), n);
-    await page.evaluate(() => {
-      const probe = document.createElement('button');
-      probe.type = 'button';
-      probe.className = 'probe-unhidden';   // not .btn: its display would override [hidden]
+    await page.evaluate(async () => {
+      // The kind of control row 2 holds: a shared .btn made by tmAction.
+      const { tmAction } = await import('/js/lib/topbar.js');
+      const probe = tmAction({ label: 'A control shown later with a long label' });
+      probe.classList.add('probe-unhidden');
       probe.style.flexShrink = '0';
-      probe.textContent = 'A control shown later with a long label';
       probe.hidden = true;
       window.__probe = probe;
       document.getElementById('topbar-actions').append(probe);
