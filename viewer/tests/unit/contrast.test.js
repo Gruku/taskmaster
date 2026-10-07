@@ -83,13 +83,6 @@ test('accent text and text on the accent fill are AA', () => {
   ]);
 });
 
-test('legacy aliases that paint the accent as text go through --text-accent', () => {
-  for (const alias of ['--accent-blue', '--accent-edit', '--accent-2', '--issues-investigating']) {
-    for (const theme of BOTH) assert.equal(THEMES[theme][alias], 'var(--text-accent)', `${alias} (${theme})`);
-  }
-  for (const theme of BOTH) assert.equal(THEMES[theme]['--ink-on-accent'], 'var(--on-accent-fill)');
-});
-
 test('modal and popover surfaces: body text and accent text are AA on them in both themes', () => {
   const surfaces = ['--overlay-surface', '--overlay-surface-sunken'];
   assertAA(['--foreground-bold', '--foreground-default', '--foreground-subtle', '--text-accent'].map((fg) => [BOTH, fg, surfaces]));

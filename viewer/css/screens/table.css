@@ -1,6 +1,6 @@
 /* User intent: the Table shows every task in fixed columns that never cut an ID, keeps ID and title in view while the
    rest scrolls sideways inside its frame (a fade says there is more), and reads in both themes. */
-.tbl-screen { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--page-gap); }
+.tbl-screen { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--space-md); }
 
 /* The filter rail: one chip row per group. A whole group may move to the next line; chips inside a group never wrap,
    what does not fit waits behind that row's More. Status and Priority keep their natural width; Epic and Area share

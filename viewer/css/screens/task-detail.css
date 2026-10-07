@@ -486,7 +486,7 @@
   overflow: hidden;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
-  background: var(--graph-frame-bg);
+  background: var(--bg-recessed);
 }
 /* The graph is drawn at its own size: a canvas wider or taller than the frame scrolls inside it, never the page. */
 .td-graph-canvas { overflow: auto; max-height: calc(var(--graph-canvas-h) * 1.5); }
@@ -533,7 +533,7 @@
 }
 
 /* SVG: the side labels, their guides, the edges and the nodes. */
-.td-graph-svg .col-guide { stroke: var(--graph-col-guide); stroke-dasharray: 3 4; }
+.td-graph-svg .col-guide { stroke: var(--border-subtle); stroke-dasharray: 3 4; }
 .td-graph-svg .col-label { fill: var(--foreground-subtle); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-label); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
 .td-graph-svg .node-rect { fill: var(--card-bg); stroke: var(--border-strong); transition: fill var(--dur-standard) var(--ease-hourglass); }
 .td-graph-svg .node-rect.center { stroke: var(--signature); stroke-width: 2; }
@@ -547,8 +547,8 @@
 .td-graph-svg .node-meta { fill: var(--foreground-default); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
 .td-graph-svg .node-progress-track { fill: var(--border-default); }
 .td-graph-svg .node-progress-fill { fill: var(--signature); }
-.td-graph-svg .edge-path { fill: none; stroke: var(--graph-edge-stroke); stroke-width: 1.4; }
-.td-graph-svg .edge-path.active { stroke: var(--graph-edge-stroke-active); }
+.td-graph-svg .edge-path { fill: none; stroke: var(--signature-dim); stroke-width: 1.4; }
+.td-graph-svg .edge-path.active { stroke: var(--signature); }
 /* The status shape carries the hue; the word on the node's last line stays readable ink. */
 .node-shape--neutral { color: var(--tone-neutral); }
 .node-shape--accent { color: var(--tone-accent); }

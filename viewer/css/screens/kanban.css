@@ -190,7 +190,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 240ms var(--ease), padding 240ms var(--ease);
+  transition: width 240ms var(--ease-hourglass), padding 240ms var(--ease-hourglass);
 }
 .kanban-col[hidden] { display: none; }
 .kanban-board-grid.no-anim .kanban-col { transition: none; }
