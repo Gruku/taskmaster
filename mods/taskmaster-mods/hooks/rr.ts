@@ -1,4 +1,4 @@
-// User intent: the $.rr types taskmaster-tui draws with, derived from rr-tui's contract (laid as a dependency), never copied.
+// User intent: the $.rr types taskmaster-mods draws with, derived from rr-tui's contract (laid as a dependency), never copied.
 import type { EngineInterface } from 'claude-code'
 
 export type Rr = EngineInterface['rr']

@@ -1,4 +1,4 @@
-// User intent: taskmaster-tui's front door — bind Claude Code's events to the Taskmaster surfaces: the band above the prompt
+// User intent: taskmaster-mods's front door — bind Claude Code's events to the Taskmaster surfaces: the band above the prompt
 // (this session's task, what waits on the user, a just-written handover to copy), the review queue and handovers panes and the
 // faults-only status line, reading live tm data and keeping this session's task binding across /clear, /resume and /branch.
 import { atom, read, update } from 'claude-code'
@@ -29,18 +29,18 @@ import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope } from './tm'
 
-const SNAPSHOT = atom({ plugin: 'taskmaster-tui', key: 'snapshot' } as const, null as TmSnapshot | null)
-const CURSOR = atom({ plugin: 'taskmaster-tui', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
-const DETAILS = atom({ plugin: 'taskmaster-tui', key: 'details' } as const, {} as Readonly<Record<string, TmTaskDetail>>)
-const PICK = atom({ plugin: 'taskmaster-tui', key: 'pick' } as const, '')
-const TICKS = atom({ plugin: 'taskmaster-tui', key: 'ticks' } as const, {} as Readonly<Record<string, readonly string[]>>)
-const DETAILS_OPEN = atom({ plugin: 'taskmaster-tui', key: 'detailsOpen' } as const, false)
-const SUMMARIES = atom({ plugin: 'taskmaster-tui', key: 'summaries' } as const, {} as Readonly<Record<string, TmHandoverSummary>>)
-const SUMMARY_OPEN = atom({ plugin: 'taskmaster-tui', key: 'summaryOpen' } as const, '')
-const BAND = atom({ plugin: 'taskmaster-tui', key: 'band' } as const, { confirmingId: '', refusal: '' } as TmBandMode)
-const FAULT = atom({ plugin: 'taskmaster-tui', key: 'fault' } as const, 'none' as TmFault)
-const BINDING = atom({ plugin: 'taskmaster-tui', key: 'binding' } as const, null as TmBinding | null)
-const NOTICE = atom({ plugin: 'taskmaster-tui', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
+const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
+const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
+const DETAILS = atom({ plugin: 'taskmaster-mods', key: 'details' } as const, {} as Readonly<Record<string, TmTaskDetail>>)
+const PICK = atom({ plugin: 'taskmaster-mods', key: 'pick' } as const, '')
+const TICKS = atom({ plugin: 'taskmaster-mods', key: 'ticks' } as const, {} as Readonly<Record<string, readonly string[]>>)
+const DETAILS_OPEN = atom({ plugin: 'taskmaster-mods', key: 'detailsOpen' } as const, false)
+const SUMMARIES = atom({ plugin: 'taskmaster-mods', key: 'summaries' } as const, {} as Readonly<Record<string, TmHandoverSummary>>)
+const SUMMARY_OPEN = atom({ plugin: 'taskmaster-mods', key: 'summaryOpen' } as const, '')
+const BAND = atom({ plugin: 'taskmaster-mods', key: 'band' } as const, { confirmingId: '', refusal: '' } as TmBandMode)
+const FAULT = atom({ plugin: 'taskmaster-mods', key: 'fault' } as const, 'none' as TmFault)
+const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, null as TmBinding | null)
+const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 function hostOf($: EngineInterface): TmHost {
@@ -319,7 +319,7 @@ async function refreshRun(final: boolean): Promise<RunOutcome> {
     // A refreshed snapshot may carry edited handovers: their summaries are read again when next shown.
     await mod.flows?.forgetSummaries()
   } catch (error) {
-    host.log(`taskmaster-tui: refresh failed: ${String(error)}`)
+    host.log(`taskmaster-mods: refresh failed: ${String(error)}`)
   }
   return 'done'
 }
@@ -406,7 +406,7 @@ export const register: Register = (on, options) => {
         mod.refresher?.request()
       }
     } catch (error) {
-      $.ui.log(`taskmaster-tui: session binding not carried: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      $.ui.log(`taskmaster-mods: session binding not carried: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return result
   })
@@ -421,7 +421,7 @@ export const register: Register = (on, options) => {
       await ready($)
       mod.refresher?.request()
     } catch (error) {
-      $.ui.log(`taskmaster-tui: refresh not asked: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      $.ui.log(`taskmaster-mods: refresh not asked: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return result
   })
@@ -446,7 +446,7 @@ export const register: Register = (on, options) => {
         if (isWriteTool(tool)) mod.refresher?.request()
       }
     } catch (error) {
-      $.ui.log(`taskmaster-tui: tool.call bookkeeping failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      $.ui.log(`taskmaster-mods: tool.call bookkeeping failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return ran
   })
@@ -461,12 +461,12 @@ export const register: Register = (on, options) => {
     return { text: 'Handovers opened.' }
   })
 
-  on('ui.press', { plugin: 'taskmaster-tui' }, async ($, e, next) => {
+  on('ui.press', { plugin: 'taskmaster-mods' }, async ($, e, next) => {
     await ready($)
     return next(e)
   })
 
-  on('ui.input', { plugin: 'taskmaster-tui' }, async ($, e, next) => {
+  on('ui.input', { plugin: 'taskmaster-mods' }, async ($, e, next) => {
     await ready($)
     return next(e)
   })

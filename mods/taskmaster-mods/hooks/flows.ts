@@ -38,7 +38,7 @@ export type TmFlowDeps = {
 
 export type TmFlows = ReturnType<typeof createFlows>
 
-const PROMPT_REFUSED = 'taskmaster-tui: the prompt did not take the text; close the dialog and try again'
+const PROMPT_REFUSED = 'taskmaster-mods: the prompt did not take the text; close the dialog and try again'
 const UNAVAILABLE: TmHandoverSummary = { decisions: [], blockers: [], unavailable: true }
 
 export function createFlows(d: TmFlowDeps) {
@@ -77,7 +77,7 @@ export function createFlows(d: TmFlowDeps) {
     }
   }
   const open = async (id: string, title: string): Promise<void> => {
-    if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-tui: widen the terminal to see the pane')
+    if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
   }
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
@@ -217,9 +217,9 @@ export function createFlows(d: TmFlowDeps) {
       // backlog_open_viewer takes no task id (it opens the board); the review mode of spec §6.5 will take one.
       try {
         const r = await d.host.call('backlog_open_viewer', {})
-        d.host.toast(r.isError ? `taskmaster-tui: the viewer did not open (${r.text})` : `Viewer opened: look for ${taskId}`)
+        d.host.toast(r.isError ? `taskmaster-mods: the viewer did not open (${r.text})` : `Viewer opened: look for ${taskId}`)
       } catch (error) {
-        d.host.toast(`taskmaster-tui: the viewer did not open (${error instanceof Error ? error.message : String(error)})`)
+        d.host.toast(`taskmaster-mods: the viewer did not open (${error instanceof Error ? error.message : String(error)})`)
       }
     },
     copyCheck: async (taskId: string, text: string, surface: RenderSurface | undefined): Promise<void> => {

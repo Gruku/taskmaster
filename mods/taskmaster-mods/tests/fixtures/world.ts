@@ -1,4 +1,4 @@
-// User intent: the engine beneath taskmaster-tui in tests — panes, prompt, clipboard, store, session and the tm server answered
+// User intent: the engine beneath taskmaster-mods in tests — panes, prompt, clipboard, store, session and the tm server answered
 // from memory, every effect recorded — so a test asserts what the mod asked for.
 import type { On } from 'claude-code'
 import type { MockClock } from 'claude-code/testing'

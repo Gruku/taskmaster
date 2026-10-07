@@ -1,4 +1,4 @@
-// User intent: how taskmaster-tui looks — the band, the review card and the handovers list drawn from plain view data with
+// User intent: how taskmaster-mods looks — the band, the review card and the handovers list drawn from plain view data with
 // Reality Reprojection pieces from $.rr; Buttons are drawn here because their press handlers must stay in this plugin.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { Elements, RenderChildren, RenderElement, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'

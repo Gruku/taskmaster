@@ -147,7 +147,7 @@ describe('review queue', () => {
     await ui.redraw()
     await ui.press({ key: 'confirm-yes' })
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: /^taskmaster-tui is read-only in this build: sign off and send back/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^taskmaster-mods is read-only in this build: sign off and send back/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /1 of 5 · 0 done this pass/ })).toBeDefined()
   })

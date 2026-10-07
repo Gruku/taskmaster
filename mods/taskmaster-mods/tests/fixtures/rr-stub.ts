@@ -1,4 +1,4 @@
-// User intent: a stand-in $.rr for taskmaster-tui tests — `claude plugin test` does not load dependencies — with plain,
+// User intent: a stand-in $.rr for taskmaster-mods tests — `claude plugin test` does not load dependencies — with plain,
 // predictable trees so tests assert words and keys, not colours; button props follow rr-tui's real recipe.
 import type { Plugin } from 'claude-code/testing'
 

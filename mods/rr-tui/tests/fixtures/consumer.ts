@@ -1,4 +1,4 @@
-// User intent: a second plugin that uses $.rr the way taskmaster-tui will — through the noun only — so tests see what
+// User intent: a second plugin that uses $.rr the way taskmaster-mods will — through the noun only — so tests see what
 // consumers see.
 import type { Plugin } from 'claude-code/testing'
 

@@ -1,4 +1,4 @@
-// User intent: the Taskmaster semantics behind every taskmaster-tui surface — what waits on the user, queue order, card and
+// User intent: the Taskmaster semantics behind every taskmaster-mods surface — what waits on the user, queue order, card and
 // band wording, Telegram-ready handover text — as plain functions over snapshot data, tested without drawing.
 import type { TmCursor, TmHandover, TmHandoverNotice, TmPipeline, TmPriority, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 

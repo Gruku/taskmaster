@@ -4,9 +4,9 @@
 # ///
 # User intent: capture what the Taskmaster MCP server really answers — read-only from the claude-tools (legacy) and
 # CodeMaestro (native) backlogs, and the write paths from a throwaway scratch store — as redacted TypeScript fixtures.
-"""Capture Taskmaster MCP replies as taskmaster-tui test fixtures.
+"""Capture Taskmaster MCP replies as taskmaster-mods test fixtures.
 
-    uv run --no-project --with "fastmcp>=3.4,<4" python mods/taskmaster-tui/scripts/capture_fixtures.py [--server PATH]
+    uv run --no-project --with "fastmcp>=3.4,<4" python mods/taskmaster-mods/scripts/capture_fixtures.py [--server PATH]
         [--only KEY,KEY]
 
 Real backlogs get read-only calls only. Every write runs against a scratch store in a temporary folder.

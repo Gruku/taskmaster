@@ -1,4 +1,4 @@
-// User intent: everything taskmaster-tui needs from the engine as plain closures bound once from `$` in register.tsx, so
+// User intent: everything taskmaster-mods needs from the engine as plain closures bound once from `$` in register.tsx, so
 // the logic modules stay testable and never hold `$` itself.
 import type { RenderSurface } from 'claude-code'
 

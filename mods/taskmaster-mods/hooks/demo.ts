@@ -1,4 +1,4 @@
-// User intent: built-in sample data so taskmaster-tui can be seen, screenshotted and tuned without a Taskmaster backlog
+// User intent: built-in sample data so taskmaster-mods can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
 import type { TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'

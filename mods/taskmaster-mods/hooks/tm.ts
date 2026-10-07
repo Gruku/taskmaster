@@ -220,10 +220,10 @@ export async function refreshOnce(host: TmHost, io: TmIo, scope: TmScope, final 
     now: await host.now(),
     scope,
   })
-  for (const entry of result.unreadable) host.log(`taskmaster-tui: unreadable ${entry.tool} reply: ${entry.text.slice(0, 2000)}`)
+  for (const entry of result.unreadable) host.log(`taskmaster-mods: unreadable ${entry.tool} reply: ${entry.text.slice(0, 2000)}`)
   const transient = result.transient === true
   if (transient && !final) {
-    host.log(`taskmaster-tui: tm not ready, retrying: ${result.snapshot.reason}`)
+    host.log(`taskmaster-mods: tm not ready, retrying: ${result.snapshot.reason}`)
     await io.setFault('connecting')
     return { fault: 'connecting', transient }
   }
@@ -251,10 +251,10 @@ export async function readSummary(host: TmHost, handoverId: string): Promise<TmH
     const text = (await callTm(host, 'backlog_handover_get', { handover_id: handoverId, sections: ['decisions', 'blockers'] })).text
     const parsed = parseHandoverSummary(text)
     if (parsed.ok) return parsed.value
-    host.log(`taskmaster-tui: unreadable backlog_handover_get reply: ${text.slice(0, 2000)}`)
+    host.log(`taskmaster-mods: unreadable backlog_handover_get reply: ${text.slice(0, 2000)}`)
     return null
   } catch (error) {
-    host.log(`taskmaster-tui: handover summary not read: ${error instanceof Error ? error.message : String(error)}`)
+    host.log(`taskmaster-mods: handover summary not read: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
 }

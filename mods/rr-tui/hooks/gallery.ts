@@ -10,7 +10,7 @@ const LEVELS: readonly RrLevel[] = ['raised', 'overlay', 'recessed']
 const KINDS: readonly RrSignalKind[] = ['success', 'warning', 'critical', 'info']
 const TONES: readonly RrTone[] = ['success', 'warning', 'critical', 'info', 'signature']
 const GROUNDS: readonly RrGround[] = ['page', 'raised', 'overlay']
-// The buttons taskmaster-tui draws (d done is the one primary), then one chip per tone on each ground. Only the page rows arm
+// The buttons taskmaster-mods draws (d done is the one primary), then one chip per tone on each ground. Only the page rows arm
 // hotkeys: two Buttons on one hotkey clash.
 const PRIMARY_ROW: readonly { id: string; key: string; label: string; tone: RrTone }[] = [
   { id: 'back-to-agent', key: 'a', label: 'back to agent', tone: 'warning' },

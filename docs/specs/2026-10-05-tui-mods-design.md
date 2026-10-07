@@ -4,7 +4,7 @@
 
 **Date:** 2026-10-05
 **Status:** Approved 2026-10-05 (prototype decisions folded in; RR token gaps fixed upstream first, §5.2)
-**Scope:** two Claude Code mods: `rr-tui` (Reality Reprojection for the terminal) and `taskmaster-tui` (Taskmaster surfaces). No Taskmaster server or lifecycle change.
+**Scope:** two Claude Code mods: `rr-tui` (Reality Reprojection for the terminal) and `taskmaster-mods` (Taskmaster surfaces). No Taskmaster server or lifecycle change.
 **Platform:** Claude Code mods, v2.1.289 (early access; the build's `claude-code.d.ts` is authoritative).
 
 ---
@@ -60,15 +60,15 @@ Verified live with throwaway probe mods on 2026-10-05 (Windows Terminal, dark th
 ```
 rr-tui            provides $.rr  (tokens + Box/Text trees, gallery pane)
   ▲ dependency
-taskmaster-tui    status line · band · review queue pane · handovers pane
+taskmaster-mods    status line · band · review queue pane · handovers pane
   │ $.mcp.call
 plugin:taskmaster:tm   (unchanged MCP server)
 ```
 
 - **`rr-tui`** owns everything visual that isn't interaction: colour tokens per polarity, and finished trees for surfaces, labels and signals. Reusable by any future mod.
-- **`taskmaster-tui`** owns data, session binding, interaction and Taskmaster semantics. It draws Buttons itself (press handlers must stay in its own environment) and asks `$.rr` for everything else.
-- **Development home:** both mods live in this repo under `mods/rr-tui/` and `mods/taskmaster-tui/` and load through `CLAUDE_CODE_PLUGIN_DIRS` (watched, hot-reloaded).
-- **Shipping (decided 2026-10-05):** Taskmaster must work properly as the sole installed plugin. `rr-tui` and `taskmaster-tui` ship as separate, optional plugins from the claude-tools marketplace; `taskmaster-tui` depends on `rr-tui` and `taskmaster`, and Taskmaster depends on neither. Folding was dropped: on 2.1.289 a plugin with an unmet `dependencies` entry is disabled entirely, so a fold would switch Taskmaster off for anyone without `rr-tui`. A pytest guard keeps Taskmaster's manifest free of `dependencies` and its `hooks.json` free of `modules`.
+- **`taskmaster-mods`** owns data, session binding, interaction and Taskmaster semantics. It draws Buttons itself (press handlers must stay in its own environment) and asks `$.rr` for everything else.
+- **Development home:** both mods live in this repo under `mods/rr-tui/` and `mods/taskmaster-mods/` and load through `CLAUDE_CODE_PLUGIN_DIRS` (watched, hot-reloaded).
+- **Shipping (decided 2026-10-05):** Taskmaster must work properly as the sole installed plugin. `rr-tui` and `taskmaster-mods` ship as separate, optional plugins from the claude-tools marketplace; `taskmaster-mods` depends on `rr-tui` and `taskmaster`, and Taskmaster depends on neither. Folding was dropped: on 2.1.289 a plugin with an unmet `dependencies` entry is disabled entirely, so a fold would switch Taskmaster off for anyone without `rr-tui`. A pytest guard keeps Taskmaster's manifest free of `dependencies` and its `hooks.json` free of `modules`.
 
 ## 5. `rr-tui`
 
@@ -145,7 +145,7 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 - 2026-10-06 (handovers card): the user picked a card look from a mock. The picked handover is a raised round card like the review card: the head row is the full tldr, `NEXT` sits in the card, and the summary sections get `rr.label` labels (`DECISIONS`, `BLOCKERS`). The refs line drops its `branch:` / `tasks:` prefixes, and the `Next:` line under the list is gone.
 - 2026-10-06 (Task 2 closed): the user approved the handovers card live (dark polarity, summary expanded on `unified-chat-022`), and said the rest of the live look checked out too. Task 2 is done; next is Task 3a.
 
-## 6. `taskmaster-tui`
+## 6. `taskmaster-mods`
 
 ### 6.1 Surfaces
 
@@ -211,7 +211,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
   Resume: <thread> — <next action>
   ```
 
-**Handover-written notice (band).** When this session's main agent writes a handover — its own `tool.call` hook sees `backlog_handover_create` succeed after `await next(e)` (`e.agentId` unset) — the band shows one row: `HANDOVER  <tldr, truncated>   3: copy   2: handovers`. `3` (digit hotkey, works from an empty prompt) copies the same three-line block and toasts; the row clears on copy, when a newer handover replaces it, or on `/clear`. Nothing is copied without a keypress. The handover id and path come from the call's result (the receipt's `Handover written: <id>` and `- Path:` lines); the tldr from its input; the thread and next action from the receipt's `Resume: <thread> — <next action>` line (the server derives the thread when the input names none), falling back to the call's input when the receipt has no `Resume:` line. Stored in `$.state` (`taskmaster-tui.handoverNotice`).
+**Handover-written notice (band).** When this session's main agent writes a handover — its own `tool.call` hook sees `backlog_handover_create` succeed after `await next(e)` (`e.agentId` unset) — the band shows one row: `HANDOVER  <tldr, truncated>   3: copy   2: handovers`. `3` (digit hotkey, works from an empty prompt) copies the same three-line block and toasts; the row clears on copy, when a newer handover replaces it, or on `/clear`. Nothing is copied without a keypress. The handover id and path come from the call's result (the receipt's `Handover written: <id>` and `- Path:` lines); the tldr from its input; the thread and next action from the receipt's `Resume: <thread> — <next action>` line (the server derives the thread when the input names none), falling back to the call's input when the receipt has no `Resume:` line. Stored in `$.state` (`taskmaster-mods.handoverNotice`).
 - `r` resume → `$.prompt.fill("Resume from handover <id> (<path>)")`; the pane stays open.
 - `i` summary (added 2026-10-06; card look decided live the same day) → the picked handover is always a raised card with a round `border-strong` border, the review card's treatment; the other rows stay plain list rows that pick. Collapsed, the card holds the head row (`→ <date>  <tldr>`, the whole tldr wrapped, never cut), `NEXT  <next action>` and `i: ▸ summary`; this replaces the standalone `Next:` line under the list. Expanded (`i: ▾ summary`) it adds, under the head: the dim refs line `<branch> · <task>, <task>` (an empty part left out), then `DECISIONS` and `BLOCKERS` as `rr.label` section labels, each only when non-empty with its items wrapped below and a blank row before each, then NEXT. Decisions and blockers are read lazily with `backlog_handover_get` sections `decisions` and `blockers` on expand (`loading summary…` until they arrive). The toggle follows the pick: another row shows collapsed.
 
@@ -230,7 +230,7 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 - **Set** when this session's own `tool.call` hook sees, after `await next(e)` succeeds: `backlog_pick_task`, `backlog_claim`, or `backlog_update_task` moving a task to `in-progress`. The task id is read from the call's input, never the result.
 - **Kept** when the task moves to `in-review` (the band shows the review form).
 - **Cleared** on `backlog_complete_task` to `done`, archive, or a move back to `todo`.
-- Stored in `$.state` (`taskmaster-tui.binding`) and mirrored to `$.store` under `binding:<session id>`.
+- Stored in `$.state` (`taskmaster-mods.binding`) and mirrored to `$.store` under `binding:<session id>`.
 - Re-hydrated in `classic.SessionStart` for `source` `clear` / `resume` / `fork`, using that event's `session_id` and the previous id where available. Stale store keys (>30 days) are pruned at `session.start`.
 - **Fallback:** before any binding, a task id in the branch or worktree name is shown dimmed and marked `inferred`. Nothing else is guessed; never another session's task.
 - Needs-you data is project-wide.
@@ -259,7 +259,7 @@ Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minu
 
 - **Arm:** each main-loop `turn.complete` (`e.agentId` unset) records `lastTurnEnd` and starts one `$.clock.after(idle)` timer, cancelling the previous one. `turn.start`, a user `prompt.submit` and `session.end` (`/clear`, resume) cancel it and move an epoch on, so an arm or check begun before them never fires (a turn starting while the previous end is still arming gets no timer).
 - **Fire** only when all hold: enabled; `$.session.usage().context.tokens` ≥ the floor (unknown → no); under 58 min since `lastTurnEnd` (a later timer, e.g. after sleep, finds the cache cold already); the session's latch is `none`. It sets the latch to `fired` first, toasts, then `$.prompt.submit`s one plain-text prompt asking for a handover via `taskmaster:handover`.
-- **Latch** (`$.state` `taskmaster-tui.handoverGuard`): `none` → `fired`, or → `handover` when any `tool.call` of `…backlog_handover_create` returns a "Handover written:" receipt (tracked even while disabled). The guard's own handover turn re-arms and is blocked by the latch. A reload keeps it. The docs say `/clear` and a resume start a fresh `$.state`, so a new session there could earn one more (not live-verified).
+- **Latch** (`$.state` `taskmaster-mods.handoverGuard`): `none` → `fired`, or → `handover` when any `tool.call` of `…backlog_handover_create` returns a "Handover written:" receipt (tracked even while disabled). The guard's own handover turn re-arms and is blocked by the latch. A reload keeps it. The docs say `/clear` and a resume start a fresh `$.state`, so a new session there could earn one more (not live-verified).
 - Skips with a reason and the firing go to the debug log only; no status line.
 - **Arms only from a turn end:** enabling it mid-session or a hot reload (which cancels the pending timer) leaves it unarmed until the next main-loop turn ends.
 
@@ -278,7 +278,7 @@ Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minu
 `claude plugin test`, `claude plugin validate --strict`, and `tsc -p` on both mods.
 
 - **rr-tui:** token resolution for dark, light, survivalist (including pre-composited alpha); survivalist trees carry no hue; every element validates on `terminal` and `desktop` (`$.ui.mount`).
-- **taskmaster-tui:**
+- **taskmaster-mods:**
   - parsers against captured fixtures (including the native-store variants);
   - binding set/kept/cleared across simulated `tool.call` sequences; re-hydration after `classic.SessionStart({ source: 'clear' })` with a mocked store;
   - band hidden when nothing to show; composes `next(e)`; yields under a survey;
@@ -291,10 +291,10 @@ Long sessions run on a 1-hour prompt-cache TTL: a session left idle past 60 minu
 
 0. Fix the RR token gaps upstream in the RR Design System artifact's `tokens.json` (§5.2).
 1. `rr-tui` tokens + elements + `/rr-gallery`; visual tuning loop with the user.
-2. `taskmaster-tui` surfaces against fixture data (no `tm`).
+2. `taskmaster-mods` surfaces against fixture data (no `tm`).
 3. Data layer + parsers against real backlogs; binding.
 4. Write actions (done, back to agent) behind confirmation.
-5. Ship `rr-tui` and `taskmaster-tui` as optional marketplace plugins; verify Taskmaster still works as the sole plugin.
+5. Ship `rr-tui` and `taskmaster-mods` as optional marketplace plugins; verify Taskmaster still works as the sole plugin.
 
 Tracked as one Taskmaster epic, one task per step, each through the review-gate.
 

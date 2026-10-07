@@ -11,7 +11,7 @@ export type TmActions = {
 
 /** tm mode until Task 4 wires the real writes: every write refuses, so nothing is ever shown as signed off that was not. */
 export function readOnlyActions(): TmActions {
-  const refusal = 'taskmaster-tui is read-only in this build: sign off and send back arrive with the write actions.'
+  const refusal = 'taskmaster-mods is read-only in this build: sign off and send back arrive with the write actions.'
   return { done: async () => ({ ok: false, refusal }), backToAgent: async () => ({ ok: false, refusal }) }
 }
 

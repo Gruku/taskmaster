@@ -1,4 +1,4 @@
-// User intent: the shapes taskmaster-tui keeps in $.state — what Taskmaster says waits on the user, which task this session
+// User intent: the shapes taskmaster-mods keeps in $.state — what Taskmaster says waits on the user, which task this session
 // is on, where the review queue stands — declared once so every drawing and handler agrees.
 export type TmPriority = 'critical' | 'high' | 'medium' | 'low'
 export type TmQueueItem =
@@ -96,7 +96,7 @@ export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly la
 
 declare module 'claude-code' {
   interface PluginState {
-    'taskmaster-tui': {
+    'taskmaster-mods': {
       snapshot: TmSnapshot | null
       fault: TmFault
       cursor: TmCursor

@@ -16,7 +16,7 @@ export type GuardVerdict = { readonly fire: true; readonly tokens: number } | { 
 export const GUARD_DEFAULTS: GuardConfig = { enabled: false, idleMs: 55 * MIN, minTokens: 200_000 }
 const FRESH_GUARD: TmHandoverGuard = { lastTurnEnd: null, latch: 'none' }
 
-const GUARD = atom({ plugin: 'taskmaster-tui', key: 'handoverGuard' } as const, FRESH_GUARD)
+const GUARD = atom({ plugin: 'taskmaster-mods', key: 'handoverGuard' } as const, FRESH_GUARD)
 
 const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null)
 
@@ -76,7 +76,7 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   const verdict = guardVerdict(cfg, await read($, GUARD), await $.clock.now(), tokens)
   if (epoch !== guard.epoch) return
   if (!verdict.fire) {
-    if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-tui: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
+    if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-mods: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
     return
   }
   // Latch before submitting: the prompt's own turn ends and re-arms, and only an unlatched session may fire.
@@ -87,16 +87,16 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   })
   if (!won) return
   const minutes = Math.round(cfg.idleMs / MIN)
-  $.ui.log(`taskmaster-tui: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
+  $.ui.log(`taskmaster-mods: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
   $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: asking for a handover before the cache goes cold`)
   if (epoch !== guard.epoch) {
-    $.ui.log('taskmaster-tui: handover guard latched but not sent: the session moved on meanwhile', { to: 'debug' })
+    $.ui.log('taskmaster-mods: handover guard latched but not sent: the session moved on meanwhile', { to: 'debug' })
     return
   }
   try {
     await $.prompt.submit({ text: guardPrompt(minutes, verdict.tokens) })
   } catch (error) {
-    $.ui.log(`taskmaster-tui: handover guard prompt not submitted: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    $.ui.log(`taskmaster-mods: handover guard prompt not submitted: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
   }
 }
 
@@ -129,7 +129,7 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
     try {
       await arm($, epoch)
     } catch (error) {
-      $.ui.log(`taskmaster-tui: handover guard not armed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+      $.ui.log(`taskmaster-mods: handover guard not armed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return result
   })

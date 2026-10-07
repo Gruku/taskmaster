@@ -1,7 +1,7 @@
-// User intent: the inputs taskmaster-tui's tests hand the engine — a session, the band, the panes, a typed command — once.
+// User intent: the inputs taskmaster-mods's tests hand the engine — a session, the band, the panes, a typed command — once.
 import type { RenderInput, SessionStartInput } from 'claude-code'
 
-export const PLUGIN = 'taskmaster-tui'
+export const PLUGIN = 'taskmaster-mods'
 
 export const SESSION: SessionStartInput = { cwd: 'C:\\work\\proj', surface: 'terminal', isInteractive: true }
 
