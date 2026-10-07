@@ -226,109 +226,13 @@
   --sidebar-w: 240px;
   --rail-w: 720px;
   --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px;   /* documentation only: @media needs literals */
+  --task-rail-w: 280px;                       /* task detail's side rail column; no RR token sizes it */
+  --graph-canvas-h: 320px;                    /* task detail graph's base height; the canvas scrolls past 1.5× of it */
 
-  /* ── Legacy aliases — DELETE in plan 4. Old name → RR role. ── */
-  --bg-canvas: var(--bg-page);
-  --bg-shell: var(--surface-ground);
-  --bg-panel: var(--card-bg);
-  --bg-card: var(--card-bg);
-  --bg-card-hover: var(--card-bg-hover);
-  --bg-board-col: var(--col-bg);
-  --bg-deep: var(--bg-recessed);
-  --bg-issue: var(--card-bg);
-  --border: var(--border-subtle);
-  --border-soft: var(--border-subtle);
-  --ink: var(--foreground-bold);
-  --ink-1: var(--foreground-bold);
-  --ink-2: var(--foreground-default);
-  --ink-3: var(--foreground-subtle);
-  --ink-4: var(--foreground-subtle);
-  --ink-on-accent: var(--on-accent-fill);
-  --accent: var(--signature);
-  --accent-2: var(--text-accent);
-  --accent-soft: var(--signature-glow);
-  --accent-blue: var(--text-accent);
-  --accent-edit: var(--text-accent);
-  --accent-green: var(--color-success);
-  --green: var(--color-success);
-  --amber: var(--color-warning);
-  --gold: var(--color-warning);
-  --red: var(--color-critical);
-  --purple: var(--pastel-signature);
-  --diff-add: var(--color-success);
-  --diff-mod: var(--color-warning);
-  --diff-del: var(--color-critical);
-  --sev-critical: var(--color-critical);
-  --sev-high: var(--accent-orange);
-  --sev-medium: var(--color-warning);
-  --sev-low: var(--foreground-subtle);
-  --epic-1: var(--cat-1); --epic-2: var(--cat-2); --epic-3: var(--cat-3);
-  --epic-4: var(--cat-4); --epic-5: var(--cat-5); --epic-6: var(--cat-6);
-  --bundle-1: var(--cat-2); --bundle-2: var(--cat-3); --bundle-3: var(--cat-4);
-  --bundle-4: var(--cat-5); --bundle-5: var(--cat-6); --bundle-6: var(--cat-1);
-  --font-sans: var(--font-narrator);
-  --font-mono: var(--font-technical);
-  --font-serif: var(--font-narrator);
-  --text-xs: var(--size-technical-small);
-  --text-sm: var(--size-narrator-small);
-  --text-base: var(--size-narrator-default);
-  --text-md: var(--size-narrator-default);
-  --text-lg: var(--size-narrator-large);
-  --text-xl: var(--size-declaration-h4);
-  --text-2xl: var(--size-declaration-h4);
-  --text-3xl: var(--size-declaration-h3);
-  --sp-1: var(--space-micro); --sp-2: var(--space-xs); --sp-3: var(--space-sm);
-  --sp-4: var(--space-md); --sp-5: var(--space-md); --sp-6: var(--space-lg);
-  --sp-7: var(--space-lg); --sp-8: var(--space-lg); --sp-9: var(--space-xl);
-  --sp-10: var(--space-xl); --sp-12: var(--space-2xl); --sp-13: var(--space-3xl);
-  --r-sm: var(--radius-lg); --r-md: var(--radius-xl); --r-lg: var(--radius-xl);
-  --r-xl: var(--radius-xl); --r-2xl: var(--radius-xl);
-  --t-fast: var(--dur-micro); --t-base: var(--dur-standard); --t-slow: var(--dur-macro);
-  --ease: var(--ease-hourglass);
-  --page-pad: var(--page-gutter);
-  --page-gap: var(--space-md);
-  /* Names the old screens used without ever defining them (audit TK-03). */
-  --bl: var(--border-default);
-  --surface: var(--card-bg);
-  --surface-1: var(--card-bg);
-  --surface2: var(--surface-overlay);
-  --s2: var(--surface-overlay);
-  --danger-ink: var(--color-critical);
-  --danger-border: var(--color-critical);
-  --danger-bg: var(--color-critical-subtle);
-  --amber-tint-bg: var(--color-warning-subtle);
-  --amber-tint-border: var(--color-warning);
-  --muted-tint-bg: var(--ground-15);
-  --muted-tint-border: var(--border-default);
-  /* Screen-local tokens hoisted out of shell/screen CSS (audit TK-04). Shadow-valued ones are none. */
-  --shell-bg-sidebar: var(--surface-ground);
-  --shell-label-size: var(--size-technical-label);
-  --shell-hover-overlay: var(--surface-raised);
-  --card-recent-glow: none;
-  --issues-card-bg: var(--card-bg);
-  --issues-card-border: var(--border-subtle);
-  --issues-investigating: var(--text-accent);
-  --task-rail-w: 280px;
-  --task-grid-gap: var(--space-md);
-  --task-section-mb: var(--space-md);
-  --task-section-h: var(--space-sm);
-  --graph-frame-bg: var(--bg-recessed);
-  --graph-frame-border: var(--border-subtle);
-  --graph-frame-shadow: none;
-  --graph-canvas-h: 320px;
-  --graph-edge-stroke: var(--signature-dim);
-  --graph-edge-stroke-active: var(--signature);
-  --graph-col-guide: var(--border-subtle);
-  /* Defaults for variables JS sets as inline style. */
-  --tilt: 0deg;
-  --epic: var(--foreground-subtle);
-  --epic-soft: var(--surface-overlay);
-  --ec: var(--foreground-subtle);
-  --ec-soft: var(--surface-overlay);
-  --bundle: var(--bundle-1);
-  --anim-dur: var(--dur-macro);
-  --card-w: 240px;
+  /* ── Set from JS ── */
   --conflict-banner-height: 0px;              /* the shown conflict banner's height; the modal overlay starts below it */
+  --tilt: 0deg;                               /* a desk note's tilt (desk/note-card.js) */
+  --epic: var(--foreground-subtle);           /* an epic's swatch, pointed at its --cat-N (lib/epics.js) */
 }
 
 [data-theme="light"] {
@@ -391,22 +295,6 @@
   --cat-3: var(--pastel-pink-grounded);
   --cat-5: var(--pastel-lime-grounded);
   --cat-6: var(--pastel-orange-grounded);
-
-  /* ── Legacy aliases — DELETE in plan 4. The old screens paint these hues as text;
-     on light grounds only the darker step of each stays readable. ── */
-  --accent-green: var(--color-success-bold);
-  --green: var(--color-success-bold);
-  --amber: var(--color-warning-bold);
-  --gold: var(--color-warning-bold);
-  --red: var(--color-critical-bold);
-  --purple: var(--pastel-signature-grounded);
-  --diff-add: var(--color-success-bold);
-  --diff-mod: var(--color-warning-bold);
-  --diff-del: var(--color-critical-bold);
-  --sev-critical: var(--color-critical-bold);
-  --sev-high: var(--color-warning-bold);
-  --sev-medium: var(--color-warning-bold);
-  --danger-ink: var(--color-critical-bold);
 }
 
 @media (max-width: 768px) { :root { --page-gutter: var(--space-md); } }
