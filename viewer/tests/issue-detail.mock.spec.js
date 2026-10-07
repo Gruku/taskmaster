@@ -19,7 +19,7 @@ test.afterEach(async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-async function open(page, hash, { theme = 'dark', issues = ISSUES, before } = {}) {
+async function open(page, hash, { theme = 'dark', issues = { issues: ISSUES }, before } = {}) {
   await mockApi(page, { ...issueDetailMocks({ theme }), '/api/bugs': [], '/api/issues': issues });
   if (before) await before();
   await page.goto(`/${hash}`);
@@ -77,7 +77,7 @@ test('ISS-999 is not found in words, and a failed load says so without the serve
 
   const fresh = await context.newPage();
   fresh.on('pageerror', (e) => errors.push(e.message));
-  await open(fresh, '#/issue/ISS-012', { issues: ISSUES });
+  await open(fresh, '#/issue/ISS-012', { issues: { issues: ISSUES } });
   // Registered after mockApi, so it wins until unrouted.
   let hold = null; // set before the last Try again, so its Loading state can be seen
   const fail = async (route) => {
@@ -116,11 +116,11 @@ test('the first fetch shows a Loading state, not a blank page', async ({ page })
 });
 
 test('an issue made after the list was cached is still found', async ({ page }) => {
-  await open(page, '#/issue/ISS-009', { issues: { issues: [ISSUES.issues[1]] } });
+  await open(page, '#/issue/ISS-009', { issues: { issues: [ISSUES.find((i) => i.id === 'ISS-009')] } });
   await expect(mount(page).locator('h1')).toHaveText('Light card edge');
   let gets = 0;
   page.on('request', (r) => { if (r.method() === 'GET' && new URL(r.url()).pathname === '/api/issues') gets++; });
-  await page.route('**/api/issues*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(ISSUES) }));
+  await page.route('**/api/issues*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ issues: ISSUES }) }));
   await page.evaluate(() => { location.hash = '#/issue/ISS-012'; });
   await expect(mount(page).locator('h1')).toHaveText(ISSUE.title);
   expect(gets).toBe(1);

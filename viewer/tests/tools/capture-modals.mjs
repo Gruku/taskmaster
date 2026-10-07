@@ -88,7 +88,7 @@ const TABLE = {
   '/api/task/T-103/detail': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
   '/api/epic/viewer': F.epicPayload(BOARD, 'viewer', { design_status: 'locked', done_when: 'All screens pass the audit in both themes.', description: F.EPIC.description }),
   '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
-  '/api/issues': { issues: F.LIST_ISSUES },
+  '/api/issues': { issues: F.ISSUES },
 };
 const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
 // Plan 3e: Sessions, Archived and Dashboard read the same builders plan 4 reuses; prefs (the loop's theme) and the board stay as above.
@@ -361,14 +361,14 @@ const ALL_SCENES = [
   ['issues-list', { open: openIssues(), drive: issuesView('List'), scope: '#screen-mount' }],
   // ISS-001's evidence runs past three lines: the shot is its clamped evidence with Show all showing (at 390 its column
   // sits behind the Investigating tab).
-  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.LIST_ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
+  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
     const iss = p.locator('.issue-card[data-issue-id="ISS-001"]');
     if (!(await iss.isVisible())) await p.getByRole('tab', { name: /^Investigating/ }).click();
     await iss.locator('.issue-card__more').waitFor({ state: 'visible' });
     await iss.scrollIntoViewIfNeeded();
   } }],
   ['issues-long', { open: openIssues(), routes: listRoute('issues', F.LONG_ISSUES, 'issues'), fullPage: true, scope: '#screen-mount' }],
-  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LIST_BUGS), scope: '#screen-mount',
+  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.BUGS), scope: '#screen-mount',
     drive: (p) => p.getByRole('button', { name: /^Show archived/ }).click() }],
   ['bugs-long', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LONG_BUGS), fullPage: true, scope: '#screen-mount' }],
   ['ideas-list', { open: openScreen('#/ideas/IDEA-1', '.ideas :text("IDEA-1"):visible'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: '#screen-mount' }],

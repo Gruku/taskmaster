@@ -301,26 +301,11 @@ export const deskMocks = ({ theme = 'dark', notes = NOTES } = {}) => ({
   '/api/continuity': { items: [] },
 });
 
-// The Dashboard's summary strip: two open issues, one investigating, one fixed (3 open); two open bugs, one fixed.
-export const ISSUES_LIST = {
-  issues: [
-    { id: 'ISS-011', title: 'Board poll drops a delta under load', status: 'open', severity: 'high', created: ago(30) },
-    { id: 'ISS-012', title: 'Light theme pills fail contrast', status: 'open', severity: 'medium', created: ago(20) },
-    { id: 'ISS-013', title: 'Writer mutex held across the projection scan', status: 'investigating', severity: 'critical', created: ago(10) },
-    { id: 'ISS-009', title: 'Handover list ignores the archive cap', status: 'fixed', severity: 'low', created: ago(90), resolved: ago(40) },
-  ],
-};
-
-export const BUGS_LIST = [
-  { id: 'B-031', title: 'Card edge vanishes at 390px', status: 'open', found_in: 'T-102', discovered: ago(6) },
-  { id: 'B-032', title: 'Note fade covers the last line', status: 'open', found_in: 'T-103', discovered: ago(4) },
-  { id: 'B-027', title: 'Sessions timeline keeps the legacy palette', status: 'fixed', found_in: 'T-104', discovered: ago(80) },
-];
-
-// The Dashboard with a board, issues and bugs behind its summary strip; `extra` overrides any route.
+// The Dashboard with a board, issues and bugs behind its summary strip (ISSUES: 8 open or investigating; BUGS: 3
+// open); `extra` overrides any route.
 export const summaryMocks = ({ theme = 'dark', ...extra } = {}) => ({
   ...deskMocks({ theme }),
-  '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
+  '/api/board': BOARD, '/api/backlog': BOARD, '/api/issues': { issues: ISSUES }, '/api/bugs': BUGS,
   ...extra,
 });
 
@@ -329,22 +314,32 @@ const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString().repla
 // 120 characters with spaces in them, so a title wraps; `unbroken` gives one long word that must not push the page wide.
 const longText = (lead, { unbroken = false } = {}) =>
   (unbroken ? lead + '-' + 'x'.repeat(120) : `${lead} — the words keep going past the edge of a phone screen and on again`.repeat(2)).slice(0, 120);
-// GET /api/bugs?include_archive=1: every bug, the archived ones flagged.
-export const LIST_BUGS = [
-  { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P1', found_in: 'T-102', components: ['viewer'], discovered: daysAgo(2) },
-  { id: 'B-030', title: 'Phase strip clips the current phase name', status: 'open', found_in: 'T-102', discovered: daysAgo(3) },
+const byId = (list, id) => list.find((r) => r.id === id);
+const LONG_PATH = ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'];
+// The one bug set (plan 4 folded the 3c detail, 3d list and 3e Dashboard sets). GET /api/bugs?include_archive=1:
+// every bug, the archived ones flagged. B-031 open and rich (the bug page), B-030 fixed (its commit, adopted into
+// T-101, promoted to ISS-012, no severity), B-032 open without a severity, B-1234 too long for a phone.
+const RICH_BUG = { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P2', found_in: 'T-102', discovered: daysAgo(2), discovered_by: 'user', components: ['viewer'], location: ['viewer/css/screens/kanban.css:87'], summary: 'The card border uses `--border-subtle`.\n\n1. Light theme\n2. Laptop screen' };
+export const BUGS = [
+  RICH_BUG,
+  { ...RICH_BUG, id: 'B-030', title: 'Phase strip clips the current phase name', status: 'fixed', severity: null, discovered: daysAgo(3), fix_commit: 'abfb1b9c0ffee', adopted_into: 'T-101', promoted_to: 'ISS-012' },
+  { id: 'B-032', title: 'Note fade covers the last line', status: 'open', found_in: 'T-103', discovered: daysAgo(4) },
+  { ...RICH_BUG, id: 'B-1234', title: 'y'.repeat(120), location: LONG_PATH, discovered: daysAgo(5) },
   { id: 'B-029', title: 'Store write hangs for six seconds on a large backlog', status: 'fixed', severity: 'P0', components: ['store'], discovered: daysAgo(16) },
   { id: 'B-028', title: 'Handover quote loses its heading', status: 'shelved', severity: 'P3', discovered: daysAgo(18) },
   { id: 'B-027', title: 'Inbox message archived twice', status: 'adopted', severity: 'P2', adopted_into: 'T-118', discovered: daysAgo(21) },
   { id: 'B-026', title: 'Legacy mirror written after cutover', status: 'fixed', archived: true, discovered: daysAgo(35) },
 ];
+export const BUG = byId(BUGS, 'B-031');
+export const BUG_FIXED = byId(BUGS, 'B-030');
+export const LONG_BUG = byId(BUGS, 'B-1234');
 const BUG_STATUSES = ['open', 'open', 'shelved', 'fixed', 'adopted', 'promoted'];
 export const LONG_BUGS = Array.from({ length: 23 }, (_, i) => ({
   id: `B-${1201 + i}`, title: longText(`Bug ${1201 + i}`, { unbroken: i === 4 }), status: BUG_STATUSES[i % 6],
   severity: i % 5 === 4 ? undefined : `P${i % 4}`, found_in: `T-${1234 + i}`, components: ['viewer', 'store'], discovered: daysAgo(i + 1),
 }));
 // The table plan 4's a11y gate reuses for #/bugs; loaded when `.bugs__list .bug-row` is visible.
-export const bugsMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/bugs': LIST_BUGS, '/api/board': BOARD, '/api/backlog': BOARD,
+export const bugsMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/bugs': BUGS, '/api/board': BOARD, '/api/backlog': BOARD,
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
 
 // The Dashboard's continuity band: seven open handovers (five fit the Resume rail, two are "older"), two tasks to
@@ -392,7 +387,7 @@ export const dashboardMocks = ({ theme = 'dark' } = {}) => ({
   '/api/notes': { notes: [...NOTES.notes, LONG_NOTE] },
   '/api/continuity': CONTINUITY,
   '/api/decisions/DEC-001': DECISION,
-  '/api/issues': ISSUES_LIST, '/api/bugs': BUGS_LIST,
+  '/api/issues': { issues: ISSUES }, '/api/bugs': BUGS,
   '/api/board': BOARD, '/api/backlog': BOARD,
 });
 
@@ -455,7 +450,11 @@ export function epicDetailMocks({ theme = 'dark' } = {}) {
 // GET /api/issues: the server adds severity_label and aging.
 const issue = (id, title, status, severity, extra = {}) => ({ id, title, status, severity,
   severity_label: { P0: 'Critical', P1: 'High', P2: 'Medium', P3: 'Low' }[severity], aging: { percent: 10, tier: 'Fresh' }, ...extra });
-export const LIST_ISSUES = [
+// The one issue set (plan 4 folded the 3c detail, 3d list and 3e Dashboard sets). ISS-012 is the issue page's rich
+// one, stale by its own date (no `aging`, so the page works the tier out from the prefs); ISS-009 the fixed one it
+// duplicates; ISS-1234 too long for a phone. Eight are open or investigating.
+const RICH_ISSUE = { id: 'ISS-012', title: 'Card edge vanishes on the light page ground', severity: 'P1', severity_label: 'High', status: 'investigating', discovered: '2026-08-01T09:00:00Z', evidence: 'Seen on **three** laptops in light theme.', repro: ['Open the board in light', 'Look at a card edge'], impact: 'Cards blur into the column; `--card-bg` sits too close to `--col-bg`.', summary: '## Notes\n\nTracked in T-102.', location: ['viewer/css/screens/kanban.css:87', 'viewer/css/tokens.css'], links: [{ type: 'relates_to', target: 'T-102' }, { type: 'duplicate_of', target: 'ISS-009' }] };
+export const ISSUES = [
   issue('ISS-001', 'Board poll redraws every card on a quiet tick', 'investigating', 'P1', { component: 'viewer',
     location: ['viewer/js/main.js:121'], related_tasks: ['T-102'], discovered: daysAgo(50), aging: { percent: 90, tier: 'Stale' },
     evidence: Array.from({ length: 8 }, (_, i) => `Line ${i + 1}: the poll answered 200 with an unchanged revision and the board still repainted.`).join(' ') }),
@@ -466,14 +465,21 @@ export const LIST_ISSUES = [
   issue('ISS-005', 'Legacy mirror written after cutover', 'fixed', 'P1', { resolved: daysAgo(6) }),
   issue('ISS-006', 'Search hint shows the Mac glyph on Windows', 'wontfix', 'P3', { resolved: daysAgo(12) }),
   issue('ISS-007', 'Duplicate of the poll repaint', 'duplicate', 'P2', { resolved: daysAgo(1) }),
+  { id: 'ISS-009', title: 'Light card edge', severity: 'P2', status: 'fixed', discovered: '2026-07-01T09:00:00Z', resolved: '2026-07-10T09:00:00Z' },
+  issue('ISS-011', 'Board poll drops a delta under load', 'open', 'P1', { discovered: daysAgo(2) }),
+  RICH_ISSUE,
+  issue('ISS-013', 'Writer mutex held across the projection scan', 'investigating', 'P0', { discovered: daysAgo(1) }),
+  { ...RICH_ISSUE, id: 'ISS-1234', title: 'x'.repeat(120), location: LONG_PATH },
 ];
+export const ISSUE = byId(ISSUES, 'ISS-012');
+export const LONG_ISSUE = byId(ISSUES, 'ISS-1234');
 const ISSUE_STATUSES = ['investigating', 'open', 'open', 'open', 'fixed', 'wontfix', 'duplicate', 'investigating'];
 export const LONG_ISSUES = Array.from({ length: 24 }, (_, i) => issue(`ISS-${1201 + i}`, longText(`Issue ${1201 + i}`, { unbroken: i === 3 }),
   ISSUE_STATUSES[i % 8], `P${i % 4}`, { component: ['viewer', 'store', 'sync'][i % 3], related_tasks: [`T-${1234 + i}`],
     location: [`viewer/js/screens/a-rather-long-module-name-${i}.js:${100 + i}`], evidence: longText(`Evidence ${i}`).repeat(3),
     discovered: daysAgo(5 + i), resolved: ISSUE_STATUSES[i % 8] === 'open' || ISSUE_STATUSES[i % 8] === 'investigating' ? undefined : daysAgo(i) }));
 // The table plan 4's a11y gate reuses for #/issues; loaded when `.issues-col .issue-card` is visible.
-export const issuesMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/issues': { issues: LIST_ISSUES }, '/api/board': BOARD, '/api/backlog': BOARD,
+export const issuesMocks = ({ theme = 'dark' } = {}) => ({ '/api/viewer/prefs': { theme, ui: {}, screens: {} }, '/api/issues': { issues: ISSUES }, '/api/board': BOARD, '/api/backlog': BOARD,
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1', RICH_RELATED) });
 // ── Plan 3e: Sessions ──
 // The table plan 4's a11y gate reuses for #/sessions; loaded when `.ho-child[data-handover-id="2026-07-13-m1-shipped"]`
@@ -513,10 +519,6 @@ export function manySessions(n) {
   return { sessions, details };
 }
 
-// The issue detail page (plan 3c Task 7): one rich issue, a fixed one it duplicates, and one too long for a phone.
-export const ISSUE = { id: 'ISS-012', title: 'Card edge vanishes on the light page ground', severity: 'P1', severity_label: 'High', status: 'investigating', discovered: '2026-08-01T09:00:00Z', evidence: 'Seen on **three** laptops in light theme.', repro: ['Open the board in light', 'Look at a card edge'], impact: 'Cards blur into the column; `--card-bg` sits too close to `--col-bg`.', summary: '## Notes\n\nTracked in T-102.', location: ['viewer/css/screens/kanban.css:87', 'viewer/css/tokens.css'], links: [{ type: 'relates_to', target: 'T-102' }, { type: 'duplicate_of', target: 'ISS-009' }] };
-export const ISSUES = { issues: [ISSUE, { id: 'ISS-009', title: 'Light card edge', severity: 'P2', status: 'fixed', discovered: '2026-07-01T09:00:00Z', resolved: '2026-07-10T09:00:00Z' }] };
-export const LONG_ISSUE = { ...ISSUE, id: 'ISS-1234', title: 'x'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
 // ── Plan 3e: Archived ──
 // BOARD plus `n` archived tasks T-1001… spread over the two fixture epics, an epic the board does not list (`legacy`)
 // and no epic; every fifth title is 120 characters long; T-1002 was superseded, T-1003 is a duplicate. Deterministic.
@@ -536,11 +538,6 @@ export const archivedMocks = ({ theme = 'dark' } = {}) => ({
   '/api/board': archivedBoard(40), '/api/backlog': archivedBoard(40),
   '/api/task/T-1001/detail': taskDetail({ ...EMPTY_TASK, id: 'T-1001', title: 'Archived task 1001', status: 'archived' }),
 });
-
-// The bug detail page (plan 3c Task 8): one open bug found in a board task, a fixed one that went somewhere, and one too long for a phone.
-export const BUG = { id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', severity: 'P2', found_in: 'T-102', discovered: '2026-09-30T10:00:00Z', discovered_by: 'user', components: ['viewer'], location: ['viewer/css/screens/kanban.css:87'], summary: 'The card border uses `--border-subtle`.\n\n1. Light theme\n2. Laptop screen' };
-export const BUG_FIXED = { ...BUG, id: 'B-030', status: 'fixed', severity: null, fix_commit: 'abfb1b9c0ffee', adopted_into: 'T-101', promoted_to: 'ISS-012' };
-export const LONG_BUG = { ...BUG, id: 'B-1234', title: 'y'.repeat(120), location: ['viewer/' + 'deeply/nested/'.repeat(14) + 'file.css:1'] };
 
 // ── Ideas (3d Task 9) ──
 export const LIST_IDEAS = [
@@ -621,7 +618,7 @@ export function issueDetailMocks({ theme = 'dark' } = {}) {
   return {
     '/api/viewer/prefs': { theme, ui: {}, screens: {}, issues: { aging: { High: 30 } } }, 'PUT /api/viewer/prefs': {},
     '/api/board': BOARD, '/api/backlog': BOARD,
-    '/api/issues': { issues: [...ISSUES.issues, LONG_ISSUE] },
+    '/api/issues': { issues: ISSUES },
   };
 }
 // The bug page's routes: B-031 open, B-030 fixed, B-1234 long, B-999 missing.
