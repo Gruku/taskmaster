@@ -497,14 +497,16 @@ test.describe('mobile drawer', () => {
   });
 });
 
+// Every icon link must deliver an image; another link beside the ICO (an SVG, say) is fine.
 test('the tab icon is the pixel-fitted ICO, a real file the server can deliver', async ({ page }) => {
   await page.goto('/#/kanban');
-  const hrefs = await page.locator('link[rel="icon"]').evaluateAll((links) => links.map((l) => l.href));
-  expect(hrefs.map((h) => new URL(h).pathname)).toEqual(['/vendor/favicon.ico']);
-  for (const href of hrefs) {
+  const links = await page.locator('link[rel~="icon"]').evaluateAll((all) => all.map((l) => ({ href: l.href, sizes: l.getAttribute('sizes') })));
+  for (const { href } of links) {
     const res = await page.request.get(href);
     expect(res.status(), href).toBe(200);
+    expect(res.headers()['content-type'], href).toMatch(/^image\//);
   }
+  expect(links.find((l) => new URL(l.href).pathname === '/vendor/favicon.ico')?.sizes).toBe('16x16 32x32 48x48 256x256');
 });
 
 // Topbar row 2 stays on one line: what does not fit waits behind "Filters".

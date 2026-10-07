@@ -1,21 +1,57 @@
 // User intent: the live-server specs write viewer prefs, so they must never run against a real viewer by accident —
 // only on an explicit opt-in, and for run_smoke.sh only against a backlog the caller has named.
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { requireLiveOptIn } from '../live-guard.js';
 
 const TESTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
+const VIEWER_DIR = join(TESTS_DIR, '..');
+const optInFree = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^TM_LIVE_SPECS_/i.test(k)));
+
+// Temp trees this file makes; a run killed mid-test leaves its tree behind, so the next run sweeps the old ones.
+const SMOKE_PREFIX = 'tm-smoke-guard-';
+const RM = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
+const smokeDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith(SMOKE_PREFIX));
+const made = new Set();
+const stale = new Set();
+before(() => {
+  for (const name of smokeDirs()) {
+    const dir = join(tmpdir(), name);
+    try {
+      if (Date.now() - statSync(dir).mtimeMs < 60 * 60 * 1000) continue;
+      rmSync(dir, RM);
+      stale.add(name);
+    } catch { /* gone already, or still held: left for the next run */ }
+  }
+});
 
 test('requireLiveOptIn refuses unless TM_LIVE_SPECS_OK is exactly 1', () => {
   for (const env of [{}, { TM_LIVE_SPECS_OK: '' }, { TM_LIVE_SPECS_OK: '0' }, { TM_LIVE_SPECS_OK: 'true' }, { TM_LIVE_SPECS_OK: 'yes' }]) {
-    assert.throws(() => requireLiveOptIn(env), /TM_LIVE_SPECS_OK=1/, JSON.stringify(env));
+    assert.throws(() => requireLiveOptIn(env, ['node', 'playwright', 'test']), /TM_LIVE_SPECS_OK=1/, JSON.stringify(env));
   }
-  assert.doesNotThrow(() => requireLiveOptIn({ TM_LIVE_SPECS_OK: '1' }));
+  assert.doesNotThrow(() => requireLiveOptIn({ TM_LIVE_SPECS_OK: '1' }, ['node', 'playwright', 'test']));
+});
+
+test('requireLiveOptIn lets a --list through: listing runs nothing and writes nothing', () => {
+  assert.doesNotThrow(() => requireLiveOptIn({}, ['node', 'playwright', 'test', '--list']));
+});
+
+test('the live Playwright config lists its tests without the opt-in, and still refuses to run them', () => {
+  const cli = createRequire(join(VIEWER_DIR, 'package.json')).resolve('@playwright/test/cli');
+  const pw = (...args) => spawnSync(process.execPath, [cli, 'test', '--config', 'tests/playwright.config.js', ...args], {
+    cwd: VIEWER_DIR, env: optInFree(), encoding: 'utf8', timeout: 60_000,
+  });
+  const listed = pw('--list');
+  assert.equal(listed.status, 0, listed.stdout + listed.stderr);
+  const run = pw('no-spec-matches-this-filter');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stdout + run.stderr, /TM_LIVE_SPECS_OK=1/);
 });
 
 test('the live Playwright config refuses to load without the opt-in', async () => {
@@ -66,7 +102,8 @@ const fwd = (p) => p.replaceAll('\\', '/');
 // { withBacklog } puts .taskmaster/backlog.yaml in the parent the script resolves as TASKMASTER_ROOT.
 // { portBusy } makes the stub curl answer before the script has started its own server.
 function runSmoke({ env = {}, withBacklog = true, portBusy = false, thenWith = null } = {}) {
-  const top = mkdtempSync(join(tmpdir(), 'tm-smoke-guard-'));
+  const top = mkdtempSync(join(tmpdir(), SMOKE_PREFIX));
+  made.add(top.slice(tmpdir().length + 1));
   const plugin = join(top, 'repo', 'plugin');
   const tests = join(plugin, 'viewer', 'tests');
   const bin = join(top, 'bin');
@@ -97,7 +134,8 @@ function runSmoke({ env = {}, withBacklog = true, portBusy = false, thenWith = n
     // thenWith(first) → env for a second run in the same tree (the root to name is only known from the refusal).
     return thenWith ? { first, second: run(thenWith(first)) } : first;
   } finally {
-    rmSync(top, { recursive: true, force: true });
+    // On Windows a Git Bash child can still hold a handle in the tree for a moment.
+    rmSync(top, RM);
   }
 }
 const smoke = (name, fn) => test(name, { skip: BASH ? false : 'Git Bash not found' }, fn);
@@ -153,4 +191,11 @@ smoke('run_smoke.sh refuses when a viewer already answers on its port', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /8765/);
   assert.equal(r.calls, '');
+});
+
+// Last in the file: what the tests above made is gone, and so are the stale trees swept before them. Only those names
+// are compared — another suite running at the same time may have trees of its own in flight.
+test('the smoke-guard tests leave no temp dirs behind', () => {
+  const left = new Set(smokeDirs());
+  assert.deepEqual([...made, ...stale].filter((n) => left.has(n)), []);
 });

@@ -31,7 +31,6 @@ const choice = (name, allowed) => {
 const THEMES = choice('themes', ['dark', 'light']);
 const WIDTHS = choice('widths', ['d', 'm']);
 const OUT = path.resolve(OUT_ARG);
-fs.mkdirSync(OUT, { recursive: true });
 const ONLY = flag('only');
 
 const ALL_ROUTES = [
@@ -63,6 +62,8 @@ const ALL_ROUTES = [
 const unknownRoutes = (ONLY || []).filter(n => !ALL_ROUTES.some(([name]) => name === n));
 if (unknownRoutes.length || (ONLY && !ONLY.length)) usage(`--only: unknown route name(s) "${unknownRoutes.join(',')}"; known: ${ALL_ROUTES.map(([n]) => n).join(', ')}`);
 const ROUTES = ALL_ROUTES.filter(([name]) => !ONLY || ONLY.includes(name));
+// Only once every option is known good: a refused run leaves no directory behind.
+fs.mkdirSync(OUT, { recursive: true });
 
 const VIEWPORTS = [['d', 1440, 900], ['m', 390, 844]].filter(([vk]) => WIDTHS.includes(vk));
 
