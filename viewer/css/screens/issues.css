@@ -86,6 +86,16 @@
   font-size: var(--size-narrator-small);
 }
 
+/* Beside a desktop slot the board is the Kanban pattern: it shrinks to the height left under the toolbar (never below a
+   readable floor), each column's list scrolls inside itself, and the shelf below stays in view. */
+@media (min-width: 769px) {
+  .issues-board { flex: 0 1 auto; min-height: 320px; }
+  .issues-board__cols { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .issues-col { min-height: 0; }
+  .issues-col__head { flex: 0 0 auto; }
+  .issues-col__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+}
+
 @media (max-width: 768px) {
   .issues-board__cols { grid-auto-flow: row; grid-auto-columns: auto; overflow-x: visible; }
   .issues-col[hidden] { display: none; }

@@ -385,6 +385,24 @@ test('at 1440 every column shows, each at least 280px wide', async ({ page }) =>
   console.log('issues columns at 1440 scroll inside the board:', m.inside);
 });
 
+test('at 1440×900 the long board fits the viewport: the Open column scrolls inside itself and the shelf stays in view', async ({ page }) => {
+  await boot(page, { '/api/issues': { issues: LONG_ISSUES } });
+  await expect(page.locator('#issues-col-open .issue-card')).toHaveCount(9);
+  const m = await page.evaluate(() => {
+    const root = document.querySelector('.issues');
+    const list = document.querySelector('#issues-col-open .issues-col__list');
+    const shelf = document.querySelector('.issues-shelf__toggle').getBoundingClientRect();
+    return { doc: document.documentElement.scrollHeight, inner: innerHeight,
+      rootScroll: root.scrollHeight - root.clientHeight, listScroll: list.scrollHeight - list.clientHeight,
+      listOverflow: getComputedStyle(list).overflowY, shelfBottom: shelf.bottom };
+  });
+  expect(m.doc).toBeLessThanOrEqual(m.inner);
+  expect(m.rootScroll).toBeLessThanOrEqual(1);
+  expect(m.listOverflow).toBe('auto');
+  expect(m.listScroll).toBeGreaterThan(0);
+  expect(m.shelfBottom).toBeLessThanOrEqual(m.inner);
+});
+
 test('keyboard walk: search, the View group, the chips, From a bug, then the cards and their controls', async ({ page }) => {
   await boot(page);
   await expect(card(page, 'ISS-001').locator('.issue-card__more')).toBeVisible();
