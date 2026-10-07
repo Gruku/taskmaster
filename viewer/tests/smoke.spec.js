@@ -30,7 +30,9 @@ test.describe('Viewer v3 smoke', () => {
       await page.goto('/v3');
       await page.evaluate(h => location.hash = h, r.hash);
       await expect(page.locator('#page-title')).toHaveText(r.title);
-      await expect(page.locator('.screen-mount .stub')).toBeVisible();
+      // Resolved: the screen drew something, and it is not the router's "could not open" block (router.js failureBlock).
+      await expect(page.locator('#screen-mount > *').first()).toBeVisible();
+      await expect(page.locator('#screen-mount .tm-empty[data-state="error"]')).toHaveCount(0);
       if (r.sidebarKey) {
         await expect(page.locator(`.sidebar-link[data-key="${r.sidebarKey}"]`)).toHaveClass(/active/);
       }

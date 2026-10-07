@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, LONG_ISSUES, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, LONG_ISSUES, dashboardMocks, taskDetail } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -431,23 +431,54 @@ test.describe('shell layout at 1280×720', () => {
     expect(cs).toEqual({ position: 'sticky', top: '0px', painted: true });
   });
 
-  for (const [route, ready] of [['#/issues', '.issues-col .issue-card'], ['#/dashboard', '.dk-summary']]) {
-    test(`on ${route} with more than fits, the slot fills the space under the topbar and the window does not scroll`, async ({ page }) => {
-      await page.route((url) => url.pathname === '/api/issues', (route) => route.fulfill({ json: { issues: LONG_ISSUES } }));
-      await page.goto('/' + route);
-      await expect(page.locator(ready).first()).toBeVisible();
-      const probe = await page.evaluate(() => {
-        const slot = document.querySelector('#screen-mount').getBoundingClientRect();
-        const main = document.querySelector('.main');
-        window.scrollTo(0, 200);
-        return {
-          slotTop: Math.round(slot.top), topbarBottom: Math.round(document.querySelector('#topbar').getBoundingClientRect().bottom),
-          slotBottom: Math.round(slot.bottom), mainFits: main.scrollHeight <= main.clientHeight, windowY: window.scrollY,
-        };
-      });
-      expect(probe).toEqual({ slotTop: probe.topbarBottom, topbarBottom: probe.topbarBottom, slotBottom: 720, mainFits: true, windowY: 0 });
-    });
-  }
+  // Where the slot sits, whether .main or the window scrolls, and for the slot and the element `scroller` names:
+  // its overflow-y, whether its content is taller than it, and whether its scrollTop actually moves when set.
+  const frame = (page, scroller) => page.evaluate((sel) => {
+    const slot = document.querySelector('#screen-mount');
+    const main = document.querySelector('.main');
+    window.scrollTo(0, 200);
+    const moves = (el) => {
+      const before = el.scrollTop;
+      el.scrollTop = before + 50;
+      const moved = el.scrollTop !== before;
+      el.scrollTop = before;
+      return moved;
+    };
+    const scroll = (el) => ({ overflowY: getComputedStyle(el).overflowY, taller: el.scrollHeight > el.clientHeight, moves: moves(el) });
+    const box = slot.getBoundingClientRect();
+    return {
+      slotTop: Math.round(box.top), topbarBottom: Math.round(document.querySelector('#topbar').getBoundingClientRect().bottom),
+      slotBottom: Math.round(box.bottom), mainFits: main.scrollHeight <= main.clientHeight, windowY: window.scrollY,
+      slot: scroll(slot), scroller: scroll(document.querySelector(sel)),
+    };
+  }, scroller);
+
+  test('on #/issues with more than fits, .issues is the scroller: the slot under the topbar has nothing to scroll, nor has the window', async ({ page }) => {
+    await page.route((url) => url.pathname === '/api/issues', (route) => route.fulfill({ json: { issues: LONG_ISSUES } }));
+    await page.goto('/#/issues');
+    await expect(page.locator('.issues-col .issue-card').first()).toBeVisible();
+    await page.locator('.issues-shelf__toggle').click();
+    await expect(page.locator('#issues-shelf-list .issue-row').first()).toBeVisible();
+    const f = await frame(page, '#screen-mount > section.issues');
+    expect(f.slotTop).toBe(f.topbarBottom);
+    expect(f).toMatchObject({ slotBottom: 720, mainFits: true, windowY: 0 });
+    expect(f.scroller, '.issues overflows and scrolls').toEqual({ overflowY: 'auto', taller: true, moves: true });
+    expect(f.slot, 'the slot').toMatchObject({ taller: false, moves: false });
+  });
+
+  test('on #/dashboard with more than fits, the slot is the desk and scrolls; the window does not', async ({ page }) => {
+    for (const [path, json] of Object.entries(dashboardMocks())) {
+      if (path.startsWith('/api/') && !['/api/viewer/prefs', '/api/board', '/api/backlog'].includes(path)) {
+        await page.route((url) => url.pathname === path, (route) => route.fulfill({ json }));
+      }
+    }
+    await page.goto('/#/dashboard');
+    await expect(page.locator('#screen-mount.dk-desk .dk-note').first()).toBeVisible();
+    const f = await frame(page, '#screen-mount.dk-desk');
+    expect(f.slotTop).toBe(f.topbarBottom);
+    expect(f).toMatchObject({ slotBottom: 720, mainFits: true, windowY: 0 });
+    expect(f.scroller, 'the desk overflows and scrolls').toEqual({ overflowY: 'auto', taller: true, moves: true });
+  });
 });
 
 test.describe('mobile drawer', () => {

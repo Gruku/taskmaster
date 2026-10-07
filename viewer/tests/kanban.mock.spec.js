@@ -33,6 +33,7 @@ test('a card is a link: Enter opens the task, Escape hands focus back, Ctrl+clic
   const dialog = page.locator('.modal--detail');
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.modal-eyebrow')).toHaveText('T-102');
+  expect(await page.evaluate(() => location.hash), 'the dialog is an overlay, not a route').toBe('#/kanban');
   await page.keyboard.press('Escape');
   await expect(page.locator('.modal')).toHaveCount(0);
   await expect(link).toBeFocused();

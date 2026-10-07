@@ -452,7 +452,9 @@ const issue = (id, title, status, severity, extra = {}) => ({ id, title, status,
   severity_label: { P0: 'Critical', P1: 'High', P2: 'Medium', P3: 'Low' }[severity], aging: { percent: 10, tier: 'Fresh' }, ...extra });
 // The one issue set (plan 4 folded the 3c detail, 3d list and 3e Dashboard sets). ISS-012 is the issue page's rich
 // one, stale by its own date (no `aging`, so the page works the tier out from the prefs); ISS-009 the fixed one it
-// duplicates; ISS-1234 too long for a phone. Eight are open or investigating.
+// duplicates; ISS-1234 too long for a phone. Eight are open or investigating. The three 3c records keep their sparser
+// shape on purpose — ISS-009 has no severity_label or aging, ISS-012 and ISS-1234 no aging — so the screens are also
+// tested on records without the server's additions; do not run them through `issue()`.
 const RICH_ISSUE = { id: 'ISS-012', title: 'Card edge vanishes on the light page ground', severity: 'P1', severity_label: 'High', status: 'investigating', discovered: '2026-08-01T09:00:00Z', evidence: 'Seen on **three** laptops in light theme.', repro: ['Open the board in light', 'Look at a card edge'], impact: 'Cards blur into the column; `--card-bg` sits too close to `--col-bg`.', summary: '## Notes\n\nTracked in T-102.', location: ['viewer/css/screens/kanban.css:87', 'viewer/css/tokens.css'], links: [{ type: 'relates_to', target: 'T-102' }, { type: 'duplicate_of', target: 'ISS-009' }] };
 export const ISSUES = [
   issue('ISS-001', 'Board poll redraws every card on a quiet tick', 'investigating', 'P1', { component: 'viewer',
