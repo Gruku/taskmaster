@@ -237,7 +237,6 @@
   letter-spacing: var(--tracking-normal);
 }
 :is(.gate--pending, .gate--skipped, .rung--empty) .marker__word { color: var(--foreground-subtle); }
-.gate--skipped .marker__word { text-decoration: line-through; }
 /* The gate's state, said beside its name. */
 .gp-gate__state {
   color: var(--foreground-subtle);
