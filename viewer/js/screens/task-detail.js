@@ -3,7 +3,6 @@ import { mountTaskDetailDocument, rememberView } from '../components/task-detail
 import { stateBlock } from '../components/empty-state.js';
 import { openModalCount, topModal } from '../components/modal.js';
 import { claimTopbar } from '../lib/topbar.js';
-import { deepMerge } from '../lib/prefs-writer.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: null };
 
@@ -42,9 +41,7 @@ export function mount(root, { params, store, api, prefs, subpath }) {
     // From here the choice is the saved one; an address still naming the other view would undo it on reload.
     if (urlView) history.replaceState(history.state, '', `#/task/${encodeURIComponent(id)}`);
     if (shown) await paint(shown, generation);
-    const patch = { screens: { task_detail: { view: next } } };
-    store.setPrefs(deepMerge(structuredClone(store.getPrefs() || {}), patch));
-    try { await api.savePrefs(patch); } catch (e) { console.error('savePrefs failed', e); }
+    prefs?.patch({ screens: { task_detail: { view: next } } });
   };
 
   // Persist the most-recently-viewed task so a bare #/task re-opens it. Only once it has

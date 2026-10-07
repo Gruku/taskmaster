@@ -14,11 +14,21 @@ export function deepMerge(base, patch) {
 
 // queue(patch) merges into one pending object; `delayMs` after the last patch it is sent as one save.
 // Saves never overlap: a patch that arrives during a save goes out in the next one.
-export function createPrefsWriter({ save, delayMs, setTimer = setTimeout, clearTimer = clearTimeout, onError = () => {} }) {
+// A failed save is sent again after retryDelayMs(n) with whatever was queued since merged over it; after `retries`
+// failed retries in a row it is given up and onError(err, { dropped }) is told once.
+// flush() is for a page going away: what is pending goes out at once with keepalive, overlap or not, and is not retried.
+export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (n) => delayMs * 2 ** n,
+                                    setTimer = setTimeout, clearTimer = clearTimeout, onError = () => {} }) {
   let pending = null;
   let timer = null;
+  let retryTimer = null;
   let inFlight = false;
   let due = false;      // the debounce elapsed during a save; send as soon as that save ends
+  let failures = 0;
+
+  function call(batch, opts) {
+    try { return Promise.resolve(save(batch, opts)); } catch (e) { return Promise.reject(e); }
+  }
 
   function send() {
     if (!pending) return;
@@ -28,9 +38,20 @@ export function createPrefsWriter({ save, delayMs, setTimer = setTimeout, clearT
     pending = null;
     due = false;
     inFlight = true;
-    let result;
-    try { result = Promise.resolve(save(batch)); } catch (e) { result = Promise.reject(e); }
-    result.catch(onError).then(() => {
+    call(batch, { keepalive: false }).then(() => { failures = 0; }, (err) => {
+      if (failures >= retries) {
+        failures = 0;
+        onError(err, { dropped: batch });
+        return;
+      }
+      failures++;
+      // Under what was queued since: a newer value of the same key wins.
+      pending = deepMerge(batch, pending ?? {});
+      // The retry carries everything pending, so a debounce still waiting would only send it early.
+      if (timer) { clearTimer(timer); timer = null; }
+      due = false;
+      retryTimer = setTimer(() => { retryTimer = null; send(); }, retryDelayMs(failures));
+    }).then(() => {
       inFlight = false;
       if (due) send();
     });
@@ -40,9 +61,21 @@ export function createPrefsWriter({ save, delayMs, setTimer = setTimeout, clearT
     queue(patch) {
       // Cloned: a later merge must not write into the caller's object.
       pending = deepMerge(pending || {}, structuredClone(patch));
+      // Waiting on a retry: this patch goes out with it.
+      if (retryTimer) return;
       if (timer) clearTimer(timer);
       due = false;
       timer = setTimer(() => { timer = null; send(); }, delayMs);
+    },
+    flush() {
+      if (timer) { clearTimer(timer); timer = null; }
+      if (retryTimer) { clearTimer(retryTimer); retryTimer = null; }
+      due = false;
+      if (!pending) return;
+      const batch = pending;
+      pending = null;
+      failures = 0;
+      call(batch, { keepalive: true }).catch((err) => onError(err, { dropped: batch }));
     },
   };
 }
