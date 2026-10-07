@@ -675,3 +675,22 @@ test('leaving the Table for Epics takes Add task out of row 1 and replaces the c
   await expect(page.locator('#topbar-primary')).toBeEmpty();
   await expect(page.locator('#topbar-count')).toHaveText(`${TABLE_BOARD.epics.length} epics`);
 });
+
+test('the right-edge fade paints above every cell, the sticky header included, while there is more to the right', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-more-end', '');
+  const fade = page.locator('.tbl-fade');
+  await expect(fade).toHaveCSS('background-image', /linear-gradient/);
+  const top = await page.evaluate(() => {
+    const f = document.querySelector('.tbl-fade');
+    f.style.pointerEvents = 'auto';
+    const r = f.getBoundingClientRect();
+    const th = document.querySelector('.tbl-th').getBoundingClientRect();
+    const hits = [th.top + th.height / 2, r.top + r.height / 2].map((y) => document.elementFromPoint(r.right - 4, y) === f);
+    f.style.pointerEvents = '';
+    return hits;
+  });
+  expect(top).toEqual([true, true]);
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(fade).toHaveCSS('opacity', '0');
+});

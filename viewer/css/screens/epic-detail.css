@@ -36,10 +36,15 @@
 .ed-progress__label { margin: 0 0 var(--space-xs); color: var(--foreground-default); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
 .ed-breakdown { display: flex; height: var(--space-xs); max-width: 480px; border-radius: var(--radius-full); overflow: hidden; background: var(--bg-recessed); border: 1px solid var(--border-subtle); }
 .ed-seg { display: block; height: 100%; background: var(--tone-neutral); }
+.ed-legend__key { background: var(--tone-neutral); }
 .ed-seg--in-progress { background: var(--tone-accent); }
 .ed-seg--in-review { background: var(--tone-warning); }
 .ed-seg--blocked { background: var(--tone-critical); }
 .ed-seg--done { background: var(--tone-success); }
+/* Todo is a light neutral that still reads against the track; Archived a darker one, so the two never merge. */
+.ed-seg--todo { background: var(--border-strong); }
+.ed-seg--archived { background: var(--foreground-subtle); }
+.ed-legend__key { flex: 0 0 auto; width: var(--space-xs); height: var(--space-xs); border-radius: var(--radius-xs); }
 .ed-legend { list-style: none; margin: var(--space-xs) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-micro) var(--space-md); }
 .ed-legend li { display: inline-flex; align-items: center; gap: var(--space-micro); }
 .ed-legend__n, .ed-group__n { color: var(--foreground-subtle); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
