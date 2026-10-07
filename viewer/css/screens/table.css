@@ -29,8 +29,9 @@
 }
 /* scroll-padding-top (the header's height) is set from table.js. */
 .tbl-host { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
+/* Above the sticky header (z-index 3) and every cell, so the cut column fades instead of stopping dead. */
 .tbl-fade {
-  position: absolute; top: 0; right: 0; bottom: 0; width: var(--space-2xl); pointer-events: none;
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 4; width: var(--space-2xl); pointer-events: none;
   background: linear-gradient(to left, var(--card-bg), transparent); opacity: 0;
   transition: opacity var(--dur-standard) var(--ease-hourglass);
 }
