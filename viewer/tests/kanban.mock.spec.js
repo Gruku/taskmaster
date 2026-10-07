@@ -395,14 +395,17 @@ test('a poll keeps focus on a pressed chip and keeps Epic options open', async (
 });
 
 // Leave the board with something open, then come back: no page error, no popover or modal left, the board lays out anew.
-async function leaveAndReturn(page, errors) {
+async function leaveAndReturn(page, errors, htmlOverflow) {
   await page.evaluate(() => { location.hash = '#/table'; });
   await expect(page.locator('table.tbl')).toBeVisible();
   await expect(page.locator('.popover')).toHaveCount(0);
   await expect(page.locator('.modal')).toHaveCount(0);
   // The modal's scroll lock goes with it: html:has(> body.modal-open) would otherwise keep a phone page from scrolling.
   await expect(page.locator('body.modal-open')).toHaveCount(0);
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowY)).not.toBe('hidden');
+  // Desktop locks html by design (the app frame scrolls), so compare with the board's own value before anything opened.
+  const overflow = await page.evaluate(() => getComputedStyle(document.documentElement).overflowY);
+  if (htmlOverflow !== undefined) expect(overflow, 'html overflow as before the modal').toBe(htmlOverflow);
+  if (await page.evaluate(() => innerWidth <= 768)) expect(overflow, 'a phone page can scroll').not.toBe('hidden');
   expect(await page.evaluate(() => import('/js/components/popover.js').then((m) => m.openPopoverCount()))).toBe(0);
   await page.evaluate(() => { location.hash = '#/kanban'; });
   await expect(page.locator('.card-task[data-task-id] > .link-row__link').first()).toBeVisible();
@@ -426,14 +429,22 @@ for (const [what, viewport, open] of [
     await linkOf(page, 'T-102').click();
     await expect(page.locator('.modal--detail .td-doc--embedded')).toBeVisible();
   }],
+  ['the detail modal at 390', { width: 390, height: 844, board: BOARD }, async (page) => {
+    // One column shows behind the Columns tabs: pick the tab of the column holding the card.
+    const panel = await card(page, 'T-102').evaluate((c) => c.closest('.kanban-col').id);
+    await page.locator(`[id="${panel}-tab"]`).click();
+    await linkOf(page, 'T-102').click();
+    await expect(page.locator('.modal--detail .td-doc--embedded')).toBeVisible();
+  }],
 ]) {
   test(`leaving the board with ${what} open leaves nothing behind`, async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     const { board: b = longBoard(), ...size } = viewport;
     await board(page, { board: b, viewport: size });
+    const htmlOverflow = await page.evaluate(() => getComputedStyle(document.documentElement).overflowY);
     await open(page);
-    await leaveAndReturn(page, errors);
+    await leaveAndReturn(page, errors, htmlOverflow);
   });
 }
 
