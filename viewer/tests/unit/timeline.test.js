@@ -136,3 +136,16 @@ test('a parallel block lays its columns out in CSS, not inline', () => {
   assert.equal(grid.getAttribute('style'), null);
   assert.equal(grid.querySelectorAll('.ho').length, 2);
 });
+
+// Final review: "11:00 AM → 12:00 PM · 25h0m" — a session ending on a later day showed bare times beside a 25h duration.
+test('sessionTimeLine: a session spanning days shows both dates so the duration agrees with the times', async () => {
+  const { sessionTimeLine } = await import('../../js/components/timeline.js');
+  const { formatAbsolute } = await import('../../js/lib/time.js');
+  const s = SESSIONS[0];
+  const line = sessionTimeLine(s);
+  assert.equal(line, `${formatAbsolute(s.start)} → ${formatAbsolute(s.end)} · 25h0m`);
+  assert.notEqual(formatAbsolute(s.start, { time: false }), formatAbsolute(s.end, { time: false }));
+  const sameDay = { start: '2026-07-10T10:00:00Z', end: '2026-07-10T11:30:00Z', duration: 5400 };
+  assert.equal(sessionTimeLine(sameDay),
+    `${formatAbsolute(sameDay.start, { date: false })} → ${formatAbsolute(sameDay.end, { date: false })} · 1h30m`);
+});

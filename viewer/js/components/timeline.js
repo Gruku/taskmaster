@@ -121,14 +121,22 @@ function handoverRow(id, meta, ctx) {
   ]);
 }
 
-function sessionTimeLine(s) {
+// A session that ends on a later local day than it starts shows both dates — bare times would contradict its duration.
+function spansDays(start, end) {
+  const a = new Date(start), b = new Date(end);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return false;
+  return a.toDateString() !== b.toDateString();
+}
+
+export function sessionTimeLine(s) {
   const isDateOnly = s.time_resolution === 'date-only';
   if (isDateOnly) {
     // Legacy sessions: render the date only, no time, no arrow.
     return formatAbsolute(s.start, { time: false });
   }
-  const startStr = shortTime(s.start);
-  const endStr   = shortTime(s.end);
+  const multiDay = spansDays(s.start, s.end);
+  const startStr = multiDay ? formatAbsolute(s.start) : shortTime(s.start);
+  const endStr   = multiDay ? formatAbsolute(s.end)   : shortTime(s.end);
   let timeLine = (startStr === endStr) ? startStr : `${startStr} → ${endStr}`;
 
   // Append duration when meaningful (> 0) and not a date-only session.
