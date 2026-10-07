@@ -66,6 +66,8 @@
 .td-title-message { max-width: 80ch; }
 .td-title-message:empty,
 .td-title-message:not(:has(> :not(:empty))) { display: none; }
+/* Holding only the off-screen "Saving…"/"Saved" words, it is drawn (so they are announced) but takes no room. */
+.td-title-message:not(:has(> .ef-error:not(:empty))) { height: 0; padding-block: 0; margin-block: 0; }
 .td-title-message > .ef-error { margin: 0; }
 /* In the dialog it opens the body; hidden, it must not push the marker row down. */
 .td-body > .td-title-message { margin-bottom: var(--space-sm); }

@@ -59,7 +59,8 @@ export function waitForRelease(doc, view, fn) {
  *   sized by its children shrinks as they park and never grows back, so they never return.
  * - Children that may move are measured at their natural width (`flex-shrink: 0` while measured). Give them
  *   `flex-shrink: 0` in CSS too, or a visible one can still shrink beside a growing neighbour. A child that should flex
- *   (a search field) must be `keep`; it is measured at whatever width the row leaves it.
+ *   (a search field) must be `keep`; it is measured unshrunk like the rest, so it keeps the room of its flex basis
+ *   (or more when the row has room to spare), never just its min-width.
  * - A child whose width changes in place (a new count or label) needs `relayout()`; only the row's width and its list
  *   of children are observed.
  * - Parked children are out of the document while the popover is closed: keep references to them, or use `onLayout`.

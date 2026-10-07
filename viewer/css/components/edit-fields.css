@@ -263,6 +263,8 @@
 .if-wrap { display: inline-block; max-width: 100%; vertical-align: baseline; }
 /* Controls that want the whole line get it. */
 .if-wrap:has(> .ef-text-input, > .ef-md-textarea, > .ef-chip-input, > .ef-md) { display: block; }
+/* Saving and saved in words, for a screen reader only: the glyph says them on screen. */
+.if-said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .if-status {
   display: inline-block;
   margin-left: var(--space-xs);

@@ -51,7 +51,9 @@ test('each epic is one link row with its lifecycle word, a bar and closed/total'
   await expect(row(page, 'empty').locator('.epic-row__fill')).toHaveAttribute('style', 'width: 0%;');
   await expect(row(page, 'closed').locator('.epic-tag')).toHaveText('Closeable');
   await expect(row(page, 'empty').locator('.epic-tag')).toHaveCount(0);
-  await expect(row(page, 'closed').getByRole('link')).toHaveAttribute('title', 'All closed\nDone when: Both tasks are done.');
+  // The row carries the words its link's hit area hides; the link is named once, by its text.
+  await expect(row(page, 'closed')).toHaveAttribute('title', 'All closed\nDone when: Both tasks are done.');
+  await expect(row(page, 'closed').getByRole('link')).not.toHaveAttribute('title');
 });
 
 test('on a real backlog\'s volume the one closeable epic says so, and no other row does', async ({ page }) => {

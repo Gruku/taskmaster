@@ -50,6 +50,9 @@ export function mountInlineField(parent, {
   // `messageHost` takes it when the field sits somewhere words must not, such as a heading whose text names a dialog.
   const message = h('span', { class: 'ef-error if-error', id: `if-error-${++seq}`, role: 'alert' });
   (messageHost ?? parent).appendChild(message);
+  // Saving and saved in words, for whoever cannot see the glyph: a polite status, off screen, beside the message.
+  const said = h('span', { class: 'if-said', role: 'status' });
+  (messageHost ?? parent).appendChild(said);
   // A document drawn again (another writer's change, or the reload after an editor closes) asks what the field was
   // still saying and says it again in the new one: shown, not announced a second time.
   wrap.refusal = () => (mode === 'read' ? message.textContent : '');
@@ -102,6 +105,10 @@ export function mountInlineField(parent, {
       });
       editor = el;
       control = el.control ?? el;
+      // Inline there is no visible label to point at; a control that does not name itself takes its field's label.
+      if (fieldSpec.label && !control.hasAttribute('aria-label') && !control.hasAttribute('aria-labelledby')) {
+        control.setAttribute('aria-label', fieldSpec.label);
+      }
       wrap.appendChild(el);
     }
   }
@@ -241,6 +248,7 @@ export function mountInlineField(parent, {
     status.replaceChildren();
     status.className = 'if-status';
     showMessage(kind === 'error' ? (msg || 'Save failed') : '');
+    said.textContent = kind === 'saving' ? 'Saving…' : kind === 'ok' ? 'Saved' : '';
     if (!kind) return;
     if (kind === 'saving')  status.appendChild(h('span', { class: 'if-status-saving' }, '●'));
     if (kind === 'ok')      status.appendChild(h('span', { class: 'if-status-ok' }, '✓'));
@@ -261,6 +269,7 @@ export function mountInlineField(parent, {
       wrap.remove();
       status.remove();
       message.remove();
+      said.remove();
     },
   };
 }
