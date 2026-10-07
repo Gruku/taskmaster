@@ -232,7 +232,8 @@ test('issueRow: a won\'t-fix issue is a link row to the issue with its status wo
   const when = content.querySelector('time.issue-row__when');
   assert.equal(when.textContent, '1d ago');
   assert.ok(when.title);
-  assert.ok(link.title.includes('Old thing'), 'the cut title reaches the link');
+  assert.ok(el.title.includes('Old thing'), 'the cut title reaches the row');
+  assert.equal(link.hasAttribute('title'), false);
 });
 
 test('issueRow: narrow adds its modifier, and only then', () => {

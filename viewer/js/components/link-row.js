@@ -23,7 +23,7 @@ function refuseInteractive(node, where) {
 const asNode = (c) => (typeof c === 'string' ? document.createTextNode(c) : c);
 
 // The titles truncate() put on the name and the content, in order. The link's ::after covers them, so a hover never
-// reaches their own title; the link has to carry it.
+// reaches their own title; the row has to carry it (on the link it would be read a second time, as its description).
 function cutTitles(nodes) {
   const out = [];
   for (const n of nodes) {
@@ -37,8 +37,9 @@ function cutTitles(nodes) {
  * A row (or card) that opens `href`: a real link holding `name`, then `content`, then `controls` beside the link.
  * The whole row is the link's hit area; controls are siblings stacked above it, so they keep their own clicks.
  * `name` is required (string or Node with text): the link's text is its accessible name.
- * `title` goes on the link. Left out, the link takes the titles of anything cut inside the name and content (each
- * `[title]`, in order, one per line), since the hit area hides their own: cut text keeps its words on hover.
+ * `title` goes on the row, never the link, so the link is named once, by its text. Left out, the row takes the titles
+ * of anything cut inside the name and content (each `[title]`, in order, one per line), since the hit area hides their
+ * own: cut text keeps its words on hover. The controls carry an empty title, so they do not inherit the row's.
  * `name` or `content` that is or holds a control throws; controls go in `controls`.
  */
 export function linkRow({ href, name, content = [], controls = [], tag = 'div', className = '', title }) {
@@ -55,7 +56,7 @@ export function linkRow({ href, name, content = [], controls = [], tag = 'div', 
   link.setAttribute('href', href);
   link.append(asNode(name));
   const full = title ?? cutTitles([name, ...content]).join('\n');
-  if (full) link.title = full;
+  if (full) row.title = full;
   row.append(link);
 
   const body = document.createElement('div');
@@ -67,6 +68,7 @@ export function linkRow({ href, name, content = [], controls = [], tag = 'div', 
   if (kept.length) {
     const side = document.createElement('div');
     side.className = 'link-row__controls';
+    side.title = '';
     for (const c of kept) side.append(asNode(c));
     row.append(side);
   }

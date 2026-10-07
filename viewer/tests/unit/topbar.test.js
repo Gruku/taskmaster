@@ -169,3 +169,36 @@ test('tmSearch: a debounced input does not reach onInput once the search has lef
   assert.deepEqual(calls, ['abcd']);
   el.remove();
 });
+
+// A control unhidden in place (hidden, a class or a style) changes its width as surely as new text does.
+test('row 2 watches its controls\' hidden, class and style too; an attribute of the row itself or of Filters is not a change', async () => {
+  document.body.innerHTML = ROW1;
+  const frames = [];
+  window.requestAnimationFrame = (fn) => frames.push(fn);
+  const seen = [];
+  const observe = window.MutationObserver.prototype.observe;
+  window.MutationObserver.prototype.observe = function (target, opts) { seen.push({ target, opts }); return observe.call(this, target, opts); };
+  let root;
+  try { root = claimTopbar(); } finally { window.MutationObserver.prototype.observe = observe; }
+  try {
+    const mine = seen.filter((s) => s.target === root && s.opts.subtree);
+    assert.equal(mine.length, 1);
+    assert.deepEqual(mine[0].opts, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
+
+    const probe = tmAction({ label: 'Probe' });
+    probe.hidden = true;
+    root.append(probe);
+    await Promise.resolve();
+    frames.splice(0);
+    root.classList.add('is-busy');
+    root.querySelector('.overflow-more').classList.add('x');
+    root.querySelector('.overflow-more').hidden = false;
+    await Promise.resolve();
+    assert.equal(frames.length, 0, 'the row and Filters are left out');
+    probe.hidden = false;
+    await Promise.resolve();
+    assert.equal(frames.length, 1, 'a control unhidden in place is laid out again');
+  } finally {
+    delete window.requestAnimationFrame;
+  }
+});

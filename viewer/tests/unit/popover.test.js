@@ -399,3 +399,37 @@ test('9. an arrow with Alt, Ctrl or Meta, or one already used by someone else, i
   items[1].removeEventListener('keydown', taken);
   p.close();
 });
+
+test('12. a popover closed before its first frame runs throws nothing when that frame comes and leaves nothing behind', () => {
+  const frames = [];
+  window.requestAnimationFrame = (fn) => frames.push(fn);
+  try {
+    const p = open();
+    p.close();
+    assert.doesNotThrow(() => { for (const fn of frames.splice(0)) fn(performance.now()); });
+    assert.equal(document.querySelectorAll('.popover').length, 0);
+    assert.equal(openPopoverCount(), 0);
+    // The scroll listener that frame would have armed is not armed: a scroll now closes nothing a second time.
+    fire(document.body, 'scroll');
+    assert.deepEqual(p.reasons, ['api']);
+  } finally {
+    delete window.requestAnimationFrame;
+  }
+});
+
+test('12. after close, Escape and a press on the old anchor reach only the anchor\'s own listeners', () => {
+  const p = open();
+  p.close();
+  const anchor = $('#anchor');
+  const heard = [];
+  anchor.addEventListener('keydown', (e) => heard.push(`key ${e.key}`));
+  anchor.addEventListener('pointerdown', () => heard.push('pointerdown'));
+  const esc = key(anchor, 'Escape');
+  const press = fire(anchor, 'pointerdown');
+  fire(document.body, 'pointerdown');
+  assert.equal(esc.defaultPrevented, false, 'no popover used the key');
+  assert.equal(press.defaultPrevented, false);
+  assert.deepEqual(heard, ['key Escape', 'pointerdown']);
+  assert.deepEqual(p.reasons, ['api']);
+  assert.equal(anchor.getAttribute('aria-expanded'), 'false');
+});

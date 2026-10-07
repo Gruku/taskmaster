@@ -152,14 +152,8 @@
 .ef-chip-input { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 200px; }
 .ef-chip-list { display: flex; flex-wrap: wrap; gap: var(--space-micro); }
 .ef-chip-list:empty { display: none; }
-/* The suggestion list is a popover (placed and stacked by openPopover, at least as wide as its input); it keeps the
-   look of a list of rows flush to its edge. */
-.popover.ef-chip-dropdown {
-  padding: 0;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--overlay-surface);
-}
+/* The suggestion list is a popover (placed and stacked by openPopover, at least as wide as its input) and takes the
+   one popover surface as it is: fill, edge, corners and inset all come from .popover. */
 .ef-chip-dd-row {
   display: flex;
   align-items: baseline;

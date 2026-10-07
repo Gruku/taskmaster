@@ -161,3 +161,62 @@ for (const theme of ['dark', 'light']) {
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+// The detail dialog over the board in a theme and a viewport; at phone width the card's column is chosen first.
+async function detailAt(page, { width = 1440, height = 900, theme = 'dark' } = {}) {
+  await page.setViewportSize({ width, height });
+  await mock(page, theme);
+  await page.goto('/#/kanban');
+  const card = page.locator('.card-task[data-task-id="T-102"]');
+  await card.waitFor({ state: 'attached' });
+  if (width <= 768) {
+    const panel = await card.evaluate((c) => c.closest('.kanban-col').id);
+    await page.locator(`[id="${panel}-tab"]`).click();
+  }
+  await card.click();
+  const dialog = page.locator('.modal--detail');
+  await expect(dialog.locator('.td-doc--embedded')).toBeVisible();
+  return dialog;
+}
+const settle = (page) => page.evaluate(async () => {
+  await Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished));
+  await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(() => ok())));
+});
+
+for (const [width, height] of [[1440, 900], [390, 844]]) {
+  test(`placement: in the detail dialog at ${width}×${height} the handover menu sits 4px off its pill once the dialog has risen`, async ({ page }) => {
+    const dialog = await detailAt(page, { width, height });
+    const pill = dialog.locator('.ho-status-pill');
+    await pill.click();
+    await expect(menu(page)).toBeVisible();
+    await settle(page);
+    const at = await pill.boundingBox();
+    const box = await menu(page).boundingBox();
+    const gap = box.y >= at.y ? box.y - (at.y + at.height) : at.y - (box.y + box.height);
+    expect(Math.abs(gap - 4), `gap ${gap}`).toBeLessThanOrEqual(1);
+  });
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`${theme}: the relation suggestions and the handover menu are one surface`, async ({ page }) => {
+    const dialog = await detailAt(page, { theme });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    const surface = (loc) => loc.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { background: cs.backgroundColor, border: cs.borderTopColor };
+    });
+    await dialog.locator('.ho-status-pill').click();
+    await expect(menu(page)).toBeVisible();
+    const handover = await surface(menu(page));
+    await page.keyboard.press('Escape');
+    await expect(menu(page)).toHaveCount(0);
+    await dialog.locator('[data-action="edit"]').click();
+    const form = page.locator('.modal--form');
+    await expect(form).toBeVisible();
+    await form.locator('[data-key="depends_on"] input').first().fill('T-1');
+    const list = page.getByRole('listbox', { name: 'Depends on suggestions' });
+    await expect(list).toBeVisible();
+    expect(await surface(list)).toEqual(handover);
+    await page.keyboard.press('Escape');
+  });
+}

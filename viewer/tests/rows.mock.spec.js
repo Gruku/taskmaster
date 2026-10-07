@@ -156,6 +156,71 @@ test('390×844: the sort headers and the row\'s own buttons and links are at lea
   for (const s of controls) expect(s.w, `${s.name} width`).toBeGreaterThanOrEqual(44);
 });
 
+test('390×844: a control wrapped inside the row\'s controls is a touch target too', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const row = await boot(page);
+  await page.evaluate(() => {
+    const wrap = document.createElement('span');
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    pin.className = 'row-pin';
+    pin.textContent = 'P';
+    const epic = document.createElement('a');
+    epic.href = '#/epics';
+    epic.className = 'row-epic';
+    epic.textContent = 'E';
+    wrap.append(pin, epic);
+    document.querySelector('#rows-host .link-row__controls').append(wrap);
+  });
+  const sizes = await row.locator('.link-row__controls > span > *').evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { name: el.className, w: Math.round(r.width), h: Math.round(r.height) };
+  }));
+  expect(sizes).toHaveLength(2);
+  for (const s of sizes) {
+    expect(s.h, `${s.name} height`).toBeGreaterThanOrEqual(44);
+    expect(s.w, `${s.name} width`).toBeGreaterThanOrEqual(44);
+  }
+});
+
+// The full text of what is cut is the row's title: on the link it would be read again after the link's name.
+test('a row\'s link is named once: its name is its text and it has no description', async ({ page }) => {
+  await boot(page);
+  await page.evaluate(async () => {
+    const { linkRow } = await import('/js/components/link-row.js');
+    const { truncate } = await import('/js/lib/text.js');
+    const row = linkRow({
+      href: '#/task/T-102', name: truncate('T-102 · Re-skin the Kanban cards and columns'),
+      content: [truncate('Epic: Viewer re-skin of every remaining screen')], className: 'named-row',
+    });
+    document.getElementById('rows-host').append(row);
+  });
+  const link = page.locator('.named-row .link-row__link');
+  await expect(link).toHaveAccessibleName('T-102 · Re-skin the Kanban cards and columns');
+  await expect(link).toHaveAccessibleDescription('');
+  await expect(page.locator('#rows-host .link-row').first().locator('.link-row__link')).toHaveAccessibleDescription('');
+});
+
+test('cut content keeps its words: a 120-character title in 240px is cut on screen and whole in the row\'s title', async ({ page }) => {
+  await boot(page);
+  const full = 'Re-skin every remaining screen of the viewer to the Reality Reprojection system, both themes, keyboard and phone';
+  expect(full.length).toBeGreaterThanOrEqual(110);
+  const title = full.padEnd(120, '.');
+  await page.evaluate(async (text) => {
+    const { linkRow } = await import('/js/components/link-row.js');
+    const { truncate } = await import('/js/lib/text.js');
+    const box = document.createElement('div');
+    box.style.width = '240px';
+    box.append(linkRow({ href: '#/task/T-106', name: 'T-106', content: [truncate(text)], className: 'cut-content' }));
+    document.getElementById('rows-host').append(box);
+  }, title);
+  const look = await page.locator('.cut-content').evaluate((row) => {
+    const t = row.querySelector('.link-row__content .truncate');
+    return { cut: t.scrollWidth > t.clientWidth, title: row.title };
+  });
+  expect(look).toEqual({ cut: true, title });
+});
+
 test('Tab reaches the link, then the copy button; a keyboard-focused link rings the row', async ({ page }) => {
   const row = await boot(page);
   await page.locator('#before').focus();
