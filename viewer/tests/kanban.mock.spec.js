@@ -180,6 +180,19 @@ test('in a narrow card "New" and the age give way: they wrap below the id, which
   expect(tag.y + tag.height, '"New" above the title').toBeLessThanOrEqual(title.y + 1);
 });
 
+test('1440: a card sits centred in its column, with equal space left and right', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const gaps = await page.locator('.kanban-col').evaluateAll((cols) => cols.map((col) => {
+    const c = col.querySelector('.kanban-col-body > .card-task');
+    if (!c) return null;
+    const a = col.getBoundingClientRect();
+    const b = c.getBoundingClientRect();
+    return { left: b.left - a.left, right: a.right - b.right };
+  }).filter(Boolean));
+  expect(gaps.length).toBeGreaterThan(2);
+  for (const g of gaps) expect(Math.abs(g.left - g.right), JSON.stringify(g)).toBeLessThanOrEqual(1);
+});
+
 test('1440, the long board: the estimate shares the epic\'s line and the bundle slug stays on one', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
   const lines = await page.locator('.card-task').evaluateAll((cards) => cards

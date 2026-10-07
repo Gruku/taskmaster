@@ -236,7 +236,11 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-gutter: stable;
+  /* Cards sit centred: the body spans the column's padding and reserves a thin gutter on both edges, so the
+     scrollbar no longer takes width from one side only (which also pushed a Critical card's age off line 1). */
+  margin-inline: calc(-1 * var(--space-sm));
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
 }
 .kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
 .kanban-col-empty {
@@ -266,7 +270,7 @@
   .kanban-page, .kanban-board { height: auto; min-height: 0; overflow: visible; flex: 0 0 auto; }
   .kanban-board-grid { flex-direction: column; gap: var(--space-lg); min-height: 0; height: auto; }
   .kanban-col { width: 100%; height: auto; overflow: visible; transition: none; }
-  .kanban-col-body { overflow: visible; height: auto; scrollbar-gutter: auto; }
+  .kanban-col-body { overflow: visible; height: auto; margin-inline: 0; scrollbar-gutter: auto; }
   /* The head stays in view while its cards scroll by, on the column's own surface and with no shadow. */
   .kanban-col-head {
     position: sticky;
