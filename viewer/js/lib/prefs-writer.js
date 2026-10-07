@@ -12,6 +12,22 @@ export function deepMerge(base, patch) {
   return base;
 }
 
+const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+// `batch` without the leaf keys `newer` sets (an object in one and anything else in the other counts as covered);
+// null when nothing is left.
+function uncovered(batch, newer) {
+  const out = {};
+  for (const [k, v] of Object.entries(batch)) {
+    if (!(k in newer)) out[k] = v;
+    else if (isPlain(v) && isPlain(newer[k])) {
+      const rest = uncovered(v, newer[k]);
+      if (rest) out[k] = rest;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 // queue(patch) merges into one pending object; `delayMs` after the last patch it is sent as one save.
 // Saves never overlap: a patch that arrives during a save goes out in the next one.
 // A failed save is sent again after retryDelayMs(n) with whatever was queued since merged over it; after `retries`
@@ -25,7 +41,7 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
   let inFlight = false;
   let due = false;      // the debounce elapsed during a save; send as soon as that save ends
   let failures = 0;
-  let generation = 0;   // bumped by flush(): a batch sent before it is older than what flush sent
+  let flushedInFlight = null;   // what flush() sent while the regular save was out: newer than that save
 
   function call(batch, opts) {
     try { return Promise.resolve(save(batch, opts)); } catch (e) { return Promise.reject(e); }
@@ -39,27 +55,27 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
     pending = null;
     due = false;
     inFlight = true;
-    const sentIn = generation;
+    flushedInFlight = null;
     call(batch, { keepalive: false }).then(() => { failures = 0; }, (err) => {
-      // flush() sent newer values meanwhile: retrying this batch would land it over them.
-      if (sentIn !== generation) {
-        onError(err, { dropped: batch });
-        return;
-      }
+      // flush() sent newer values meanwhile: only the keys it did not cover are retried, never the older ones over them.
+      // (flush() reset the count, so this failure is the first of the remainder's.)
+      const left = flushedInFlight ? uncovered(batch, flushedInFlight) : batch;
+      if (!left) return;
       if (failures >= retries) {
         failures = 0;
-        onError(err, { dropped: batch });
+        onError(err, { dropped: left });
         return;
       }
       failures++;
       // Under what was queued since: a newer value of the same key wins.
-      pending = deepMerge(batch, pending ?? {});
+      pending = deepMerge(left, pending ?? {});
       // The retry carries everything pending, so a debounce still waiting would only send it early.
       if (timer) { clearTimer(timer); timer = null; }
       due = false;
       retryTimer = setTimer(() => { retryTimer = null; send(); }, retryDelayMs(failures));
     }).then(() => {
       inFlight = false;
+      flushedInFlight = null;
       if (due) send();
     });
   }
@@ -82,7 +98,7 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
       const batch = pending;
       pending = null;
       failures = 0;
-      generation++;
+      if (inFlight) flushedInFlight = deepMerge(flushedInFlight ?? {}, structuredClone(batch));
       call(batch, { keepalive: true }).catch((err) => onError(err, { dropped: batch }));
     },
   };
