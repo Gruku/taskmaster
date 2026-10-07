@@ -198,6 +198,32 @@ test('flush sends a batch waiting for its retry, and does not retry it again', a
   assert.deepEqual(errors[0].dropped, { theme: 'light', ui: { a: 1 } });
 });
 
+test('a save that fails after flush sent newer values is not retried over them', async () => {
+  // The page survives its pagehide (bfcache): the older in-flight batch must never land after the flushed one.
+  const calls = [];
+  let rejectFirst;
+  const { t, writer, errors } = harness((p, opts) => {
+    calls.push([structuredClone(p), opts]);
+    if (calls.length === 1) return new Promise((_, no) => { rejectFirst = no; });
+    return Promise.resolve();
+  });
+  writer.queue({ theme: 'light', ui: { a: 1 } });
+  t.fire();                                        // save A is in flight
+  writer.queue({ theme: 'dark' });
+  writer.flush();                                  // sends B = { theme: 'dark' }
+  assert.deepEqual(calls[1], [{ theme: 'dark' }, { keepalive: true }]);
+  rejectFirst(new Error('PUT /api/viewer/prefs → 500'));
+  await settle();
+  for (let i = 0; i < 4; i++) { t.fire(); await settle(); }
+  assert.equal(calls.length, 2);                   // A is never sent again
+  assert.equal(errors.length, 1);                  // and is given up out loud
+  assert.deepEqual(errors[0].dropped, { theme: 'light', ui: { a: 1 } });
+  // A patch queued afterwards still goes out normally.
+  writer.queue({ card_density: 'compact' });
+  t.fire(); await settle();
+  assert.deepEqual(calls[2], [{ card_density: 'compact' }, { keepalive: false }]);
+});
+
 test('a regular save uses no keepalive', async () => {
   const calls = [];
   const { t, writer } = harness(async (p, opts) => { calls.push(opts); });

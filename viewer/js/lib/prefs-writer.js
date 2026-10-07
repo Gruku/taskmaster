@@ -25,6 +25,7 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
   let inFlight = false;
   let due = false;      // the debounce elapsed during a save; send as soon as that save ends
   let failures = 0;
+  let generation = 0;   // bumped by flush(): a batch sent before it is older than what flush sent
 
   function call(batch, opts) {
     try { return Promise.resolve(save(batch, opts)); } catch (e) { return Promise.reject(e); }
@@ -38,7 +39,13 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
     pending = null;
     due = false;
     inFlight = true;
+    const sentIn = generation;
     call(batch, { keepalive: false }).then(() => { failures = 0; }, (err) => {
+      // flush() sent newer values meanwhile: retrying this batch would land it over them.
+      if (sentIn !== generation) {
+        onError(err, { dropped: batch });
+        return;
+      }
       if (failures >= retries) {
         failures = 0;
         onError(err, { dropped: batch });
@@ -75,6 +82,7 @@ export function createPrefsWriter({ save, delayMs, retries = 3, retryDelayMs = (
       const batch = pending;
       pending = null;
       failures = 0;
+      generation++;
       call(batch, { keepalive: true }).catch((err) => onError(err, { dropped: batch }));
     },
   };
