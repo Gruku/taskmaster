@@ -349,8 +349,13 @@ const ALL_SCENES = [
   ['issues-board', { open: openIssues(), drive: openShelf, scope: '#screen-mount' }],
   ['issues-status', { open: openIssues(), drive: issuesView('Status'), scope: '#screen-mount' }],
   ['issues-list', { open: openIssues(), drive: issuesView('List'), scope: '#screen-mount' }],
-  ['issues-evidence', { open: openIssues(), scope: '#screen-mount', drive: async (p) => {
-    await p.locator('.issue-card[data-issue-id="ISS-001"] .issue-card__more, .issue-card:has-text("ISS-001") .issue-card__more').first().click();
+  // ISS-001's evidence runs past three lines: the shot is its clamped evidence with Show all showing (at 390 its column
+  // sits behind the Investigating tab).
+  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.LIST_ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
+    const iss = p.locator('.issue-card[data-issue-id="ISS-001"]');
+    if (!(await iss.isVisible())) await p.getByRole('tab', { name: /^Investigating/ }).click();
+    await iss.locator('.issue-card__more').waitFor({ state: 'visible' });
+    await iss.scrollIntoViewIfNeeded();
   } }],
   ['issues-long', { open: openIssues(), routes: listRoute('issues', F.LONG_ISSUES, 'issues'), fullPage: true, scope: '#screen-mount' }],
   ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LIST_BUGS), scope: '#screen-mount',
