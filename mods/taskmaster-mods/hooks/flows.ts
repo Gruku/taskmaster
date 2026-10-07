@@ -27,6 +27,11 @@ export type TmFlowDeps = {
   write: TmWriter
   actions: TmActions
   afterWrite: (taskId: string, outcome: 'done' | 'sent-back') => void
+  /**
+   * The task this session is bound to (tm: the session binding; demo: the seeded bound task), or null. The band's d and a
+   * act only on it (ruling F1): a task shown as inferred, or one the binding moved off, is refused, never looked up.
+   */
+  boundId: () => Promise<string | null>
   /** Which data the flows act on: demo never reaches the tm server (the viewer is only announced). Default tm. */
   source?: 'tm' | 'demo'
   /**
@@ -39,6 +44,7 @@ export type TmFlowDeps = {
 export type TmFlows = ReturnType<typeof createFlows>
 
 const PROMPT_REFUSED = 'taskmaster-mods: the prompt did not take the text; close the dialog and try again'
+const notBound = (id: string, what: string): string => `${id} is not this session's task: ${what} it from the review queue (1)`
 const UNAVAILABLE: TmHandoverSummary = { decisions: [], blockers: [], unavailable: true }
 
 export function createFlows(d: TmFlowDeps) {
@@ -76,19 +82,46 @@ export function createFlows(d: TmFlowDeps) {
       busy.delete(id)
     }
   }
+  // A write acts only while the row that asked for it is still up for that task: a press after the write landed or was
+  // refused, after a cancel, or on a row drawn before a refresh finds nothing armed and sends nothing (never twice).
+  const paneArmed = async (id: string, mode: TmCursor['mode']): Promise<boolean> => {
+    let armed = false
+    await d.write.cursor(c => {
+      armed = c.mode === mode && c.currentId === id
+      return c
+    })
+    return armed
+  }
+  const bandArmed = async (id: string): Promise<boolean> => {
+    let armed = false
+    await d.write.band(b => {
+      armed = b.confirmingId === id
+      return b
+    })
+    return armed
+  }
+  // A signed-off task leaves both the pane and the band: no confirm row on it stays up anywhere to be pressed again.
+  const signedOff = async (id: string): Promise<void> => {
+    await d.write.snapshot(s => (s === null ? s : afterDone(s, id)))
+    await d.write.cursor(c => (c.currentId === id ? { ...c, mode: 'card', refusal: '', currentId: '' } : c))
+    await d.write.band(b => (b.confirmingId === id || b.refusalId === id ? { confirmingId: '', refusal: '' } : b))
+    d.afterWrite(id, 'done')
+  }
+  const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
   const open = async (id: string, title: string): Promise<void> => {
     if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
   }
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
   }
+  const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
+    await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
+    await open(REVIEW, 'Review')
+    if (mode === 'note') await d.host.focus(REVIEW, 'note')
+  }
 
   return {
-    openReview: async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
-      await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
-      await open(REVIEW, 'Review')
-      if (mode === 'note') await d.host.focus(REVIEW, 'note')
-    },
+    openReview,
     openHandovers: async (): Promise<void> => {
       await d.write.pick('')
       await d.write.summaryOpen(() => '')
@@ -103,11 +136,11 @@ export function createFlows(d: TmFlowDeps) {
     },
     confirmDone: (id: string): Promise<void> =>
       once(id, async () => {
+        if (!(await paneArmed(id, 'confirm'))) return
         const out = await d.actions.done(id)
         if (out.ok) {
-          await d.write.snapshot(s => (s === null ? s : afterDone(s, id)))
-          await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', done: [...c.done, id] }))
-          d.afterWrite(id, 'done')
+          await d.write.cursor(c => ({ ...c, done: c.done.includes(id) ? c.done : [...c.done, id] }))
+          await signedOff(id)
           return
         }
         await d.write.cursor(c => ({ ...c, mode: 'card', refusal: out.refusal, currentId: id }))
@@ -118,9 +151,12 @@ export function createFlows(d: TmFlowDeps) {
     },
     sendBack: (id: string, note: string): Promise<void> =>
       once(id, async () => {
+        if (!(await paneArmed(id, 'note'))) return
         const out = await d.actions.backToAgent(id, note)
         if (!out.ok) {
           await d.write.cursor(c => ({ ...c, mode: 'card', refusal: out.refusal, currentId: id }))
+          // The Input is gone with the refusal: the prompt keeps the note so it is never lost (ruling F14).
+          if (note.trim() !== '') await fill(`Back to ${id}: ${note.trim()}`)
           return
         }
         await d.write.snapshot(s => (s === null ? s : afterSendBack(s, id)))
@@ -134,18 +170,33 @@ export function createFlows(d: TmFlowDeps) {
     },
     fill,
     bandAskDone: async (id: string): Promise<void> => {
+      if (!(await isBound(id))) {
+        await d.write.band(() => ({ confirmingId: '', refusal: notBound(id, 'sign off'), refusalId: id }))
+        return
+      }
       await d.write.band(() => ({ confirmingId: id, refusal: '' }))
+    },
+    bandSendBack: async (id: string): Promise<void> => {
+      if (!(await isBound(id))) {
+        await d.write.band(() => ({ confirmingId: '', refusal: notBound(id, 'send back'), refusalId: id }))
+        return
+      }
+      await d.write.band(() => ({ confirmingId: '', refusal: '' }))
+      await openReview(id, 'note')
     },
     bandCancel: async (): Promise<void> => {
       await d.write.band(() => ({ confirmingId: '', refusal: '' }))
     },
     bandConfirmDone: (id: string): Promise<void> =>
       once(id, async () => {
+        if (!(await bandArmed(id))) return
+        if (!(await isBound(id))) {
+          await d.write.band(() => ({ confirmingId: '', refusal: notBound(id, 'sign off'), refusalId: id }))
+          return
+        }
         const out = await d.actions.done(id)
         if (out.ok) {
-          await d.write.snapshot(s => (s === null ? s : afterDone(s, id)))
-          await d.write.band(() => ({ confirmingId: '', refusal: '' }))
-          d.afterWrite(id, 'done')
+          await signedOff(id)
           return
         }
         await d.write.band(() => ({ confirmingId: '', refusal: out.refusal, refusalId: id }))
