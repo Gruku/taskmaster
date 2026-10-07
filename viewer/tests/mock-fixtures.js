@@ -634,3 +634,13 @@ export function bugDetailMocks({ theme = 'dark' } = {}) {
     '/api/bugs/B-999': { status: 404, json: { ok: false, error: 'unknown bug B-999' } },
   };
 }
+
+// The API table that puts the Kanban (and the detail modal opened from its T-102 card) on screen with content.
+// Content loaded: `.card-task[data-task-id] > .link-row__link` on #/kanban; `.modal--detail .td-doc--embedded` in the modal.
+export function kanbanMocks({ theme = 'dark', board = BOARD } = {}) {
+  return {
+    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
+    '/api/board': board, '/api/backlog': board, '/api/bugs': [],
+    '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
+  };
+}

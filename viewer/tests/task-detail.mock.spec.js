@@ -31,7 +31,17 @@ async function board(page, { theme = 'dark', table = {} } = {}) {
     ...DETAILS, ...table,
   });
   await page.goto('/#/kanban');
+  await showCard(page, 'T-102');
   await expect(card(page, 'T-102')).toBeVisible();
+}
+
+// At phone width the Kanban shows one column behind the Columns tabs: select the tab of the column holding the card.
+async function showCard(page, id) {
+  if (await page.evaluate(() => innerWidth > 768)) return;
+  const sel = `.card-task[data-task-id="${id}"]`;
+  await page.locator(sel).waitFor({ state: 'attached' });
+  const panel = await page.locator(sel).evaluate((c) => c.closest('.kanban-col').id);
+  await page.locator(`[id="${panel}-tab"]`).click();
 }
 
 const card = (page, id) => page.locator(`.card-task[data-task-id="${id}"] > .link-row__link`);
@@ -40,6 +50,7 @@ const titleOf = (dialog) => dialog.locator('.modal-title');
 
 // Clicks the card and waits for the task's document (not the loading state) to be in the dialog.
 async function openCard(page, id) {
+  await showCard(page, id);
   await card(page, id).click();
   const dialog = detail(page);
   await expect(dialog).toBeVisible();

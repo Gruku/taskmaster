@@ -23,6 +23,7 @@ async function boot(page, { theme = 'dark' } = {}) {
     '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
   });
   await page.goto('/#/kanban');
+  await showCard(page, 'T-102');
   await expect(page.locator('.card-task[data-task-id="T-102"]')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
   await page.evaluate(async () => {
@@ -202,4 +203,13 @@ for (const theme of ['dark', 'light']) {
     expect(await axe(page, '#rows-host .link-row')).toEqual([]);
     expect(await axe(page, '#rows-host table')).toEqual([]);
   });
+}
+
+// At phone width the Kanban shows one column behind the Columns tabs: select the tab of the column holding the card.
+async function showCard(page, id) {
+  if (await page.evaluate(() => innerWidth > 768)) return;
+  const sel = `.card-task[data-task-id="${id}"]`;
+  await page.locator(sel).waitFor({ state: 'attached' });
+  const panel = await page.locator(sel).evaluate((c) => c.closest('.kanban-col').id);
+  await page.locator(`[id="${panel}-tab"]`).click();
 }

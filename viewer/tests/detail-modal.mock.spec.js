@@ -3,7 +3,7 @@
 // the task the same way every time: one marker size on first open, after a redraw and on the full page, no meta line.
 import { test, expect } from '@playwright/test';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, RICH_RELATED, LONG_TASK, LONG_RELATED, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, RICH_RELATED, LONG_TASK, LONG_RELATED, taskDetail, kanbanMocks } from './mock-fixtures.js';
 
 const DETAILS = {
   '/api/task/T-102/detail': taskDetail(DETAIL_TASK, 't1:fixture', RICH_RELATED),
@@ -17,12 +17,9 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 async function board(page, { theme = 'dark', table = {} } = {}) {
-  await mockApi(page, {
-    '/api/viewer/prefs': { theme, ui: {}, screens: {} },
-    '/api/board': BOARD, '/api/backlog': BOARD, '/api/bugs': [],
-    ...DETAILS, ...table,
-  });
+  await mockApi(page, { ...kanbanMocks({ theme }), ...DETAILS, ...table });
   await page.goto('/#/kanban');
+  await expect(page.locator('.card-task[data-task-id] > .link-row__link').first()).toBeVisible();
   await expect(card(page, 'T-102')).toBeVisible();
 }
 
@@ -131,6 +128,23 @@ test('a refused title stays in view with the body scrolled to the end', async ({
   await expect(page.getByRole('dialog', { name: LONG_TASK.title, exact: true })).toBeVisible();
   await inView();
   await expect(dialog.locator('.td-title-message')).toHaveCount(1);
+});
+
+test('a refused title leaves the body where the reader scrolled it and the editor open', async ({ page }) => {
+  await board(page, { table: { 'PATCH /api/tasks/T-105': { status: 409, json: { ok: false, error: 'Titles are frozen during review' } } } });
+  const dialog = await openCard(page, 'T-105');
+  const body = dialog.locator('.modal-body');
+  // Midway, not at the end: at the end the browser clamps scrollTop by however much the header grows while editing.
+  const before = await body.evaluate((el) => { el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) / 2); return el.scrollTop; });
+  expect(before).toBeGreaterThan(0);
+  const heading = titleOf(dialog);
+  await heading.locator('.ef-editable').click();
+  await heading.locator('input').fill('Renamed while frozen');
+  await heading.locator('input').press('Enter');
+  await expect(page.locator('.modal--detail > .td-title-message .if-error')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await body.evaluate((el) => el.scrollTop), 'scrollTop after the refusal').toBe(before);
+  await expect(heading.locator('input')).toHaveValue('Renamed while frozen');
 });
 
 test('the marker row keeps one size through a redraw and matches the full page', async ({ page }) => {

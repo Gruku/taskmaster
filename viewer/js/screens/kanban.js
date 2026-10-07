@@ -328,6 +328,7 @@ export async function mount(root, { store, api, prefs }) {
       swatch: index.get(ep.id)?.swatch,
     }));
     epicOptionsData = { epics: epicsForChips, counts: epicCounts };
+    if (epicOptions?.isOpen()) epicOptions.updateCounts?.(epicCounts);
     priRow.update(priorityChips(state.filters.priorities, countOpen(tasksInPhase, 'priority')));
     epicRow.update(epicChips({
       epics: epicsForChips,
@@ -499,13 +500,15 @@ export async function mount(root, { store, api, prefs }) {
     const card = a.closest('[data-task-id]');
     const key = a.closest('.kanban-col')?.dataset.key;
     if (card) return { taskId: card.dataset.taskId, focus: a.dataset.focus || a.closest('[data-focus]')?.dataset.focus, key };
+    // Any other control in a column (the no-match "Clear filters") is not tracked by itself: focus lands on that
+    // column's toggle (its tab on a phone). Clear filters removes itself when pressed, so nothing finer is needed today.
     return key ? { toggle: key } : null;
   }
 
   function refocus(t, phone) {
     if (!t) return;
     if (t.tab != null) return; // the tab is the same element across update(); it kept focus
-    const esc = (s) => (window.CSS?.escape ? CSS.escape(s) : s);
+    const esc = CSS.escape;
     let el = null;
     if (t.taskId) {
       const card = boardGrid.querySelector(`[data-task-id="${esc(t.taskId)}"]`);
@@ -602,6 +605,7 @@ export async function mount(root, { store, api, prefs }) {
   // The phone's sticky column head sits below the sticky topbar, whose height changes with its second row.
   const topbarEl = document.querySelector('.topbar');
   const topbarObs = new ResizeObserver(() => {
+    if (!topbarEl?.isConnected) return;
     document.documentElement.style.setProperty('--topbar-height', `${topbarEl.offsetHeight}px`);
   });
   if (topbarEl) topbarObs.observe(topbarEl);

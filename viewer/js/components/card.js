@@ -75,7 +75,7 @@ function depsWords(task) {
   // A blocked card's note already says how many block it ("Blocked by <n>").
   if (task.status === 'blocked' && blockersOf(task)) return '';
   if (typeof task.depends_on_unmet_count === 'number' && task.depends_on_unmet_count > 0) return `${task.depends_on_unmet_count} unmet`;
-  if (Array.isArray(task.depends_on) && task.depends_on.length) return `${task.depends_on.length} deps`;
+  if (Array.isArray(task.depends_on) && task.depends_on.length) { const n = task.depends_on.length; return `${n} ${n === 1 ? 'dep' : 'deps'}`; }
   return '';
 }
 

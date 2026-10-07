@@ -106,7 +106,14 @@ const bugsByTask = (page) => page.route('**/api/bugs*', (route) => {
 // ── How each scene is reached ──
 const openCard = (id) => async (page) => {
   await page.goto(`${BASE}/#/kanban`);
-  await page.locator(`.card-task[data-task-id="${id}"]`).click();
+  // At phone width (plan 3a) one column shows behind the Columns tabs: select the tab of the column holding the card.
+  const sel = `.card-task[data-task-id="${id}"]`;
+  await page.locator(sel).waitFor({ state: 'attached' });
+  if (await page.evaluate(() => innerWidth <= 768)) {
+    const panel = await page.locator(sel).evaluate((c) => c.closest('.kanban-col').id);
+    await page.locator(`[id="${panel}-tab"]`).click();
+  }
+  await page.locator(sel).click();
   await page.locator('.modal--detail .td-doc--embedded, .modal--detail .tm-empty[data-state="error"], .modal--detail .tm-empty').first().waitFor();
 };
 // Once the fonts have settled topbar row 2, a control is in it or parked behind Filters (row 2 too narrow for it).
@@ -129,6 +136,13 @@ const openCreate = async (page) => {
   await page.locator('#topbar-primary [aria-label="Add task"]').click();
   await page.locator('.modal--form').waitFor();
 };
+const openKanban = async (page) => {
+  await page.goto(`${BASE}/#/kanban`);
+  await page.locator('.card-task[data-task-id] > .link-row__link').first().waitFor();
+  await settleRow(page);
+};
+const LONG_BOARD = F.longBoard();
+const longKanban = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: LONG_BOARD }))));
 const openPage = (id) => async (page) => {
   await page.goto(`${BASE}/#/task/${id}`);
   await page.locator('.td-doc--page').waitFor();
@@ -192,6 +206,44 @@ const ALL_SCENES = [
   ['detail-edit-stacked', { open: openCard('T-102'), drive: async (p) => {
     await p.locator('.modal--detail [data-action="edit"]').click();
     await p.locator('.modal--form').waitFor();
+  } }],
+  // Plan 3a: the Kanban itself (kanbanMocks' board, or longBoard() routed over it) and the detail modal's refused title.
+  ['kanban-board', { open: openKanban, scope: '#screen-mount' }],
+  // At phone width one column shows behind the Columns tabs and there is no collapse control: skipped there, said so.
+  ['kanban-collapsed', { open: openKanban, scope: '#screen-mount', skipAt: { m: 'no collapse control at phone width (columns sit behind tabs)' },
+    drive: async (p) => { await p.locator('.kanban-col button[aria-label^="Collapse"]').first().click(); } }],
+  ['kanban-long', { open: openKanban, routes: longKanban, scope: 'body' }],
+  ['kanban-epic-more', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.kanban-filters__epic .overflow-more').click();
+    await p.locator('.popover').first().waitFor();
+  } }],
+  ['kanban-epic-options', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.epic-options-btn').click();
+    await p.locator('.epic-options').waitFor();
+  } }],
+  ['kanban-archived-phases', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.phase-strip .phase-archived').click();
+    await p.locator('.phase-archived__menu').waitFor();
+  } }],
+  ['kanban-filters', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await settleRow(p);
+    if (await filters(p).isVisible()) {
+      await filters(p).click();
+      await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+    }
+  } }],
+  ['kanban-empty', { open: openKanban, scope: '#screen-mount', drive: async (p) => {
+    await (await topbarControl(p, '[data-global-search]')).fill('zzzz');
+    await p.locator('#screen-mount .card-task').first().waitFor({ state: 'detached' });
+  } }],
+  ['detail-refused-title', { open: openCard('T-105'), routes: (p) => p.route('**/api/tasks/T-105', (r) => (r.request().method() === 'PATCH'
+    ? r.fulfill({ status: 409, json: { ok: false, error: 'Titles are frozen during review' } }) : r.fallback())), drive: async (p) => {
+    const dialog = p.locator('.modal--detail');
+    await dialog.locator('.modal-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await dialog.locator('.modal-title .ef-editable').click();
+    await dialog.locator('.modal-title input').fill('Renamed while frozen');
+    await dialog.locator('.modal-title input').press('Enter');
+    await p.locator('.modal--detail > .td-title-message').waitFor();
   } }],
   ['create-untouched', { open: openCreate }],
   ['create-validation', { open: openCreate, drive: async (p) => {
@@ -404,6 +456,7 @@ try {
     for (const [vk, w, h] of VIEWPORTS) {
       for (const [name, scene] of SCENES) {
         const key = `${name}.${theme}.${vk}`;
+        if (scene.skipAt?.[vk]) { console.log(`${key} skipped: ${scene.skipAt[vk]}`); continue; }
         const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, colorScheme: theme,
           reducedMotion: 'reduce', serviceWorkers: 'block' });
         await ctx.addInitScript((t) => { try { localStorage.setItem('tm.theme', t); } catch { /* storage unavailable */ } }, theme);
