@@ -89,6 +89,27 @@ test('the reason is a tag, not italics', async ({ page }) => {
   expect(await reason.evaluate((el) => getComputedStyle(el).fontStyle)).toBe('normal');
 });
 
+// Final review: a bare "P1" read as a priority code — priority is a shape + word marker, the phase says it is one.
+for (const width of [1440, 390]) {
+  test(`every row shows priority as a shape and a word, never a bare code (${width})`, async ({ page }) => {
+    await boot(page, { width });
+    const rows = await page.locator('.arch-row').evaluateAll((els) => els.map((r) => ({
+      shape: r.querySelector('.marker .marker__shape')?.textContent.trim() || '',
+      word: r.querySelector('.marker .marker__word')?.textContent.trim() || '',
+      bare: [...r.querySelectorAll('*')].some((e) => e.children.length === 0 && /^P\d$/.test(e.textContent.trim())),
+      wordSize: parseFloat(getComputedStyle(r.querySelector('.marker .marker__word') || r).fontSize),
+      idSize: parseFloat(getComputedStyle(r.querySelector('.arch-id')).fontSize),
+    })));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r.shape).not.toBe('');
+      expect(r.word).toMatch(/^(Critical|High|Medium|Low)$/);
+      expect(r.bare).toBe(false);
+      expect(r.wordSize).toBeLessThanOrEqual(r.idSize + 2);
+    }
+  });
+}
+
 test('a board redraw keeps focus on the focused row', async ({ page }) => {
   await boot(page);
   const third = page.locator('.arch-row').nth(2);

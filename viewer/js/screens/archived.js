@@ -6,6 +6,7 @@ import { pluralize } from '../util/pluralize.js';
 import { linkRow } from '../components/link-row.js';
 import { stateBlock } from '../components/empty-state.js';
 import { truncate } from '../lib/text.js';
+import { priorityMarker } from '../components/status.js';
 
 export const meta = { title: 'Archived', icon: '⌫', sidebarKey: 'archived' };
 
@@ -59,7 +60,8 @@ function archivedRow(t) {
     href: `#/task/${encodeURIComponent(t.id)}`,
     name,
     content: [
-      t.phase ? span('arch-phase', String(t.phase)) : null,
+      t.priority ? priorityMarker(t.priority) : null,
+      t.phase ? span('arch-phase', `Phase ${t.phase}`) : null,
       reason ? span('arch-reason', reason.charAt(0).toUpperCase() + reason.slice(1)) : null,
     ].filter(Boolean),
     className: 'arch-row',
