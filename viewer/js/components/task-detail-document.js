@@ -127,11 +127,13 @@ const SHUT_TOGGLE = 'button[aria-expanded="false"][data-focus]:not([aria-haspopu
 // something a re-mounted document can find again. Returns a function that re-opens the same disclosures under `next`,
 // says the same refusals beside the same fields, puts focus on the same thing, and says whether focus could be restored.
 // A refusal is said again only while the field still holds the stored value it was refused against (`data-stored`):
-// once another writer has changed that field, the reason was about a value that is gone.
+// once another writer has changed that field, the reason was about a value that is gone. A field that had just saved
+// says "Saved" again in its new self, since the redraw a save brings would otherwise take the word before it is heard.
 export function rememberView(scope) {
   const open = scope ? [...scope.querySelectorAll(OPEN_TOGGLE)].map((b) => b.dataset.focus) : [];
   const said = scope ? [...scope.querySelectorAll('.if-wrap[data-key]')]
     .map((w) => [w.dataset.key, w.refusal?.(), w.dataset.stored]).filter(([, text]) => text) : [];
+  const saved = scope ? [...scope.querySelectorAll('.if-wrap[data-key]')].filter((w) => w.saved?.()).map((w) => w.dataset.key) : [];
   const active = scope?.ownerDocument.activeElement;
   const focused = !!active && scope.contains(active) && active !== scope;
   const key = focused ? active.closest('.if-wrap')?.dataset.key : null;
@@ -146,6 +148,7 @@ export function rememberView(scope) {
     for (const [field, text, stored] of said) {
       find('.if-wrap', (w) => w.dataset.key === field && w.dataset.stored === stored)?.sayRefusal?.(text);
     }
+    for (const field of saved) find('.if-wrap', (w) => w.dataset.key === field)?.saySaved?.();
     if (!focused) return false;
     const target = (key && find('.if-wrap', (w) => w.dataset.key === key)?.querySelector('[tabindex="0"]'))
       || (key && find('[data-focus]', (e) => e.dataset.focus === `edit:${key}`))

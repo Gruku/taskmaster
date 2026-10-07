@@ -752,3 +752,30 @@ for (const theme of ['dark', 'light']) {
     await hoverEach(page, rail, '.td-doc--page [data-test="rail"]');
   });
 }
+
+// The save ends the edit and the task is read again, which draws the title's field anew: the new one says "Saved".
+for (const where of ['dialog', 'page']) {
+  test(`${where}: after a title save goes through, the title drawn anew says "Saved"`, async ({ page }) => {
+    await board(page, { table: { 'PATCH /api/tasks/T-102': { json: { ok: true } } } });
+    let heading;
+    if (where === 'page') {
+      await page.goto('/#/task/T-102');
+      await expect(page.locator('.td-doc--page')).toBeVisible();
+      heading = page.locator('h1.td-title');
+    } else {
+      heading = titleOf(await openCard(page, 'T-102'));
+    }
+    const said = page.locator('.td-title-message .if-said');
+    await expect(said).toHaveCount(1);
+    const before = await said.elementHandle();
+    await heading.locator('.ef-editable').click();
+    await heading.locator('input').fill('Re-skin the Kanban cards and column');
+    const reread = page.waitForResponse('**/api/task/T-102/detail');
+    await heading.locator('input').press('Enter');
+    await reread;
+    await expect.poll(() => before.evaluate((el) => el.isConnected), 'the field was drawn anew').toBe(false);
+    await expect(said).toHaveCount(1);
+    await expect(said).toHaveText('Saved');
+    await expect(said).toHaveAttribute('role', 'status');
+  });
+}

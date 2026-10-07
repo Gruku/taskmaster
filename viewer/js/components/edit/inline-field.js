@@ -8,6 +8,8 @@ import { describeWriteError, lostRace } from './write-errors.js';
 import { sameValue } from './same-value.js';
 
 const DEBOUNCE_MS = 600;
+const TICK_MS = 800;   // how long the success tick, and the word "Saved", stay
+const SAY_MS = 100;    // a field drawn anew says a carried "Saved" this long after it mounts, so the change is heard
 let seq = 0;
 
 export function mountInlineField(parent, {
@@ -36,6 +38,7 @@ export function mountInlineField(parent, {
     dismissConflict?.();
     if (saveTimer) clearTimeout(saveTimer);
     clearTimeout(tickTimer);
+    clearTimeout(sayTimer);
     if (mode === 'edit') { mode = 'read'; store.endEdit(currentEntity.id); }
   };
   parent.appendChild(wrap);
@@ -59,6 +62,19 @@ export function mountInlineField(parent, {
   wrap.sayRefusal = (text) => {
     if (mode !== 'read' || !text) return;
     setStatus('error', text, { quiet: true });
+  };
+  // A save that goes through ends the edit, and the document drawn again replaces this field before "Saved" can be
+  // heard; the new field says it, a moment after it mounts (words present at mount are not announced).
+  let sayTimer = null;
+  wrap.saved = () => mode === 'read' && said.textContent === 'Saved';
+  wrap.saySaved = () => {
+    if (mode !== 'read') return;
+    clearTimeout(sayTimer);
+    sayTimer = setTimeout(() => {
+      if (disposed || mode !== 'read') return;
+      setStatus('ok');
+      tickTimer = setTimeout(() => setStatus(''), TICK_MS);
+    }, SAY_MS);
   };
   let editor = null;    // the open editor, as the renderer returned it
   let control = null;   // the focusable control of the open editor
@@ -156,31 +172,32 @@ export function mountInlineField(parent, {
 
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(flushSave, DEBOUNCE_MS);
+    saveTimer = setTimeout(() => flushSave({ auto: true }), DEBOUNCE_MS);
   }
 
-  async function flushSave() {
+  // `auto`: the debounced save at a pause in typing, which says only "Saved"; a commit also says "Saving…".
+  async function flushSave({ auto = false } = {}) {
     if (disposed || conflicted) return false;
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     // A commit during autosave must wait and then drain the newest draft. Do
     // not drop it, close the editor early, or issue concurrent stale writes.
     if (inFlight) {
       if (!await inFlight || disposed) return false;
-      return flushSave();
+      return flushSave({ auto });
     }
     const v = pendingValue;
     if (sameValue(v, currentEntity[fieldKey])) return true;
-    const saving = saveValue(v);
+    const saving = saveValue(v, { auto });
     inFlight = saving;
     let saved;
     try { saved = await saving; }
     finally { if (inFlight === saving) inFlight = null; }
     if (!saved || disposed) return false;
-    return sameValue(v, pendingValue) || await flushSave();
+    return sameValue(v, pendingValue) || await flushSave({ auto });
   }
 
-  async function saveValue(v) {
-    setStatus('saving');
+  async function saveValue(v, { auto = false } = {}) {
+    setStatus('saving', undefined, { say: !auto });
     try {
       const result = await onSave(v);
       if (result && result.error) {
@@ -189,7 +206,7 @@ export function mountInlineField(parent, {
       }
       currentEntity[fieldKey] = v;
       setStatus('ok');
-      tickTimer = setTimeout(() => setStatus(''), 800);
+      tickTimer = setTimeout(() => setStatus(''), TICK_MS);
       return true;
     } catch (e) {
       // Only a 409 that names the revision it lost to is a conflict; any other is the server refusing the write,
@@ -241,14 +258,15 @@ export function mountInlineField(parent, {
   }
 
   // `quiet` says it without announcing it: the live region is off before the words land.
-  function setStatus(kind, msg, { quiet = false } = {}) {
+  // `say: false` shows the glyph without the words (an autosave's "Saving…").
+  function setStatus(kind, msg, { quiet = false, say = true } = {}) {
     clearTimeout(tickTimer);
     if (quiet) message.setAttribute('aria-live', 'off');
     else message.removeAttribute('aria-live');
     status.replaceChildren();
     status.className = 'if-status';
     showMessage(kind === 'error' ? (msg || 'Save failed') : '');
-    said.textContent = kind === 'saving' ? 'Saving…' : kind === 'ok' ? 'Saved' : '';
+    said.textContent = !say ? '' : kind === 'saving' ? 'Saving…' : kind === 'ok' ? 'Saved' : '';
     if (!kind) return;
     if (kind === 'saving')  status.appendChild(h('span', { class: 'if-status-saving' }, '●'));
     if (kind === 'ok')      status.appendChild(h('span', { class: 'if-status-ok' }, '✓'));
