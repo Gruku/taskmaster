@@ -275,9 +275,11 @@
     padding-top: var(--space-xs);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
-  /* Filter bar: each group takes the full line, so chip-row parks what does not fit and the page never scrolls sideways. */
-  .kanban-filters__priority,
-  .kanban-filters__epic { flex: 1 1 100%; min-width: 0; }
+  /* Filter bar: priority takes the full line; the epic group shares its line with Epic options. Each chip-row parks
+     what does not fit behind More, so the page never scrolls sideways. */
+  .kanban-filters__priority { flex: 1 1 100%; min-width: 0; }
+  .kanban-filters__epic { flex: 1 1 0; min-width: 0; }
+  .kanban-filters .epic-options-btn { flex: none; }
   /* Scoped so they outrank .btn--sm's 24px: phone touch targets. */
   .kanban-filters .overflow-more,
   .kanban-filters .epic-options-btn,

@@ -297,6 +297,26 @@ test('the epic row is one line with More at 1440 and at 390', async ({ page }) =
   }
 });
 
+test('at 390 Epic options sits on the epic line, not on a row of its own', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await expect(page.locator('.kanban-filters__epic .overflow-more')).toBeVisible();
+  expect(await visibleTops(rowChips(page, 'epic'))).toHaveLength(1);
+  const m = await page.evaluate(() => {
+    const box = (s) => document.querySelector(s).getBoundingClientRect();
+    const group = box('.kanban-filters__epic');
+    const btn = box('.kanban-filters .epic-options-btn');
+    const more = box('.kanban-filters__epic .overflow-more');
+    const bar = box('.kanban-filters');
+    return { groupTop: Math.round(group.top), btnTop: Math.round(btn.top), btnRight: btn.right, moreRight: more.right,
+      groupRight: group.right, barRight: bar.right, vw: innerWidth, sideways: document.documentElement.scrollWidth - innerWidth };
+  });
+  expect(m.btnTop, 'Epic options top = epic group top').toBe(m.groupTop);
+  expect(m.moreRight, 'More inside its group').toBeLessThanOrEqual(m.groupRight + 0.5);
+  expect(m.btnRight, 'Epic options inside the filter box').toBeLessThanOrEqual(m.barRight + 0.5);
+  expect(m.btnRight).toBeLessThanOrEqual(m.vw);
+  expect(m.sideways).toBe(0);
+});
+
 test('an epic\'s count is the same on its chip and in Epic options, and the label says what it counts', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
   // A chip that does not fit is parked in the Epic row's More list.
