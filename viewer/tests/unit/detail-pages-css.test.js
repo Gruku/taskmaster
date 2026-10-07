@@ -1,7 +1,7 @@
 // User intent: the issue and bug detail pages keep only template rules in detail-pages.css — no legacy selector survives anywhere, and the file is enforced.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,8 +28,9 @@ test('detail-pages.css holds no legacy detail selector, and the list screens hol
 test('detail-pages.css is held to the style rules', () => {
   // Read as text: importing the style-rules test would register its tests a second time here.
   const rules = readFileSync(join(ROOT, 'tests', 'unit', 'style-rules.test.js'), 'utf8');
-  const start = rules.indexOf('export const ENFORCED');
-  assert.ok(start >= 0 && rules.slice(start, rules.indexOf('];', start)).includes("'screens/detail-pages.css'"));
+  // The style rules run over every file under viewer/css, this one included.
+  assert.ok(rules.includes("test('every CSS file satisfies every style rule'"));
+  assert.ok(existsSync(join(CSS_DIR, 'screens', 'detail-pages.css')));
 });
 
 test('the dead italic body rule is gone everywhere', () => {
