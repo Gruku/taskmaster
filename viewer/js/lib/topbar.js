@@ -13,19 +13,27 @@ const rows = new WeakMap();   // #topbar-actions → its overflowRow, installed 
 function topbarRow(root) {
   let row = rows.get(root);
   if (row) return row;
-  row = overflowRow(root, { moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search') });
+  let mo = null;
+  // Every layout writes each child's flex-shrink while it measures; those writes are its own, not news.
+  row = overflowRow(root, {
+    moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search'),
+    onLayout: () => mo?.takeRecords(),
+  });
   rows.set(root, row);
-  // A count or label rewritten in place changes its control's width, which the row does not watch. Its own moves
-  // (children of the row itself), Filters' count and the open popover are left out, or a layout would retrigger itself.
+  // A count or label rewritten in place, or a control unhidden in place (hidden, a class, a style), changes its
+  // control's width, which the row does not watch. Its own moves (children of the row itself), the row's and Filters'
+  // own attributes, Filters' count and the open popover are left out, or a layout would retrigger itself; so are the
+  // writes of every layout itself (dropped in onLayout above).
   const view = root.ownerDocument.defaultView;
   if (view.MutationObserver && view.requestAnimationFrame) {
     let frame = 0;
     const grown = (r) => r.target !== root && !row.more.contains(r.target)
       && !(r.target.nodeType === 1 ? r.target : r.target.parentElement)?.closest('.popover');
-    new view.MutationObserver((records) => {
+    mo = new view.MutationObserver((records) => {
       if (frame || !records.some(grown)) return;
       frame = view.requestAnimationFrame(() => { frame = 0; row.relayout(); });
-    }).observe(root, { childList: true, characterData: true, subtree: true });
+    });
+    mo.observe(root, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
   }
   return row;
 }
@@ -171,7 +179,7 @@ export function tmSegmented(options, { value, onChange, icon = false } = {}) {
 const ACTION_CLASS = { primary: 'btn btn--primary', ghost: 'btn btn--ghost', icon: 'btn btn--ghost btn--icon' };
 
 // icon: an ICONS name (an unknown name throws). variant: 'primary' | 'ghost' | 'icon' | undefined (secondary).
-export function tmAction({ icon: glyph, label, variant, title, onClick, href, disabled = false } = {}) {
+export function tmAction({ icon: glyph, label, variant, title, onClick, href } = {}) {
   const el = href ? document.createElement('a') : document.createElement('button');
   el.className = ACTION_CLASS[variant] || 'btn btn--secondary';
   if (!href) el.type = 'button';
@@ -184,13 +192,6 @@ export function tmAction({ icon: glyph, label, variant, title, onClick, href, di
     const t = document.createElement('span');
     t.textContent = label;
     el.appendChild(t);
-  }
-  if (disabled) {
-    el.disabled = true;
-    el.setAttribute('aria-disabled', 'true');
-  } else {
-    el.disabled = false;
-    el.removeAttribute('aria-disabled');
   }
   if (onClick) el.addEventListener('click', onClick);
   return el;

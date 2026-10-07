@@ -175,3 +175,30 @@ test('the modal has no meta line; the page keeps it', async ({ page }) => {
   await expect(page.locator('#screen-mount h1.td-title')).toBeVisible();
   await expect(page.locator('#screen-mount [data-test="task-id"]')).toHaveCount(1);
 });
+
+// A button the code hides with the `hidden` attribute is gone, whatever display its .btn class gives it.
+test('Edit is not shown while the task loads, and appears with the task; any hidden .btn is not drawn', async ({ page }) => {
+  await board(page);
+  let release;
+  const held = new Promise((ok) => { release = ok; });
+  await page.route('**/api/task/T-102/detail', async (route) => { await held; await route.fallback(); });
+  await card(page, 'T-102').click();
+  const dialog = detail(page);
+  await expect(dialog.locator('[aria-busy="true"], .state-block').first()).toBeVisible();
+  const edit = dialog.locator('[data-action="edit"]');
+  await expect(edit).toHaveAttribute('hidden', '');
+  await expect(edit).toBeHidden();
+  release();
+  await expect(dialog.locator('.td-doc--embedded')).toBeVisible();
+  await expect(edit).toBeVisible();
+  const display = await page.evaluate(() => {
+    const b = document.createElement('button');
+    b.className = 'btn btn--primary btn--icon btn--sm';
+    b.hidden = true;
+    document.body.append(b);
+    const d = getComputedStyle(b).display;
+    b.remove();
+    return d;
+  });
+  expect(display).toBe('none');
+});

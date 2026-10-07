@@ -300,3 +300,64 @@ for (const theme of ['dark', 'light']) {
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+// A caller's onLayout may widen More again and again (a count, then "· n on"); each widening gets its own pass. A fresh
+// row at each width across one chip's width, so the room left beside More takes every value.
+test('More that its onLayout widens on its first two calls still ends inside the row', async ({ page }) => {
+  await mount(page);
+  const bad = await page.evaluate(async (labels) => {
+    const { overflowRow } = await import('/js/components/overflow-row.js');
+    const out = [];
+    for (let w = 540; w <= 660; w += 2) {
+      const row = document.createElement('div');
+      row.className = 'chip-row__chips';
+      for (const label of labels) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.textContent = label;
+        row.append(chip);
+      }
+      const box = document.createElement('div');
+      box.style.width = `${w}px`;
+      box.append(row);
+      document.getElementById('screen-mount').append(box);
+      let calls = 0;
+      const ov = overflowRow(row, {
+        onLayout() {
+          calls += 1;
+          if (calls <= 2) row.querySelector('.overflow-more__label').append(' (more)');
+        },
+      });
+      await new Promise((done) => { const ro = new ResizeObserver(() => { ro.disconnect(); done(); }); ro.observe(row); });
+      const label = row.querySelector('.overflow-more__label').textContent;
+      if (label !== 'More (more) (more)') out.push(`${w}: label ${label}`);
+      if (row.scrollWidth > row.clientWidth) out.push(`${w}: overflows by ${row.scrollWidth - row.clientWidth}`);
+      ov.destroy();
+      box.remove();
+    }
+    return out;
+  }, LABELS);
+  expect(bad).toEqual([]);
+});
+
+test('a long press outside More still lands on the chip it was released on', async ({ page }) => {
+  await mount(page);
+  await more(page).click();
+  await expect(pop(page)).toBeVisible();
+  // A change waits on More; it must not move the chip under a press that is still held.
+  await addAhead(page);
+  const first = page.locator('.chip[data-value="e1"]');
+  await expect(first).toHaveAttribute('aria-pressed', 'false');
+  const box = await first.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(pop(page)).toHaveCount(0);
+  await page.waitForTimeout(5000);
+  expect(await first.boundingBox()).toEqual(box);
+  await page.mouse.up();
+  await expect(first).toHaveAttribute('aria-pressed', 'true');
+  await expect(pop(page)).toHaveCount(0);
+  expect(await page.evaluate(() => window.__toggles)).toEqual(['e1']);
+  await expect(rowChips(page).first()).toHaveAttribute('data-value', 'new');
+});

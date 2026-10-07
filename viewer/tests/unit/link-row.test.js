@@ -10,6 +10,7 @@ globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 
 const { linkRow, isInteractive } = await import('../../js/components/link-row.js');
+const { truncate } = await import('../../js/lib/text.js');
 
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 
@@ -112,18 +113,34 @@ test('a row without a name is refused: the link\'s text is its accessible name',
   }
 });
 
-// The link's ::after covers the row, so the pointer never reaches a cut element's own title: the link carries it.
-test('the link carries the full text of what is cut inside it: the titles of name and content, in order', () => {
-  const name = el('<span class="truncate" title="T-102 · Re-skin the Kanban cards and columns">T-102 · Re-skin the Kanban cards and columns</span>');
+// The link's ::after covers the row, so the pointer never reaches a cut element's own title: the row carries it. On the
+// link it would be read a second time, as the link's description; the controls' empty title keeps them from inheriting it.
+test('the row carries the full text of what is cut inside it: the titles of name and content, in order', () => {
+  const name = truncate('T-102 · Re-skin the Kanban cards and columns');
   const meta = el('<span><span class="truncate" title="Epic: Viewer re-skin">Epic: Viewer re-skin</span></span>');
-  const row = linkRow({ href: '#/task/T-102', name, content: [meta, el('<span>In progress</span>')] });
-  assert.equal(row.querySelector('a').title, 'T-102 · Re-skin the Kanban cards and columns\nEpic: Viewer re-skin');
+  const copy = el('<button type="button">Copy id</button>');
+  const row = linkRow({ href: '#/task/T-102', name, content: [meta, el('<span>In progress</span>')], controls: [copy] });
+  assert.equal(row.title, 'T-102 · Re-skin the Kanban cards and columns\nEpic: Viewer re-skin');
+  assert.equal(row.querySelector('a.link-row__link').hasAttribute('title'), false, 'the link is named once, by its text');
+  const controls = row.querySelector('.link-row__controls');
+  assert.equal(controls.hasAttribute('title'), true);
+  assert.equal(controls.title, '');
 });
 
-test('an explicit title wins; with nothing cut and no title the link has none', () => {
+test('a truncate()d content node alone gives the row its title', () => {
+  const row = linkRow({ href: '#/task/T-1', name: 'T-1', content: [truncate('A long title in the content')] });
+  assert.equal(row.title, 'A long title in the content');
+  assert.equal(row.querySelector('a').hasAttribute('title'), false);
+});
+
+test('an explicit title wins; with nothing cut and no title neither the row nor the link has one', () => {
   const name = el('<span title="cut">cut</span>');
-  assert.equal(linkRow({ href: '#/task/T-1', name, title: 'Full words' }).querySelector('a').title, 'Full words');
-  assert.equal(linkRow({ href: '#/task/T-1', name: 'Plain' }).querySelector('a').hasAttribute('title'), false);
+  const titled = linkRow({ href: '#/task/T-1', name, title: 'Full words' });
+  assert.equal(titled.title, 'Full words');
+  assert.equal(titled.querySelector('a').hasAttribute('title'), false);
+  const plain = linkRow({ href: '#/task/T-1', name: 'Plain' });
+  assert.equal(plain.hasAttribute('title'), false);
+  assert.equal(plain.querySelector('a').hasAttribute('title'), false);
 });
 
 test('href is used verbatim', () => {

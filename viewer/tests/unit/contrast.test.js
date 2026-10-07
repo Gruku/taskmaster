@@ -211,3 +211,8 @@ test('rendered markdown: body, quote, link and table-head text are AA on every g
     [BOTH, '--foreground-bold', ['--bg-recessed']],      // code, pre, table head
   ]);
 });
+
+// The unsorted column's glyph is the only sign a header sorts; it is a shape, so 3:1 on every ground a table sits on.
+test('the unsorted-column glyph reaches 3:1 on the page, a card and a modal, in both themes', () => {
+  assertNonText([[BOTH, '--foreground-subtle', ['--bg-page', '--card-bg', '--overlay-surface']]]);
+});

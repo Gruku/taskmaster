@@ -25,12 +25,14 @@ test('the root is a link row: no role, no tabindex, no style; it carries the tas
   assert.ok(card({}, { density: 'minimal' }).matches('div.card-task.link-row.minimal'));
 });
 
-test('the link opens the task and is named "<id> <title>", with the full title in its title', () => {
-  const a = link(card());
+test('the link opens the task and is named "<id> <title>"; the card carries the full title in its title', () => {
+  const el = card();
+  const a = link(el);
   assert.equal(a.getAttribute('href'), '#/task/T-102');
   assert.equal(a.textContent.replace(/\s+/g, ' ').trim(), 'T-102 Re-skin the board');
   assert.equal(a.querySelector('.card-sr').textContent, 'T-102 ');
-  assert.equal(a.title.split('\n')[0], 'Re-skin the board');
+  assert.equal(el.title.split('\n')[0], 'Re-skin the board');
+  assert.equal(a.hasAttribute('title'), false);
   assert.equal(a.dataset.focus, 'link');
   assert.equal(a.querySelector('a, button, input, [tabindex]'), null);
 });
@@ -122,13 +124,14 @@ test('the spec review is a marker word', () => {
   assert.deepEqual(words('fail'), ['Spec failed']);
 });
 
-test('the link carries the titles its hit area hides: the full title, the epic name and the age\'s date', () => {
+test('the card carries the titles its link\'s hit area hides: the full title, the epic name and the age\'s date', () => {
   const long = 'An epic name long enough to be cut on any card in any column';
   const el = renderCard({
     task: { ...TASK, epic: 'big', started: new Date(NOW - 5 * 86_400_000).toISOString(), tracker_id: 'linear-cm-eng-42' },
     epicIndex: new Map([['big', { name: long, swatch: 2 }]]), now: NOW,
   });
-  const lines = link(el).title.split('\n');
+  const lines = el.title.split('\n');
+  assert.equal(link(el).hasAttribute('title'), false);
   assert.equal(lines[0], 'Re-skin the board');
   assert.ok(lines.includes(long), lines.join(' | '));
   assert.ok(lines.includes(el.querySelector('.card-age').title), lines.join(' | '));

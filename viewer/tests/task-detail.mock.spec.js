@@ -357,6 +357,47 @@ test('a title save that goes through moves nothing below the heading', async ({ 
   await expect(dialog.locator('.td-title-message')).toBeHidden();
 });
 
+// The page twin: there the title's message sits last in the header, a column with a gap. The off-screen "Saving…" and
+// "Saved" words must not open that gap either.
+test('on the full page, a title save that goes through moves nothing below the heading', async ({ page }) => {
+  await board(page);
+  await page.route('**/api/tasks/T-102', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/#/task/T-102');
+  await expect(page.locator('.td-doc--page')).toBeVisible();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
+  const heading = page.locator('h1.td-title');
+  await page.evaluate(() => {
+    window.__tops = { read: new Set(), edit: new Set() };
+    const sample = () => {
+      const head = document.querySelector('.td-doc--page .td-head');
+      const next = head?.nextElementSibling;
+      const editing = !!head?.querySelector('h1.td-title input');
+      if (next) window.__tops[editing ? 'edit' : 'read'].add(next.getBoundingClientRect().top);
+      window.__sampling = requestAnimationFrame(sample);
+    };
+    sample();
+  });
+  await heading.locator('.ef-editable').click();
+  await heading.locator('input').fill('Re-skin the Kanban cards and column');
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+  await heading.locator('input').press('Enter');
+  await expect(heading.locator('.if-status-saving'), 'saving is shown beside the title').toHaveCount(1);
+  await expect(page.locator('.td-head .if-said')).toHaveText('Saving…');
+  // Past the save, the redraw it brings and any 800 ms tick that clears "Saved".
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1000)));
+  const tops = await page.evaluate(() => {
+    cancelAnimationFrame(window.__sampling);
+    return { read: [...window.__tops.read], edit: [...window.__tops.edit] };
+  });
+  expect(tops.read, 'reading: what follows the header never moved').toHaveLength(1);
+  expect(tops.edit, 'editing and saving: what follows the header never moved').toHaveLength(1);
+  await expect(page.locator('.td-title-message')).toBeHidden();
+});
+
 // The browser blurs the title's input as Escape takes it away, and a text field commits on blur.
 test('Escape on the title writes nothing: the cancelled draft is not saved by the blur of the closing input', async ({ page }) => {
   const sent = [];
@@ -709,5 +750,32 @@ for (const theme of ['dark', 'light']) {
     const rail = page.locator('.td-doc--page [data-test="rail"]');
     await expect(rail).toBeVisible();
     await hoverEach(page, rail, '.td-doc--page [data-test="rail"]');
+  });
+}
+
+// The save ends the edit and the task is read again, which draws the title's field anew: the new one says "Saved".
+for (const where of ['dialog', 'page']) {
+  test(`${where}: after a title save goes through, the title drawn anew says "Saved"`, async ({ page }) => {
+    await board(page, { table: { 'PATCH /api/tasks/T-102': { json: { ok: true } } } });
+    let heading;
+    if (where === 'page') {
+      await page.goto('/#/task/T-102');
+      await expect(page.locator('.td-doc--page')).toBeVisible();
+      heading = page.locator('h1.td-title');
+    } else {
+      heading = titleOf(await openCard(page, 'T-102'));
+    }
+    const said = page.locator('.td-title-message .if-said');
+    await expect(said).toHaveCount(1);
+    const before = await said.elementHandle();
+    await heading.locator('.ef-editable').click();
+    await heading.locator('input').fill('Re-skin the Kanban cards and column');
+    const reread = page.waitForResponse('**/api/task/T-102/detail');
+    await heading.locator('input').press('Enter');
+    await reread;
+    await expect.poll(() => before.evaluate((el) => el.isConnected), 'the field was drawn anew').toBe(false);
+    await expect(said).toHaveCount(1);
+    await expect(said).toHaveText('Saved');
+    await expect(said).toHaveAttribute('role', 'status');
   });
 }
