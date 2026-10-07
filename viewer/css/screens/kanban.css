@@ -29,6 +29,11 @@
 .kanban-filters__epic { flex: 1 1 240px; min-width: 240px; }
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
+/* Epic chips are counted at a short basis (the overflow row measures them unshrunk, and an overflowing row cannot
+   grow them), then the ones left grow into the free width up to their full name: the row fills before it parks and a
+   name is cut only when the visible chips together outgrow the row. Higher specificity than chips.css .chip. */
+.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) { flex: 1 0 16ch; min-width: 0; max-width: max-content; overflow: hidden; }
+.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) .chip__label { max-width: none; min-width: 0; }
 /* One control height across the bar: More, Epic options and Clear filters match the chips (chips.css .chip). */
 .kanban-filters .overflow-more,
 .kanban-filters .epic-options-btn,
