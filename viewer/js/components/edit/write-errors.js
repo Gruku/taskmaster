@@ -12,9 +12,11 @@ const sentenceCase = (key) => {
 };
 
 // The error thrown by api.js's http(): `code` is the HTTP status (none when the server was never reached), `reason`
-// the `error` string of a JSON body, `errors` a 422's field map; a 409's message is already its reason ('stale' when
-// it gave none). The raw message stays for the console.
+// the `error` string of a JSON body, `errors` a 422's field map, `unreadable` an answer whose JSON could not be read;
+// a 409's message is already its reason ('stale' when it gave none). The raw message stays for the console.
 export function describeWriteError(e, { noun = 'task' } = {}) {
+  // The server answered, so it was reached, but nothing in the answer says whether the write took.
+  if (e?.unreadable) return 'The server answered in a form the viewer cannot read, so it cannot tell whether the change was saved. Reload to check.';
   const code = typeof e?.code === 'number' ? e.code : null;
   if (code === 422) {
     const fields = Object.entries(e.errors || {}).filter(([, why]) => typeof why === 'string' && why);

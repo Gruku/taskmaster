@@ -113,11 +113,11 @@ function docsList(docs) {
 }
 
 // chrome: 'page' (route screen: the id · Epics line and the title) | 'embedded' (the modal: its heading shows the name).
-// Every task link is a real href: the page's detail interceptor and the modal's own link handler route them, so
-// onNavigate is accepted and unused. onComponentNav(componentKey) is handed to the architecture map.
+// Every task link is a real href: the page's detail interceptor and the modal's own link handler route them.
+// onComponentNav(componentKey) is handed to the architecture map.
 // Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on the same container — it is the
 // only handle that disconnects the architecture map's ResizeObserver and the swatch's board subscription.
-export function mountEpicDetail(container, { epic, store, onNavigate, onComponentNav, chrome = 'page' } = {}) {
+export function mountEpicDetail(container, { epic, store, onComponentNav, chrome = 'page' } = {}) {
   container.classList.add('ed-root');
   container.replaceChildren();
 

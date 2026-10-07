@@ -155,3 +155,10 @@ test('the Epic select shows each epic by its name, keeping the id as the value',
   const epic = s.fields.find(f => f.key === 'epic');
   assert.deepEqual(epic.options, [{ value: 'viewer', label: 'Viewer re-skin' }, { value: 'bare', label: 'bare' }]);
 });
+
+test('depends_on has no validator of its own: the self-dependency guard is the crossField entry, with the same words', () => {
+  const s = taskSchema({ getBacklog: FAKE });
+  assert.equal(s.fields.find((f) => f.key === 'depends_on').validate, undefined);
+  const r = runValidation({ id: 'v3-edit-001', title: 'x', status: 'todo', priority: 'medium', epic: 'v3-edit', depends_on: ['v3-edit-001'] }, s);
+  assert.equal(r.errors.depends_on, 'cannot depend on itself');
+});

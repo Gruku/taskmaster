@@ -14,7 +14,7 @@ const quote = (s) => `"${s.length > 40 ? `${s.slice(0, 40)}…` : s}"`;
 // Rows from whatever is stored or being edited: the map itself, the editor's own rows, or a legacy list of
 // "type: path" strings. Blank rows are not rows. A list entry without a type keeps its text and an empty type.
 // A map entry keeps its stored value as `raw` beside the text shown for it, so a value that is not text (a list of
-// paths) survives an edit to another row.
+// paths), or a stored empty one (null), survives an edit to another row.
 function toRows(raw) {
   if (typeof raw === 'string') return toRows([raw]);
   if (raw == null || typeof raw !== 'object') return [];
@@ -29,9 +29,15 @@ function toRows(raw) {
   return rows.filter((r) => r.key || r.value);
 }
 
+// A row stored empty (null) whose text is still empty: left as it was stored, and not a fault.
+const storedEmpty = (r) => r.raw === null && !text(r.value);
+
 // What a row saves: the stored value while its text is still the one shown for it, else the text. A stored string
 // is saved as its text, which differs at most by the surrounding space.
-const kept = (r) => (r.raw != null && typeof r.raw !== 'string' && r.value === text(r.raw) ? r.raw : r.value);
+const kept = (r) => {
+  if (storedEmpty(r)) return null;
+  return r.raw != null && typeof r.raw !== 'string' && r.value === text(r.raw) ? r.raw : r.value;
+};
 
 // Everything that keeps these rows from being a map, in row order: each fault's row index, the part at fault ('key'
 // or 'value') and why. Blank rows are not rows and are skipped. A row is named by what it holds, not by a number:
@@ -43,7 +49,7 @@ function faults(rows) {
     const r = { key: text(row.key), value: text(row.value) };
     if (!r.key && !r.value) continue;
     if (!r.key) { out.push({ i, part: 'key', message: `${quote(r.value)} needs a type` }); continue; }
-    if (!r.value) out.push({ i, part: 'value', message: `${quote(r.key)} needs a path or URL` });
+    if (!r.value && !storedEmpty(row)) out.push({ i, part: 'value', message: `${quote(r.key)} needs a path or URL` });
     if (seen.has(r.key)) out.push({ i, part: 'key', message: `${quote(r.key)} is used twice` });
     seen.add(r.key);
   }

@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { taskPageMocks } from './mock-fixtures.js';
+import { BOARD, bugDetailMocks, taskPageMocks } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -118,4 +118,62 @@ test('a remembered task that no longer exists is forgotten', async ({ page }) =>
   await page.evaluate(() => { location.hash = '#/task'; });
   await expect(page.locator('#screen-mount .tm-empty__headline')).toHaveText('No task open');
   expect(await page.evaluate(() => location.hash)).toBe('#/task');
+});
+
+// "Not found" is the 404 status, never a guess from the message: a server failure on an id that contains 404 is still
+// a failure to load, and a real 404 is still the missing block.
+const BOARD_404 = {
+  ...BOARD,
+  tasks: [...BOARD.tasks, { id: 'T-404', title: 'A task whose id says 404', status: 'todo', priority: 'medium', epic: 'viewer', phase: 'P1', depends_on: [] }],
+};
+const FAILS_500 = { status: 500, json: { error: 'x' } };
+
+test('a task page whose id contains 404 and fails with a 500 says it could not load, not that the task is missing', async ({ page }) => {
+  await mockApi(page, { ...taskPageMocks(), '/api/task/T-404/detail': FAILS_500 });
+  await page.goto('/#/task/T-404');
+  const block = page.locator('#screen-mount .tm-empty');
+  await expect(block).toHaveAttribute('data-state', 'error');
+  await expect(block.locator('.tm-empty__headline')).toHaveText('Could not load this task');
+  await expect(block).not.toContainText('not found');
+});
+
+// Opens the detail modal from the T-404 card on a board whose T-404 detail answers `detail`.
+async function openT404(page, detail) {
+  await mockApi(page, {
+    '/api/viewer/prefs': { theme: 'dark', ui: {}, screens: {} },
+    '/api/board': BOARD_404, '/api/backlog': BOARD_404, '/api/bugs': [],
+    '/api/task/T-404/detail': detail,
+  });
+  await page.goto('/#/kanban');
+  const sel = '.card-task[data-task-id="T-404"]';
+  // At phone width the Kanban shows one column at a time: pick the column holding the card.
+  if (await page.evaluate(() => innerWidth <= 768)) {
+    await page.locator(sel).waitFor({ state: 'attached' });
+    const panel = await page.locator(sel).evaluate((c) => c.closest('.kanban-col').id);
+    await page.locator(`[id="${panel}-tab"]`).click();
+  }
+  await page.locator(`${sel} > .link-row__link`).click();
+  return page.locator('.modal--detail');
+}
+
+test('the detail modal says a 500 on T-404 could not load, not that the task is missing', async ({ page }) => {
+  const dialog = await openT404(page, FAILS_500);
+  await expect(dialog.locator('.tm-empty')).toHaveAttribute('data-state', 'error');
+  await expect(dialog.locator('.tm-empty__headline')).toHaveText('Could not load this task');
+  await expect(dialog).not.toContainText('not found');
+});
+
+test('the detail modal shows a real 404 as the missing block', async ({ page }) => {
+  const dialog = await openT404(page, { status: 404, json: { ok: false, error: 'unknown task' } });
+  await expect(dialog.locator('.tm-empty')).toHaveAttribute('data-state', 'missing');
+  await expect(dialog.locator('.tm-empty__headline')).toHaveText('This task was not found');
+});
+
+test('a bug page whose id contains 404 and fails with a 500 says it could not load, not that the bug is missing', async ({ page }) => {
+  await mockApi(page, { ...bugDetailMocks(), '/api/bugs': [], '/api/issues': { issues: [] }, '/api/bugs/B-404': FAILS_500 });
+  await page.goto('/#/bug/B-404');
+  const block = page.locator('#screen-mount .tm-empty');
+  await expect(block).toHaveAttribute('data-state', 'error');
+  await expect(block.locator('.tm-empty__headline')).toHaveText('Could not load this bug');
+  await expect(block).not.toContainText('not found');
 });

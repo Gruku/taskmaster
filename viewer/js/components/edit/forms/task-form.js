@@ -59,13 +59,7 @@ export function taskSchema({ getBacklog }) {
       { key: 'branch',   label: 'Branch',   renderer: TextField, group: 'tracking', maxLength: 200 },
       { key: 'worktree', label: 'Worktree', renderer: TextField, group: 'tracking', maxLength: 200 },
       { key: 'depends_on', label: 'Depends on', renderer: RelationPicker, group: 'relations',
-        kind: 'tasks', getBacklog,
-        validate(value, spec) {
-          // Self-dep guard. Cycle detection is server-side via backlog_validate.
-          if (!Array.isArray(value)) return null;
-          // The owning task's id is passed via crossField (see below).
-          return null;
-        }},
+        kind: 'tasks', getBacklog },
       // Stored as a map { type: path or URL }; edited as rows and saved as that same map.
       { key: 'docs',     label: 'Docs',     renderer: KeyValueField, group: 'relations',
         keyLabel: 'Type', valueLabel: 'Path or URL', addLabel: 'Add doc' },
@@ -84,7 +78,7 @@ export function taskSchema({ getBacklog }) {
       'claim_expires', 'claim_expires_for',
     ],
     crossField: [
-      // Self-dep guard.
+      // Self-dep guard: it needs the owning task's id, so it is checked here. Cycle detection is server-side via backlog_validate.
       (entity) => {
         const id = entity.id;
         const deps = entity.depends_on || [];
