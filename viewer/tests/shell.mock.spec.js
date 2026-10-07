@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mockApi, unmockedWrites } from './mock-api.js';
-import { BOARD, DETAIL_TASK, taskDetail } from './mock-fixtures.js';
+import { BOARD, DETAIL_TASK, LONG_ISSUES, taskDetail } from './mock-fixtures.js';
 
 const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 
@@ -403,6 +403,51 @@ test('sidebar collapse keeps its label in step with its state', async ({ page })
   await expect(btn).toHaveAttribute('aria-label', 'Expand sidebar');
   await expect(btn).toHaveClass(/is-collapsed/);
   await expect.poll(() => page.locator('#sidebar').evaluate((el) => el.offsetWidth)).toBe(56);
+});
+
+// The shell is exactly the viewport, the topbar sticks at its top, and the window never scrolls: what scrolls is
+// inside the slot below the topbar, or the slot itself.
+test.describe('shell layout at 1280×720', () => {
+  test.use({ viewport: { width: 1280, height: 720 } });
+
+  test('the shell and .main are exactly the viewport tall', async ({ page }) => {
+    await page.goto('/#/dashboard');
+    await expect(page.locator('#page-title')).toHaveText('Dashboard');
+    const dims = await page.evaluate(() => ({
+      main: document.querySelector('.main').getBoundingClientRect().height,
+      shell: document.querySelector('.shell').getBoundingClientRect().height,
+      sizing: getComputedStyle(document.querySelector('.main')).boxSizing,
+    }));
+    expect(dims).toEqual({ main: 720, shell: 720, sizing: 'border-box' });
+  });
+
+  test('the topbar sticks at the top of .main on its own ground', async ({ page }) => {
+    await page.goto('/#/issues');
+    await expect(page.locator('#page-title')).toHaveText('Issues');
+    const cs = await page.locator('#topbar').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { position: s.position, top: s.top, painted: s.backgroundColor !== 'rgba(0, 0, 0, 0)' };
+    });
+    expect(cs).toEqual({ position: 'sticky', top: '0px', painted: true });
+  });
+
+  for (const [route, ready] of [['#/issues', '.issues-col .issue-card'], ['#/dashboard', '.dk-summary']]) {
+    test(`on ${route} with more than fits, the slot fills the space under the topbar and the window does not scroll`, async ({ page }) => {
+      await page.route((url) => url.pathname === '/api/issues', (route) => route.fulfill({ json: { issues: LONG_ISSUES } }));
+      await page.goto('/' + route);
+      await expect(page.locator(ready).first()).toBeVisible();
+      const probe = await page.evaluate(() => {
+        const slot = document.querySelector('#screen-mount').getBoundingClientRect();
+        const main = document.querySelector('.main');
+        window.scrollTo(0, 200);
+        return {
+          slotTop: Math.round(slot.top), topbarBottom: Math.round(document.querySelector('#topbar').getBoundingClientRect().bottom),
+          slotBottom: Math.round(slot.bottom), mainFits: main.scrollHeight <= main.clientHeight, windowY: window.scrollY,
+        };
+      });
+      expect(probe).toEqual({ slotTop: probe.topbarBottom, topbarBottom: probe.topbarBottom, slotBottom: 720, mainFits: true, windowY: 0 });
+    });
+  }
 });
 
 test.describe('mobile drawer', () => {

@@ -111,6 +111,12 @@ test('a card opens its issue and its task link opens the task', async ({ page })
   expect(await page.evaluate(() => location.hash)).not.toBe('#/issue/ISS-001');
 });
 
+test('a card says how many unfinished tasks its issue blocks, and a card that blocks none says nothing', async ({ page }) => {
+  await boot(page);
+  await expect(card(page, 'ISS-001').locator('.issue-card__blocks')).toHaveText('Blocks 1 task');
+  await expect(card(page, 'ISS-004').locator('.issue-card__blocks')).toHaveCount(0);
+});
+
 test('search and the chips filter, and say how many', async ({ page }) => {
   const puts = await boot(page);
   const search = page.getByRole('textbox', { name: 'Search issues' });

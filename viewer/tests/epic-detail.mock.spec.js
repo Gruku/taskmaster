@@ -166,6 +166,15 @@ test('a task row opens its task in the modal on the page, and peeks it inside th
   await expect(page.locator('.modal')).toHaveCount(1);
 });
 
+test('the epic modal opened over the Kanban closes with one Back, which lands on the Kanban', async ({ page }) => {
+  await boot(page, { route: '#/kanban', ready: '.card-task' });
+  await page.evaluate(() => import('/js/lib/open-detail.js').then((m) => m.openDetail('epic', 'viewer')));
+  await expect(page.locator('.modal--detail .ed-root')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('.modal--detail')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/kanban$/);
+});
+
 test('every task row and group toggle is reached by Tab', async ({ page }) => {
   await boot(page);
   await page.locator('.ed-meta').getByRole('link', { name: 'Epics' }).focus();

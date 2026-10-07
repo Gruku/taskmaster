@@ -393,7 +393,7 @@ export const dashboardMocks = ({ theme = 'dark' } = {}) => ({
 
 // ---- 3b Task 5: Epic detail ------------------------------------------------------------------------------------------
 
-// Fixture epic used for architecture-map e2e tests (copied verbatim from epic-detail.spec.js).
+// Fixture epic for the architecture-map tests in epic-detail.mock.spec.js.
 // Three components with two edges: ingest→thumb, thumb→cdn.
 // One unassigned task so the trailing _unassigned bucket is also rendered.
 export const ARCH_EPIC_FIXTURE = {
