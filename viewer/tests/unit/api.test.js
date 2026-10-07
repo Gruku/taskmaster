@@ -97,3 +97,14 @@ test('bug writes go through the shared client: a refusal carries code and reason
     assert.equal(seen[0].init.method, 'POST');
   });
 });
+
+test('a JSON answer that cannot be read is an error carrying the status and marked unreadable, not a network failure', async () => {
+  const cut = () => new Response('{"ok": tr', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  await withFetch(cut, async () => {
+    const e = await api.patchTask('T-1', { title: 'x' }).catch((err) => err);
+    assert.ok(e instanceof Error);
+    assert.equal(e.code, 200);
+    assert.equal(e.unreadable, true);
+    assert.match(e.message, /JSON parse failed/, 'the console still gets the old message');
+  });
+});

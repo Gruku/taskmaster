@@ -85,7 +85,7 @@ const sentenceCase = (key) => capitalise(String(key).replace(/[_-]+/g, ' ').trim
 
 export function showFieldConflict({
   entityKind, entityId, fieldKey, fieldLabel,
-  localValue, currentValue, currentEtag,
+  localValue, currentValue,
   onKeepMine, onUseServer, text = conflictValueText,
 }) {
   const id = `cb-${++seq}`;
@@ -109,7 +109,7 @@ export function showFieldConflict({
 }
 
 export function showFullConflict({
-  entityKind, entityId, localDraft, currentValue, currentEtag, labels = {}, texts = {}, onResolve, onDismiss,
+  entityKind, entityId, localDraft, currentValue, labels = {}, texts = {}, onResolve, onDismiss,
 }) {
   const id = `cb-${++seq}`;
   // Compute per-field diffs.

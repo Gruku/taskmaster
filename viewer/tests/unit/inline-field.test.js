@@ -654,3 +654,34 @@ test('an emptied field that was never set writes nothing: null, "" and [] are on
     assert.deepEqual(saved, []);
   } finally { ctrl.destroy(); root.remove(); }
 });
+
+// By design: a refused text keeps what was typed so it can be corrected beside the reason; a refused choice goes back
+// to the stored value, since a select left on the refused value would look saved.
+test('after a refused save a text editor keeps the typed text beside the reason, while a select returns to the stored value', async () => {
+  const reason = 'Completion blocked: review-gate is still open';
+  const root = document.createElement('div');
+  document.body.append(root);
+  const text = mountInlineField(root, {
+    schema: SCHEMA, fieldKey: 'title', entity: { id: 'refused-text', title: 'old' }, onSave: async () => ({ error: reason }),
+  });
+  const choice = mountStatus('refused-select', async () => ({ error: reason }));
+  try {
+    root.querySelector('.ef-text').click();
+    const input = root.querySelector('input');
+    input.value = 'new';
+    input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+    await until(() => root.querySelector('.if-error')?.textContent);
+    assert.equal(root.querySelector('.if-error').textContent, reason);
+    assert.equal(root.querySelector('input'), input, 'the text editor stays open');
+    assert.equal(input.value, 'new', 'with the text that was typed, to be corrected');
+
+    choice.root.querySelector('.ef-enum').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const select = choice.select();
+    select.value = 'done';
+    select.dispatchEvent(new dom.window.Event('change'));
+    await until(() => choice.root.querySelector('.if-error')?.textContent);
+    assert.equal(choice.root.querySelector('.if-error').textContent, reason);
+    assert.equal(select.value, 'todo', 'the select is back on the stored value');
+  } finally { text.destroy(); root.remove(); choice.done(); }
+});

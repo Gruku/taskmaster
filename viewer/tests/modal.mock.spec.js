@@ -408,7 +408,7 @@ async function showBanner(page) {
   await page.evaluate(() => import('/js/components/edit/conflict-banner.js').then((b) => {
     b.showFieldConflict({
       entityKind: 'task', entityId: 'T-101', fieldKey: 'title', fieldLabel: 'Title',
-      localValue: 'Mine', currentValue: 'Theirs', currentEtag: 'e2',
+      localValue: 'Mine', currentValue: 'Theirs',
       onKeepMine: async () => {}, onUseServer: () => {},
     });
   }));

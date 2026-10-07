@@ -192,3 +192,21 @@ test('read lists the entries, or a placeholder when there are none', () => {
   assert.match(KeyValueField.read({ value: null, placeholder: 'no docs' }).textContent, /no docs/);
   for (const odd of [3, 'x', ['a'], { a: { b: 1 } }, true]) assert.doesNotThrow(() => KeyValueField.read({ value: odd }));
 });
+
+test('a stored empty doc is left alone: shown empty, kept null through an edit to another row, never faulted', () => {
+  const stored = { spec: null, plan: 'p.md' };
+  assert.deepEqual(KeyValueField.coerce(stored), stored, 'untouched, it reads back as stored');
+  assert.equal(KeyValueField.validate(stored), null);
+  const { rows, type, kept, changes } = mount({ value: stored });
+  assert.deepEqual(rows().map((r) => [r.querySelector('.ef-kv-key').value, r.querySelector('.ef-kv-value').value]), [['spec', ''], ['plan', 'p.md']]);
+  type(rows()[1].querySelector('.ef-kv-value'), 'p2.md');
+  assert.deepEqual(kept(), { spec: null, plan: 'p2.md' });
+  assert.equal(KeyValueField.validate(changes.at(-1)), null, 'no "needs a path or URL"');
+  type(rows()[0].querySelector('.ef-kv-value'), 'docs/spec.md');
+  assert.deepEqual(kept(), { spec: 'docs/spec.md', plan: 'p2.md' }, 'a path typed into it is saved');
+  type(rows()[0].querySelector('.ef-kv-value'), '');
+  assert.deepEqual(kept(), { spec: null, plan: 'p2.md' }, 'emptied again, it is null again and still not a fault');
+  assert.equal(KeyValueField.validate(changes.at(-1)), null);
+  // A row the user adds and leaves without a path is still a fault: only a stored null is left alone.
+  assert.match(KeyValueField.validate([{ key: 'notes', value: '' }]), /"notes" needs a path or URL/);
+});

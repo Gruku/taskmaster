@@ -72,7 +72,11 @@ async function http(method, path, body, options = {}) {
       endMeasure('parse', parseStart);
       return data;
     } catch (e) {
-      throw new Error(`${method} ${path} → JSON parse failed: ${e.message}`);
+      // The server answered, so this is not a network failure, but whether a write took cannot be known from it.
+      const err = new Error(`${method} ${path} → JSON parse failed: ${e.message}`);
+      err.code = resp.status;
+      err.unreadable = true;
+      throw err;
     }
   }
   if (ctype.includes('text/yaml') || path.endsWith('.yaml')) return resp.text();
@@ -204,16 +208,6 @@ export async function listBugs({ status, found_in, include_archive } = {}) {
 
 export async function getBug(bugId) {
   return http('GET', `/api/bugs/${encodeURIComponent(bugId)}`);
-}
-
-export async function createBug(payload) {
-  const r = await fetch('/api/bugs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(`createBug failed: ${r.status}`);
-  return r.json();
 }
 
 export async function archiveBug(bugId) {

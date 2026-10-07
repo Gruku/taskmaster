@@ -49,7 +49,6 @@ export function openTaskEditModal({ store, api, task }) {
         entityKind: 'task', entityId: task.id,
         // Only the user's own changes are in question; what else moved on the server is simply the server's.
         localDraft: { ...current, ...changes }, currentValue: current,
-        currentEtag: e.current_etag,
         // Each field is named as the form names it, never by its stored key.
         labels: Object.fromEntries(schema.fields.map((f) => [f.key, f.label])),
         // ...and each choice field's values in the words its picker shows.

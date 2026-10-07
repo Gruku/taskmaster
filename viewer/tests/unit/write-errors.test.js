@@ -103,3 +103,12 @@ test('the inline field and the task document import write errors without the for
   const own = imports('edit/write-errors.js');
   assert.deepEqual(own, [], 'write-errors.js imports nothing');
 });
+
+test('an answer the viewer cannot read says the save is unknown, never that the server was unreachable', async () => {
+  const e = await refused(new Response('{"ok": tr', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const text = describeWriteError(e);
+  assert.equal(text, 'The server answered in a form the viewer cannot read, so it cannot tell whether the change was saved. Reload to check.');
+  assertPlain(text);
+  assert.doesNotMatch(text, /200|JSON|\/api/);
+  assert.doesNotMatch(text, /could not reach/i);
+});

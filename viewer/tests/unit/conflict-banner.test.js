@@ -14,7 +14,7 @@ test('field conflict shows local + server values', () => {
     entityKind: 'task', entityId: 'e1-001',
     fieldKey: 'title', fieldLabel: 'Title',
     localValue: 'My version', currentValue: 'Server version',
-    currentEtag: 'abc', onKeepMine: async () => {}, onUseServer: () => {},
+    onKeepMine: async () => {}, onUseServer: () => {},
   });
   const banner = document.querySelector('.cb-banner');
   assert.ok(banner);
@@ -29,7 +29,7 @@ test('Keep mine button calls onKeepMine and dismisses', async () => {
   showFieldConflict({
     entityKind: 'task', entityId: 'e1-001',
     fieldKey: 'title', fieldLabel: 'Title',
-    localValue: 'a', currentValue: 'b', currentEtag: 'x',
+    localValue: 'a', currentValue: 'b',
     onKeepMine: async () => { called = true; },
     onUseServer: () => {},
   });
@@ -44,7 +44,7 @@ test('Use server button calls onUseServer and dismisses', () => {
   showFieldConflict({
     entityKind: 'task', entityId: 'e1-001',
     fieldKey: 'title', fieldLabel: 'Title',
-    localValue: 'a', currentValue: 'b', currentEtag: 'x',
+    localValue: 'a', currentValue: 'b',
     onKeepMine: async () => {},
     onUseServer: () => { called = true; },
   });
@@ -59,14 +59,14 @@ test('the banner buttons are the shared primary and secondary buttons', async ()
   const classes = (sel) => document.querySelector(sel).className.split(' ').sort();
   const close = showFieldConflict({
     entityKind: 'task', entityId: 'e1-001', fieldKey: 'title', fieldLabel: 'Title',
-    localValue: 'a', currentValue: 'b', currentEtag: 'x', onKeepMine: async () => {}, onUseServer: () => {},
+    localValue: 'a', currentValue: 'b', onKeepMine: async () => {}, onUseServer: () => {},
   });
   assert.deepEqual(classes('.cb-keep-mine'), ['btn', 'btn--primary', 'cb-keep-mine']);
   assert.deepEqual(classes('.cb-use-server'), ['btn', 'btn--secondary', 'cb-use-server']);
   close();
   const closeFull = showFullConflict({
     entityKind: 'task', entityId: 'e1-001', localDraft: { title: 'a' }, currentValue: { title: 'b' },
-    currentEtag: 'x', onResolve: async () => {}, onDismiss: () => {},
+    onResolve: async () => {}, onDismiss: () => {},
   });
   assert.deepEqual(classes('.cb-resolve'), ['btn', 'btn--primary', 'cb-resolve']);
   assert.deepEqual(classes('.cb-dismiss'), ['btn', 'btn--secondary', 'cb-dismiss']);
@@ -80,7 +80,7 @@ test('the full banner lists only real differences: null, "", [] and {} are one e
     entityKind: 'task', entityId: 'e1-001',
     localDraft: { title: 'mine', notes: '', anchors: [], docs: { a: '1', b: '2' }, branch: null },
     currentValue: { title: 'theirs', notes: null, anchors: null, docs: { b: '2', a: '1' }, branch: {} },
-    currentEtag: 'x', onResolve: async () => {}, onDismiss: () => {},
+    onResolve: async () => {}, onDismiss: () => {},
   });
   assert.deepEqual([...document.querySelectorAll('.cb-multi-row .cb-key')].map((e) => e.textContent), ['Title']);
   close();
@@ -92,7 +92,7 @@ const full = async (extra = {}) => {
   return showFullConflict({
     entityKind: 'task', entityId: 'T-102',
     localDraft: { title: 'mine', depends_on: ['T-1'] }, currentValue: { title: 'theirs', depends_on: ['T-2'] },
-    currentEtag: 'x', onResolve: async () => {}, onDismiss: () => {}, ...extra,
+    onResolve: async () => {}, onDismiss: () => {}, ...extra,
   });
 };
 const keys = () => [...document.querySelectorAll('.cb-multi-row .cb-key')].map((e) => e.textContent);
@@ -125,7 +125,7 @@ test('the banner is a region named by its headline; the headline is an alert wit
   close();
   const closeField = showFieldConflict({
     entityKind: 'task', entityId: 'T-102', fieldKey: 'title', fieldLabel: 'Title',
-    localValue: 'a', currentValue: 'b', currentEtag: 'x', onKeepMine: async () => {}, onUseServer: () => {},
+    localValue: 'a', currentValue: 'b', onKeepMine: async () => {}, onUseServer: () => {},
   });
   const fb = document.querySelector('.cb-banner');
   assert.equal(fb.getAttribute('role'), 'region');
@@ -208,7 +208,7 @@ test('while a banner is shown the page knows its height, and forgets it when the
   assert.equal(height(), '');
   showFieldConflict({
     entityKind: 'task', entityId: 'T-102', fieldKey: 'title', fieldLabel: 'Title',
-    localValue: 'a', currentValue: 'b', currentEtag: 'x', onKeepMine: async () => {}, onUseServer: () => {},
+    localValue: 'a', currentValue: 'b', onKeepMine: async () => {}, onUseServer: () => {},
   });
   assert.match(height(), /^\d+px$/);
   document.querySelector('.cb-use-server').click();
@@ -238,7 +238,7 @@ test('a field conflict words both sides through the text it is given', async () 
   const { optionText } = await import('../../js/components/edit/conflict-banner.js');
   const close = showFieldConflict({
     entityKind: 'task', entityId: 'T-102', fieldKey: 'status', fieldLabel: 'Status',
-    localValue: 'done', currentValue: 'in-review', currentEtag: 'x',
+    localValue: 'done', currentValue: 'in-review',
     text: optionText(STATUS_SPEC), onKeepMine: async () => {}, onUseServer: () => {},
   });
   assert.equal(document.querySelector('.cb-val-mine').textContent, 'Done');
@@ -251,7 +251,7 @@ test('a full conflict words a row through its texts entry and leaves other rows 
   const close = showFullConflict({
     entityKind: 'task', entityId: 'T-102',
     localDraft: { title: 'in-progress', status: 'done' }, currentValue: { title: 'in-review', status: 'in-progress' },
-    currentEtag: 'x', labels: { title: 'Title', status: 'Status' }, texts: { status: optionText(STATUS_SPEC) },
+    labels: { title: 'Title', status: 'Status' }, texts: { status: optionText(STATUS_SPEC) },
     onResolve: async () => {}, onDismiss: () => {},
   });
   const row = (label) => [...document.querySelectorAll('.cb-multi-row')]
@@ -261,4 +261,16 @@ test('a full conflict words a row through its texts entry and leaves other rows 
   assert.equal(row('Title').querySelector('.cb-val-mine').textContent, 'in-progress');
   assert.equal(row('Title').querySelector('.cb-val-server').textContent, 'in-review');
   close();
+});
+
+// The banners never read the revision a write lost to: the callers store it themselves.
+test('the banner takes no revision: the etag argument is in neither signature, any caller, nor these tests', async () => {
+  const { readFileSync } = await import('node:fs');
+  // Spelled in two parts so this test does not find itself.
+  const word = ['current', 'Etag'].join('');
+  for (const file of ['conflict-banner.js', 'inline-field.js', 'task-actions.js']) {
+    const source = readFileSync(new URL(`../../js/components/edit/${file}`, import.meta.url), 'utf8');
+    assert.ok(!source.includes(word), file);
+  }
+  assert.ok(!readFileSync(new URL(import.meta.url), 'utf8').includes(word), 'the banner calls in this file');
 });

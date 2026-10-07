@@ -117,7 +117,6 @@ export function openDetailModal({ kind, id, opener }) {
         mountEl.replaceChildren();
         disposeComponent = mountEpicDetail(mountEl, {
           epic, store, chrome: 'embedded',
-          onNavigate: (tid) => load('task', tid),
         });
       } else {
         const { mountTaskDetailDocument, rememberView } = await import('./task-detail-document.js');
@@ -155,11 +154,10 @@ export function openDetailModal({ kind, id, opener }) {
       task = null;
       editBtn.hidden = true;
       modal.setTitle(knownTitle(k, i));
-      // http() throws `GET <path> → <status>: <body>`; the message is for the console, never for the page.
-      const missing = /→ 404\b/.test(String(e?.message));
+      const missing = e?.code === 404;
       const noun = k === 'epic' ? 'epic' : 'task';
       mountEl.replaceChildren(stateBlock({
-        state: 'error', label: i,
+        state: missing ? 'missing' : 'error', label: i,
         headline: missing ? `This ${noun} was not found` : `Could not load this ${noun}`,
         hint: missing ? 'It may have been archived, renamed or removed.' : 'Something went wrong while loading it. The full page may still open.',
         action: h('a', { class: 'btn btn--secondary btn--sm', 'data-action': 'open-full', href: route(k, i) }, 'Open full'),

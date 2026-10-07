@@ -934,3 +934,45 @@ test('title, eyebrow and saveLabel name the form; omitted, the defaults stand', 
   await tick(10);
   assert.equal(openModalCount(), 0);
 });
+
+// By design: typed text is never thrown away silently. Text left in a chip input makes the form dirty, so Escape asks
+// before closing over it. Escape pressed inside that input is the field's own key: it clears the half-typed entry
+// in plain sight and leaves the form open (chip-input.test.js, "3. keys are unchanged").
+test('text typed into a chip input and not yet a chip makes the form dirty, so Escape asks "Discard changes?"', async () => {
+  const { calls } = openEdit(RICH);
+  await tick();
+  assert.equal(saveBtn().disabled, true);
+  // A relation input takes only entries picked from its list, so leaving it keeps the text as text, not a chip.
+  const deps = control('depends_on');
+  deps.focus();
+  deps.value = 'T-99';
+  fire(deps, 'input');
+  assert.equal(saveBtn().disabled, false);
+  control('title').focus();
+  await tick(120);   // the chip inputs commit a moment after blur
+  assert.equal(deps.value, 'T-99', 'still text, not a chip');
+  assert.equal(saveBtn().disabled, false, 'and still an edit');
+  escape();
+  await tick();
+  assert.ok(confirmBox(), 'Escape asks before the typed text is lost');
+  assert.equal(confirmBox().querySelector('.modal-title').textContent, 'Discard changes?');
+  confirmBox().querySelector('[data-confirm]').click();
+  await tick();
+  assert.equal(dialogs().length, 0);
+  assert.equal(calls.cancelled, 1);
+});
+
+test('a stored empty doc is left alone: the form opens clean, and an edit to another doc saves it as null', async () => {
+  const { calls } = openEdit({ ...RICH, docs: { spec: null, plan: 'p.md' } });
+  await tick();
+  assert.equal(saveBtn().disabled, true, 'untouched, the form is not dirty');
+  const values = () => [...field('docs').querySelectorAll('.ef-kv-value')];
+  assert.equal(values()[0].value, '', 'the spec row shows an empty value');
+  values()[1].value = 'p2.md';
+  fire(values()[1], 'input');
+  saveBtn().click();
+  await tick();
+  assert.equal(calls.saved.length, 1, 'saved, with no "needs a path or URL" in the way');
+  assert.deepEqual(calls.saved[0].changes.docs, { spec: null, plan: 'p2.md' });
+  assert.equal(dialogs().length, 0);
+});

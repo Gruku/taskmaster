@@ -199,7 +199,6 @@ export function mountInlineField(parent, {
           fieldKey, fieldLabel: fieldSpec.label || fieldKey,
           localValue: pendingValue,
           currentValue: e.current?.[fieldKey],
-          currentEtag: e.current_etag,
           text: optionText(fieldSpec),
           onKeepMine: async () => {
             if (disposed) return;
