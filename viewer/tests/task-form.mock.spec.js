@@ -219,6 +219,27 @@ test('Save with an empty title: the title is focused, flagged and described, and
   await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
 });
 
+test('a focused invalid field keeps the error edge: its border is the critical tone, the focus ring sits on top', async ({ page }) => {
+  const dialog = await openCreate(page);
+  await ctl(dialog, 'description').fill('Only a description so far');
+  await save(dialog).click();
+  const title = ctl(dialog, 'title');
+  await expect(title).toBeFocused();
+  await expect(title).toHaveAttribute('aria-invalid', 'true');
+  const m = await title.evaluate((el) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--tone-critical)';
+    el.parentElement.append(probe);
+    const critical = getComputedStyle(probe).color;
+    probe.remove();
+    const cs = getComputedStyle(el);
+    return { critical, border: cs.borderTopColor, outline: cs.outlineStyle };
+  });
+  expect(m.border, 'the focused invalid border is the critical tone').toBe(m.critical);
+  expect(m.outline, 'the focus ring stays on top').not.toBe('none');
+  await cancel(dialog).click();
+});
+
 test('a successful Create sends one POST with the defaults and the typed values, and closes', async ({ page }) => {
   const posts = writes(page, 'POST', '/api/tasks');
   const dialog = await openCreate(page, { table: { 'POST /api/tasks': { id: 'T-108' } } });

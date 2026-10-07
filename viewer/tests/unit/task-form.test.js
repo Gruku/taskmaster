@@ -149,3 +149,9 @@ test('status and priority options are the status tables: same values, words and 
   assert.deepEqual(options('priority'), Object.entries(PRIORITY).map(([value, m]) => ({ value, label: m.label })));
   assert.equal(options('status').find((o) => o.value === 'in-progress').label, 'In progress');
 });
+
+test('the Epic select shows each epic by its name, keeping the id as the value', () => {
+  const s = taskSchema({ getBacklog: () => ({ epics: [{ id: 'viewer', name: 'Viewer re-skin' }, { id: 'bare' }] }) });
+  const epic = s.fields.find(f => f.key === 'epic');
+  assert.deepEqual(epic.options, [{ value: 'viewer', label: 'Viewer re-skin' }, { value: 'bare', label: 'bare' }]);
+});

@@ -180,6 +180,19 @@ test('in a narrow card "New" and the age give way: they wrap below the id, which
   expect(tag.y + tag.height, '"New" above the title').toBeLessThanOrEqual(title.y + 1);
 });
 
+test('1440: a card sits centred in its column, with equal space left and right', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const gaps = await page.locator('.kanban-col').evaluateAll((cols) => cols.map((col) => {
+    const c = col.querySelector('.kanban-col-body > .card-task');
+    if (!c) return null;
+    const a = col.getBoundingClientRect();
+    const b = c.getBoundingClientRect();
+    return { left: b.left - a.left, right: a.right - b.right };
+  }).filter(Boolean));
+  expect(gaps.length).toBeGreaterThan(2);
+  for (const g of gaps) expect(Math.abs(g.left - g.right), JSON.stringify(g)).toBeLessThanOrEqual(1);
+});
+
 test('1440, the long board: the estimate shares the epic\'s line and the bundle slug stays on one', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
   const lines = await page.locator('.card-task').evaluateAll((cards) => cards
@@ -295,6 +308,24 @@ test('the epic row is one line with More at 1440 and at 390', async ({ page }) =
     expect(await visibleTops(rowChips(page, 'epic'))).toHaveLength(1);
     expect(await visibleTops(rowChips(page, 'priority'))).toHaveLength(1);
   }
+});
+
+test('1440, the long board: the epic row fills its width before it parks, and no chip is cut while there is room', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await expect(page.locator('.kanban-filters__epic .overflow-more')).toBeVisible();
+  const m = await page.evaluate(() => {
+    const row = document.querySelector('.kanban-filters__epic .chip-row__chips');
+    const group = row.parentElement;   // the chip-row: its label and the chips
+    const kids = [...row.children].filter((el) => el.getClientRects().length);
+    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+    const used = kids.reduce((s, el) => s + el.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1);
+    const chips = [...row.querySelectorAll(':scope > .chip')].filter((el) => el.getClientRects().length);
+    const cut = chips.map((c) => c.querySelector('.chip__label')).filter((l) => l && l.scrollWidth > l.clientWidth).map((l) => l.textContent);
+    return { width: group.clientWidth, free: row.clientWidth - used, epics: chips.filter((c) => c.dataset.value !== '__all__' && c.textContent.trim() !== 'All').length, cut };
+  });
+  expect(m.width, `the epic row is at least 600px wide (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(600);
+  expect(m.epics, `at least three epic chips visible (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(3);
+  if (m.free >= 80) expect(m.cut, `no chip is cut while the row has ${Math.round(m.free)}px free`).toEqual([]);
 });
 
 test('at 390 Epic options sits on the epic line, not on a row of its own', async ({ page }) => {

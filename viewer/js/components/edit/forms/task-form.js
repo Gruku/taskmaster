@@ -21,7 +21,7 @@ const STATUS_OPTIONS = optionsOf(TASK_STATUS);
 const PRIORITY_OPTIONS = optionsOf(PRIORITY);
 
 export function taskSchema({ getBacklog }) {
-  const epicOptions = () => (getBacklog()?.epics || []).map(e => ({ value: e.id, label: e.id }));
+  const epicOptions = () => (getBacklog()?.epics || []).map(e => ({ value: e.id, label: e.name || e.id }));
   const phaseOptions = () => [{ value: '', label: '—' }].concat(
     (getBacklog()?.phases || []).map(p => ({ value: p.id, label: p.id })));
 

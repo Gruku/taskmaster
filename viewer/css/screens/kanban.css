@@ -29,6 +29,11 @@
 .kanban-filters__epic { flex: 1 1 240px; min-width: 240px; }
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
+/* Epic chips are counted at a short basis (the overflow row measures them unshrunk, and an overflowing row cannot
+   grow them), then the ones left grow into the free width up to their full name: the row fills before it parks and a
+   name is cut only when the visible chips together outgrow the row. Higher specificity than chips.css .chip. */
+.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) { flex: 1 0 16ch; min-width: 0; max-width: max-content; overflow: hidden; }
+.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) .chip__label { max-width: none; min-width: 0; }
 /* One control height across the bar: More, Epic options and Clear filters match the chips (chips.css .chip). */
 .kanban-filters .overflow-more,
 .kanban-filters .epic-options-btn,
@@ -236,7 +241,11 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-gutter: stable;
+  /* Cards sit centred: the body spans the column's padding and reserves a thin gutter on both edges, so the
+     scrollbar no longer takes width from one side only (which also pushed a Critical card's age off line 1). */
+  margin-inline: calc(-1 * var(--space-sm));
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
 }
 .kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
 .kanban-col-empty {
@@ -266,7 +275,7 @@
   .kanban-page, .kanban-board { height: auto; min-height: 0; overflow: visible; flex: 0 0 auto; }
   .kanban-board-grid { flex-direction: column; gap: var(--space-lg); min-height: 0; height: auto; }
   .kanban-col { width: 100%; height: auto; overflow: visible; transition: none; }
-  .kanban-col-body { overflow: visible; height: auto; scrollbar-gutter: auto; }
+  .kanban-col-body { overflow: visible; height: auto; margin-inline: 0; scrollbar-gutter: auto; }
   /* The head stays in view while its cards scroll by, on the column's own surface and with no shadow. */
   .kanban-col-head {
     position: sticky;
