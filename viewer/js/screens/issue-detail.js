@@ -28,13 +28,39 @@ function markerHost(field, key, marker) {
 
 function markers(issue, agingCfg) {
   const row = h('div', { class: 'td-markers', 'data-test': 'chips' });
+  // Status then severity, as the bug page has them.
+  row.appendChild(markerHost('status', 'Status', statusMarker('issue', issue.status || 'open')));
   const severity = severityMarker(issue.severity_label ?? issue.severity);
   if (severity) row.appendChild(markerHost('severity', 'Severity', severity));
-  row.appendChild(markerHost('status', 'Status', statusMarker('issue', issue.status || 'open')));
   const stale = staleTag(issue, agingCfg);
   if (stale) row.appendChild(h('span', { class: 'td-marker-host', 'data-tag': 'stale' }, stale));
   return row;
 }
+
+const REF = /\b(ISS-\d+|T-\d+|B-\d+)\b/g;
+const REF_HREF = (id) => `#/${id.startsWith('ISS-') ? 'issue' : id.startsWith('T-') ? 'task' : 'bug'}/${encodeURIComponent(id)}`;
+
+// A record id written in prose ("Tracked in T-102") opens that record, like the ids in the rail.
+function linkRefs(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!n.parentElement.closest('a, code, pre') && n.data.search(REF) !== -1) texts.push(n);
+  for (const node of texts) {
+    REF.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of node.data.matchAll(REF)) {
+      frag.append(node.data.slice(at, m.index), h('a', { href: REF_HREF(m[1]) }, m[1]));
+      at = m.index + m[1].length;
+    }
+    frag.append(node.data.slice(at));
+    node.replaceWith(frag);
+  }
+  return root;
+}
+
+// The section's own label says "Notes": a leading "## Notes" in the text would say it twice.
+const withoutHeading = (text, label) => text.replace(new RegExp(String.raw`^\s*#{1,6}\s*${label}\s*\n+`, 'i'), '');
 
 function body(issue) {
   const sections = [];
@@ -48,13 +74,13 @@ function body(issue) {
     }));
   }
   if (hasText(issue.impact)) sections.push(detailSection({ key: 'impact', label: 'Impact', body: markdownBody(issue.impact) }));
-  if (hasText(issue.summary)) sections.push(detailSection({ key: 'notes', label: 'Notes', body: markdownBody(issue.summary) }));
+  if (hasText(issue.summary)) sections.push(detailSection({ key: 'notes', label: 'Notes', body: linkRefs(markdownBody(withoutHeading(issue.summary, 'Notes'))) }));
   const paths = textList(issue.location);
   if (paths.length) {
     sections.push(detailSection({ key: 'location', label: 'Location', body: h('ul', { class: 'dp-paths' }, paths.map((p) => h('li', {}, h('code', {}, p)))) }));
   }
   if (!sections.length) sections.push(h('p', { class: 'td-empty' }, 'Nothing written for this issue yet.'));
-  return h('div', { class: 'td-body' }, [...sections, datesList([['Discovered', issueDiscovered(issue)], ['Resolved', issue.resolved]])]);
+  return h('div', { class: 'td-body' }, [...sections, datesList([['Resolved', issue.resolved]])]);
 }
 
 function page(issue, { agingCfg, timers }) {

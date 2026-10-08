@@ -135,10 +135,11 @@ test('walks by keyboard', async ({ page }) => {
       .filter((el) => el.tabIndex >= 0 && el.getClientRects().length && !el.disabled)
       .map((el) => el.getAttribute('data-test') || el.getAttribute('href'));
   });
-  expect(stops).toEqual(['issue-id', '#/issues', '#/task/T-102', '#/issue/ISS-009']);
+  // The Notes text names T-102, and that id is a link too, ahead of the rail's pills.
+  expect(stops).toEqual(['issue-id', '#/issues', '#/task/T-102', '#/task/T-102', '#/issue/ISS-009']);
   // And Tab really visits them in that order.
   await page.locator('[data-test="issue-id"]').focus();
-  for (const sel of ['[data-test="meta"] a[href="#/issues"]', 'a.link-pill[href="#/task/T-102"]', 'a.link-pill[href="#/issue/ISS-009"]']) {
+  for (const sel of ['[data-test="meta"] a[href="#/issues"]', '[data-section="notes"] a[href="#/task/T-102"]', 'a.link-pill[href="#/task/T-102"]', 'a.link-pill[href="#/issue/ISS-009"]']) {
     await page.keyboard.press('Tab');
     await expect(mount(page).locator(sel)).toBeFocused();
   }
@@ -168,3 +169,13 @@ for (const theme of ['dark', 'light']) {
     expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(' | ')}`)).toEqual([]);
   });
 }
+
+test('the page says each thing once: Notes has no second heading, Discovered is only in the meta line, ids in prose are links, status comes before severity', async ({ page }) => {
+  await open(page, '#/issue/ISS-012');
+  const m = mount(page);
+  await expect(m.locator('[data-section="notes"] h2, [data-section="notes"] h3')).toHaveCount(1);
+  await expect(m.locator('[data-section="notes"] a[href="#/task/T-102"]')).toHaveText('T-102');
+  await expect(m.locator('.td-dates')).toHaveCount(0);
+  await expect(m.locator('[data-test="meta"]')).toContainText('discovered');
+  expect(await m.locator('.td-markers [data-field]').evaluateAll((els) => els.map((e) => e.dataset.field))).toEqual(['status', 'severity']);
+});

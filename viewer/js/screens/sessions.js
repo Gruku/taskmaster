@@ -156,9 +156,14 @@ export function mount(root, { params, subpath, store, prefs }) {
 
     const matched = matchSessions(all, state.searchTerm);
     const shown = state.kinds.session ? matched : [];
-    const narrowed = shown.length !== all.length;
+    // A handover counts as visible when its thread shows, the Handovers toggle is on and its status chip admits it.
+    const shownHandovers = new Set();
+    if (state.kinds.handover) {
+      for (const s of shown) for (const id of s.handover_ids || []) if (statusShown(handovers[id])) shownHandovers.add(id);
+    }
+    const visible = shown.length + shownHandovers.size;
     setTopbarCount(`${all.length} ${pluralize(all.length, 'thread', 'threads')} · ${hoCount} ${pluralize(hoCount, 'handover', 'handovers')}`
-      + (narrowed ? ` · ${shown.length} visible` : ''));
+      + (visible < all.length + hoCount ? ` · ${visible} visible` : ''));
 
     if (!all.length) {
       return list.replaceChildren(stateBlock({

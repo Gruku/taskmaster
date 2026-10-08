@@ -66,7 +66,7 @@ test('chips are buttons and filter the timeline', async ({ page }) => {
 
   await chip(page, 'Show', 'Handovers').click();
   await expect(page.locator('.ho-child')).toHaveCount(0);
-  await expect(page.locator('#topbar-count')).toHaveText('2 threads · 3 handovers');
+  await expect(page.locator('#topbar-count')).toHaveText('2 threads · 3 handovers · 2 visible');
 
   await search(page).fill('scope');
   await expect(page.locator('#topbar-count')).toHaveText('2 threads · 3 handovers · 1 visible');
@@ -396,4 +396,17 @@ test('at 390px a picked handover brings the rail into view with its top below th
     const railTop = await rail(page).evaluate((el) => el.getBoundingClientRect().top);
     return railTop >= barBottom - 1;
   }).toBe(true);
+});
+
+test('the count adds "visible" while superseded, a status chip, Handovers or search narrow the list, and drops it when cleared', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  // Superseded is off by default and hides one of the three handovers.
+  await expect(count).toHaveText('2 threads · 3 handovers · 4 visible');
+  await chip(page, 'Status', 'Superseded').click({ modifiers: ['Shift'] });
+  await expect(count).toHaveText('2 threads · 3 handovers');
+  await chip(page, 'Show', 'Handovers').click();
+  await expect(count).toHaveText('2 threads · 3 handovers · 2 visible');
+  await chip(page, 'Show', 'Handovers').click();
+  await expect(count).toHaveText('2 threads · 3 handovers');
 });

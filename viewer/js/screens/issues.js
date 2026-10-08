@@ -265,11 +265,27 @@ export function mount(root, { store, prefs }) {
       colsEl.scrollLeft = x;
     }
     const selected = paintPanels();
+    for (const c of shownCols) {
+      const { list } = sections.get(c.key);
+      if (!list.dataset.edge) { list.dataset.edge = '1'; list.addEventListener('scroll', markEdges, { passive: true }); edgeObserver?.observe(list); }
+    }
+    requestAnimationFrame(markEdges);
     tabs.update({
       columns: shownCols.map((c) => ({ key: c.key, label: c.label, count: c.items.length, panelId: `issues-col-${c.key}` })),
       selected,
     });
   }
+
+  // A cue for what is cut: data-more marks a scroller with content past its far edge, and the CSS fades that edge.
+  const edgeOf = (el, vertical) => (vertical ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
+    : el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  function markEdges() {
+    colsEl.toggleAttribute('data-more', edgeOf(colsEl, false));
+    for (const s of sections.values()) s.list.toggleAttribute('data-more', edgeOf(s.list, true));
+  }
+  colsEl.addEventListener('scroll', markEdges, { passive: true });
+  const edgeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(markEdges) : null;
+  edgeObserver?.observe(colsEl);
 
   function drawShelf(shown) {
     if (view === 'B') { shelf.hidden = true; return; }
@@ -294,7 +310,7 @@ export function mount(root, { store, prefs }) {
     }
     const narrowed = severities.length > 0 || components.length > 0 || promotedOnly || search.trim() !== '';
     const shown = filterIssues(issues, { search, severities, components, promotedOnly });
-    setTopbarCount(`${issues.length} ${pluralize(issues.length, 'issue', 'issues')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    setTopbarCount(`${issues.length} ${pluralize(issues.length, 'issue', 'issues')}${narrowed && shown.length < issues.length ? ` · ${shown.length} visible` : ''}`);
     if (!issues.length) return showState(stateBlock({ label: 'Issues', headline: 'No issues recorded yet.' }));
     if (!shown.length) {
       return showState(stateBlock({ label: 'No matches', headline: 'No issues match these filters.', action: { label: 'Clear filters', onClick: clear } }));
@@ -327,6 +343,7 @@ export function mount(root, { store, prefs }) {
     alive = false;
     for (const off of unsubscribe) off();
     mq?.removeEventListener?.('change', onMedia);
+    edgeObserver?.disconnect();
     tabs.destroy();
     severityRow.destroy();
     componentRow.destroy();

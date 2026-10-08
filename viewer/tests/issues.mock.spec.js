@@ -622,3 +622,35 @@ for (const theme of ['dark', 'light']) {
     expect(shadows.filter((s) => s !== 'none')).toEqual([]);
   });
 }
+
+test('the count says "visible" only while the list is shorter than the total', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  await chip(page, 'Severity', 'Critical').click();
+  await expect(count).toContainText('visible');
+  for (const name of ['High', 'Medium', 'Low']) await chip(page, 'Severity', name).click({ modifiers: ['Shift'] });
+  await expect(count).toHaveText('12 issues');
+});
+
+test('a card shows the evidence without markdown marks', async ({ page }) => {
+  await boot(page);
+  await expect(card(page, 'ISS-012').locator('.issue-card__evidence')).toHaveText('Seen on three laptops in light theme.');
+});
+
+test('a column cut at the bottom fades there while more is below, and the fade goes at the end', async ({ page }) => {
+  await boot(page, { height: 700 });
+  const list = page.locator('.issues-col__list').first();
+  await expect(list).toHaveAttribute('data-more', '');
+  expect(await list.evaluate((el) => getComputedStyle(el).maskImage)).toContain('linear-gradient');
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(list).not.toHaveAttribute('data-more', '');
+});
+
+test('a Status board wider than the page fades its right edge until it is scrolled to the end', async ({ page }) => {
+  await boot(page, { width: 1100 });
+  await pickView(page, 'Status');
+  const cols = page.locator('.issues-board__cols');
+  await expect(cols).toHaveAttribute('data-more', '');
+  await cols.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(cols).not.toHaveAttribute('data-more', '');
+});
