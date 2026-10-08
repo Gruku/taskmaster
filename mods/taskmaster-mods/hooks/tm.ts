@@ -1,6 +1,6 @@
-// User intent: the one door to the Taskmaster MCP server — every read bounded to 3 s, every write to 15 s, and every reply
-// read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable reply degrades to a fault
-// instead of a crash.
+// User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
+// 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
+// reply degrades to a fault instead of a crash.
 import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
@@ -144,20 +144,22 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   if (input.scope.waitingOnly) listArgs.waiting_on_human = true
   if (input.scope.phase !== '') listArgs.phase = input.scope.phase
   let replies: [TmReply, TmReply, TmReply, TmReply, TmReply, TmReply, TmReply | null, TmReply | null]
+  // One call after another, never together: the server answers one call at a time, so calls sent together queue and each
+  // one's 3 s bound counts the others' time (on CodeMaestro: ~0.7 s each alone, 3.5–4 s each when sent together).
   try {
-    replies = await Promise.all([
-      callTm(host, 'backlog_list_tasks', listArgs),
+    replies = [
+      await callTm(host, 'backlog_list_tasks', listArgs),
       // P0/P1 issues on their own: continuity ranks every in-review task before any issue, so its 50-row review window
       // holds no issue on a big backlog. Status `open` is continuity's own rule for an issue that asks for review.
-      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
       // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
-      callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: 5 }),
-      taskId === null ? Promise.resolve(null) : callTm(host, 'backlog_get_task', { task_id: taskId }),
-      taskId === null ? Promise.resolve(null) : callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
-    ])
+      await callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: 5 }),
+      taskId === null ? null : await callTm(host, 'backlog_get_task', { task_id: taskId }),
+      taskId === null ? null : await callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
+    ]
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     const transient = error instanceof TmUnreachable && error.transient

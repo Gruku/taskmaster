@@ -21,6 +21,8 @@ export type World = {
   cwd: string
   calls: { tool: string; args: Record<string, unknown> }[]
   mcp: (tool: string, args: Record<string, unknown>) => McpAnswer
+  /** When set, the server answers one call at a time, each taking this long: calls sent together queue (the real tm server). */
+  serialMs: number | null
 }
 
 export function worldOf(on: On, clock: MockClock, store: Record<string, unknown> = {}): World {
@@ -40,7 +42,9 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     cwd: 'C:\\work\\proj',
     calls: [],
     mcp: () => 'offline',
+    serialMs: null,
   }
+  let queue: Promise<void> = Promise.resolve()
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}) as never)
@@ -91,6 +95,12 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('process.run', () => ({ value: { exitCode: 0, stdout: `${world.branch}\n`, stderr: '' } }) as never)
   on('mcp.call', async ($, e) => {
     world.calls.push({ tool: e.tool, args: e.args })
+    if (world.serialMs !== null) {
+      const ms = world.serialMs
+      const turn = queue.then(() => clock.sleep(ms))
+      queue = turn
+      await turn
+    }
     const answer = world.mcp(e.tool, e.args)
     if (answer === 'offline') return { deny: 'tm: Connection closed' }
     if ('deny' in answer) return { deny: answer.deny }

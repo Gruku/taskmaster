@@ -97,6 +97,21 @@ describe('faults', () => {
     expect(world.statuses.at(-1)).toBe('◆ tm offline')
   })
 
+  test('a server that answers one call at a time (1 s each) is read one call after another, never cut at 3 s', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = backlog
+    world.serialMs = 1000
+    await $.session.start(SESSION)
+    for (let s = 0; s < 60; s += 1) {
+      await clock.advance(1000)
+      await clock.settle()
+    }
+    expect(world.statuses).not.toContain('◆ tm offline')
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
+    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+  })
+
   test('"Error: … no backlog" from the server reads as offline, with the reason in the pane', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
