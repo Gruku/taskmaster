@@ -27,6 +27,16 @@ test('fitCount: none stays when not even the first fits beside More; an empty ro
   assert.equal(fitCount([], 100), 0);
 });
 
+test('fitCount: with mins, one more stays when it fits at its least width, and a squeezed last item needs no More', () => {
+  // 50 + 5 + 40 (More) = 95 fits one; the second fits at 30: 95 + 30 + 5 = 130.
+  assert.equal(fitCount([50, 50, 50], 130, { gap: 5, moreWidth: 40, mins: [30, 30, 30] }), 2);
+  assert.equal(fitCount([50, 50, 50], 129, { gap: 5, moreWidth: 40, mins: [30, 30, 30] }), 1);
+  // All but the last at full width, the last at 30, no More: 50 + 5 + 50 + 5 + 30 = 140.
+  assert.equal(fitCount([50, 50, 50], 140, { gap: 5, moreWidth: 40, mins: [30, 30, 30] }), 3);
+  // A least width no smaller than the item adds nothing.
+  assert.equal(fitCount([50, 50, 50], 130, { gap: 5, moreWidth: 40, mins: [50, 50, 50] }), 1);
+});
+
 test('6. without ResizeObserver nothing moves and More stays hidden', () => {
   assert.equal(window.ResizeObserver, undefined, 'jsdom has no ResizeObserver');
   const row = document.createElement('div');

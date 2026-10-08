@@ -27,32 +27,34 @@ const epicCell = (id, epics) => {
   return h('span', { class: 't-epic-cell' }, [swatchEl(ep?.swatch), truncate(ep?.name ?? id)]);
 };
 
-// Widths in rem are fixed; the ID column is measured to its longest ID and the title takes the rest.
+// Widths in rem are fixed, each just wider than its header or its usual content; the ID column is measured to its
+// longest ID (up to ID_MAX_CH, beyond which an ID wraps, never cut) and the title takes the rest.
 const COLUMNS = [
   { key: 'id',        label: 'ID',       sortable: true,
     get: t => t.id, cell: t => h('span', { class: 't-id' }, String(t.id ?? '')) },
   { key: 'title',     label: 'Title',    sortable: true,
     get: t => (t.title || '').toLowerCase(),
     cell: t => h('a', { class: 'tbl-link', href: '#/task/' + encodeURIComponent(t.id) }, truncate(t.title || t.id)) },
-  { key: 'status',    label: 'Status',   width: 9,    sortable: true,
+  { key: 'status',    label: 'Status',   width: 8,    sortable: true,
     get: t => statusOrder(t.status), cell: t => statusMarker('task', t.status) },
-  { key: 'priority',  label: 'Priority', width: 7.5,  sortable: true,
+  { key: 'priority',  label: 'Priority', width: 6.5,  sortable: true,
     get: t => priorityOrder(t.priority), cell: t => (t.priority ? priorityMarker(String(t.priority).toLowerCase()) : none()) },
-  { key: 'phase',     label: 'Phase',    width: 7,    sortable: true,
+  { key: 'phase',     label: 'Phase',    width: 5,    sortable: true,
     get: t => t.phase || '', cell: t => tech(t.phase) },
-  { key: 'epic',      label: 'Epic',     width: 12.5, sortable: true,
+  { key: 'epic',      label: 'Epic',     width: 11,   sortable: true,
     get: t => t.epic || '', cell: (t, ctx) => (t.epic ? epicCell(t.epic, ctx.epics) : none()) },
-  { key: 'area',      label: 'Area',     width: 9,    sortable: true,
+  { key: 'area',      label: 'Area',     width: 7,    sortable: true,
     get: t => t.area || '', cell: t => tech(t.area) },
   { key: 'estimate',  label: 'Size',     width: 4.5,  sortable: true,
     get: t => sizeOrder(t.estimate), cell: t => (t.estimate ? h('span', { class: 't-tech' }, String(t.estimate)) : none()) },
-  { key: 'branch',    label: 'Branch',   width: 14,   sortable: false,
+  { key: 'branch',    label: 'Branch',   width: 12,   sortable: false,
     get: t => t.branch || '', cell: t => (t.branch ? truncate(t.branch, { tag: 'code', className: 't-tech' }) : none()) },
-  { key: 'started',   label: 'Started',  width: 8,    sortable: true,
+  { key: 'started',   label: 'Started',  width: 7.5,  sortable: true,
     get: t => t.started || '',
     cell: t => (t.started ? h('span', { class: 't-tech' }, formatAbsolute(t.started, { time: false, year: true }) || String(t.started)) : none()) },
 ];
 const TITLE_MIN_REM = 20;
+const ID_MAX_CH = 14;
 const FIXED_REM = COLUMNS.reduce((sum, c) => sum + (c.width || 0), 0);
 
 const STATUS_ORDER = { 'in-progress': 0, 'in-review': 1, blocked: 2, todo: 3, done: 4, archived: 5 };
@@ -144,8 +146,10 @@ export async function mount(root, { store, api, prefs, params }) {
   // whether the user has scrolled sideways (a stronger edge on the title column).
   const frame = h('div', { class: 'tbl-frame' });
   const tableHost = h('div', { class: 'tbl-host' });
-  const fade = h('div', { class: 'tbl-fade', 'aria-hidden': 'true' });
-  frame.append(tableHost, fade);
+  const fade = h('div', { class: 'tbl-fade tbl-fade--end', 'aria-hidden': 'true' });
+  // The start fade sits just after the sticky edge, over the columns scrolled under it.
+  const fadeStart = h('div', { class: 'tbl-fade tbl-fade--start', 'aria-hidden': 'true' });
+  frame.append(tableHost, fade, fadeStart);
   screen.appendChild(frame);
   // The measured ID column: { longest id it was measured for, its width in px }.
   let measured = { longest: null, px: 0 };
@@ -160,17 +164,15 @@ export async function mount(root, { store, api, prefs, params }) {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
     // The fade stops at the scrollbars, never over them.
     fade.style.right = `${offsetWidth - clientWidth}px`;
-    fade.style.bottom = `${offsetHeight - clientHeight}px`;
+    fade.style.bottom = fadeStart.style.bottom = `${offsetHeight - clientHeight}px`;
     // A link reached by Shift+Tab is scrolled into view below the sticky header, not under it.
     tableHost.style.scrollPaddingTop = `${headHeight}px`;
     // When ID and title together would hold most of the frame, the title scrolls with the rest and only the ID stays,
     // so the other columns can still come into view.
     const loose = measured.px + TITLE_MIN_REM * rem > 0.6 * clientWidth;
-    if (loose !== frame.hasAttribute('data-title-loose')) {
-      frame.toggleAttribute('data-title-loose', loose);
-      const tbl = tableHost.querySelector('table.tbl');
-      if (tbl) placeTitle(tbl);
-    }
+    frame.toggleAttribute('data-title-loose', loose);
+    const tbl = tableHost.querySelector('table.tbl');
+    if (tbl) placeTitle(tbl);
     // The empty/no-match block spans the part of the table the frame shows, so its action is always in reach.
     const block = tableHost.querySelector('.tbl-empty > .tm-empty');
     if (block) block.style.width = `${clientWidth}px`;
@@ -309,13 +311,14 @@ export async function mount(root, { store, api, prefs, params }) {
     paint(); persist();
   }
 
-  // The ID column is as wide as the longest ID on screen, and never narrower than its own header with the sort arrow,
-  // so no ID is ever cut; the title column sticks just after it.
+  // The ID column is as wide as the longest ID on screen, up to ID_MAX_CH (a longer ID wraps; none is ever cut), and
+  // never narrower than its own header with the sort arrow; the title column sticks just after it.
   function sizeColumns(tbl, tasks) {
     const longest = tasks.reduce((a, t) => (String(t.id ?? '').length > a.length ? String(t.id) : a), 'ID');
     if (longest !== measured.longest) {
       const probe = h('span', { class: 't-id tbl-probe' }, longest);
-      tableHost.append(probe);
+      const cap = h('span', { class: 't-id tbl-probe' }, '0'.repeat(ID_MAX_CH));
+      tableHost.append(probe, cap);
       const th = tbl.querySelector('th[data-key="id"]');
       const cs = getComputedStyle(th);
       const btn = th.querySelector('.sort-header');
@@ -323,18 +326,37 @@ export async function mount(root, { store, api, prefs, params }) {
         ? [...btn.children].reduce((w, c) => w + c.getBoundingClientRect().width, 0)
           + (parseFloat(getComputedStyle(btn).columnGap) || 0) * (btn.children.length - 1)
         : 0;
-      const text = Math.max(probe.getBoundingClientRect().width, head);
+      const text = Math.max(Math.min(probe.getBoundingClientRect().width, cap.getBoundingClientRect().width), head);
       measured = { longest, px: Math.ceil(text) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 1 };
       probe.remove();
+      cap.remove();
     }
     tbl.querySelector('col.tbl-col--id').style.width = `${measured.px}px`;
-    tbl.style.minWidth = `calc(${measured.px}px + ${FIXED_REM + TITLE_MIN_REM}rem)`;
     placeTitle(tbl);
   }
 
+  // The title takes what the columns that fit whole beside it leave, less the end fade's width: the frame's edge then
+  // cuts no column it shows, and the next one starts under the fade as the cue that more wait there. In a frame too
+  // narrow for that (data-title-loose) the title keeps its minimum.
   function placeTitle(tbl) {
-    const left = frame.hasAttribute('data-title-loose') ? '' : `${measured.px}px`;
+    const loose = frame.hasAttribute('data-title-loose');
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const min = TITLE_MIN_REM * rem;
+    const room = tableHost.clientWidth - measured.px;
+    const widths = COLUMNS.filter((c) => c.width).map((c) => c.width * rem);
+    let used = 0;
+    let shown = 0;
+    if (!loose) {
+      const peek = fade.getBoundingClientRect().width;
+      while (shown < widths.length && min + used + widths[shown] + (shown + 1 < widths.length ? peek : 0) <= room) used += widths[shown++];
+      if (shown < widths.length) used += peek;
+    }
+    const title = Math.max(min, Math.floor(room - used));
+    tbl.querySelector('col.tbl-col--title').style.width = `${title}px`;
+    tbl.style.minWidth = `${measured.px + title + FIXED_REM * rem}px`;
+    const left = loose ? '' : `${measured.px}px`;
     for (const el of tbl.querySelectorAll('th[data-key="title"], td.tbl-cell--title')) el.style.left = left;
+    fadeStart.style.left = `${measured.px + (loose ? 0 : title)}px`;
   }
 
   // The table is rebuilt on every paint: where the frame was scrolled and what the keyboard was on are noted first and

@@ -89,6 +89,7 @@ export async function mount(root, { store, api, prefs }) {
   });
   dens.setAttribute('role', 'group');
   dens.setAttribute('aria-label', 'Card density');
+  dens.classList.add('kanban-density');
   head.appendChild(dens);
 
   // A labelled select: the visible label names the control, the chevron is the shared edit-field one.
@@ -168,6 +169,8 @@ export async function mount(root, { store, api, prefs }) {
     },
   });
   epicRow.el.classList.add('kanban-filters__epic');
+  // Epic chips keep their full names; one more fits when 16ch of it still shows (overflow-row.js), and only it is cut.
+  epicRow.el.querySelector('.chip-row__chips').dataset.overflowSqueeze = '16ch';
   state.showArchivedEpics = false;
   let epicOptions = null;     // the open popover handle, so cleanup can close it
   let epicOptionsData = { epics: [], counts: new Map() };
