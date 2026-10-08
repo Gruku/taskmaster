@@ -636,3 +636,21 @@ test('a card shows the evidence without markdown marks', async ({ page }) => {
   await boot(page);
   await expect(card(page, 'ISS-012').locator('.issue-card__evidence')).toHaveText('Seen on three laptops in light theme.');
 });
+
+test('a column cut at the bottom fades there while more is below, and the fade goes at the end', async ({ page }) => {
+  await boot(page, { height: 700 });
+  const list = page.locator('.issues-col__list').first();
+  await expect(list).toHaveAttribute('data-more', '');
+  expect(await list.evaluate((el) => getComputedStyle(el).maskImage)).toContain('linear-gradient');
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await expect(list).not.toHaveAttribute('data-more', '');
+});
+
+test('a Status board wider than the page fades its right edge until it is scrolled to the end', async ({ page }) => {
+  await boot(page, { width: 1100 });
+  await pickView(page, 'Status');
+  const cols = page.locator('.issues-board__cols');
+  await expect(cols).toHaveAttribute('data-more', '');
+  await cols.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  await expect(cols).not.toHaveAttribute('data-more', '');
+});
