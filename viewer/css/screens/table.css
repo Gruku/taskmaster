@@ -54,7 +54,8 @@ table.tbl {
   padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
   white-space: nowrap; overflow: hidden; vertical-align: middle;
 }
-.tbl-row { cursor: pointer; }
+/* No hand on the row itself: the title link is the row's one real target (a keyboard reaches it; a click anywhere on the
+   row is forwarded to it, table.js). A hand on the row would promise a target no keyboard can reach. */
 .tbl-row:hover > .tbl-cell { background: var(--card-bg-hover); }
 
 /* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. The fade's right and
