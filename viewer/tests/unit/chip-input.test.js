@@ -195,6 +195,23 @@ test('2. suggestions open on the shared popover as a labelled listbox of options
   await cleared();
 });
 
+test('a suggestion with a status shows the shared marker (shape plus word); a plain hint stays text', async () => {
+  const src = async () => [
+    { value: 'T-1', label: 'T-1 · One', marker: { label: 'Blocked', shape: '◆', tone: 'critical' } },
+    { value: 'T-2', label: 'T-2 · Two', hint: 'todo' },
+  ];
+  const { input } = combo({ source: src });
+  await type(input, 'T');
+  const [withMarker, withHint] = options();
+  const m = withMarker.querySelector('.ef-chip-dd-hint .marker.marker--critical');
+  assert.ok(m, 'the status is a marker');
+  assert.equal(m.querySelector('.marker__shape').dataset.shape, 'diamond');
+  assert.equal(m.querySelector('.marker__word').textContent, 'Blocked');
+  assert.equal(withHint.querySelector('.ef-chip-dd-hint').textContent, 'todo');
+  assert.equal(withHint.querySelector('.marker'), null);
+  await cleared();
+});
+
 test('3. keys are unchanged: arrows move the highlight, Enter and Tab pick, Escape clears and closes, Backspace removes', async () => {
   const { el, input } = combo({ value: ['z9'] });
   await type(input, 'al');

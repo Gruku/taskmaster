@@ -334,3 +334,19 @@ test('at 1440 the pane sits beside the list with no Back to ideas, and every pan
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('button', { name: 'Back to ideas' })).toBeVisible();
 });
+
+test('a tag in the Tags popover hovers with the popover hover', async ({ page }) => {
+  await boot(page);
+  await tagsButton(page).click();
+  const hover = await page.evaluate(() => {
+    const d = document.createElement('div');
+    d.style.background = 'var(--popover-surface-hover)';
+    document.body.append(d);
+    const c = getComputedStyle(d).backgroundColor;
+    d.remove();
+    return c;
+  });
+  const option = tagDialog(page).locator('.tag-filter__option').first();
+  await option.hover();
+  await expect.poll(() => option.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(hover);
+});

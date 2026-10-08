@@ -30,6 +30,9 @@
 .ed-label { margin-right: var(--space-xs); }
 .ed-h { margin: 0 0 var(--space-xs); }
 .ed-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-lg); }
+/* No attention list and no docs: the main column takes the whole width, as the task rows then should. */
+.ed-grid:has(> .ed-side:empty) { grid-template-columns: minmax(0, 1fr); }
+.ed-side:empty { display: none; }
 .ed-main { min-width: 0; display: flex; flex-direction: column; gap: var(--space-lg); }
 .ed-md { color: var(--foreground-default); }
 
@@ -41,12 +44,15 @@
 .ed-seg--in-review { background: var(--tone-warning); }
 .ed-seg--blocked { background: var(--tone-critical); }
 .ed-seg--done { background: var(--tone-success); }
-/* Todo is a light neutral that still reads against the track; Archived a darker one, so the two never merge. */
+/* Todo is a light neutral that still reads against the track; Archived the same neutral hatched, so the two never
+   merge and Archived never turns into a near-black block on the light ground. */
 .ed-seg--todo { background: var(--border-strong); }
-.ed-seg--archived { background: var(--foreground-subtle); }
+.ed-seg--archived { background: repeating-linear-gradient(135deg, var(--border-strong) 0 2px, transparent 2px 4px); }
 .ed-legend__key { flex: 0 0 auto; width: var(--space-xs); height: var(--space-xs); border-radius: var(--radius-xs); }
 .ed-legend { list-style: none; margin: var(--space-xs) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-micro) var(--space-md); }
 .ed-legend li { display: inline-flex; align-items: center; gap: var(--space-micro); }
+/* One glyph per entry: the key is the bar's own colour, so the status shape beside it would only repeat it. */
+.ed-legend .marker__shape { display: none; }
 .ed-legend__n, .ed-group__n { color: var(--foreground-subtle); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
 
 .ed-group + .ed-group { margin-top: var(--space-sm); }

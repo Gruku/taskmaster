@@ -133,6 +133,13 @@ function bareCheckbox(node) {
 function markTasks(html) {
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
+  // An ordered list's marker hangs left of its text: the indent grows with the digits of its last number.
+  for (const ol of tpl.content.querySelectorAll('ol')) {
+    const start = Number.parseInt(ol.getAttribute('start') ?? '1', 10);
+    const last = Math.max(Math.abs(Number.isFinite(start) ? start : 1) + ol.children.length - 1, 1);
+    const digits = String(last).length;
+    if (digits > 1) ol.setAttribute('data-digits', String(Math.min(digits, 6)));
+  }
   for (const box of tpl.content.querySelectorAll('input')) {
     const done = box.hasAttribute('checked');
     const mark = document.createElement('span');

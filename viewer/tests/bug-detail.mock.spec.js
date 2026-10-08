@@ -500,3 +500,9 @@ for (const theme of ['dark', 'light']) {
     }
   });
 }
+
+test('Discovered is said once, in the meta line', async ({ page }) => {
+  await open(page, '#/bug/B-031');
+  await expect(mount(page).locator('[data-test="meta"]')).toContainText('discovered');
+  await expect(mount(page).locator('.td-dates')).toHaveCount(0);
+});

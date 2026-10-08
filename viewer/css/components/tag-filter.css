@@ -37,7 +37,7 @@
   color: var(--foreground-default);
   cursor: pointer;
 }
-.tag-filter__option:hover { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
+.tag-filter__option:hover { background: var(--popover-surface-hover); color: var(--foreground-bold); }
 .tag-filter__option[hidden] { display: none; }
 .tag-filter__option input { margin: 0; accent-color: var(--signature-fill); }
 

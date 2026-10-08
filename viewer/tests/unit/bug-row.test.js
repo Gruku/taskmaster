@@ -52,7 +52,9 @@ test('2: the name is id, severity marker, two-line title', () => {
 
 test('3: content is status marker, archived tag, components, age', () => {
   const { content } = parts(bugRow(bug({ archived: true }), { now }));
-  const [status, tag, comps, age] = content.children;
+  const [cell, comps, age] = content.children;
+  assert.ok(cell.classList.contains('bug-row__status'));
+  const [status, tag] = cell.children;
   assert.ok(status.classList.contains('marker'));
   assert.equal(status.querySelector('.marker__word').textContent, 'Open');
   assert.ok(tag.classList.contains('list-tag'));

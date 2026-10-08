@@ -25,7 +25,8 @@ function _source(kind, getBacklog) {
         .map(t => ({
           value: t.id,
           label: `${t.id} · ${t.title || ''}`,
-          hint: t.status ? statusMeta('task', t.status).label : '',
+          // Said the way every task status is said: a shape plus a word, never the bare word.
+          marker: t.status ? statusMeta('task', t.status) : null,
         }));
     };
   }

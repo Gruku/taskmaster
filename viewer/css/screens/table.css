@@ -1,5 +1,5 @@
 /* User intent: the Table shows every task in fixed columns that never cut an ID, keeps ID and title in view while the
-   rest scrolls sideways inside its frame (a fade says there is more), and reads in both themes. */
+   rest scrolls sideways inside its frame (a fade at either edge says there is more), and reads in both themes. */
 .tbl-screen { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--space-md); }
 
 /* The filter rail: one chip row per group. A whole group may move to the next line; chips inside a group never wrap,
@@ -29,13 +29,16 @@
 }
 /* scroll-padding-top (the header's height) is set from table.js. */
 .tbl-host { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
-/* Above the sticky header (z-index 3) and every cell, so the cut column fades instead of stopping dead. */
+/* Above the sticky header (z-index 3) and every cell, so the cut column fades instead of stopping dead: at the end
+   while more columns wait there, and just after the sticky edge (left set from table.js) once some have scrolled under it. */
 .tbl-fade {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 4; width: var(--space-2xl); pointer-events: none;
-  background: linear-gradient(to left, var(--card-bg), transparent); opacity: 0;
+  position: absolute; top: 0; bottom: 0; z-index: 4; width: var(--space-2xl); pointer-events: none; opacity: 0;
   transition: opacity var(--dur-standard) var(--ease-hourglass);
 }
-.tbl-frame[data-more-end] .tbl-fade { opacity: 1; }
+.tbl-fade--end { right: 0; background: linear-gradient(to left, var(--card-bg), transparent); }
+.tbl-fade--start { background: linear-gradient(to right, var(--card-bg), transparent); }
+.tbl-frame[data-more-end] .tbl-fade--end,
+.tbl-frame[data-scrolled] .tbl-fade--start { opacity: 1; }
 .tbl-probe { position: absolute; visibility: hidden; white-space: nowrap; }
 
 table.tbl {
@@ -50,6 +53,8 @@ table.tbl {
   letter-spacing: var(--tracking-wide); text-transform: uppercase; text-align: left; white-space: nowrap; user-select: none;
 }
 .tbl-th[aria-sort] { color: var(--foreground-bold); }
+/* Gone under the sticky edge (table.js): no fragment of the word shows; the keyboard on it still sees it. */
+.tbl-th[data-under]:not(:focus-within) > * { visibility: hidden; }
 .tbl-cell {
   padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
   white-space: nowrap; overflow: hidden; vertical-align: middle;
@@ -61,6 +66,9 @@ table.tbl {
 /* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. The fade's right and
    bottom offsets (the scrollbars' size) are set there too. */
 .tbl-th[data-key="id"], .tbl-cell--id { position: sticky; left: 0; z-index: 1; }
+/* An ID longer than the column (table.js ID_MAX_CH) wraps, at its hyphens first; it is never cut. */
+.tbl-cell--id { white-space: normal; }
+.tbl-cell--id .t-id { white-space: normal; overflow-wrap: anywhere; }
 .tbl-th[data-key="title"], .tbl-cell--title { position: sticky; z-index: 1; border-right: 1px solid var(--border-subtle); }
 .tbl-th:is([data-key="id"], [data-key="title"]) { z-index: 3; }
 .tbl-frame[data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-strong); }

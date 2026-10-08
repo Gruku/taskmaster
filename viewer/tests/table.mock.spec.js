@@ -298,7 +298,7 @@ test('at 1440 with 230 long rows the ID column fits its longest ID and ID and ti
   expect(ids).toEqual([]);
   expect(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('.tbl-frame')).toHaveAttribute('data-more-end', '');
-  await expect(page.locator('.tbl-fade')).toHaveCSS('opacity', '1');
+  await expect(page.locator('.tbl-fade--end')).toHaveCSS('opacity', '1');
   const titles = await page.locator('.tbl-cell--title .truncate').evaluateAll((els) => els.filter((el) => el.title !== el.textContent).length);
   expect(titles).toBe(0);
   await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
@@ -473,8 +473,8 @@ test('the fade stops at classic scrollbars, and the header height is the host\'s
   // Windows scrollbar does (offsetWidth - clientWidth counts both alike), so the arithmetic is what is checked.
   await page.addStyleTag({ content: '.tbl-host { border-right: 15px solid transparent; border-bottom: 15px solid transparent; }' });
   await expect.poll(() => host(page).evaluate((el) => [el.offsetWidth - el.clientWidth, el.offsetHeight - el.clientHeight])).toEqual([15, 15]);
-  await expect(page.locator('.tbl-fade')).toHaveCSS('right', '15px');
-  await expect(page.locator('.tbl-fade')).toHaveCSS('bottom', '15px');
+  await expect(page.locator('.tbl-fade--end')).toHaveCSS('right', '15px');
+  await expect(page.locator('.tbl-fade--end')).toHaveCSS('bottom', '15px');
   const head = await page.locator('table.tbl thead').evaluate((el) => `${el.offsetHeight}px`);
   await expect(host(page)).toHaveCSS('scroll-padding-top', head);
 });
@@ -682,10 +682,10 @@ test('leaving the Table for Epics takes Add task out of row 1 and replaces the c
 test('the right-edge fade paints above every cell, the sticky header included, while there is more to the right', async ({ page }) => {
   await boot(page, { board: LONG_IDS_BOARD });
   await expect(page.locator('.tbl-frame')).toHaveAttribute('data-more-end', '');
-  const fade = page.locator('.tbl-fade');
+  const fade = page.locator('.tbl-fade--end');
   await expect(fade).toHaveCSS('background-image', /linear-gradient/);
   const top = await page.evaluate(() => {
-    const f = document.querySelector('.tbl-fade');
+    const f = document.querySelector('.tbl-fade--end');
     f.style.pointerEvents = 'auto';
     const r = f.getBoundingClientRect();
     const th = document.querySelector('.tbl-th').getBoundingClientRect();
@@ -697,3 +697,92 @@ test('the right-edge fade paints above every cell, the sticky header included, w
   await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
   await expect(fade).toHaveCSS('opacity', '0');
 });
+
+// TB-01/TB-02: at 1440 Size was cut at the frame's edge while Phase, Area and Epic left ~300px empty, titles ended in
+// "…" beside that room, one 27-character ID made the ID column ~220px for "T-1000", and a column scrolled under the
+// sticky edge showed a stray fragment there.
+for (const [name, board] of [['the table', TABLE_BOARD], ['230 long rows', LONG_IDS_BOARD]]) {
+  test(`1440, ${name}: the frame's edge cuts no column it shows, only the next one peeks under the fade`, async ({ page }) => {
+    await boot(page, { board });
+    await page.evaluate(() => document.fonts.ready);
+    const m = await page.evaluate(() => {
+      const frame = document.querySelector('.tbl-host').getBoundingClientRect();
+      const fade = document.querySelector('.tbl-fade--end').getBoundingClientRect();
+      const edge = frame.left + document.querySelector('.tbl-host').clientWidth;
+      const cols = [...document.querySelectorAll('table.tbl thead th')].map((th) => ({ key: th.dataset.key, ...th.getBoundingClientRect().toJSON() }));
+      return { edge, fadeLeft: fade.left, cut: cols.filter((c) => c.left < edge - 1 && c.right > edge + 1).map((c) => ({ key: c.key, left: c.left })) };
+    });
+    // The one column that crosses the edge starts under the fade (the cue that more wait there); none is cut before it.
+    expect(m.cut.length, JSON.stringify(m)).toBeLessThanOrEqual(1);
+    for (const c of m.cut) expect(c.left, `${c.key} starts under the fade`).toBeGreaterThanOrEqual(m.fadeLeft - 1);
+  });
+}
+
+test('1440: the ID column fits the usual IDs; a longer ID wraps instead of widening the column or being cut', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  const m = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.tbl-cell--id')];
+    const long = cells.find((c) => c.textContent === 'database-native-n17-cutover');
+    const usual = cells.find((c) => c.textContent === 'v3-polish-009');
+    const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el.querySelector('.t-id')); return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size; };
+    return {
+      col: document.querySelector('th[data-key="id"]').getBoundingClientRect().width,
+      cut: cells.filter((c) => c.scrollWidth > c.clientWidth).map((c) => c.textContent),
+      longLines: lines(long), usualLines: lines(usual),
+    };
+  });
+  expect(m.cut).toEqual([]);
+  expect(m.col, 'the column is sized to the usual IDs, not to the one 27-character ID').toBeLessThan(140);
+  expect(m.usualLines).toBe(1);
+  expect(m.longLines).toBeGreaterThan(1);
+});
+
+test('scrolled sideways, a fade starts at the sticky edge over the columns that went under it', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  const start = page.locator('.tbl-fade--start');
+  await expect(start).toHaveCSS('opacity', '0');
+  await host(page).evaluate((el) => { el.scrollLeft = 300; });
+  await expect(start).toHaveCSS('opacity', '1');
+  await expect(start).toHaveCSS('background-image', /linear-gradient/);
+  const at = await page.evaluate(() => ({
+    fade: document.querySelector('.tbl-fade--start').getBoundingClientRect().left,
+    edge: document.querySelector('th[data-key="title"]').getBoundingClientRect().right,
+  }));
+  expect(Math.abs(at.fade - at.edge), JSON.stringify(at)).toBeLessThanOrEqual(1);
+});
+
+// A header cut by the sticky edge would show a fragment of its word under the fade ("IC ⇕" of EPIC, re-audit N2).
+test('scrolled sideways, a header cut by the sticky edge shows nothing until it comes back out', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  const look = () => page.evaluate(() => {
+    const edge = document.querySelector('th[data-key="title"]').getBoundingClientRect().right;
+    return [...document.querySelectorAll('th.tbl-th:not([data-key="id"]):not([data-key="title"])')].map((th) => {
+      const r = th.getBoundingClientRect();
+      const label = th.firstElementChild ? getComputedStyle(th.firstElementChild).visibility : 'visible';
+      return { key: th.dataset.key, cut: r.left < edge - 0.5 && r.right > edge + 0.5, under: r.right <= edge + 0.5, label };
+    });
+  });
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  // The cue follows the scroll event: wait for it, then every header cut or under the edge is blank and the rest show.
+  await expect.poll(async () => (await look()).filter((h) => h.cut || h.under).every((h) => h.label === 'hidden')).toBe(true);
+  const scrolled = await look();
+  expect(scrolled.some((h) => h.cut)).toBe(true);
+  for (const h of scrolled) expect(h.label, JSON.stringify(h)).toBe(h.cut || h.under ? 'hidden' : 'visible');
+  await host(page).evaluate((el) => { el.scrollLeft = 0; });
+  await expect.poll(async () => (await look()).every((h) => h.label === 'visible')).toBe(true);
+});
+
+// The sticky ID and title headers never count as gone under the edge, at any frame width (a 1280 laptop's frame scrolls
+// further than the edge is wide, which once blanked them).
+for (const width of [1280, 1366]) {
+  test(`at ${width}, scrolled to the end, the ID and Title headers keep their labels`, async ({ page }) => {
+    await boot(page, { board: LONG_IDS_BOARD, width, height: 800 });
+    await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+    await expect.poll(() => page.locator('th.tbl-th[data-under]').count()).toBeGreaterThan(0);
+    for (const key of ['id', 'title']) {
+      const th = page.locator(`th.tbl-th[data-key="${key}"]`);
+      await expect(th, key).not.toHaveAttribute('data-under', '');
+      expect(await th.evaluate((el) => getComputedStyle(el.firstElementChild).visibility), key).toBe('visible');
+    }
+  });
+}

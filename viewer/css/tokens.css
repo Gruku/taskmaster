@@ -195,6 +195,11 @@
   --overlay-surface-sunken: var(--bg-recessed);
   --overlay-surface-hover: var(--ground-20);
   --overlay-surface-active: var(--ground-30);
+  /* A popover (menu, suggestion list, Filters) floats over a dialog as often as over the page, so it is not the dialog's
+     ground: it takes the raised ground, below the dialog's, edged by --border-strong. The step up (ground-20) would
+     leave the critical shape under 3:1 (2.88); here it is 3.6, and on the hovered item (ground-15) 3.3. */
+  --popover-surface: var(--surface-raised);
+  --popover-surface-hover: var(--ground-15);
   /* The hue a status, severity or priority shape is drawn in. A shape is not text: it must reach 3:1 against the
      page, a card and a modal, so each theme names the step that does. */
   --tone-neutral: var(--foreground-subtle);
@@ -236,6 +241,7 @@
   /* ── Set from JS ── */
   --conflict-banner-height: 0px;              /* the shown conflict banner's height; the modal overlay starts below it */
   --tilt: 0deg;                               /* a desk note's tilt (desk/note-card.js) */
+  --note-rows: 1;                             /* the 4px board rows a desk note spans when packed (screens/desk.js) */
   --epic: var(--foreground-subtle);           /* an epic's swatch, pointed at its --cat-N (lib/epics.js) */
 }
 
@@ -270,11 +276,11 @@
   --color-warning-subtle: rgba(212, 120, 14, 0.15);
   --color-warning-bold: #b36100;
   /* @generated:end */
-  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface,
-     its column the darkest, and hover steps the card down to the page ground. */
+  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface and its column the
+     darkest. Hover steps the card halfway to the page ground: the page's own step would merge a hovered card into it. */
   --col-bg: var(--ground-10);
   --card-bg: var(--ground-0);
-  --card-bg-hover: var(--ground-5);
+  --card-bg-hover: color-mix(in srgb, var(--ground-0), var(--ground-5));
   --note-ink: var(--ground-100);
   --note-ink-soft: var(--ground-50);
   --text-accent: var(--signature);
@@ -286,6 +292,10 @@
   --overlay-surface-sunken: var(--ground-5);
   --overlay-surface-hover: var(--ground-15);
   --overlay-surface-active: var(--ground-20);
+  /* Nothing is lighter than the dialog's ground-0 here, so a popover shares it and its border carries the edge.
+     Its hovered item steps only to ground-5: on the dialog's ground-15 hover no status shape reached 3:1. */
+  --popover-surface: var(--overlay-surface);
+  --popover-surface-hover: var(--ground-5);
   /* On the light grounds the plain success and warning steps fall below 3:1, so shapes take the bold step.
      No orange in RR reaches 3:1 here (accent-orange 2.31, pastel-orange-grounded 2.34 on the page), so the orange
      tone shares the bold warning step; the shape and the word still tell High from Medium. */

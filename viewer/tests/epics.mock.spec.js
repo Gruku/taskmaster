@@ -41,7 +41,7 @@ test('each epic is one link row with its lifecycle word, a bar and closed/total'
   const word = (id) => row(page, id).locator('.epic-row__status .marker__word');
   await expect(word('viewer')).toHaveText('Active');
   await expect(word('later')).toHaveText('Planned');
-  await expect(word('odd')).toHaveText('paused');
+  await expect(word('odd')).toHaveText('Paused');
   await expect(word('bare')).toHaveText('Active');
   await expect(page.getByText('Exploring')).toHaveCount(0);
   await expect(row(page, 'viewer').locator('.epic-row__count')).toHaveText('1/4');
@@ -235,3 +235,20 @@ test('the epic count is in topbar row 1 and says how many the search leaves; Epi
   await page.getByPlaceholder('Filter epics…').fill('');
   await expect(count).toHaveText('7 epics');
 });
+
+// Re-audit B 2j and EP-02: the rows stopped 52px short of the search's right edge; the empty track was barely visible.
+for (const theme of ['dark', 'light']) {
+  test(`${theme}, 1440: epic rows end where the search ends, and an empty progress track stands off its card`, async ({ page }) => {
+    await boot(page, { theme });
+    const m = await page.evaluate(() => {
+      const search = document.querySelector('#topbar-actions [data-global-search]').closest('.tm-search') ?? document.querySelector('#topbar-actions [data-global-search]');
+      const rowEl = document.querySelector('.epic-row');
+      return {
+        searchRight: search.getBoundingClientRect().right, rowRight: rowEl.getBoundingClientRect().right,
+        track: getComputedStyle(document.querySelector('.epic-row__bar')).backgroundColor, card: getComputedStyle(rowEl).backgroundColor,
+      };
+    });
+    expect(Math.abs(m.rowRight - m.searchRight), JSON.stringify(m)).toBeLessThanOrEqual(1);
+    expect(m.track).not.toBe(m.card);
+  });
+}

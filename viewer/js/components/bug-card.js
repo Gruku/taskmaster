@@ -24,8 +24,11 @@ export function bugRow(bug, { now = Date.now() } = {}) {
   else sev.setAttribute('aria-hidden', 'true');
   name.append(span('bug-row__id', bug.id), sev, truncate(bug.title || 'Untitled', { lines: 2, className: 'bug-row__title' }));
 
-  const content = [statusMarker('bug', bug.status || 'open')];
-  if (archived) content.push(span('list-tag', 'Archived'));
+  // One cell for the status and its Archived tag, so the status column is the same column on every row.
+  const status = span('bug-row__status');
+  status.append(statusMarker('bug', bug.status || 'open'));
+  if (archived) status.append(span('list-tag', 'Archived'));
+  const content = [status];
   const components = Array.isArray(bug.components) ? bug.components.filter(Boolean) : [];
   if (components.length) content.push(truncate(components.join(', '), { className: 'bug-row__components' }));
   if (bug.discovered) {
@@ -44,6 +47,7 @@ export function bugRow(bug, { now = Date.now() } = {}) {
     a.className = 'bug-row__found-in';
     a.setAttribute('href', `#/task/${encodeURIComponent(bug.found_in)}`);
     a.textContent = `found in ${bug.found_in}`;
+    a.title = a.textContent;   // cut with an ellipsis when long (bugs.css)
     controls.push(a);
   }
 

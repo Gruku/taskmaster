@@ -239,3 +239,57 @@ for (const theme of ['dark', 'light']) {
     expect(result.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+test('the count says "visible" only while the list is shorter than the total, not merely while a filter is set', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  await expect(count).toHaveText('7 bugs · 4 visible');
+  // Press every status chip the fixtures offer: all pressed hides nothing.
+  const unpressed = page.getByRole('group', { name: 'Status' }).locator('button[aria-pressed="false"]');
+  while (await unpressed.count()) await unpressed.first().click({ modifiers: ['Shift'] });
+  await expect(count).toHaveText('7 bugs');
+  await statusChip(page, 'Fixed').click({ modifiers: ['Shift'] });
+  await expect(count).toContainText('visible');
+});
+
+test('status, age and found-in are columns: each at the same x on every row', async ({ page }) => {
+  await boot(page);
+  const xs = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => ({
+    status: r.querySelector('.bug-row__status').getBoundingClientRect().left,
+    age: r.querySelector('.bug-row__age')?.getBoundingClientRect().left,
+    found: r.querySelector('.bug-row__found-in')?.getBoundingClientRect().left,
+  })));
+  for (const k of ['status', 'age', 'found']) expect(new Set(xs.map((x) => x[k]).filter((v) => v != null)).size, k).toBe(1);
+});
+
+test('at 1440 the title keeps at least half the row, and the cells of a row share one top', async ({ page }) => {
+  await boot(page);
+  const m = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => {
+    const box = r.getBoundingClientRect();
+    const tops = ['.bug-row__id', '.bug-row__status', '.bug-row__age'].map((s) => r.querySelector(s)?.getBoundingClientRect().top).filter((v) => v != null);
+    return { share: r.querySelector('.link-row__link').getBoundingClientRect().width / box.width, spread: Math.max(...tops) - Math.min(...tops) };
+  }));
+  for (const x of m) { expect(x.share).toBeGreaterThanOrEqual(0.5); expect(x.spread).toBeLessThanOrEqual(6); }
+});
+
+// One bug's long components list or found-in ID must not widen its column for every row: both are capped, cut with an
+// ellipsis, and keep their full text in a title.
+test('at 1280 one long components list and found-in ID leave every title at least 40% of the row', async ({ page }) => {
+  const long = {
+    ...BUGS[0], id: 'B-777', title: 'Card edge vanishes on the light ground',
+    components: ['viewer-ui', 'store-native', 'linear-sync', 'handover-quotes', 'guard-hooks', 'status-line'],
+    found_in: 'database-native-n17-cutover-follow-up-task',
+  };
+  await boot(page, { width: 1280, height: 800, '/api/bugs': [long, ...BUGS] });
+  const m = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => ({
+    id: r.dataset.bugId,
+    share: r.querySelector('.link-row__link').getBoundingClientRect().width / r.getBoundingClientRect().width,
+  })));
+  for (const x of m) expect(x.share, x.id).toBeGreaterThanOrEqual(0.4);
+  const cells = row(page, 'B-777');
+  await expect(cells.locator('.bug-row__components')).toHaveAttribute('title', long.components.join(', '));
+  await expect(cells.locator('.bug-row__found-in')).toHaveAttribute('title', `found in ${long.found_in}`);
+  for (const sel of ['.bug-row__components', '.bug-row__found-in']) {
+    expect(await cells.locator(sel).evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow), sel).toBe('ellipsis');
+  }
+});

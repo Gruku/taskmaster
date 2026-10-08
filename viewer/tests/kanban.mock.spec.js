@@ -181,7 +181,8 @@ for (const [name, make] of [['the fixture board', richBoard], ['the long board',
 }
 
 test('in a narrow card "New" and the age give way: they wrap below the id, which keeps its priority beside it', async ({ page }) => {
-  await board(page, { board: richBoard(), viewport: { width: 1440, height: 900 } });
+  // 1280: five columns, each card too narrow for id, priority, "New" and the age on one line.
+  await board(page, { board: richBoard(), viewport: { width: 1280, height: 900 } });
   const recent = card(page, 'T-102');
   const [id, pri, tag, title] = await Promise.all(['.card-id', '.card-pri', '.card-new', '.card-title']
     .map((s) => recent.locator(s).boundingBox()));
@@ -263,8 +264,8 @@ test('every phase is named in full or in its title, and the current one is wider
 test('at 390 the phase row is one line; More lists the rest and picking one filters the board', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
   const tops = await page.locator('.phase-strip__items > *').evaluateAll((els) => [...new Set(els.filter((e) => e.offsetParent).map((e) => e.offsetTop))]);
-  // At most two lines: the current phase keeps a readable name, so Archived and More may take a second line (fix round 1).
-  expect(tops.length).toBeLessThanOrEqual(2);
+  // One line (§6): Archived shrinks to its icon and count and the current phase takes what is left (re-audit 2b).
+  expect(tops).toHaveLength(1);
   const more = page.locator('.phase-strip .overflow-more');
   await expect(more).toBeVisible();
   await more.click();
@@ -320,23 +321,42 @@ test('the epic row is one line with More at 1440 and at 390', async ({ page }) =
   }
 });
 
-test('1440, the long board: the epic row fills its width before it parks, and no chip is cut while there is room', async ({ page }) => {
-  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
-  await expect(page.locator('.kanban-filters__epic .overflow-more')).toBeVisible();
-  const m = await page.evaluate(() => {
-    const row = document.querySelector('.kanban-filters__epic .chip-row__chips');
-    const group = row.parentElement;   // the chip-row: its label and the chips
-    const kids = [...row.children].filter((el) => el.getClientRects().length);
-    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    const used = kids.reduce((s, el) => s + el.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1);
-    const chips = [...row.querySelectorAll(':scope > .chip')].filter((el) => el.getClientRects().length);
-    const cut = chips.map((c) => c.querySelector('.chip__label')).filter((l) => l && l.scrollWidth > l.clientWidth).map((l) => l.textContent);
-    return { width: group.clientWidth, free: row.clientWidth - used, epics: chips.filter((c) => c.dataset.value !== '__all__' && c.textContent.trim() !== 'All').length, cut };
+// KB-05: names were cut to ~7 characters (every chip counted at 16ch) and the swatches squeezed to slivers.
+for (const [name, fixture] of [['the board', BOARD], ['the long board', longBoard()]]) {
+  test(`1440, ${name}: epic chips show their names, only the one the free width squeezes in is cut, swatches keep their size`, async ({ page }) => {
+    await board(page, { board: fixture, viewport: { width: 1440, height: 900 } });
+    await page.evaluate(() => document.fonts.ready);
+    const m = await page.evaluate(() => {
+      const row = document.querySelector('.kanban-filters__epic .chip-row__chips');
+      const kids = [...row.children].filter((el) => el.getClientRects().length);
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      const used = kids.reduce((s, el) => s + el.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1);
+      const chips = [...row.querySelectorAll(':scope > .chip:not([data-value="__all__"])')].filter((el) => el.getClientRects().length);
+      // Cut below its own cap (chips.css: 24ch): a label narrower than both its text and that cap.
+      const cut = (c) => {
+        const l = c.querySelector('.chip__label');
+        return l.clientWidth + 1 < Math.min(l.scrollWidth, parseFloat(getComputedStyle(l).maxWidth) || Infinity);
+      };
+      const squeezed = chips.filter((c) => c.hasAttribute('data-overflow-squeezed'));
+      return {
+        free: row.clientWidth - used,
+        squeezeMin: (() => { const p = document.createElement('span'); p.className = 'chip'; p.style.width = '16ch'; row.append(p); const w = p.getBoundingClientRect().width; p.remove(); return w; })(),
+        epics: chips.length,
+        parked: !row.querySelector(':scope > .overflow-more').hidden,
+        squeezed: squeezed.length,
+        cut: chips.filter((c) => !c.hasAttribute('data-overflow-squeezed') && cut(c)).map((c) => c.textContent),
+        squeezedWidth: squeezed[0]?.getBoundingClientRect().width ?? null,
+        swatches: [...row.querySelectorAll(':scope > .chip .chip__swatch')].map((s) => [s.getBoundingClientRect().width, s.getBoundingClientRect().height]),
+      };
+    });
+    expect(m.epics, JSON.stringify(m)).toBeGreaterThanOrEqual(2);
+    expect(m.cut, 'no chip but the squeezed one is cut below its cap').toEqual([]);
+    expect(m.squeezed).toBeLessThanOrEqual(1);
+    if (m.squeezed) expect(m.squeezedWidth, 'the squeezed chip keeps at least 16ch').toBeGreaterThanOrEqual(m.squeezeMin - 1);
+    if (m.parked) expect(m.free, 'with chips parked, the free width left is less than one more chip could use').toBeLessThan(m.squeezeMin);
+    for (const [w, hgt] of m.swatches) expect([w, hgt], 'a swatch is a square, never a sliver').toEqual([8, 8]);
   });
-  expect(m.width, `the epic row is at least 600px wide (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(600);
-  expect(m.epics, `at least three epic chips visible (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(3);
-  if (m.free >= 80) expect(m.cut, `no chip is cut while the row has ${Math.round(m.free)}px free`).toEqual([]);
-});
+}
 
 test('at 390 Epic options sits on the epic line, not on a row of its own', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
@@ -1050,4 +1070,92 @@ test('a collapsed In review rail hides its whisper (nothing cut) and its title k
   expect(s.whisperCut).toBe(false);
   expect(s.title).toBe('In review, waiting on you');
   await expect(colOf(page, 'in-review').getByRole('heading', { level: 2 })).toHaveAccessibleName(/waiting on you/);
+});
+
+// Re-audit 2a: a card inside a bundle frame was 10px narrower than a loose one, and T-1015's "37d" dropped under "Critical".
+test('1440: a card inside a bundle frame keeps its age on line 1, with the same room as a loose card', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.evaluate(() => document.fonts.ready);
+  const m = await page.evaluate(() => {
+    const inner = (c) => { const cs = getComputedStyle(c); return c.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
+    const framed = [...document.querySelectorAll('.bundle-frame > .card-task')];
+    const col = framed[0].closest('.kanban-col');
+    const loose = col.querySelector('.kanban-col-body > .card-task');
+    return {
+      n: framed.length,
+      room: [inner(framed[0]), inner(loose)],
+      wrapped: framed.filter((c) => {
+        const age = c.querySelector('.card-age');
+        return age && Math.abs(age.getBoundingClientRect().top - c.querySelector('.card-id').getBoundingClientRect().top) > 4;
+      }).map((c) => c.dataset.taskId),
+    };
+  });
+  expect(m.n).toBeGreaterThan(0);
+  expect(Math.abs(m.room[0] - m.room[1]), `content width framed vs loose ${m.room}`).toBeLessThanOrEqual(1);
+  expect(m.wrapped).toEqual([]);
+});
+
+// Re-audit 2e/2g: parked in Filters the density control filled half its frame; Epic options listed names in the body face.
+test('390: in Filters, Minimal and Full share the density control\'s width', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await page.locator('#topbar-actions > .overflow-more').click();
+  const dens = page.getByRole('dialog', { name: 'Filters' }).locator('.kanban-density');
+  await expect(dens).toBeVisible();
+  const m = await dens.evaluate((el) => ({ frame: el.clientWidth, halves: [...el.children].map((b) => b.getBoundingClientRect().width) }));
+  expect(Math.abs(m.halves[0] - m.halves[1]), JSON.stringify(m)).toBeLessThanOrEqual(1);
+  expect(m.halves[0] + m.halves[1], JSON.stringify(m)).toBeGreaterThanOrEqual(m.frame - 2);
+});
+
+test('1440: Epic options lists its epics in the Technical face of the Epic row\'s More list', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  const name = page.locator('.epic-options .epic-option__name').first();
+  await expect(name).toBeVisible();
+  const chip = await page.locator('.kanban-filters__epic .chip').first().evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize]);
+  expect(await name.evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize])).toEqual(chip);
+});
+
+// Epic options is a popover like every other: its ground (and the scroll cue painted in it) and its row hover are the
+// popover's tokens, not the dialog's.
+test('Epic options sits on the popover ground and its rows hover with the popover hover', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const token = (name) => page.evaluate((v) => {
+    const d = document.createElement('div');
+    d.style.background = `var(${v})`;
+    document.body.append(d);
+    const c = getComputedStyle(d).backgroundColor;
+    d.remove();
+    return c;
+  }, name);
+  await page.locator('.epic-options-btn').click();
+  const pop = page.locator('.popover.epic-options');
+  await expect(pop).toBeVisible();
+  expect(await pop.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await token('--popover-surface'));
+  const row = pop.locator('.epic-option').first();
+  await row.hover();
+  await expect.poll(() => row.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await token('--popover-surface-hover'));
+});
+
+// On a phone the current phase's count gives way to its name, and a progress bar under the name still shows how far
+// it is (re-audit N1: the chip's flex layout had squeezed the bar to nothing). At desktop width the count says it.
+test('at 390 the current phase shows its progress as a bar under its name, inside the chip', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const cur = page.locator('.phase-strip .phase-chip--current');
+  const look = await cur.evaluate((el) => {
+    const r = (s) => el.querySelector(s).getBoundingClientRect();
+    const [name, bar, chip] = [r('.phase-chip__name'), r('.phase-chip__bar'), el.getBoundingClientRect()];
+    return { barW: bar.width, nameW: name.width, below: bar.top >= name.bottom, inside: bar.bottom <= chip.bottom };
+  });
+  expect(look.barW).toBeGreaterThan(0);
+  expect(look.barW).toBeCloseTo(look.nameW, 0);
+  expect(look).toMatchObject({ below: true, inside: true });
+  await expect(cur).toHaveAttribute('title', /\d+\/\d+ done/);
+});
+
+test('at desktop width the current phase says its count on its one row', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const cur = page.locator('.phase-strip .phase-chip--current');
+  await expect(cur.locator('.phase-chip__count')).toBeVisible();
+  await expect(cur.locator('.phase-chip__count')).toHaveText(/^\d+\/\d+$/);
+  await expect(cur.locator('.phase-chip__bar')).toBeHidden();
 });

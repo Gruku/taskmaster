@@ -9,8 +9,10 @@
 /* Hover is rows.css's --card-bg-hover. */
 .bug-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
+  /* Status, components, age and found-in are columns, not a cluster: each sits at the same x on every row (on desktop
+     the rows share the list's tracks, so the title takes the rest and the others fit their widest cell). */
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: baseline;
   gap: var(--space-xs) var(--space-md);
   padding: var(--space-sm) var(--space-md);
   background: var(--card-bg);
@@ -37,9 +39,20 @@
   font-size: var(--size-narrator-small);
   overflow-wrap: anywhere;
 }
-.bug-row > .link-row__content { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; white-space: nowrap; }
+.bug-row > .link-row__content,
+.bug-row > .link-row__controls { display: contents; }
+.bug-row > .link-row__link,
+.bug-row__status,
+.bug-row__components,
+.bug-row__age,
+.bug-row__found-in { grid-row: 1; white-space: nowrap; min-width: 0; }
+.bug-row > .link-row__link { grid-column: 1; }
+.bug-row__status { grid-column: 2; display: inline-flex; align-items: center; gap: var(--space-xs); }
+.bug-row__components { grid-column: 3; }
+.bug-row__age { grid-column: 4; }
+.bug-row__found-in { grid-column: 5; overflow: hidden; text-overflow: ellipsis; }
 .bug-row__components {
-  max-width: 18ch;
+  max-width: 100%;
   font-family: var(--font-technical);
   font-weight: var(--font-technical-weight);
   font-size: var(--size-technical-small);
@@ -63,14 +76,36 @@
 .bug-row__found-in:focus-visible { text-decoration: underline; }
 
 @media (max-width: 768px) {
-  .bug-row { grid-template-columns: minmax(0, 1fr); }
+  /* The name takes the first line; the meta and "found in" share the second instead of "found in" standing alone. */
+  .bug-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; align-items: center; }
+  .bug-row > .link-row__link { grid-column: 1 / -1; }
   /* Not max-content twice: the title spans both tracks and would size them to its whole unwrapped line. */
   .bug-row__name { grid-template-columns: max-content minmax(0, 1fr); }
   .bug-row__title { grid-column: 1 / -1; }
-  .bug-row > .link-row__content { flex-wrap: wrap; }
+  /* The columns collapse to a wrapped line under the name: the contents are a flex row again. */
+  .bug-row > .link-row__content { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); min-width: 0; }
+  .bug-row > .link-row__controls { display: block; justify-self: end; }
+  .bug-row__status, .bug-row__components, .bug-row__age, .bug-row__found-in { grid-row: auto; grid-column: auto; }
+  .bug-row > .link-row__link { grid-row: auto; }
   .bug-row > .link-row__link,
   .bug-row__found-in { min-height: var(--touch-target); }
   .bug-row__found-in { display: inline-flex; align-items: center; }
   /* The Sort select sits in row 2 or, parked, in its Filters popover. */
   #bugs-sort { min-height: var(--touch-target); }
+}
+@media (min-width: 769px) {
+  .bug-row__found-in { position: relative; z-index: 1; }
+}
+
+/* The chip row's "More" is a chip among chips: bordered like them, not bare text. */
+.bugs .chip-row .overflow-more { border: 1px solid var(--border-default); }
+
+@media (min-width: 769px) {
+  .bugs__list { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: var(--space-xs) 0; }
+  .bugs__list[hidden] { display: none; }
+  .bug-row { grid-template-columns: subgrid; grid-column: 1 / -1; column-gap: var(--space-md); }
+  /* The shared tracks fit their widest cell, so one long list or task ID would widen its column for every row and
+     squeeze every title: both are capped, cut with an ellipsis, and keep their full text in their title. */
+  .bug-row__components { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+  .bug-row__found-in { max-width: 24ch; }
 }

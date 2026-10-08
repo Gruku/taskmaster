@@ -184,6 +184,21 @@ for (const [name, viewport] of [['1440×900', DESKTOP], ['390×844', PHONE]]) {
   });
 }
 
+// Re-audit: in dark the rows were divided by --border-subtle, which is the banner's own ground, so no line showed.
+for (const theme of ['dark', 'light']) {
+  test(`${theme}: the field rows are divided by a line that differs from the banner's ground`, async ({ page }) => {
+    const { banner } = await conflict(page, { title: 'My title', branch: 'feat/mine' }, { theme });
+    const rows = banner.locator('.cb-multi-row');
+    await expect(rows).toHaveCount(2);
+    const ground = await banner.evaluate((el) => getComputedStyle(el).backgroundColor);
+    for (const edge of await rows.evaluateAll((els) => els.map((el) => getComputedStyle(el).borderTopColor))) {
+      expect(edge).not.toBe(ground);
+    }
+    expect(await rows.last().evaluate((el) => getComputedStyle(el).borderBottomColor)).not.toBe(ground);
+    await leave(page);
+  });
+}
+
 for (const theme of ['dark', 'light']) {
   test(`axe (${theme}): the banner has no violation`, async ({ page }) => {
     await conflict(page, { title: 'My title', branch: 'feat/mine' }, { theme });

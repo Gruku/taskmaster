@@ -29,11 +29,12 @@
 .kanban-filters__epic { flex: 1 1 240px; min-width: 240px; }
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
-/* Epic chips are counted at a short basis (the overflow row measures them unshrunk, and an overflowing row cannot
-   grow them), then the ones left grow into the free width up to their full name: the row fills before it parks and a
-   name is cut only when the visible chips together outgrow the row. Higher specificity than chips.css .chip. */
-.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) { flex: 1 0 16ch; min-width: 0; max-width: max-content; overflow: hidden; }
-.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) .chip__label { max-width: none; min-width: 0; }
+/* Epic chips keep their full names (up to chips.css's 24ch); the free width left after them goes to one more chip
+   when it can show at least 16ch of itself (kanban.js sets data-overflow-squeeze; overflow-row.js), and only that one
+   is cut. Its swatch keeps its size. Higher specificity than chips.css .chip. */
+.kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] { flex-shrink: 1; min-width: 0; overflow: hidden; }
+.kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] .chip__label { min-width: 0; }
+.kanban-filters__epic .chip__swatch { flex: none; }
 /* One control height across the bar: More, Epic options and Clear filters match the chips (chips.css .chip). */
 .kanban-filters .overflow-more,
 .kanban-filters .epic-options-btn,
@@ -42,6 +43,16 @@
 .kanban-filters .kanban-clear[hidden] { display: none; }
 
 /* ─────────── EPIC OPTIONS POPOVER (the epic hue is the swatch only; words stay foreground) ─────────── */
+/* The list runs past the popover's height: an edge with rows beyond it shows a soft band (backgrounds only: the
+   'local' covers move with the content and hide each band once its end is reached). */
+.popover.epic-options {
+  background:
+    linear-gradient(var(--popover-surface) 40%, transparent) top / 100% var(--space-lg) no-repeat local,
+    linear-gradient(transparent, var(--popover-surface) 60%) bottom / 100% var(--space-lg) no-repeat local,
+    linear-gradient(var(--border-strong), transparent) top / 100% var(--space-sm) no-repeat scroll,
+    linear-gradient(transparent, var(--border-strong)) bottom / 100% var(--space-sm) no-repeat scroll,
+    var(--popover-surface);
+}
 .epic-options__body { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-xs); min-width: 0; }
 .epic-options__field { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
 .epic-options__label,
@@ -71,9 +82,14 @@
   border-radius: var(--radius-md);
   min-width: 0;
 }
-.epic-option:hover { background: var(--overlay-surface-hover); }
+.epic-option:hover { background: var(--popover-surface-hover); }
+/* The Technical face, as in the Epic row's More list. */
 .epic-option__name {
   flex: 1 1 auto;
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -92,6 +108,9 @@
 .epic-option__count { font-variant-numeric: tabular-nums; }
 .epic-option__pin { flex: 0 0 auto; }
 .epic-option__pin[aria-pressed="true"] { color: var(--foreground-bold); }
+
+/* Parked in Filters the density control spans the list's width; its two halves share it. */
+.overflow-list > .kanban-density > button { flex: 1 1 0; justify-content: center; }
 
 /* Row 2's labelled selects: a Technical label beside the shared edit-field select. */
 .kanban-field { display: inline-flex; align-items: center; gap: var(--space-xs); }
@@ -123,34 +142,38 @@
 }
 .phase-chip--done { color: var(--foreground-subtle); }
 .phase-chip--done[aria-pressed="true"] { color: var(--foreground-bold); }
-/* The current phase: number, name and count on one row, the progress bar spanning under the name. */
-.phase-chip--current {
-  display: inline-grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: center;
-  column-gap: var(--space-micro);
-  row-gap: var(--space-micro);
-}
-/* Kept in the row whatever its width: at 390 it gives way (its name truncates) so More stays on screen. Two classes:
-   chips.css loads after this sheet and its .chip sets flex: 0 0 auto. */
+/* The current phase: number, name and count on one row, as the other chips. Kept in the row whatever its width: at
+   390 it gives way (its name truncates) so More stays on screen. Two classes: chips.css loads after this sheet and its
+   .chip sets flex: 0 0 auto. */
 .phase-chip.phase-chip--current { flex-shrink: 1; min-width: 0; }
-/* Phone: the current phase never shrinks past a readable name (it ends in an ellipsis); the other phases go behind
-   More first; All, the current phase, Archived and More do not fit one line at 390, so the strip takes a second. */
+/* Phone: one line (§6). The other phases go behind More first; All, Archived and More keep their width and the current
+   phase takes the rest, its name ending in an ellipsis; its count gives way to the bar, which still shows progress
+   (the count stays in its title). */
 @media (max-width: 480px) {
-  /* A slimmer side inset hands the rows 16px: room for a second priority chip and slack on the strip's second line. */
+  /* A slimmer side inset hands the rows 16px: room for a second priority chip and for the current phase's name. */
   .kanban-filterbar { padding: var(--space-sm) var(--space-xs); }
   .phase-strip { gap: var(--space-micro); }
-  .phase-strip__items { flex-wrap: wrap; row-gap: var(--space-micro); }
-  .phase-chip.phase-chip--current { flex-shrink: 0; }
   .phase-chip--current .phase-chip__name { max-width: 16ch; }
+  /* Its count gives way to a progress bar under the name, in the 44px chip's own height (the count stays in its
+     title). Two classes: chips.css's .chip is inline-flex, which would squeeze the bar to nothing. */
+  .phase-chip.phase-chip--current {
+    display: inline-grid; grid-template-columns: auto minmax(0, 1fr);
+    align-items: center; column-gap: var(--space-micro); row-gap: var(--space-micro);
+  }
+  .phase-chip--current .phase-chip__count { display: none; }
+  .phase-chip--current .phase-chip__bar { display: block; grid-column: 2; grid-row: 2; }
+  /* A slimmer inset on the strip's own controls (never under the 44px touch width) leaves the current name its room. */
+  .phase-strip .phase-chip, .phase-strip .phase-archived { padding-inline: var(--space-xs); min-width: var(--touch-target); justify-content: center; }
+  /* Archived is its icon and count; the word stays its accessible name. */
+  .phase-strip .phase-archived > .icon { display: inline-block; flex: none; }
+  .phase-archived__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
-.phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
-  display: block; height: 4px; overflow: hidden;
+  display: none; height: 4px; overflow: hidden;
   background: var(--surface-recessed); border-radius: var(--radius-full);
 }
 .phase-chip__bar > span { display: block; height: 100%; background: var(--tone-success); border-radius: var(--radius-full); }
+.phase-archived > .icon { display: none; }
 .phase-archived__reason { color: var(--foreground-subtle); }
 .phase-archived__menu .popover-item { display: flex; gap: var(--space-xs); align-items: baseline; }
 
@@ -248,6 +271,9 @@
   scrollbar-width: thin;
 }
 .kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
+/* A card inside a bundle frame gives back the frame's padding and border in its own inline padding, so its line 1 has
+   the same room as a loose card's and its age stays on that line. */
+.kanban-col-body .bundle-frame > .card-task { padding-inline: calc(var(--space-sm) - var(--space-micro) - 1px); }
 .kanban-col-empty {
   margin: 0;
   padding: var(--space-xl) 0;

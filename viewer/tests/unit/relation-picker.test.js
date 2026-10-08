@@ -32,6 +32,15 @@ test('tasks source filters by id substring', async () => {
   assert.match(out[0].label, /Field renderers/);
 });
 
+// Re-audit X-01: the status was a bare word ("In progress"); it is the shared marker's shape, word and tone.
+test('a task suggestion carries its status as the shared marker meta', async () => {
+  const out = await makeRelationSource('tasks', () => FAKE_BACKLOG)('flat');
+  assert.deepEqual(out[0].marker, { label: 'In review', shape: '▲', tone: 'warning' });
+  assert.equal(out[0].hint, undefined);
+  const none = await makeRelationSource('tasks', () => ({ tasks: [{ id: 'T-1', title: 'No status' }] }))('T-1');
+  assert.equal(none[0].marker, null);
+});
+
 test('tasks source filters by title substring', async () => {
   const src = makeRelationSource('tasks', () => FAKE_BACKLOG);
   const out = await src('flat');

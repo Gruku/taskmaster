@@ -27,7 +27,16 @@
 }
 
 /* ── Board ──────────────────────────────────────────────────────────────── */
-.dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); align-items: start; }
+/* Packed (desk.js adds .is-packed where it can measure): the rows are 4px tracks and each note spans as many as its
+   height needs (--note-rows), so a short note leaves no hole under it, and dense placement fills a gap an expanded note
+   leaves before it. Without the measuring the board is a plain grid of rows. The board is the container an expanded
+   note asks whether a second column exists. */
+.dk-board {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); align-items: start;
+  container-type: inline-size;
+}
+.dk-board.is-packed { grid-auto-rows: var(--space-micro); grid-auto-flow: row dense; row-gap: 0; }
+.dk-board.is-packed > * { grid-row-end: span var(--note-rows); }
 
 /* A refused note write, said in words across the whole board; hidden while there is nothing to say. */
 .dk-board-error { grid-column: 1 / -1; margin: 0; color: var(--foreground-bold); font-size: var(--size-narrator-small); }
@@ -93,15 +102,17 @@
 .dk-note:hover .dk-note__head .btn,
 .dk-note:focus-within .dk-note__head .btn { opacity: 1; }
 
-/* Pinned note: its Unpin stays visible. */
-.dk-note.is-pinned .dk-note__pin { opacity: 1; }
+/* Pinned note: its controls stay visible, so Unpin sits in its row of controls rather than alone mid-header. */
+.dk-note.is-pinned .dk-note__head .btn { opacity: 1; }
 
 /* ── Note body + edit ───────────────────────────────────────────────────── */
 .dk-note__body { position: relative; cursor: text; max-height: 16em; overflow: hidden; }
 .dk-note.is-expanded .dk-note__body { max-height: none; }
-/* Expanded, a note takes the board's full width on a row of its own — a long line bounds its height — and sits upright,
-   since a tilt on a tall box swings its far corner into the next note. */
-.dk-note.is-expanded { grid-column: 1 / -1; transform: none; }
+/* Expanded, a note stays where it is and sits upright (a tilt on a tall box swings its far corner into the next
+   note). Where the board has a second column it takes two: a readable line that bounds its height, never a full-width
+   wall. 456px = two 220px columns and their gap. */
+.dk-note.is-expanded { transform: none; }
+@container (min-width: 456px) { .dk-note.is-expanded { grid-column: span 2; } }
 .dk-note__body a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 
 /* A clamped body fades into its paper; the fade sits inside the body, so the body is its containing block. */
@@ -166,7 +177,7 @@
   .dk-summary > ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: var(--touch-target); }
 }
+/* A phone keeps the 220px column floor: one note per row at 390px, not two 130px-wide columns of three-word lines. */
 @media (max-width: 720px) {
   .dk-desk { padding: var(--space-md); }
-  .dk-board { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 }

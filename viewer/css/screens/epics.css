@@ -1,6 +1,7 @@
 /* User intent: epic rows on the shared card surface, their status, bar and count in columns that line up, stacked on a phone. */
 .epics-screen { display: flex; flex-direction: column; gap: var(--space-md); min-width: 0; }
-.epics-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); max-width: 1100px; }
+/* As wide as the search above it, so their right edges line up. */
+.epics-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
 .epic-row {
   display: grid; align-items: center; column-gap: var(--space-md);
   grid-template-columns: minmax(0, 1fr) 9rem minmax(6rem, 14rem) 4.5rem 6.5rem;
@@ -24,7 +25,8 @@
 .epic-swatch--cat-5 { background: var(--cat-5); }
 .epic-swatch--cat-6 { background: var(--cat-6); }
 .epic-row__status { grid-area: status; }
-.epic-row__bar { grid-area: bar; display: block; height: var(--space-micro); border-radius: var(--radius-full); background: var(--bg-recessed); border: 1px solid var(--border-subtle); overflow: hidden; }
+/* The empty track is a border-weight neutral that reads on the card in both themes. */
+.epic-row__bar { grid-area: bar; display: block; height: var(--space-micro); border-radius: var(--radius-full); background: var(--border-default); overflow: hidden; }
 .epic-row__fill { display: block; height: 100%; background: var(--signature-fill); }
 .epic-row__count { grid-area: count; text-align: right; font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); color: var(--foreground-default); }
 .epic-row__tags { grid-area: tags; display: flex; justify-content: flex-end; }

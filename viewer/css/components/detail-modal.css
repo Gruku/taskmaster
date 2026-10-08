@@ -3,7 +3,10 @@
    first frame. */
 
 /* Lifted out of the body by detail-modal.js: under the header, aligned with the header's own padding at every width. */
-.modal--detail > .td-title-message { flex: 0 0 auto; padding: var(--space-sm) var(--space-lg) 0; }
+.modal--detail > .td-title-message { flex: 0 0 auto; padding: var(--space-sm) var(--space-lg); }
+
+/* While the title is being edited in place, Edit would open a second editor over the first. */
+.modal--detail:has(.modal-title input) [data-action="edit"] { display: none; }
 
 /* The row would otherwise inherit the modal's smaller size for the first frames after opening (14px, then 16px). */
 .modal--detail .td-markers { font-size: var(--size-narrator-default); }

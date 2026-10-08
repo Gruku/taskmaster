@@ -95,6 +95,11 @@
   .issues-col { min-height: 0; }
   .issues-col__head { flex: 0 0 auto; }
   .issues-col__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  /* A column with more cards below its edge fades out there instead of slicing a card mid-line; scrolled to the end
+     the fade is gone. */
+  .issues-col__list[data-more] { -webkit-mask-image: linear-gradient(to bottom, var(--foreground-bold) calc(100% - 48px), transparent); mask-image: linear-gradient(to bottom, var(--foreground-bold) calc(100% - 48px), transparent); }
+  /* More columns past the right edge: the same fade, sideways. */
+  .issues-board__cols[data-more] { -webkit-mask-image: linear-gradient(to right, var(--foreground-bold) calc(100% - 56px), transparent); mask-image: linear-gradient(to right, var(--foreground-bold) calc(100% - 56px), transparent); }
 }
 
 @media (max-width: 768px) {
@@ -115,3 +120,6 @@
     border: 0;
   }
 }
+
+/* The chip row's "More" is a chip among chips: bordered like them, not bare text. */
+.issues .chip-row .overflow-more { border: 1px solid var(--border-default); }
