@@ -1,6 +1,6 @@
 // User intent: read Taskmaster's MCP replies — markdown and JSON text — into plain data, purely, so every format quirk is
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
-import type { TmHandover, TmHandoverSummary, TmPipeline, TmPriority, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
@@ -223,6 +223,40 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
     .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
   const total = typeof doc.value.total === 'number' ? doc.value.total : handovers.length
   return ok({ handovers, total })
+}
+
+const PHASE_ROW = /^(\[\S*\])(?:\s+(.*))?$/
+const ROWS_FOOTER = /^\d+ rows?(?: \(capped\))?$/
+
+/**
+ * backlog_query's phase table: a header line, one `["id","status",order,count]  name` line a phase (cells padded; a name cut
+ * at 80 chars stays as cut), then `N rows`. A line whose JSON cell does not read is left out; a reply with no footer is
+ * not a table the server finished.
+ */
+export function parsePhases(raw: string): Parsed<TmPhase[]> {
+  const lines = raw.trim().split('\n')
+  if (isRefusal(raw)) return fail(`backlog_query: ${firstParagraph(raw)}`)
+  if (!ROWS_FOOTER.test((lines[lines.length - 1] ?? '').trim())) return fail('backlog_query: no "N rows" footer')
+  const phases: TmPhase[] = []
+  for (const line of lines.slice(1, -1)) {
+    const row = PHASE_ROW.exec(line.trim())
+    if (row === null) continue
+    let cells: unknown
+    try {
+      cells = JSON.parse(row[1] ?? '')
+    } catch {
+      continue
+    }
+    if (!Array.isArray(cells) || typeof cells[0] !== 'string' || cells[0] === '') continue
+    phases.push({
+      id: cells[0],
+      status: typeof cells[1] === 'string' ? cells[1] : '',
+      order: typeof cells[2] === 'number' ? cells[2] : 0,
+      count: typeof cells[3] === 'number' ? cells[3] : 0,
+      name: (row[2] ?? '').trim(),
+    })
+  }
+  return ok(phases)
 }
 
 const SUMMARY_SECTION = /^### (decisions|blockers)\s*$/

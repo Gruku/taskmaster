@@ -18,7 +18,7 @@ import { RR_STUB } from './fixtures/rr-stub'
 import { type McpAnswer, type World, worldOf } from './fixtures/world'
 
 const TM = { plugins: [RR_STUB] }
-const READS = /^backlog_(list_tasks|issue_list|continuity_items|handover_list|get_task|task_pipeline)$/
+const READS = /^backlog_(list_tasks|issue_list|continuity_items|handover_list|get_task|task_pipeline|query)$/
 const writes = (world: World) => world.calls.filter(c => !READS.test(c.tool))
 type Over = Record<string, (args: Record<string, unknown>) => McpAnswer | string>
 const router = (over: Over) => (tool: string, args: Record<string, unknown>): McpAnswer => {

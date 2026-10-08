@@ -16,6 +16,7 @@ import {
   parseHandoverWritten,
   parseIssueList,
   parseListTasks,
+  parsePhases,
   parsePipeline,
   replyText,
   stripSeq,
@@ -24,6 +25,7 @@ import type { TmPipeline, TmTaskDetail } from '../types'
 import { LEGACY } from './fixtures/captured/legacy'
 import { NATIVE } from './fixtures/captured/native'
 import { SCRATCH } from './fixtures/captured/scratch'
+import { PHASES_ALL, PHASES_WAITING } from './fixtures/phases'
 import * as R from './fixtures/replies'
 
 type Reply = { readonly tool: string; readonly args: Readonly<Record<string, unknown>>; readonly isError: boolean; readonly text: string }
@@ -537,5 +539,45 @@ describe('replyText', () => {
     expect(replyText('{"result": 3}')).toBe('{"result": 3}')
     expect(replyText('{"result": broken')).toBe('{"result": broken')
     expect(replyText(list, { other: 1 })).toBe(list)
+  })
+})
+
+describe('parsePhases', () => {
+  const phases = (text: string) => {
+    const parsed = parsePhases(text)
+    if (!parsed.ok) throw new Error(parsed.reason)
+    return parsed.value
+  }
+
+  test('the real table: header and footer skipped, every phase read with its order and count, names kept as the server holds them', () => {
+    const all = phases(PHASES_WAITING)
+    expect(all).toHaveLength(20)
+    expect(all[0]).toEqual({ id: '2-1-0', status: 'planned', order: 17, count: 16, name: 'Release 2.1.0 — Alpha Scope & Polish' })
+    expect(all.find(p => p.status === 'active')).toMatchObject({ id: '2-0-4', order: 14, count: 249 })
+    expect(all.find(p => p.id === '2-0-2')?.name).toBe('Patch 2.0.2 — Alpha Scope &amp; Polish')
+    expect(all.at(-1)).toMatchObject({ id: 'p1', status: 'done', order: 1, count: 0 })
+    expect(phases(PHASES_ALL).find(p => p.id === 'patch-1-9-5')?.count).toBe(423)
+  })
+
+  test('a capped footer, a name cut at 80 chars, a missing order and an empty table all read', () => {
+    const cut = 'A very long phase name that the server cut off at eighty characters, right in the mi'
+    const text = ['phase                       name', `["a","planned",3,2]           ${cut}`, '["b","done",null,0]          B', '2 rows (capped)'].join('\n')
+    expect(phases(text)).toEqual([
+      { id: 'a', status: 'planned', order: 3, count: 2, name: cut },
+      { id: 'b', status: 'done', order: 0, count: 0, name: 'B' },
+    ])
+    expect(phases('phase  name\n0 rows')).toEqual([])
+  })
+
+  test('an error, garbage and a table with no footer are unreadable', () => {
+    expect(parsePhases('Error: no such table: entities')).toEqual({ ok: false, reason: 'backlog_query: Error: no such table: entities' })
+    expect(parsePhases('garbage').ok).toBe(false)
+    expect(parsePhases('').ok).toBe(false)
+    expect(parsePhases('phase  name\n["a","planned",3,2]  A').ok).toBe(false)
+  })
+
+  test('a row whose JSON cell is cut or malformed is skipped, the others stay', () => {
+    const text = ['phase  name', '["a","planned",3,2]  A', '["b","planned",3', '[not json]  C', '3 rows'].join('\n')
+    expect(phases(text).map(p => p.id)).toEqual(['a'])
   })
 })

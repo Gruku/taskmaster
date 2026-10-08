@@ -15,7 +15,7 @@ const TM = { plugins: [RR_STUB] }
 const ID = 'unified-chat-022'
 const CHECK = DEMO_DETAILS[ID]!.humanAction
 const [FIRST, SECOND] = splitCheck(CHECK).items as [string, string]
-const ACTIONS = ['done-box', 'back-box', 'skip-box', 'open-box', 'viewer-box', 'copy-box']
+const ACTIONS = ['done-box', 'back-box', 'skip-box', 'open-box', 'phase-box', 'viewer-box', 'copy-box']
 const wide = (columns: number) => ({ ...pane('tm-review'), props: { ...pane('tm-review').props, bodyColumns: columns } })
 /** A tm-mode snapshot that is real data (not the demo marker), so tm-mode tests start from a state with a card. */
 const REAL: TmSnapshot = { ...demoSnapshot(0), reason: '' }

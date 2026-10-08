@@ -1,7 +1,7 @@
 // User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
 // 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
 // reply degrades to a fault instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmPhase, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -16,6 +16,7 @@ import {
   parseHandoverSummary,
   parseIssueList,
   parseListTasks,
+  parsePhases,
   parsePipeline,
 } from './parse'
 
@@ -24,6 +25,8 @@ export const TM_TIMEOUT_MS = 3000
 export const TM_WRITE_TIMEOUT_MS = 15_000
 /** Every refresh reads a window of the first 50 rows (ruling F2); counts come from the server's totals, not the rows. */
 export const QUEUE_WINDOW = 50
+/** Handovers fetched at each refresh (the server's own search window); the pane shows them five to a page. */
+export const HANDOVER_WINDOW = 30
 export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
   none: undefined,
   connecting: undefined,
@@ -156,7 +159,7 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
       await callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
       await callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
-      await callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: 5 }),
+      await callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: HANDOVER_WINDOW }),
       taskId === null ? null : await callTm(host, 'backlog_get_task', { task_id: taskId }),
       taskId === null ? null : await callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
     ]
@@ -273,6 +276,33 @@ export async function readSummary(host: TmHost, handoverId: string): Promise<TmH
     return null
   } catch (error) {
     host.log(`taskmaster-mods: handover summary not read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+/** The phase list query, newest phase first, each with its in-review tasks the scope lists (naming a human action when `waitingOnly`). */
+export function phaseSql(waitingOnly: boolean): string {
+  const waiting = waitingOnly ? " AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''" : ''
+  return (
+    "SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), (SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id" +
+    waiting +
+    ")) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC"
+  )
+}
+
+/**
+ * The phase list for the review pane's filter, from one backlog_query. Null when the server refuses, is unreachable or
+ * answers unreadably (the reason goes to the debug log), so the filter stays where it was.
+ */
+export async function readPhases(host: TmHost, waitingOnly: boolean): Promise<readonly TmPhase[] | null> {
+  try {
+    const text = (await callTm(host, 'backlog_query', { sql: phaseSql(waitingOnly), limit: 200 })).text
+    const parsed = parsePhases(text)
+    if (parsed.ok) return parsed.value
+    host.log(`taskmaster-mods: unreadable backlog_query reply: ${text.slice(0, 2000)}`)
+    return null
+  } catch (error) {
+    host.log(`taskmaster-mods: phases not read: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
 }

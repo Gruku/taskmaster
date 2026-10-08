@@ -55,6 +55,17 @@ export type TmHandoverSummary = {
   readonly unavailable?: true
   readonly stale?: true
 }
+/** One phase of the backlog (backlog_query): `count` is the in-review tasks the review scope would list for it. */
+export type TmPhase = {
+  readonly id: string
+  readonly status: string
+  readonly order: number
+  readonly count: number
+  /** The phase name as the server holds it (`Release 1.5.0 — CM 1.0 Patches`), entities not decoded. */
+  readonly name: string
+}
+/** The review pane's phase filter: the chosen phase id ('' every phase) and the phases it can cycle through (empty until read). */
+export type TmPhaseView = { readonly choice: string; readonly phases: readonly TmPhase[] }
 export type TmBound = {
   readonly taskId: string
   readonly inferred: boolean
@@ -70,7 +81,7 @@ export type TmSnapshot = {
   /** True when a count behind queueTotal was cut at the 50-row window with no server total: the band shows `N+`. */
   readonly queueCapped?: boolean
   /**
-   * The last 5 open handovers, newest first (by `created`), superseded ones left out. Every producer (demo, the tm reader)
+   * The newest open handovers (up to 30, the pane pages them 5 at a time), newest first (by `created`), superseded ones left out. Every producer (demo, the tm reader)
    * keeps this rule: the pane draws the list as given. `handoversTotal` is the server's count of all open handovers.
    */
   readonly handovers: readonly TmHandover[]
@@ -111,6 +122,10 @@ declare module 'claude-code' {
       summaries: Readonly<Record<string, TmHandoverSummary>>
       /** The handover whose summary is expanded ('' none); it shows only while that handover is the picked one. */
       summaryOpen: string
+      /** The review pane's phase filter, mirrored from `$.store` `phase:<repo root>`; `choice` is what the band's count follows. */
+      phaseView: TmPhaseView
+      /** The handovers pane's page (0 first); reset when the pane opens. */
+      handoverPage: number
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
       handoverNotice: TmHandoverNotice | null
       /** One handover prompt per session at most: `$.state` is per session, so /clear or a resume can earn another. */

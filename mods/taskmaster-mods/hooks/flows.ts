@@ -2,10 +2,32 @@
 // pane can never disagree and every write goes through one explicit confirmation and at most one write per task at a time.
 import type { RenderSurface } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmHandoverNotice, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type {
+  TmBandMode,
+  TmCursor,
+  TmHandover,
+  TmHandoverNotice,
+  TmHandoverSummary,
+  TmPhase,
+  TmPhaseView,
+  TmSnapshot,
+  TmTaskDetail,
+} from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
-import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW, TICKS_PREFIX, ticksOf, toggleTick } from './model'
+import {
+  afterDone,
+  afterSendBack,
+  FRESH_CURSOR,
+  handoverCopyText,
+  HANDOVERS,
+  nextPhase,
+  PHASE_PREFIX,
+  REVIEW,
+  TICKS_PREFIX,
+  ticksOf,
+  toggleTick,
+} from './model'
 
 export type TmWriter = {
   snapshot: (change: (s: TmSnapshot | null) => TmSnapshot | null) => Promise<void>
@@ -20,6 +42,8 @@ export type TmWriter = {
   ) => Promise<void>
   summaryOpen: (change: (id: string) => string) => Promise<void>
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
+  phaseView: (change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
+  handoverPage: (page: number) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -40,6 +64,10 @@ export type TmFlowDeps = {
    * cannot. Absent in demo, whose summaries are seeded like the task details.
    */
   summary?: (handoverId: string) => Promise<TmHandoverSummary | null>
+  /** Reads the phases the review filter cycles through (null: could not; the filter stays). Demo answers its own list. */
+  readPhases?: () => Promise<readonly TmPhase[] | null>
+  /** The review filter moved to this phase id ('' all): the scope follows and a refresh is asked. */
+  phaseChosen?: (phaseId: string) => void
 }
 
 export type TmFlows = ReturnType<typeof createFlows>
@@ -137,6 +165,10 @@ export function createFlows(d: TmFlowDeps) {
     await d.write.band(b => (b.confirmingId === id || b.refusalId === id ? { confirmingId: '', refusal: '' } : b))
     d.afterWrite(id, 'done')
   }
+  const pick = async (id: string): Promise<void> => {
+    await d.write.pick(id)
+    await d.write.summaryOpen(open => (open === id ? open : ''))
+  }
   const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
   const open = async (id: string, title: string): Promise<void> => {
     if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
@@ -144,9 +176,20 @@ export function createFlows(d: TmFlowDeps) {
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
   }
+  const loadPhases = async (): Promise<readonly TmPhase[] | null> => {
+    const phases = (await d.readPhases?.()) ?? null
+    if (phases !== null) await d.write.phaseView(v => ({ ...v, phases }))
+    return phases
+  }
   const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
     await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
     await open(REVIEW, 'Review')
+    // The phase list is read when the pane opens, off the open: the pane draws at once, the filter label follows.
+    if (pin === '') {
+      d.host.after(0, () => {
+        void loadPhases().catch(() => undefined)
+      })
+    }
     if (mode === 'note') await d.host.focus(REVIEW, 'note')
   }
 
@@ -155,7 +198,25 @@ export function createFlows(d: TmFlowDeps) {
     openHandovers: async (): Promise<void> => {
       await d.write.pick('')
       await d.write.summaryOpen(() => '')
+      await d.write.handoverPage(0)
       await open(HANDOVERS, 'Handovers')
+    },
+    // f: the next phase of the cycle (all → active → the others → all), read fresh; kept per project unless demo. The cursor
+    // goes back to the first card (skips are forgotten, or a skipped task of the new phase would hide) and the scope follows.
+    // A phase list that cannot be read leaves the filter as it is.
+    cyclePhase: async (): Promise<void> => {
+      const phases = await loadPhases()
+      if (phases === null) return
+      let current = ''
+      await d.write.phaseView(v => {
+        current = v.choice
+        return v
+      })
+      const next = nextPhase(current, phases)
+      if (d.source !== 'demo') await d.host.storeSet(`${PHASE_PREFIX}${await d.host.repoRoot()}`, { phase: next })
+      await d.write.phaseView(v => ({ ...v, choice: next }))
+      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [] }))
+      d.phaseChosen?.(next)
     },
     askDone: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'confirm', refusal: '', currentId: id }))
@@ -249,9 +310,11 @@ export function createFlows(d: TmFlowDeps) {
         await d.write.band(() => ({ confirmingId: '', refusal: out.refusal, refusalId: id }))
         return holdOf(out)
       }),
-    pick: async (id: string): Promise<void> => {
-      await d.write.pick(id)
-      await d.write.summaryOpen(open => (open === id ? open : ''))
+    pick,
+    /** n / p: turn to a page and pick its first handover. */
+    turnPage: async (page: number, firstId: string): Promise<void> => {
+      await d.write.handoverPage(page)
+      await pick(firstId)
     },
     copyHandover: async (h: TmHandover, surface: RenderSurface | undefined): Promise<void> => {
       const r = await d.host.copy(handoverCopyText(h), surface)

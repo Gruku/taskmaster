@@ -13,10 +13,12 @@ import {
   cardPosition,
   dateOf,
   gateSignal,
+  handoverPage,
   handoverRefs,
   oneLine,
   PRIORITY_GLYPH,
   PRIORITY_TONE,
+  PAGE_SIZE,
   PRIORITY_WORD,
   queueDots,
   reviewQueue,
@@ -360,6 +362,8 @@ export type ReviewView = {
   /** The ticked check items of a task (local UI state, never Taskmaster's). */
   ticks: (taskId: string) => Promise<readonly string[]>
   detailsOpen: boolean
+  /** The phase filter's line: `phase: all` or `phase: <name> (<count>)`. */
+  phaseLabel: string
   /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
   connecting?: boolean
 }
@@ -377,6 +381,8 @@ export type ReviewHandlers = {
   toggleDetails: () => void
   openViewer: (id: string) => void
   copyCheck: (id: string, text: string, surface: RenderSurface) => void
+  /** `f`: the next phase of the filter's cycle. */
+  cyclePhase: () => void
 }
 
 /** `done <id>?` in `room` cells of chip text: the id shortens to MIN_ID, never away; the word goes before it does. */
@@ -430,6 +436,10 @@ function lines(ui: Ui, color: string, text: string, width: number, indent = 0): 
   )
 }
 
+/** `f: phase`: the review pane's filter chip. */
+const phaseChip = (ui: Ui, rr: Rr, on: ReviewHandlers): Promise<Piece> =>
+  chip(ui, rr, { id: 'phase', hotkey: 'f', label: 'phase', treatment: 'chip', tone: 'signature', onPress: () => on.cyclePhase() })
+
 export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderElement> {
   const { Box, Text, Button, Input } = ui
   const t = await rr.tokens()
@@ -439,7 +449,13 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const item = card.item
   if (item === null) {
     const tally = `${v.cursor.done.length} done · ${v.cursor.skipped.length} skipped this pass`
-    return paneRoot(ui, rr, [title, node(await rr.signal({ kind: 'success', word: 'Queue clear', detail: tally }))])
+    // Under a filter the queue can be clear while other phases still wait: f stays reachable.
+    return paneRoot(ui, rr, [
+      title,
+      <Text color={t.fg.subtle}>{truncate(v.phaseLabel, Math.max(10, width - 2))}</Text>,
+      node(await rr.signal({ kind: 'success', word: 'Queue clear', detail: tally })),
+      chipRow(ui, [(await phaseChip(ui, rr, on)).el]),
+    ])
   }
   const inner = Math.max(10, width - 2)
   const raised = await rr.surfaceProps({ level: 'raised' })
@@ -616,6 +632,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
       chip(ui, rr, { id: 'skip', hotkey: 's', label: 'skip', treatment: 'chip', tone: 'signature', onPress: () => on.skip(item.id) }),
       chip(ui, rr, { id: 'open', hotkey: 'o', label: 'open in prompt', treatment: 'chip', tone: 'signature', onPress: () => on.fill(openText) }),
     ])
+    const phase = await phaseChip(ui, rr, on)
     const extras = isTask
       ? await Promise.all([
           chip(ui, rr, { id: 'viewer', hotkey: 'v', label: 'viewer', treatment: 'chip', tone: 'signature', onPress: () => on.openViewer(item.id) }),
@@ -629,11 +646,12 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
           }),
         ])
       : []
-    actions = chipRows(ui, [...taskOnly, ...always, ...extras], inner, extras.length)
+    actions = chipRows(ui, [...taskOnly, ...always, phase, ...extras], inner, extras.length)
   }
 
   return paneRoot(ui, rr, [
     await headerStrip(ui, rr, t, card.n, card.total, v.cursor.done.length, inner),
+    <Text color={t.fg.subtle}>{truncate(v.phaseLabel, inner)}</Text>,
     <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
       {head}
       <Text color={t.fg.default}>{truncate(oneLine(item.title), room)}</Text>
@@ -653,6 +671,8 @@ export type HandoversView = {
   summaries: Readonly<Record<string, TmHandoverSummary>>
   /** The handover whose summary is expanded; it shows only while that handover is the picked one. */
   summaryOpen: string
+  /** The page shown, 0 first (clamped to the list). */
+  page: number
   /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
   connecting?: boolean
 }
@@ -662,6 +682,8 @@ export type HandoverHandlers = {
   copy: (h: TmHandover, surface: RenderSurface) => void
   resume: (h: TmHandover) => void
   toggleSummary: (h: TmHandover, open: boolean) => void
+  /** n / p: show this page and pick its first handover. */
+  turnPage: (page: number, firstId: string) => void
 }
 
 /** The card's body indent: the refs, the sections and NEXT start where the head row's text does (after `→ `). */
@@ -745,23 +767,34 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
   const title = node(await rr.label({ text: 'handovers' }))
   if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot, v.connecting === true)
   const list = v.snapshot.handovers
-  const picked = list.find(entry => entry.id === v.pick) ?? list[0]
+  const pg = handoverPage(list, v.page, v.pick)
+  const picked = pg.picked
   if (picked === undefined) return paneRoot(ui, rr, [title, <Text color={t.fg.subtle}>No open handovers.</Text>])
   const inner = Math.max(10, width - 2)
   const raised = await rr.surfaceProps({ level: 'raised' })
   const room = Math.max(8, inner - 2 * (raised.paddingX ?? 0) - 2)
   const esc = escHint(ui, t)
-  const [rowPress, togglePress, copy, resume] = await Promise.all([
+  const turn = (to: number, label: string, hotkey: string) =>
+    chip(ui, rr, { id: label, hotkey, label, treatment: 'chip', tone: 'signature', onPress: () => on.turnPage(to, list[to * PAGE_SIZE]?.id ?? '') })
+  const [rowPress, togglePress, copy, resume, prev, next] = await Promise.all([
     rr.buttonProps({}),
     rr.buttonProps({ key: 'i' }),
     chip(ui, rr, { id: 'copy', hotkey: 'c', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copy(picked, press.surface) }),
     chip(ui, rr, { id: 'resume', hotkey: 'r', label: 'resume', treatment: 'chip', tone: 'signature', onPress: () => on.resume(picked) }),
+    pg.page > 0 ? turn(pg.page - 1, 'prev', 'p') : null,
+    pg.page < pg.pages - 1 ? turn(pg.page + 1, 'next', 'n') : null,
   ])
   const open = v.summaryOpen === picked.id
+  const total = Math.max(v.snapshot.handoversTotal, list.length)
+  const first = pg.page * PAGE_SIZE + 1
+  const footer =
+    pg.pages > 1
+      ? `${first}–${first + pg.entries.length - 1} of ${total} · n/p page · superseded hidden`
+      : `${list.length} of ${v.snapshot.handoversTotal} · superseded hidden`
   const card = await handoverCard(ui, rr, t, picked, open, v.summaries[picked.id], room, { row: rowPress, toggle: togglePress }, on)
   return paneRoot(ui, rr, [
     title,
-    ...list.map(entry =>
+    ...pg.entries.map(entry =>
       entry.id === picked.id ? (
         <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
           {card}
@@ -778,7 +811,7 @@ export async function handoversPaneTree(ui: Ui, rr: Rr, v: HandoversView, on: Ha
         </Box>
       ),
     ),
-    <Text color={t.fg.subtle}>{`${list.length} of ${v.snapshot.handoversTotal} · superseded hidden`}</Text>,
-    chipRow(ui, fit([copy, resume, esc], inner, 1)),
+    <Text color={t.fg.subtle}>{footer}</Text>,
+    chipRow(ui, fit([copy, resume, prev, next, esc], inner, 1)),
   ])
 }

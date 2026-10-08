@@ -4,10 +4,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { TmBandMode, TmBinding, TmCursor, TmFault, TmHandoverNotice, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type {
+  TmBandMode,
+  TmBinding,
+  TmCursor,
+  TmFault,
+  TmHandoverNotice,
+  TmHandoverSummary,
+  TmPhaseView,
+  TmSnapshot,
+  TmTaskDetail,
+} from '../types'
 import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_PHASES, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
@@ -17,17 +27,21 @@ import {
   cardPosition,
   FRESH_CURSOR,
   handoverNotice,
+  handoverPage,
   HANDOVERS,
   isStaleTicks,
+  PHASE_PREFIX,
+  phaseLabel,
   REVIEW,
   reviewQueue,
+  storedPhase,
   TICKS_PREFIX,
   ticksOf,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
-import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
+import { FAULT_LINE, loadDetail, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
@@ -41,6 +55,8 @@ const BAND = atom({ plugin: 'taskmaster-mods', key: 'band' } as const, { confirm
 const FAULT = atom({ plugin: 'taskmaster-mods', key: 'fault' } as const, 'none' as TmFault)
 const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, null as TmBinding | null)
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
+const PHASE_VIEW = atom({ plugin: 'taskmaster-mods', key: 'phaseView' } as const, { choice: '', phases: [] } as TmPhaseView)
+const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 function hostOf($: EngineInterface): TmHost {
@@ -139,6 +155,12 @@ function writerOf($: EngineInterface): TmWriter {
     notice: async change => {
       await update($, NOTICE, change)
     },
+    phaseView: async change => {
+      await update($, PHASE_VIEW, change)
+    },
+    handoverPage: async page => {
+      await update($, HANDOVER_PAGE, () => page)
+    },
   }
 }
 
@@ -175,6 +197,7 @@ const mod: {
   lastFault: TmFault | null
   detailAsked: Set<string>
   refreshAsked: boolean
+  phaseRestore: Promise<void> | null
 } = {
   source: 'tm',
   scope: { waitingOnly: true, phase: '' },
@@ -187,6 +210,7 @@ const mod: {
   lastFault: null,
   detailAsked: new Set(),
   refreshAsked: false,
+  phaseRestore: null,
 }
 
 function ensureFlows($: EngineInterface): TmFlows {
@@ -207,6 +231,11 @@ function ensureFlows($: EngineInterface): TmFlows {
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id) } : {}),
+    readPhases: mod.source === 'demo' ? () => Promise.resolve(DEMO_PHASES) : () => readPhases(host, mod.scope.waitingOnly),
+    phaseChosen: phase => {
+      mod.scope = { ...mod.scope, phase }
+      mod.refresher?.request()
+    },
   })
   return mod.flows
 }
@@ -221,11 +250,27 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
 }
 
+/**
+ * The phase filter this project last chose (`$.store` `phase:<repo root>`, an explicit all included) replaces the reviewPhase
+ * option's default, once per instance and before the first refresh asks the server; the atom mirrors it for the drawings.
+ */
+async function restorePhase($: EngineInterface, host: TmHost): Promise<void> {
+  try {
+    const stored = storedPhase(await host.storeGet(`${PHASE_PREFIX}${await host.repoRoot()}`))
+    if (stored !== null) mod.scope = { ...mod.scope, phase: stored }
+  } catch {
+    // an unreadable store keeps the option's default
+  }
+  const choice = mod.scope.phase
+  await update($, PHASE_VIEW, v => (v.choice === choice ? v : { ...v, choice }))
+}
+
 /** Every acting hook's entry: the flows from its `$`, the session id, demo's seed, and tm's first refresh of this instance. */
 async function ready($: EngineInterface): Promise<TmFlows> {
   const flows = ensureFlows($)
   if (mod.sessionId === '') mod.sessionId = await $.session.id()
   await ensureSeeded($)
+  if (mod.source === 'tm' && mod.host !== null) await (mod.phaseRestore ??= restorePhase($, mod.host))
   if (mod.source === 'tm' && !mod.refreshAsked) {
     mod.refreshAsked = true
     mod.refresher?.request()
@@ -376,6 +421,7 @@ export const register: Register = (on, options) => {
   mod.lastFault = null
   mod.detailAsked = new Set()
   mod.refreshAsked = false
+  mod.phaseRestore = null
   onHandoverGuard(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -384,7 +430,7 @@ export const register: Register = (on, options) => {
     await pruneTicks($)
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
-      { name: HANDOVERS, description: 'The last five open Taskmaster handovers: copy for Telegram or resume' },
+      { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },
     ]) {
       try {
         await $.command.register(command)
@@ -520,6 +566,7 @@ export const register: Register = (on, options) => {
       const item = cardPosition(reviewQueue(snapshot, cursor, details), cursor, snapshot.queueTotal).item
       if (item !== null && item.kind === 'task' && details[item.id] === undefined) askDetail(item.id)
     }
+    const phaseView = await read($, PHASE_VIEW)
     const view = {
       snapshot,
       details,
@@ -528,6 +575,7 @@ export const register: Register = (on, options) => {
       ticks: (taskId: string) => ticksFor($, taskId),
       detailsOpen: await read($, DETAILS_OPEN),
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
+      phaseLabel: phaseLabel(phaseView.choice, phaseView.phases),
     }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
@@ -545,6 +593,7 @@ export const register: Register = (on, options) => {
         toggleDetails: () => act(f => f.toggleDetails()),
         openViewer: id => act(f => f.openViewer(id)),
         copyCheck: (id, text, surface) => act(f => f.copyCheck(id, text, surface)),
+        cyclePhase: () => act(f => f.cyclePhase()),
       },
       e.props.bodyColumns,
     )
@@ -560,12 +609,13 @@ export const register: Register = (on, options) => {
       pick: await read($, PICK),
       summaries,
       summaryOpen: await read($, SUMMARY_OPEN),
+      page: await read($, HANDOVER_PAGE),
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
     }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {
-      const picked = snapshot.handovers.find(entry => entry.id === view.pick) ?? snapshot.handovers[0]
+      const picked = handoverPage(snapshot.handovers, view.page, view.pick).picked
       const held = picked === undefined ? undefined : summaries[picked.id]
       if (picked !== undefined && picked.id === view.summaryOpen && (held === undefined || held.stale === true)) askSummary(picked.id)
     }
@@ -578,6 +628,7 @@ export const register: Register = (on, options) => {
         copy: (handover, surface) => act(f => f.copyHandover(handover, surface)),
         resume: handover => act(f => f.resumeHandover(handover)),
         toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
+        turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
       },
       e.props.bodyColumns,
     )

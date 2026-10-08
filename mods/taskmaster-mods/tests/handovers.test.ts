@@ -7,6 +7,7 @@ import { DEMO_SUMMARIES, demoSnapshot } from '../hooks/demo'
 import { dateOf, handoverCopyText } from '../hooks/model'
 import type { TmHandover, TmSnapshot } from '../types'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import * as R from './fixtures/replies'
 import { type Drawn, elementsOf, widthOf } from './fixtures/measure'
 import { RR_STUB } from './fixtures/rr-stub'
 import { stateOf, worldOf } from './fixtures/world'
@@ -198,5 +199,105 @@ describe('handovers', () => {
     expect(head.length).toBeGreaterThan(1)
     expect(head.join(' ')).toBe(`${dateOf(FIRST.created)}  ${long}`)
     expect(widthOf(tree)).toBeLessThanOrEqual(40)
+  })
+})
+
+describe('handover pages', () => {
+  const MANY: readonly TmHandover[] = Array.from({ length: 13 }, (_, i) => ({
+    ...FIRST,
+    id: `2026-09-${String(28 - i).padStart(2, '0')}-note`,
+    created: `2026-09-${String(28 - i).padStart(2, '0')}T10:00`,
+    tldr: `Handover number ${i + 1}`,
+    nextAction: `Next for ${i + 1}`,
+  }))
+  const seeded = (on: Parameters<typeof stateOf>[0], handovers: readonly TmHandover[], total: number) =>
+    stateOf(on, { [`${PLUGIN}.snapshot`]: { ...demoSnapshot(0), reason: '', handovers, handoversTotal: total } })
+  const rowKeys = async (ui: { findAll: (q: { type: string }) => Promise<{ key?: string }[]> }) =>
+    (await ui.findAll({ type: 'Button' })).map(b => b.key).filter((k): k is string => k?.startsWith('ho:') === true)
+
+  test('five to a page: footer, n and p chips, n turns the page and picks its first handover, p goes back', TM, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    seeded(on, MANY, 13)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    expect(await rowKeys(ui)).toEqual(MANY.slice(0, 5).map(h => `ho:${h.id}`))
+    expect(await ui.find({ type: 'Text', text: '1–5 of 13 · n/p page · superseded hidden' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'prev' })).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'next' }))?.props).toMatchObject({ hotkey: 'n', label: 'next' })
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    expect(await rowKeys(ui)).toEqual(MANY.slice(5, 10).map(h => `ho:${h.id}`))
+    expect(await ui.find({ type: 'Text', text: '6–10 of 13 · n/p page · superseded hidden' })).toBeDefined()
+    expect(flatOf(cardOf(await ui.drawn()))[1]).toBe(`${dateOf(MANY[5]!.created)}  ${MANY[5]!.tldr}`)
+    expect((await ui.find({ type: 'Button', key: 'prev' }))?.props).toMatchObject({ hotkey: 'p', label: 'prev' })
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    expect(await rowKeys(ui)).toEqual(MANY.slice(10).map(h => `ho:${h.id}`))
+    expect(await ui.find({ type: 'Text', text: '11–13 of 13 · n/p page · superseded hidden' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'next' })).toBeUndefined()
+    await ui.press({ key: 'prev' })
+    await ui.redraw()
+    expect(await rowKeys(ui)).toEqual(MANY.slice(5, 10).map(h => `ho:${h.id}`))
+    expect(flatOf(cardOf(await ui.drawn()))[1]).toBe(`${dateOf(MANY[5]!.created)}  ${MANY[5]!.tldr}`)
+  })
+
+  test('c and r act on the picked handover of the page shown', TM, async ($, on) => {
+    const world = worldOf(on, mock.clock(on))
+    seeded(on, MANY, 13)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    await ui.press({ key: 'resume' })
+    expect(world.fills).toEqual([`Resume from handover ${MANY[5]!.id} (${MANY[5]!.path})`])
+  })
+
+  test('one page of five keeps the plain footer and no n or p; the server total can exceed what was fetched', TM, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    seeded(on, MANY.slice(0, 5), 5)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    expect(await ui.find({ type: 'Text', text: '5 of 5 · superseded hidden' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'next' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'prev' })).toBeUndefined()
+  })
+
+  test('the page resets to the first when the pane opens', TM, async ($, on) => {
+    const world = worldOf(on, mock.clock(on))
+    seeded(on, MANY, 13)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    await $.command.run(command('tm-handovers'))
+    await ui.redraw()
+    expect(world.opened).toEqual(['tm-handovers'])
+    expect(await rowKeys(ui)).toEqual(MANY.slice(0, 5).map(h => `ho:${h.id}`))
+  })
+
+  test('a refresh that leaves fewer handovers clamps the page to the last one', TM, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = seeded(on, MANY, 13)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    await ui.press({ key: 'next' })
+    await ui.redraw()
+    state.set(`${PLUGIN}.snapshot`, { ...demoSnapshot(0), reason: '', handovers: MANY.slice(0, 7), handoversTotal: 7 })
+    await ui.redraw()
+    expect(await rowKeys(ui)).toEqual(MANY.slice(5, 7).map(h => `ho:${h.id}`))
+    expect(await ui.find({ type: 'Text', text: '6–7 of 7 · n/p page · superseded hidden' })).toBeDefined()
+  })
+
+  test('the refresh asks the server for 30 handovers, and the pane shows the first five of them', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = (tool, args) => (tool === 'backlog_handover_list' ? { text: R.handoversOpen(13) } : R.backlog(tool, args))
+    await $.session.start(SESSION)
+    await clock.settle()
+    expect(world.calls.find(c => c.tool === 'backlog_handover_list')?.args).toEqual({ format: 'json', status: 'open', limit: 30 })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_PANE })
+    expect(await ui.find({ type: 'Text', text: '1–5 of 13 · n/p page · superseded hidden' })).toBeDefined()
   })
 })

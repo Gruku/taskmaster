@@ -1,6 +1,16 @@
 // User intent: the Taskmaster semantics behind every taskmaster-mods surface — what waits on the user, queue order, card and
 // band wording, Telegram-ready handover text — as plain functions over snapshot data, tested without drawing.
-import type { TmCursor, TmHandover, TmHandoverNotice, TmPipeline, TmPriority, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type {
+  TmCursor,
+  TmHandover,
+  TmHandoverNotice,
+  TmPhase,
+  TmPipeline,
+  TmPriority,
+  TmQueueItem,
+  TmSnapshot,
+  TmTaskDetail,
+} from '../types'
 
 export const REVIEW = 'tm-review'
 export const HANDOVERS = 'tm-handovers'
@@ -351,4 +361,56 @@ export function toggleTick(ticks: readonly string[], item: string): string[] {
 export function isStaleTicks(stored: unknown, now: number): boolean {
   const at = typeof stored === 'object' && stored !== null ? (stored as { at?: unknown }).at : undefined
   return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
+}
+
+/** The phase filter's `$.store` key is this plus the repo root: one choice per project, machine-wide. */
+export const PHASE_PREFIX = 'phase:'
+export const PAGE_SIZE = 5
+
+/** A stored phase choice: its id ('' every phase, kept as an explicit choice), or null for none / unreadable. */
+export function storedPhase(value: unknown): string | null {
+  const phase = typeof value === 'object' && value !== null ? (value as { phase?: unknown }).phase : undefined
+  return typeof phase === 'string' ? phase : null
+}
+
+const decodeAmp = (text: string): string => text.replace(/&amp;/g, '&')
+
+/** A phase's short name: what its full name says before ` — `, `&amp;` decoded; its id when it has no name. */
+export function phaseName(p: TmPhase): string {
+  return decodeAmp(p.name.split(' — ')[0] ?? '').trim() || p.id
+}
+
+/** The review pane's filter line: `phase: all`, or `phase: <name> (<count>)`; the bare id while the phase list is not known. */
+export function phaseLabel(choice: string, phases: readonly TmPhase[]): string {
+  if (choice === '') return 'phase: all'
+  const known = phases.find(p => p.id === choice)
+  return known === undefined ? `phase: ${choice}` : `phase: ${phaseName(known)} (${known.count})`
+}
+
+/**
+ * The phase `f` moves to: all, the active phase (offered even with nothing waiting: the board's marker can lag, but it is
+ * the usual start), then every other phase with waiting tasks, newest (highest order) first, then all again. A current
+ * phase the cycle does not offer goes to all.
+ */
+export function nextPhase(current: string, phases: readonly TmPhase[]): string {
+  const active = phases.find(p => p.status === 'active')
+  const others = phases.filter(p => p.id !== active?.id && p.count > 0).sort((a, b) => b.order - a.order)
+  const cycle = ['', ...(active === undefined ? [] : [active.id]), ...others.map(p => p.id)]
+  const at = cycle.indexOf(current)
+  return at < 0 ? '' : (cycle[(at + 1) % cycle.length] ?? '')
+}
+
+export type HandoverPage = {
+  readonly entries: readonly TmHandover[]
+  readonly page: number
+  readonly pages: number
+  readonly picked: TmHandover | undefined
+}
+
+/** One page of the handovers list (PAGE_SIZE a page, out-of-range pages clamped) and the handover its card shows. */
+export function handoverPage(list: readonly TmHandover[], page: number, pick: string): HandoverPage {
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+  const at = Math.min(Math.max(0, page), pages - 1)
+  const entries = list.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE)
+  return { entries, page: at, pages, picked: entries.find(h => h.id === pick) ?? entries[0] }
 }

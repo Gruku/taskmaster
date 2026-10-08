@@ -144,6 +144,8 @@ A pane (opened by command) drawing every `$.rr` element in every relevant state 
 - 2026-10-06 (Task 2 live look, handovers): the picked handover now expands on `i` (`▸ summary` / `▾ summary`, mirroring the review card's details) into its full tldr, branch and tasks, decisions and blockers, and `Next:` (§6.1).
 - 2026-10-06 (handovers card): the user picked a card look from a mock. The picked handover is a raised round card like the review card: the head row is the full tldr, `NEXT` sits in the card, and the summary sections get `rr.label` labels (`DECISIONS`, `BLOCKERS`). The refs line drops its `branch:` / `tasks:` prefixes, and the `Next:` line under the list is gone.
 - 2026-10-06 (Task 2 closed): the user approved the handovers card live (dark polarity, summary expanded on `unified-chat-022`), and said the rest of the live look checked out too. Task 2 is done; next is Task 3a.
+- 2026-10-09 (review phase filter): the user asked to filter the queue by phase from inside the pane, and picked a cycling `f` key (all → active → the other phases with waiting tasks, newest first → all) over reading the board's active marker alone: the marker can lag (CodeMaestro's active phase is 1.4.4 while 1.5.0 is in progress), so the user chooses. The choice is kept per project in `$.store` and overrides the `reviewPhase` option (§6.1).
+- 2026-10-09 (handover pages): the refresh fetches 30 open handovers (the server's own search window) instead of 5; the pane still shows 5 and pages with `n` / `p`, so older open handovers are reachable without a second pane (§6.1).
 
 ## 6. `taskmaster-mods`
 
@@ -195,6 +197,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - Action bar, one row: `done` is the primary — a 24% success chip with the button recipe (§5.4), so it reads stronger than the 12% secondary chips; the 3-row outline is no longer used on the card.
 
 - Scope (decided 2026-10-06, option A): `userConfig.reviewScope` defaults to `waiting` — only in-review tasks that name a `human_action` (the sign-off state); `all` adds pre-protocol ones — and `reviewPhase` (a phase id, empty for all) narrows it like the board's phase filter; the queue is a window of the first 50 rows and its count is the server's total.
+- Phase filter (decided 2026-10-09): `f` (chip `phase`) cycles all phases → the backlog's active phase → every other phase with waiting tasks in the scope, newest (highest `order`) first → all. The active phase is always offered, even with nothing waiting. The pane shows the filter under its header, `phase: Release 1.5.0 (16)` / `phase: all` (the phase name before ` — `, `&amp;` decoded, then the count in the current scope). The phase list is one `backlog_query` (id, status, order and the in-review count per phase; waiting scope counts only tasks naming a `human_action`), read when the pane opens and when `f` is pressed, never on the band's refreshes; a failed or unreadable read keeps the filter as it is (logged to debug). The choice feeds `list_tasks`' `phase`, so the band's waiting count follows it; P0/P1 issues and decisions stay unfiltered. It is kept per project in `$.store` (`phase:<repo root>`, an explicit all included) and replaces `reviewPhase` (now only the default). Changing it puts the cursor back on the first card and forgets this pass's skips. With nothing left under a filter the pane still shows the label and `f`.
 - Order: priority (Critical → Low), then oldest first. Priority glyphs: ◆ Critical, ▲ High, ⓘ Medium, `·` Low. Items: `in-review` tasks; then P0/P1 open issues; then open decisions (show title, `o` fills the prompt to resolve via the decision skill).
 - The check is shown in full (the pane scrolls if long).
 - `d` → inline confirm row `done <id>?  y: yes  n: no` (focus starts on `n`, so Enter cancels; with unticked items it reads `1 of 2 unchecked — done anyway?`) → `backlog_complete_task(id, done: "Signed off in review queue")`. On server refusal (unpassed blocking gate, open linked bug) the card shows the refusal text as a `◆` signal and stays.
@@ -203,7 +206,7 @@ TASK  tm-audit-030  Agent tool-use audit fixes            FULL · review-gate:pa
 - `v` → open this task in the Taskmaster viewer (`backlog_open_viewer`; the review mode of §6.5 once it exists, the task view until then). `c` → `$.ui.copy` the check text (toast; path-less fallback toast on `no-clipboard`).
 - After the last card: "Queue clear" with the pass tally.
 
-**Handovers pane — `/handovers` or band `2`.** On demand. Last 5 open handovers, newest first (`superseded` hidden), one Button per row (Up/Down to move). Footer `5 of 23 · superseded hidden`.
+**Handovers pane — `/handovers` or band `2`.** On demand. The newest open handovers (`superseded` hidden), five to a page, one Button per row (Up/Down to move). Each refresh fetches up to 30 (`backlog_handover_list`, limit 30 — the server's own search window); `n` / `p` (chips) turn the page and pick that page's first handover, and do nothing at the last / first page (their chip is not drawn there). The page lives in `$.state` (`taskmaster-mods.handoverPage`) and resets to the first when the pane opens. Footer `6–10 of 13 · n/p page · superseded hidden`; with one page just `5 of 5 · superseded hidden`.
 - `c` copy → `$.ui.copy` the Telegram-ready handover block (one shape everywhere, decided 2026-10-06), toast on success, toast with the path on `no-clipboard`:
   ```
   <tldr>
@@ -242,7 +245,8 @@ Every write is one explicit key plus confirmation (`y` for done). No bulk action
 | Review queue list | `backlog_continuity_items(action_class: "review")` (+ `"decide"`) | JSON |
 | Card detail | `backlog_get_task(id)` (lazily, per shown card) | markdown `**field:** value` lines |
 | Stage / next gate | `backlog_task_pipeline(id)` | markdown |
-| Handovers | `backlog_handover_list(format: "json", status: "open")` | JSON |
+| Handovers | `backlog_handover_list(format: "json", status: "open", limit: 30)` | JSON |
+| Phase filter list | `backlog_query` (one SQL, limit 200; on pane open and `f` only) | aligned text table |
 
 - One module (`hooks/tm.ts`) owns calls and parsers; every parser is pure and unit-tested against captured real responses (fixtures captured from the claude-tools and CodeMaestro backlogs during build).
 - Every call is wrapped in a 3 s timeout (the API has none) and aborts on `next.signal` where it runs inside a hook.

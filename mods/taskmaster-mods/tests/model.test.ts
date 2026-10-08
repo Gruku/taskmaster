@@ -13,7 +13,13 @@ import {
   handoverCopyText,
   handoverPath,
   handoverRefs,
+  nextPhase,
   oneLine,
+  PAGE_SIZE,
+  phaseLabel,
+  phaseName,
+  storedPhase,
+  handoverPage,
   isStaleTicks,
   orderQueue,
   queueDots,
@@ -26,7 +32,7 @@ import {
   wrapText,
 } from '../hooks/model'
 import { DEMO_DETAILS } from '../hooks/demo'
-import type { TmHandover, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmPhase, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 
 const H1: TmHandover = { id: 'h1', created: '', tldr: 'Shipped it', nextAction: '', path: '/p/h1.md', branch: '', taskIds: [], thread: '' }
 
@@ -281,5 +287,77 @@ describe('review card', () => {
     expect(isStaleTicks({ at: now - 31 * 86_400_000, items: [] }, now)).toBe(true)
     expect(isStaleTicks({ at: now - 86_400_000, items: [] }, now)).toBe(false)
     expect(isStaleTicks('junk', now)).toBe(true)
+  })
+})
+
+const phase = (id: string, status: string, order: number, count: number, name = id): TmPhase => ({ id, status, order, count, name })
+// newest first, as the query returns them
+const PHASES: readonly TmPhase[] = [
+  phase('r15', 'planned', 17, 16, 'Release 1.5.0 — Alpha &amp; Beta'),
+  phase('p146', 'planned', 16, 33),
+  phase('p144', 'active', 14, 249),
+  phase('p143', 'done', 13, 0),
+  phase('p141', 'done', 11, 8),
+]
+
+describe('the phase filter', () => {
+  test('a phase shows as its name before the dash, with &amp; decoded; the label adds the count', () => {
+    expect(phaseName(PHASES[0]!)).toBe('Release 1.5.0')
+    expect(phaseName(phase('x', 'planned', 1, 0, 'Research &amp; Model Evals'))).toBe('Research & Model Evals')
+    expect(phaseName(phase('x', 'planned', 1, 0, ''))).toBe('x')
+    expect(phaseLabel('', PHASES)).toBe('phase: all')
+    expect(phaseLabel('r15', PHASES)).toBe('phase: Release 1.5.0 (16)')
+    expect(phaseLabel('gone', PHASES)).toBe('phase: gone')
+    expect(phaseLabel('r15', [])).toBe('phase: r15')
+  })
+
+  test('f cycles all, the active phase, then the other phases with waiting tasks newest first, then all', () => {
+    const walk: string[] = []
+    let at = ''
+    for (let i = 0; i < 5; i += 1) {
+      at = nextPhase(at, PHASES)
+      walk.push(at)
+    }
+    expect(walk).toEqual(['p144', 'r15', 'p146', 'p141', ''])
+  })
+
+  test('the active phase is offered with no waiting tasks; with no active phase the cycle starts at the newest with tasks', () => {
+    expect(nextPhase('', [phase('a', 'active', 2, 0), phase('b', 'planned', 1, 3)])).toBe('a')
+    expect(nextPhase('a', [phase('a', 'active', 2, 0), phase('b', 'planned', 1, 3)])).toBe('b')
+    expect(nextPhase('', [phase('b', 'planned', 1, 3), phase('c', 'planned', 0, 0)])).toBe('b')
+    expect(nextPhase('', [phase('c', 'planned', 0, 0)])).toBe('')
+  })
+
+  test('a current phase the cycle does not offer (an option naming a phase with no waiting tasks) goes to all', () => {
+    expect(nextPhase('p143', PHASES)).toBe('')
+    expect(nextPhase('nowhere', PHASES)).toBe('')
+  })
+
+  test('a stored choice is a string, empty included; anything else is no choice', () => {
+    expect(storedPhase({ phase: 'r15' })).toBe('r15')
+    expect(storedPhase({ phase: '' })).toBe('')
+    expect(storedPhase(undefined)).toBeNull()
+    expect(storedPhase({ phase: 3 })).toBeNull()
+    expect(storedPhase('r15')).toBeNull()
+  })
+})
+
+describe('handover pages', () => {
+  const list = Array.from({ length: 13 }, (_, i) => ({ id: `h${i}` }) as TmHandover)
+
+  test('five to a page, the last one short; a page out of range is clamped', () => {
+    expect(PAGE_SIZE).toBe(5)
+    expect(handoverPage(list, 0, '').entries.map(h => h.id)).toEqual(['h0', 'h1', 'h2', 'h3', 'h4'])
+    const last = handoverPage(list, 2, '')
+    expect([last.page, last.pages, last.entries.map(h => h.id)]).toEqual([2, 3, ['h10', 'h11', 'h12']])
+    expect(handoverPage(list, 9, '').page).toBe(2)
+    expect(handoverPage(list, -1, '').page).toBe(0)
+    expect(handoverPage([], 0, '')).toMatchObject({ page: 0, pages: 1, entries: [], picked: undefined })
+  })
+
+  test('the picked handover is the pick when it is on the page, else the page first', () => {
+    expect(handoverPage(list, 1, 'h7').picked?.id).toBe('h7')
+    expect(handoverPage(list, 1, 'h2').picked?.id).toBe('h5')
+    expect(handoverPage(list, 1, '').picked?.id).toBe('h5')
   })
 })

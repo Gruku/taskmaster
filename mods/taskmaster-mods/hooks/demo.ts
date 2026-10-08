@@ -1,6 +1,6 @@
 // User intent: built-in sample data so taskmaster-mods can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
-import type { TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmPhase, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 /**
@@ -16,6 +16,12 @@ export const DEMO_REASON = `demo:${DEMO_SEED}`
 export const isDemoSnapshot = (s: TmSnapshot | null): boolean => s !== null && (s.reason === 'demo' || s.reason.startsWith('demo:'))
 /** A demo seed of this module's version: demo mode keeps it (the flows may have changed it); any other is rebuilt. */
 export const isCurrentDemo = (s: TmSnapshot | null): boolean => s !== null && s.reason === DEMO_REASON
+/** The phases demo's `f` cycles through; the demo queue itself is not filtered by them. */
+export const DEMO_PHASES: readonly TmPhase[] = [
+  { id: 'release-2', status: 'planned', order: 3, count: 2, name: 'Release 2.0 — Demo scope' },
+  { id: 'patch-1-9', status: 'active', order: 2, count: 3, name: 'Patch 1.9 — Demo scope' },
+  { id: 'patch-1-8', status: 'done', order: 1, count: 0, name: 'Patch 1.8 — Demo scope' },
+]
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
 export const DEMO_REFUSING_ID = 'tm-audit-031'
 export const DEMO_REFUSAL =
