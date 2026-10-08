@@ -1,9 +1,30 @@
-// User intent: an issue card's evidence preview drops markdown's marks but never eats a word's own characters — file
-// names, identifiers and dunder names in evidence stay exactly as written.
-import { test } from 'node:test';
+// User intent: pin the issue field names the API really sends, so the detail page can't silently show blanks again.
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { plainMarkdown } from '../../js/util/issue-fields.js';
+import { issueDiscovered, issueEvidence, plainMarkdown } from '../../js/util/issue-fields.js';
 
+test('reads API names', () => {
+  const i = { discovered: '2026-05-01', evidence: 'stack trace' };
+  assert.equal(issueDiscovered(i), '2026-05-01');
+  assert.equal(issueEvidence(i), 'stack trace');
+});
+test('falls back to legacy names', () => {
+  const i = { created: '2026-04-01', symptom: 'old text' };
+  assert.equal(issueDiscovered(i), '2026-04-01');
+  assert.equal(issueEvidence(i), 'old text');
+});
+test('API names win over legacy', () => {
+  assert.equal(issueDiscovered({ discovered: 'a', created: 'b' }), 'a');
+  assert.equal(issueEvidence({ evidence: 'a', symptom: 'b' }), 'a');
+});
+test('missing or null issue', () => {
+  assert.equal(issueDiscovered(undefined), null);
+  assert.equal(issueEvidence(null), '');
+  assert.equal(issueEvidence({ evidence: null }), '');
+});
+
+// A card's evidence preview drops markdown's marks but never eats a word's own characters: file names, identifiers and
+// dunder names stay exactly as written.
 test('underscores inside a word are not emphasis', () => {
   assert.equal(plainMarkdown('see test_suite_speed.py'), 'see test_suite_speed.py');
   assert.equal(plainMarkdown('the slow part is _rebuild_related under the mutex'), 'the slow part is _rebuild_related under the mutex');
