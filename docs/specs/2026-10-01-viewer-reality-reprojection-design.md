@@ -2,7 +2,7 @@
 
 # Viewer × Reality Reprojection — design
 
-Date: 2026-10-01 · Status: awaiting user review · Branch: `feat/viewer-reality-reprojection` (off `feat/database-native-foundation` @ 75989f3)
+Date: 2026-10-01 · Status: implemented; awaiting release · Branch: `feat/viewer-reality-reprojection` (off `feat/database-native-foundation` @ 75989f3)
 
 ## 1. Goal
 
@@ -56,7 +56,7 @@ Shadow and grain tokens from RR are **not** imported.
 
 ### 3.2 Migration aliases
 
-Stage 1 keeps the old names as aliases so the whole UI flips palette in one commit; stage 5 deletes them.
+Stage 1 keeps the old names as aliases so the whole UI flips palette in one commit; stage 5 deletes them. The aliases were deleted in stage 5, and a unit test (`legacy-aliases`) keeps every name in the table below out of the stylesheets and scripts.
 
 | Old | New |
 |---|---|
@@ -178,9 +178,9 @@ New/rewritten in `css/components.css` + `css/components/*.css` and `js/component
 
 - `npm install` in `viewer/` (Playwright is declared but not installed today).
 - **Unit (`node --test`):** status maps, epic progress, `formatDate`, modal dirty check, markdown sanitizer, theme resolution.
-- **Style-rules test** (`viewer/tests/unit/style-rules.test.js`), fails on: `box-shadow`; `transform` inside a `:hover` rule; a `border-left` whose color is not a `--border-*` token; `outline: none`; hex/rgb literals or raw `font-size` outside `tokens.css`; `var(--x)` with no definition; custom properties defined outside `tokens.css`. Report-only in stage 1, enforcing from stage 5.
+- **Style-rules test** (`viewer/tests/unit/style-rules.test.js`), fails on: `box-shadow`; `transform` inside a `:hover` rule; a `border-left` whose color is not a `--border-*` token; `outline: none`; hex/rgb literals or raw `font-size` outside `tokens.css`; `var(--x)` with no definition; custom properties defined outside `tokens.css`. Enforcing on every stylesheet (stage 5). Plan 4 added: quoted strings parsed safely, radii on the RR scale, one touch-target token, no pseudo-element, gradient or one-sided-border rails, every named colour (not only hex/rgb), and selector lists judged per selector.
 - **Playwright:** existing specs updated; new specs for theme toggle (persistence, no flash), modal focus trap and focus return, keyboard activation of cards/rows/chips/headers, mobile column switcher, Ctrl+K.
-- **Accessibility gate:** axe-core on every route × both themes; zero `color-contrast`, `label`, `select-name`, `nested-interactive`, landmark failures; zero pointer-only targets (the audit's probe, kept as `viewer/tests/a11y.spec.js`).
+- **Accessibility gate:** axe-core on every route × both themes; zero `color-contrast`, `label`, `select-name`, `nested-interactive`, landmark failures; zero pointer-only targets (the audit's probe). The gate is `viewer/tests/a11y.mock.spec.js`: axe's `color-contrast`, `label`, `select-name`, `nested-interactive`, `scrollable-region-focusable` and the `landmark-*` rules, plus the pointer-only probe, no sideways overflow, and (at ≤768px) no touch target under 44px, on every mocked route including the four not-found routes (epic, task, issue, bug), in both themes at 1440 and 390.
 - **Server:** pytest for the bug route (single, 404, list unchanged).
 - **Visual verification:** after each stage a fresh-context agent re-runs the capture script in both themes at both widths and checks the result against this spec; the orchestrator reviews the screenshots.
 
@@ -192,7 +192,7 @@ Each stage is a task in its own worktree, reviewed, then merged locally `--no-ff
 2. **Shared components** — §5.
 3. **Data fixes** — §7; independent, parallel with stage 1.
 4. **Screens** — five parallel tasks after stage 2: (a) Kanban + detail modal; (b) Table + Epics + Epic detail; (c) Task/Issue/Bug detail; (d) Issues + Bugs + Ideas; (e) Sessions + Archived + Dashboard + Settings.
-5. **Cleanup** — remove aliases, style-rules test enforcing, full re-audit in both themes, CHANGELOG entry.
+5. **Cleanup (done)** — remove aliases, style-rules test enforcing, full re-audit in both themes, CHANGELOG entry.
 
 ## 10. Out of scope
 
@@ -201,6 +201,27 @@ Each stage is a task in its own worktree, reviewed, then merged locally `--no-ff
 - New features beyond the dashboard summary strip and the epic task list.
 - Write-path UX not exercised by the audit (drag-and-drop, conflict banner) beyond restyling to tokens.
 - Kanban keyboard reordering.
+
+Accepted at the end of plan 4 (reason in brackets). The user-visible ones are the CHANGELOG's "Known limitations"; these are not.
+
+- First load of `#/kanban` and `#/table` shifts layout by a cumulative 0.0281, under the 0.1 "good" threshold (pinned by `shell.mock.spec.js`).
+- A screen that throws while mounting can leave a MediaQueryList listener, ResizeObservers and store subscriptions behind (the router cannot know what a screen registered; no screen registers a document or window listener or timer before it can throw).
+- `.btn--icon.btn--sm` (24×24) in a link row's controls reaches 44×44 at ≤768px only through `rows.css` min-size, which always wins (verified by `rows.mock`).
+- The modal's `focusableIn` is re-sorted on every Tab, and `rememberView` would re-open a future `[data-focus][aria-expanded]` toggle on a redraw (negligible cost; no such toggle exists).
+- The topbar measures the kept search at its 280px basis rather than its 240px minimum, so a row-2 control can wait behind Filters up to 40px sooner than it must (it stays one press away).
+- The entity form reaches the shell only through its hooks, and every refusal is worded by `describeWriteError` (verified, no change).
+- A zone-less ISO stamp is read as local time (every stamp the store writes in UTC carries its zone; the zone-less ones are written from local time).
+- With the 3 s fallback gone, an overflow layout parked behind a press that closed More waits for that press's release; a release the page never hears leaves the row as it was until the next interaction (bounded, nothing lost).
+- `smoke.spec.js` and `viewer/tests/n10/*.spec.js` stay as live-server specs outside plan 4's retirement sweep (they check real servers; plan 4 does not run them).
+- `.tm-chip-row` has no producer in `viewer/js`; it stays as the shell contract for a bare chip group.
+- `--task-rail-w` and `--graph-canvas-h` stay as viewer layout tokens (no RR token sizes a side rail or a graph).
+- `--epic` stays under "Set from JS" because the dead `epicCssVar()` export still writes it; nothing reads it.
+- `edit-fields.css` keeps literal px for hairlines, the 8px error mark, glyph boxes, the select chevron and content-sized field widths (none is a control size or on an RR scale).
+- Bare 32px/24px control heights remain in 21 declarations in entity-modal, handover-status, popover, tag-filter, toolbar, epic-detail, issues, kanban, task-detail and shell CSS; the values equal `--control-size` and `--control-size-sm`, and swapping them is a no-op.
+- The style rules do not catch a left rail whose width is set in one rule and colour in another (only the same-rule case).
+- In light, popovers and dialogs are separated from the page by their border only: nothing there is lighter than the dialog.
+- The light conflict banner's headline keeps the warning hue on its ▲ only; the words are dark foreground text.
+- The re-audit could not judge four IDs from a still image (SH-06, KB-07, DM-01, EM-07; their behaviour is covered by code or mocked tests) and found KB-10 not applicable (the element is gone).
 
 ## 11. Amendments (2026-10-01, after plan 1 and the user's live review)
 
@@ -264,3 +285,15 @@ These override the sections they name.
 - **§6 Kanban on a phone (plan 3a).** The phone Columns tablist scrolls sideways inside itself (a tab cannot be parked behind More).
 - **§4 row 1 (plan 3a).** `claimTopbarPrimary()` clears the slot it hands over; `setTopbarCount()` puts the count's full text in its title; at ≤768px a primary with an icon shows its icon only.
 - **§3.2 categorical palette (plan 3a, user decision).** Swatches come from `--cat-N` by position, unless an epic record's own `color` names a swatch 1–6 (`3`, `'cat-3'`, `'--cat-3'`); a hex or any other value is ignored.
+
+Plan 4 (cleanup) rulings:
+
+- **§3.2 aliases.** The alias list is explicit: `legacy-aliases.test.js` bans exactly the names in the table, not a prefix such as `--bg-` or `--ink`, so a new role may use those prefixes. A quoted `'--x'` literal counts as JS-set when a script sets the property through a constant.
+- **§3.4 control sizes.** `--control-size`, `--control-size-sm` and `--touch-target` are viewer layout roles (in `tokens.css`, not RR tokens); every control height and phone touch target names one of them instead of a bare 32/24/44px.
+- **§5.6 link rows.** A link row's full text lives on the row (the cut text's title), not on the link, so the link is named once.
+- **§5.6 / §6 Table rows.** Table rows drop `cursor: pointer`; the title link keeps it. A click elsewhere on the row is still forwarded to the title link. The pointer promised a target a keyboard cannot reach.
+- **§5.2 `hidden`.** `.btn[hidden]` is `display: none`, so a button its code hides is not drawn.
+- **§3.5 preferences.** A failed preference save is retried three times after the first attempt (four in all) and then given up out loud; a closing tab flushes what is pending on `pagehide` with `keepalive`.
+- **§8 gate.** The accessibility gate is `viewer/tests/a11y.mock.spec.js` and excludes axe's `region` rule (a best-practice rule that fires on the banner and modal hosts by design). A link whose `::after` covers its containing block is measured by that block; only an interactive element (native control, or an interactive role with `tabindex` ≥ 0) counts as reachable for the pointer-only probe.
+- **§8 captures.** Route captures are mocked (`capture-modals.mjs` route scenes, 20 of them); `capture.mjs` needs a live server and is the user's tool.
+- **§5.8 dark popovers.** In dark, popovers share the cards' ground-10 and are told apart by their border: the lighter ground-20 took the critical marker under 3:1.
