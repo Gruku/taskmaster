@@ -44,14 +44,14 @@ test('parked threads sit under a fold', async ({ page }) => {
   await expect(fold.locator('summary')).toContainText('1 parked');
 });
 
-test('diary lane is keyed by thread name with THREAD label', async ({ page }) => {
+test('diary lane is keyed by thread name with a Thread tag', async ({ page }) => {
   await page.goto('/#/sessions');
-  await expect(page.locator('.ho-title', { hasText: 'team-relayout' })).toBeVisible();
-  await expect(page.locator('.ho-kind.session').first()).toHaveText('THREAD');
+  await expect(page.locator('.ho-slug', { hasText: 'team-relayout' })).toBeVisible();
+  await expect(page.locator('.ho .ho-kind').first()).toHaveText('Thread');
 });
 
-test('status chips speak open/closed/superseded', async ({ page }) => {
+test('status chips speak Open/Closed/Superseded', async ({ page }) => {
   await page.goto('/#/sessions');
-  const chips = page.locator('[data-role=ho-status] .status-chip');
-  await expect(chips).toHaveText([/open/, /closed/, /superseded/]);
+  const chips = page.getByRole('group', { name: 'Status' }).locator('.chip');
+  await expect(chips).toHaveText([/Open/, /Closed/, /Superseded/]);
 });

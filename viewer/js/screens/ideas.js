@@ -1,766 +1,276 @@
-// Ideas screen — list/detail views with chip filters for status + tags,
-// archived toggle, frontmatter sidebar with click-through links, and a
-// "Create Idea" button in the topbar.
-//
-// Convention: mirrors issues.js patterns throughout.
-// No colored left rails (user pref); status uses tinted background pills.
+// User intent: the Ideas list in the Reality Reprojection skin — link rows that select in place and deep-link,
+// status chips + a Tags filter + a real Show archived toggle, "New idea" in row 1, a markdown detail pane, states in words.
 
-import * as api from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
-import { pluralize } from '../util/pluralize.js';
-import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js';
-import { emptyState } from '../components/empty-state.js';
+import { api } from '../api.js';
+import { claimTopbar, claimTopbarPrimary, setTopbarCount, tmSearch, tmAction } from '../lib/topbar.js';
+import { keepFocus } from '../lib/keep-focus.js';
+import { truncate } from '../lib/text.js';
+import { formatStamp } from '../lib/time.js';
+import { stateBlock } from '../components/empty-state.js';
+import { chipRow, filterChip } from '../components/chips.js';
+import { filterRail } from '../components/list-toolbar.js';
+import { tagFilter, collectTags } from '../components/tag-filter.js';
+import { linkRow } from '../components/link-row.js';
+import { statusMarker } from '../components/status.js';
+import { mountMarkdown } from '../components/markdown.js';
+import { linkPillsEl, linkRoute, legacyLinksToTyped } from '../components/link-pills.js';
+import { icon } from '../components/icon.js';
+import { openIdeaCreateModal } from '../components/edit/idea-actions.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
-import { formatRelative } from '../lib/time.js';
+import { pluralize } from '../util/pluralize.js';
+import { h } from '../util/h.js';
+import { applyIdeasFilters, ideaStatusChips } from '../util/ideas-filter.js';
+
+export { applyIdeasFilters };
 
 export const meta = { title: 'Ideas', icon: '💡', sidebarKey: 'ideas' };
 
-// ─── pure filter helper (exported for unit tests) ────────────────────────────
+const PHONE = '(max-width: 768px)';
+const isPhone = () => typeof matchMedia === 'function' && matchMedia(PHONE).matches;
 
-/**
- * Filter and sort ideas.
- *
- * @param {Array}  ideas           - raw idea objects
- * @param {object} opts
- * @param {string[]} opts.statuses - active status filters (OR); empty = all
- * @param {string[]} opts.tags     - active tag filters (AND with statuses); empty = all
- * @param {boolean} opts.includeArchived - include archived ideas (default false)
- * @returns {Array} filtered + sorted ideas (newest created first)
- */
-export function applyIdeasFilters(ideas, { statuses = [], tags = [], includeArchived = false } = {}) {
-  const filtered = ideas.filter(idea => {
-    if (!includeArchived && idea.archived) return false;
-    if (statuses.length > 0 && !statuses.includes(idea.status)) return false;
-    if (tags.length > 0 && !tags.every(t => (idea.tags || []).includes(t))) return false;
-    return true;
-  });
-  // Sort newest first by created date string (ISO-8601 lex-sort is fine)
-  return filtered.slice().sort((a, b) => {
-    const da = a.created || '';
-    const db = b.created || '';
-    return db < da ? -1 : db > da ? 1 : 0;
-  });
-}
-
-// ─── status pill color map ────────────────────────────────────────────────────
-// Freeform statuses: apply tinted-background pills; unknown → neutral.
-const STATUS_COLORS = {
-  exploring:   { bg: 'rgba(110, 168, 255, 0.12)', color: '#6ea8ff',  border: 'rgba(110, 168, 255, 0.28)' },
-  candidate:   { bg: 'rgba(95, 205, 184, 0.12)',  color: '#5fcdb8',  border: 'rgba(95, 205, 184, 0.28)' },
-  'parking-lot': { bg: 'rgba(214, 164, 95, 0.12)', color: '#d6a45f', border: 'rgba(214, 164, 95, 0.28)' },
-  promoted:    { bg: 'rgba(160, 127, 224, 0.12)', color: '#a07fe0',  border: 'rgba(160, 127, 224, 0.28)' },
-  dropped:     { bg: 'rgba(140, 140, 149, 0.10)', color: '#7c8290',  border: 'rgba(140, 140, 149, 0.20)' },
-};
-
-function statusPill(status) {
-  const el = document.createElement('span');
-  el.className = 'idea-row__status-pill';
-  el.textContent = status || '—';
-  const colors = STATUS_COLORS[status] || { bg: 'rgba(255,255,255,0.06)', color: '#a8a8ae', border: 'rgba(255,255,255,0.12)' };
-  el.style.background = colors.bg;
-  el.style.color = colors.color;
-  el.style.border = `1px solid ${colors.border}`;
-  return el;
-}
-
-// ─── Create Idea modal ────────────────────────────────────────────────────────
-function openCreateIdeaModal({ onSave }) {
-  const host = document.getElementById('entity-modal-host');
-  if (!host) {
-    // Fallback: append a host if missing (shouldn't happen in normal flow)
-    const h = document.createElement('div');
-    h.id = 'entity-modal-host';
-    document.body.appendChild(h);
-  }
-
-  const overlay = document.createElement('div');
-  overlay.className = 'em-overlay';
-  overlay.tabIndex = -1;
-
-  const modal = document.createElement('div');
-  modal.className = 'em-modal';
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-  modal.setAttribute('aria-label', 'Create Idea');
-
-  // Header
-  const header = document.createElement('div');
-  header.className = 'em-header';
-  const titleEl = document.createElement('span');
-  titleEl.className = 'em-title';
-  titleEl.textContent = 'Create Idea';
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'em-close';
-  closeBtn.setAttribute('aria-label', 'close');
-  closeBtn.textContent = '✕';
-  header.appendChild(titleEl);
-  header.appendChild(closeBtn);
-
-  // Body
-  const body = document.createElement('div');
-  body.className = 'em-body';
-
-  // Title field (required)
-  const titleField = document.createElement('div');
-  titleField.className = 'em-field';
-  const titleLabel = document.createElement('label');
-  titleLabel.className = 'em-label';
-  titleLabel.textContent = 'Title *';
-  const titleInput = document.createElement('input');
-  titleInput.type = 'text';
-  titleInput.className = 'em-input';
-  titleInput.placeholder = 'Short descriptive title…';
-  titleInput.required = true;
-  const titleErr = document.createElement('div');
-  titleErr.className = 'em-field-error';
-  titleField.appendChild(titleLabel);
-  titleField.appendChild(titleInput);
-  titleField.appendChild(titleErr);
-
-  // Status field (freeform)
-  const statusField = document.createElement('div');
-  statusField.className = 'em-field';
-  const statusLabel = document.createElement('label');
-  statusLabel.className = 'em-label';
-  statusLabel.textContent = 'Status';
-  const statusSelect = document.createElement('select');
-  statusSelect.className = 'em-input';
-  const statusOptions = ['exploring', 'candidate', 'parking-lot', 'promoted', 'dropped'];
-  const blankOpt = document.createElement('option');
-  blankOpt.value = '';
-  blankOpt.textContent = '— pick a status —';
-  statusSelect.appendChild(blankOpt);
-  for (const s of statusOptions) {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = s;
-    statusSelect.appendChild(opt);
-  }
-  statusField.appendChild(statusLabel);
-  statusField.appendChild(statusSelect);
-
-  // Tags field
-  const tagsField = document.createElement('div');
-  tagsField.className = 'em-field';
-  const tagsLabel = document.createElement('label');
-  tagsLabel.className = 'em-label';
-  tagsLabel.textContent = 'Tags';
-  const tagsHint = document.createElement('span');
-  tagsHint.className = 'em-label-hint';
-  tagsHint.textContent = ' (comma-separated)';
-  tagsLabel.appendChild(tagsHint);
-  const tagsInput = document.createElement('input');
-  tagsInput.type = 'text';
-  tagsInput.className = 'em-input';
-  tagsInput.placeholder = 'ux, perf, ai…';
-  tagsField.appendChild(tagsLabel);
-  tagsField.appendChild(tagsInput);
-
-  // Body field
-  const bodyField = document.createElement('div');
-  bodyField.className = 'em-field';
-  const bodyLabel = document.createElement('label');
-  bodyLabel.className = 'em-label';
-  bodyLabel.textContent = 'Body';
-  const bodyTextarea = document.createElement('textarea');
-  bodyTextarea.className = 'em-input em-textarea';
-  bodyTextarea.placeholder = 'Describe the idea in detail…';
-  bodyTextarea.rows = 5;
-  bodyField.appendChild(bodyLabel);
-  bodyField.appendChild(bodyTextarea);
-
-  body.appendChild(titleField);
-  body.appendChild(statusField);
-  body.appendChild(tagsField);
-  body.appendChild(bodyField);
-
-  // Footer
-  const errSummary = document.createElement('div');
-  errSummary.className = 'em-error-summary';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.type = 'button';
-  cancelBtn.className = 'em-cancel';
-  cancelBtn.textContent = 'Cancel';
-  const saveBtn = document.createElement('button');
-  saveBtn.type = 'button';
-  saveBtn.className = 'em-save';
-  saveBtn.textContent = 'Create';
-  saveBtn.disabled = true;
-
-  const footerActions = document.createElement('div');
-  footerActions.className = 'em-footer-actions';
-  footerActions.appendChild(cancelBtn);
-  footerActions.appendChild(saveBtn);
-
-  const footer = document.createElement('div');
-  footer.className = 'em-footer';
-  footer.appendChild(errSummary);
-  footer.appendChild(footerActions);
-
-  modal.appendChild(header);
-  modal.appendChild(body);
-  modal.appendChild(footer);
-  overlay.appendChild(modal);
-  document.getElementById('entity-modal-host').appendChild(overlay);
-  document.body.classList.add('em-open');
-
-  function validate() {
-    const valid = titleInput.value.trim().length > 0;
-    saveBtn.disabled = !valid;
-    titleErr.textContent = '';
-    return valid;
-  }
-
-  titleInput.addEventListener('input', validate);
-
-  function doClose() {
-    overlay.remove();
-    document.body.classList.remove('em-open');
-    document.removeEventListener('keydown', onKeyDown);
-  }
-
-  function doCancel() {
-    const dirty = titleInput.value.trim() || bodyTextarea.value.trim() || tagsInput.value.trim();
-    if (dirty && !window.confirm('Discard new idea?')) return;
-    doClose();
-  }
-
-  cancelBtn.addEventListener('click', doCancel);
-  closeBtn.addEventListener('click', doCancel);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) doCancel(); });
-
-  async function doSave() {
-    if (!validate()) {
-      titleErr.textContent = 'Title is required.';
-      titleInput.focus();
-      return;
-    }
-    const payload = {
-      title: titleInput.value.trim(),
-      status: statusSelect.value || 'exploring',
-      tags: tagsInput.value.trim()
-        ? tagsInput.value.split(',').map(t => t.trim()).filter(Boolean)
-        : [],
-      body: bodyTextarea.value.trim() || '',
-    };
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Creating…';
-    errSummary.textContent = '';
-    try {
-      await onSave(payload);
-      doClose();
-    } catch (e) {
-      errSummary.textContent = e.message || 'Failed to create idea.';
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Create';
-    }
-  }
-
-  saveBtn.addEventListener('click', doSave);
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') { e.preventDefault(); doCancel(); }
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doSave(); }
-  }
-  document.addEventListener('keydown', onKeyDown);
-
-  // Focus title after mount
-  queueMicrotask(() => titleInput.focus());
-
-  return doClose;
-}
-
-// ─── main mount function ──────────────────────────────────────────────────────
-
-export async function mount(root, { store, prefs }) {
-  // Gotcha: `prefs` is the patch helper, NOT the data object.
-  // Read persisted state from store.getPrefs(), then use prefs.patch() to save.
-  root.innerHTML = '';
-  const screen = document.createElement('section');
-  screen.className = 'ideas';
-
-  // ---- topbar
-  const topbar = claimTopbar();
-  const subcount = tmSubcount('… ideas');
-  const searchBuilt = tmSearch({
-    placeholder: 'Search ideas…',
-    onInput: (v) => { searchTerm = v.trim().toLowerCase(); render(); },
-  });
-
-  // Status chip row (dynamic, populated after data loads)
-  const statusRow = document.createElement('div');
-  statusRow.className = 'tm-chip-row ideas__status-chips';
-
-  // Tag chip row (dynamic)
-  const tagRow = document.createElement('div');
-  tagRow.className = 'tm-chip-row ideas__tag-chips';
-
-  // Archived toggle chip
-  const archivedChip = document.createElement('span');
-  archivedChip.className = 'ideas__archived-chip';
-  archivedChip.textContent = 'Show archived';
-  archivedChip.title = 'Toggle archived ideas';
-  archivedChip.addEventListener('click', () => {
-    includeArchived = !includeArchived;
-    archivedChip.classList.toggle('is-active', includeArchived);
-    archivedChip.textContent = includeArchived ? 'Hide archived' : 'Show archived';
-    render();
-  });
-
-  // Create Idea button — explicit user request, use tmAction with onClick
-  const newBtn = tmAction({
-    icon: '+',
-    label: 'New Idea',
-    variant: 'primary',
-    title: 'Create a new idea',
-    onClick: () => {
-      openCreateIdeaModal({
-        onSave: async (payload) => {
-          const result = await createIdea(payload);
-          // Refetch list to show the new idea
-          const data = await getIdeas();
-          store.setIdeas(data.ideas || data);
-          render();
-          return result;
-        },
-      });
-    },
-  });
-
-  topbar?.appendChild(subcount);
-  topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(statusRow);
-  topbar?.appendChild(tagRow);
-  topbar?.appendChild(archivedChip);
-  topbar?.appendChild(newBtn);
-
-  // ---- content area: list + detail split (or just list)
-  const contentEl = document.createElement('div');
-  contentEl.className = 'ideas__content';
-  screen.appendChild(contentEl);
-
-  const listEl = document.createElement('div');
-  listEl.className = 'ideas__list';
-  contentEl.appendChild(listEl);
-
-  const detailEl = document.createElement('div');
-  detailEl.className = 'ideas__detail';
-  detailEl.hidden = true;
-  contentEl.appendChild(detailEl);
-
-  root.appendChild(screen);
-
-  // ---- state
-  let searchTerm = '';
+export function mount(root, { store, subpath = [] } = {}) {
+  let statuses = [];
   let includeArchived = false;
-  const activeStatuses = new Set();
-  const activeTags = new Set();
-  let selectedId = null;
+  let search = '';
+  let failed = false;
+  let loading = false;
+  let loadSeq = 0;
+  let alive = true;
+  let selectedId = subpath?.[0] ? decodeURIComponent(subpath[0]) : null;
 
-  // ---- chip renderers
-  let _lastStatusChipKey = '';
-  function _renderStatusChips() {
-    const all = store.getIdeas() || [];
-    const statuses = [...new Set(all.map(i => i.status).filter(Boolean))].sort();
-    const key = statuses.join('|') + '::' + searchTerm;
-    if (key === _lastStatusChipKey) return;
-    _lastStatusChipKey = key;
-    statusRow.innerHTML = '';
-    for (const s of statuses) {
-      const count = all.filter(i => !i.archived && i.status === s && _matchesSearch(i)).length;
-      const chip = document.createElement('span');
-      chip.className = 'ideas__status-chip';
-      chip.dataset.status = s;
-      chip.title = CHIP_CLICK_HINT;
-      chip.textContent = `${s} · ${count}`;
-      if (activeStatuses.has(s)) chip.classList.add('is-active');
-      chip.addEventListener('click', (ev) => {
-        const next = new Set(chipClickNext(ev, activeStatuses, s));
-        activeStatuses.clear();
-        for (const k of next) activeStatuses.add(k);
-        statusRow.querySelectorAll('.ideas__status-chip').forEach(el => {
-          el.classList.toggle('is-active', activeStatuses.has(el.dataset.status));
-        });
-        render();
-      });
-      statusRow.appendChild(chip);
-    }
+  root.replaceChildren();
+  const screen = h('section', { class: 'ideas' });
+
+  // ── Row 1: the primary action; Row 2: search only ──
+  const newBtn = tmAction({
+    icon: 'plus', label: 'New idea', variant: 'primary', title: 'Create a new idea',
+    onClick: () => openIdeaCreateModal({ store, onCreated: loadIdeas }),
+  });
+  // claimTopbar() empties #topbar-primary too, so it goes first.
+  const topbar = claimTopbar();
+  claimTopbarPrimary()?.append(newBtn);
+  const searchBuilt = tmSearch({ placeholder: 'Search ideas…', onInput: (v) => { search = v; paint(); } });
+  const searchInput = searchBuilt.input;
+  topbar?.append(searchBuilt.el);
+
+  // ── The filter rail ──
+  const all = () => store.getIdeas() || [];
+  const admittedIdeas = () => all().filter((i) => includeArchived || !i.archived);
+  const rail = filterRail({ onClear: clear });
+  const statusRow = chipRow({
+    label: 'Status', chips: ideaStatusChips([], statuses), hint: CHIP_CLICK_HINT,
+    onToggle: (value, ev) => { statuses = chipClickNext(ev, statuses, value); paint(); },
+  });
+  const tags = tagFilter({ getTags: () => collectTags(admittedIdeas()), onChange: () => paint() });
+  const archivedChip = filterChip({
+    label: 'Show archived', value: 'archived', pressed: false, count: 0,
+    onToggle: () => { includeArchived = !includeArchived; paint(); },
+  });
+  rail.add(statusRow.el, tags.el, archivedChip);
+
+  const notice = h('div', { class: 'ideas__notice', role: 'status', hidden: true },
+    h('span', {}, 'Could not refresh ideas — showing the list loaded earlier.'),
+    h('button', { type: 'button', class: 'btn btn--ghost btn--sm', on: { click: () => loadIdeas() } }, 'Try again'));
+  const list = h('ul', { class: 'ideas__list', 'aria-label': 'Ideas' });
+  const stateHost = h('div', { class: 'ideas__state' });
+  const pane = h('div', { class: 'ideas__pane' });
+  const content = h('div', { class: 'ideas__content' }, list, pane);
+  screen.append(rail.el, notice, stateHost, content);
+  root.append(screen);
+
+  function clear() {
+    statuses = [];
+    includeArchived = false;
+    tags.clear();
+    search = '';
+    searchInput.value = '';
+    paint();
   }
 
-  let _lastTagChipKey = '';
-  function _renderTagChips() {
-    const all = store.getIdeas() || [];
-    // Collect all tags, sorted by frequency
-    const freq = new Map();
-    for (const idea of all) {
-      for (const t of (idea.tags || [])) {
-        freq.set(t, (freq.get(t) || 0) + 1);
-      }
-    }
-    const tags = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(e => e[0]);
-    const key = tags.join('|') + '::' + searchTerm;
-    if (key === _lastTagChipKey) return;
-    _lastTagChipKey = key;
-    tagRow.innerHTML = '';
-    for (const t of tags) {
-      const count = all.filter(i => !i.archived && (i.tags || []).includes(t) && _matchesSearch(i)).length;
-      const chip = document.createElement('span');
-      chip.className = 'ideas__tag-chip';
-      chip.dataset.tag = t;
-      chip.title = CHIP_CLICK_HINT;
-      chip.textContent = `${t} · ${count}`;
-      if (activeTags.has(t)) chip.classList.add('is-active');
-      chip.addEventListener('click', (ev) => {
-        const next = new Set(chipClickNext(ev, activeTags, t));
-        activeTags.clear();
-        for (const k of next) activeTags.add(k);
-        tagRow.querySelectorAll('.ideas__tag-chip').forEach(el => {
-          el.classList.toggle('is-active', activeTags.has(el.dataset.tag));
-        });
-        render();
-      });
-      tagRow.appendChild(chip);
-    }
+  function paint() {
+    if (!alive) return;
+    const spare = () => list.querySelector('a[href]') ?? stateHost.querySelector('button') ?? searchInput;
+    const restore = [keepFocus(screen, { fallback: spare })];
+    draw();
+    for (const back of restore) back();
+    tags.update();
   }
 
-  function _matchesSearch(idea) {
-    if (!searchTerm) return true;
-    const hay = [
-      idea.id || '',
-      idea.title || '',
-      idea.body || '',
-      idea.status || '',
-      ...(idea.tags || []),
-    ].join(' ').toLowerCase();
-    return hay.includes(searchTerm);
+  function draw() {
+    const cached = store.getIdeas();
+    const ideas = cached && (cached.length || (!loading && !failed)) ? cached : null;   // an empty cache while loading (or failed) is no cache
+    const tagSel = tags.selected();
+    // Show archived widens the list, so it makes Clear available but is not a narrowing filter for the count.
+    const narrowed = statuses.length > 0 || tagSel.length > 0 || search.trim() !== '';
+    rail.setClearable(narrowed || includeArchived);
+    notice.hidden = !(failed && ideas);
+    const archivedCount = (ideas || []).filter((i) => i.archived).length;
+    archivedChip.setAttribute('aria-pressed', String(includeArchived));
+    archivedChip.disabled = archivedCount === 0 && !includeArchived;
+    const countEl = archivedChip.querySelector('.chip__count');
+    if (countEl) countEl.textContent = String(archivedCount);
+
+    if (!ideas) {
+      setTopbarCount('');
+      statusRow.update(ideaStatusChips([], statuses));
+      list.replaceChildren();
+      showDetail(null);
+      return showState(failed
+        ? stateBlock({ state: 'error', label: 'Ideas', headline: 'Could not load ideas.', action: { label: 'Try again', onClick: loadIdeas } })
+        : stateBlock({ state: 'loading', busy: true, headline: 'Loading ideas…' }));
+    }
+    const admitted = admittedIdeas();
+    statusRow.update(ideaStatusChips(admitted, statuses));
+    const shown = applyIdeasFilters(ideas, { statuses, tags: tagSel, includeArchived, search: search.trim() });
+    const total = admitted.length;   // what the archived toggle admits (brief: 4 → 5 after a create)
+    setTopbarCount(`${total} ${pluralize(total, 'idea', 'ideas')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    list.replaceChildren(...shown.map(ideaRow));
+    if (!ideas.length) showState(stateBlock({ label: 'Ideas', headline: 'No ideas yet.', hint: 'Use “New idea” to capture one.' }));
+    else if (!total) showState(stateBlock({ label: 'Ideas', headline: 'Every idea is archived.', action: { label: 'Show archived', onClick: () => { includeArchived = true; paint(); } } }));
+    else if (!shown.length) showState(stateBlock({ label: 'No matches', headline: 'No ideas match these filters.', action: { label: 'Clear filters', onClick: clear } }));
+    else showState(null);
+    list.hidden = !shown.length;
+    showDetail(selectedId);
   }
 
-  // ---- list renderer
-  function render() {
-    const all = store.getIdeas() || [];
-    _renderStatusChips();
-    _renderTagChips();
-
-    const filtered = applyIdeasFilters(
-      all.filter(i => _matchesSearch(i)),
-      {
-        statuses: [...activeStatuses],
-        tags: [...activeTags],
-        includeArchived,
-      },
-    );
-
-    const filterActive = !!searchTerm || activeStatuses.size > 0 || activeTags.size > 0 || includeArchived;
-    subcount.textContent = filterActive
-      ? `${filtered.length} of ${all.length} ${pluralize(all.length, 'idea', 'ideas')}`
-      : `${all.length} ${pluralize(all.length, 'idea', 'ideas')}`;
-
-    listEl.innerHTML = '';
-
-    if (filtered.length === 0 && filterActive) {
-      listEl.appendChild(emptyState({
-        headline: 'No ideas match your filters',
-        hint: 'Try clearing a status chip, tag chip, or the search box.',
-      }));
-    } else if (filtered.length === 0) {
-      listEl.appendChild(emptyState({
-        headline: 'No ideas yet',
-        hint: 'Click "+ New Idea" in the toolbar to capture your first idea.',
-      }));
-    } else {
-      for (const idea of filtered) {
-        listEl.appendChild(renderRow(idea));
-      }
-    }
-
-    // Re-select current item if still in filtered list
-    if (selectedId) {
-      const row = listEl.querySelector(`[data-id="${selectedId}"]`);
-      if (row) row.classList.add('is-selected');
-      else showDetail(null);
-    }
+  function showState(block) {
+    stateHost.replaceChildren(...(block ? [block] : []));
+    stateHost.hidden = !block;
   }
 
-  function renderRow(idea) {
-    const row = document.createElement('div');
-    row.className = 'idea-row' + (idea.archived ? ' idea-row--archived' : '');
-    row.dataset.id = idea.id;
-    row.tabIndex = 0;
-    row.setAttribute('role', 'button');
-    row.setAttribute('aria-label', idea.title);
+  // linkRow takes one Node as its name: the id and the cut title go in a fragment.
+  function rowName(idea) {
+    const f = document.createDocumentFragment();
+    f.append(h('span', { class: 'idea-row__id' }, idea.id), truncate(idea.title || 'Untitled', { lines: 2, className: 'idea-row__title' }));
+    return f;
+  }
 
-    // id badge
-    const idEl = document.createElement('span');
-    idEl.className = 'idea-row__id';
-    idEl.textContent = idea.id || '—';
-
-    // title
-    const titleEl = document.createElement('span');
-    titleEl.className = 'idea-row__title';
-    titleEl.textContent = idea.title || 'Untitled';
-
-    // status pill
-    const pill = statusPill(idea.status);
-
-    // tags
-    const tagsEl = document.createElement('span');
-    tagsEl.className = 'idea-row__tags';
-    for (const t of (idea.tags || [])) {
-      const chip = document.createElement('span');
-      chip.className = 'idea-row__tag';
-      chip.textContent = t;
-      tagsEl.appendChild(chip);
+  function ideaRow(idea) {
+    const content = [];
+    if (idea.status) content.push(statusMarker('idea', idea.status));
+    const t = idea.tags || [];
+    if (t.length) {
+      const wrap = h('span', { class: 'idea-row__tags' }, t.slice(0, 3).map((x) => h('span', { class: 'list-tag' }, x)));
+      if (t.length > 3) wrap.append(h('span', { class: 'idea-row__more', title: t.slice(3).join(', ') }, `+${t.length - 3}`));
+      content.push(wrap);
     }
-
-    // created
-    const whenEl = document.createElement('span');
-    whenEl.className = 'idea-row__when';
-    whenEl.textContent = formatRelative(idea.created);
-    whenEl.title = idea.created || '';
-
-    row.appendChild(idEl);
-    row.appendChild(titleEl);
-    row.appendChild(pill);
-    row.appendChild(tagsEl);
-    row.appendChild(whenEl);
-
-    row.addEventListener('click', () => selectIdea(idea.id));
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectIdea(idea.id); }
+    if (idea.archived) content.push(h('span', { class: 'list-tag' }, 'Archived'));
+    const age = formatStamp(idea.created);
+    content.push(h('time', { class: 'idea-row__age', datetime: idea.created || '', title: age.title || '' }, age.text || ''));
+    const row = linkRow({
+      tag: 'li',
+      className: 'idea-row' + (idea.archived ? ' idea-row--archived' : ''),
+      href: linkRoute(idea.id),
+      name: rowName(idea),
+      content,
+    });
+    const a = row.querySelector('a[href]');
+    a.dataset.id = idea.id;
+    if (idea.id === selectedId) a.setAttribute('aria-current', 'true');
+    a.addEventListener('click', (ev) => {
+      if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      select(idea.id);
     });
     return row;
   }
 
-  function selectIdea(id) {
+  function rowLink(id) {
+    return [...list.querySelectorAll('a[data-id]')].find((a) => a.dataset.id === id) ?? null;
+  }
+
+  function select(id) {
     selectedId = id;
-    listEl.querySelectorAll('.idea-row').forEach(r => {
-      r.classList.toggle('is-selected', r.dataset.id === id);
-    });
-    const idea = (store.getIdeas() || []).find(i => i.id === id);
-    if (idea) showDetail(idea);
+    history.replaceState(history.state, '', `#/ideas/${encodeURIComponent(id)}`);
+    for (const a of list.querySelectorAll('a[aria-current]')) a.removeAttribute('aria-current');
+    rowLink(id)?.setAttribute('aria-current', 'true');
+    showDetail(id);
+    if (isPhone()) pane.querySelector('h2')?.focus();
   }
 
-  function showDetail(idea) {
-    detailEl.innerHTML = '';
-    if (!idea) {
-      detailEl.hidden = true;
-      contentEl.classList.remove('ideas__content--detail-open');
-      return;
-    }
-    detailEl.hidden = false;
-    contentEl.classList.add('ideas__content--detail-open');
+  function deselect() {
+    const id = selectedId;
+    selectedId = null;
+    history.replaceState(history.state, '', '#/ideas');
+    rowLink(id)?.removeAttribute('aria-current');
+    showDetail(null);
+    rowLink(id)?.focus();
+  }
 
-    // Back button (mobile / narrow)
-    const backBtn = document.createElement('button');
-    backBtn.type = 'button';
-    backBtn.className = 'ideas-detail__back';
-    backBtn.textContent = '← Back';
-    backBtn.addEventListener('click', () => {
-      selectedId = null;
-      showDetail(null);
-      listEl.querySelectorAll('.idea-row').forEach(r => r.classList.remove('is-selected'));
-    });
-    detailEl.appendChild(backBtn);
+  function showDetail(id) {
+    const ideas = store.getIdeas();
+    content.classList.toggle('ideas__content--detail-open', !!id && !!ideas);
+    if (!id || !ideas) { pane.replaceChildren(); pane.hidden = true; return; }
+    pane.hidden = false;
+    const idea = ideas.find((i) => i.id === id);
+    pane.replaceChildren(idea ? detail(idea)
+      : stateBlock({ state: 'missing', label: 'Not found', headline: `${id} is not in this project.` }));
+  }
 
-    // Head
-    const head = document.createElement('div');
-    head.className = 'ideas-detail__head';
+  function detail(idea) {
+    const headId = `ideas-detail-title-${idea.id}`;
+    // data-focus keys let keepFocus find these again after a redraw rebuilds the pane (the list fallback is hidden on phones).
+    const back = h('button', { type: 'button', class: 'btn btn--ghost btn--sm ideas-detail__back', 'data-focus': 'ideas-detail-back', on: { click: deselect } },
+      icon('chevron', { size: 14 }), h('span', {}, 'Back to ideas'));
+    const tech = h('div', { class: 'ideas-detail__tech' }, h('span', { class: 'ideas-detail__id' }, idea.id));
+    if (idea.status) tech.append(statusMarker('idea', idea.status));
+    if (idea.archived) tech.append(h('span', { class: 'list-tag' }, 'Archived'));
+    const title = h('h2', { class: 'ideas-detail__title', id: headId, tabindex: '-1', 'data-focus': 'ideas-detail-title' }, idea.title || 'Untitled');
 
-    const metaRow = document.createElement('div');
-    metaRow.className = 'ideas-detail__meta';
+    const main = h('div', { class: 'ideas-detail__main' });
+    main.append(idea.body ? mountMarkdownInto(idea.body) : h('p', { class: 'ideas-detail__empty' }, 'No description.'));
 
-    const idBadge = document.createElement('span');
-    idBadge.className = 'ideas-detail__id';
-    idBadge.textContent = idea.id || '—';
-    metaRow.appendChild(idBadge);
-    metaRow.appendChild(statusPill(idea.status));
-    if (idea.archived) {
-      const archBadge = document.createElement('span');
-      archBadge.className = 'ideas-detail__archived-badge';
-      archBadge.textContent = 'archived';
-      metaRow.appendChild(archBadge);
-    }
-    head.appendChild(metaRow);
-
-    const titleH = document.createElement('h2');
-    titleH.className = 'ideas-detail__title';
-    titleH.textContent = idea.title || 'Untitled';
-    head.appendChild(titleH);
-
-    detailEl.appendChild(head);
-
-    // Grid: main body + sidebar
-    const grid = document.createElement('div');
-    grid.className = 'ideas-detail__grid';
-
-    const main = document.createElement('div');
-    main.className = 'ideas-detail__main';
-
-    if (idea.body) {
-      const bodyEl = document.createElement('div');
-      bodyEl.className = 'ideas-detail__body';
-      // Render markdown if marked is available, otherwise plain text
-      if (typeof window !== 'undefined' && window.marked) {
-        bodyEl.innerHTML = window.marked.parse(idea.body);
-      } else {
-        bodyEl.textContent = idea.body;
-      }
-      main.appendChild(bodyEl);
-    } else {
-      const noBody = document.createElement('p');
-      noBody.className = 'ideas-detail__nobody';
-      noBody.textContent = 'No description.';
-      main.appendChild(noBody);
-    }
-
-    // Sidebar
-    const side = document.createElement('div');
-    side.className = 'ideas-detail__side';
-
-    // Frontmatter block
-    const fmBlock = document.createElement('div');
-    fmBlock.className = 'ideas-detail__side-block';
-
-    const fmH = document.createElement('div');
-    fmH.className = 'ideas-detail__side-h';
-    fmH.textContent = 'Details';
-    fmBlock.appendChild(fmH);
-
-    const dl = document.createElement('dl');
-    dl.className = 'ideas-detail__dl';
-
-    function addTerm(label, value) {
-      if (!value && value !== 0) return;
-      const dt = document.createElement('dt');
-      dt.textContent = label;
-      const dd = document.createElement('dd');
-      if (typeof value === 'string') {
-        dd.textContent = value;
-      } else {
-        dd.appendChild(value);
-      }
-      dl.appendChild(dt);
-      dl.appendChild(dd);
-    }
-
-    addTerm('Created', idea.created ? new Date(idea.created).toLocaleDateString() : null);
-    addTerm('Updated', idea.updated ? new Date(idea.updated).toLocaleDateString() : null);
-    addTerm('Status', idea.status || null);
-
-    if ((idea.tags || []).length > 0) {
-      const tagWrap = document.createElement('span');
-      for (const t of idea.tags) {
-        const tc = document.createElement('span');
-        tc.className = 'idea-row__tag';
-        tc.textContent = t;
-        tagWrap.appendChild(tc);
-      }
-      addTerm('Tags', tagWrap);
-    }
-
-    fmBlock.appendChild(dl);
-    side.appendChild(fmBlock);
-
-    // Plan C: unified typed-links block.
-    // Falls back to legacy fields when project hasn't been migrated yet.
-    const links = (idea.links && idea.links.length)
-      ? idea.links
-      : legacyLinksToTyped(idea, 'idea');
-    if (links.length) {
-      const block = document.createElement('div');
-      block.className = 'ideas-detail__side-block';
-      const h = document.createElement('div');
-      h.className = 'ideas-detail__side-h';
-      h.textContent = 'Links';
-      block.appendChild(h);
-      const pillsMount = document.createElement('div');
-      pillsMount.innerHTML = renderLinkPills({ ...idea, links });
-      pillsMount.querySelectorAll('a.link-pill').forEach((a) => {
-        const target = a.getAttribute('href')?.slice(1) || '';
-        if (!target) return;
-        if (target.startsWith('ISS-')) a.href = `#/issues/${encodeURIComponent(target)}`;
-        else if (target.startsWith('IDEA-')) a.href = `#/ideas/${encodeURIComponent(target)}`;
-        else a.href = `#/kanban/${encodeURIComponent(target)}`;
-      });
-      block.appendChild(pillsMount);
-      side.appendChild(block);
-    }
-
-    // Promoted to
+    const dl = h('dl', { class: 'ideas-detail__dl' });
+    const term = (label, value) => { if (value) dl.append(h('dt', {}, label), h('dd', {}, value)); };
+    const stamp = (v) => { if (!v) return null; const s = formatStamp(v); return h('span', { title: s.title || '' }, s.text || ''); };
+    term('Created', stamp(idea.created));
+    term('Updated', stamp(idea.updated));
+    term('Status', idea.status && statusMarker('idea', idea.status));
+    term('Tags', (idea.tags || []).length && h('span', { class: 'ideas-detail__tags' }, idea.tags.map((x) => h('span', { class: 'list-tag' }, x))));
+    const side = h('div', { class: 'ideas-detail__side' }, dl);
+    const links = idea.links?.length ? idea.links : legacyLinksToTyped(idea, 'idea');
+    if (links.length) side.append(h('h3', { class: 'ideas-detail__h' }, 'Links'), linkPillsEl(links));
     if (idea.promoted_to) {
-      const block = document.createElement('div');
-      block.className = 'ideas-detail__side-block';
-      const h = document.createElement('div');
-      h.className = 'ideas-detail__side-h';
-      h.textContent = 'Promoted To';
-      block.appendChild(h);
-      const a = document.createElement('a');
-      a.className = 'ideas-detail__rel-pill';
-      a.href = `#/kanban/${idea.promoted_to}`;
-      a.textContent = idea.promoted_to;
-      block.appendChild(a);
-      side.appendChild(block);
+      side.append(h('h3', { class: 'ideas-detail__h' }, 'Promoted to'),
+        h('a', { class: 'link-pill', href: linkRoute(idea.promoted_to) }, idea.promoted_to));
     }
-
-    grid.appendChild(main);
-    grid.appendChild(side);
-    detailEl.appendChild(grid);
+    return h('section', { class: 'ideas-detail', 'aria-labelledby': headId },
+      back, tech, title, h('div', { class: 'ideas-detail__grid' }, main, side));
   }
 
-  // ─── API helpers ────────────────────────────────────────────────────────────
-
-  async function getIdeas() {
-    // archived=true so the in-screen archived toggle filters over the full
-    // dataset; summary=false so the detail pane has the body without a
-    // second fetch.
-    const r = await fetch('/api/ideas?archived=true&summary=false');
-    if (!r.ok) {
-      if (r.status === 404) return { ideas: [] };
-      throw new Error(`getIdeas failed: ${r.status}`);
-    }
-    return r.json();
+  function mountMarkdownInto(src) {
+    const el = h('div', { class: 'ideas-detail__body md' });
+    mountMarkdown(el, src);
+    return el;
   }
 
-  async function createIdea(payload) {
-    const r = await fetch('/api/ideas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+  function loadIdeas() {
+    const seq = ++loadSeq;
+    failed = false;
+    loading = true;
+    paint();
+    return api.get('/api/ideas?archived=true&summary=false').then((data) => {
+      if (!alive || seq !== loadSeq) return;
+      loading = false;
+      store.setIdeas(data?.ideas ?? (Array.isArray(data) ? data : []));   // the subscription repaints
+    }, (e) => {
+      if (!alive || seq !== loadSeq) return;
+      loading = false;
+      if (e?.code === 404) { store.setIdeas([]); return; }
+      console.error('ideas load failed', e);
+      failed = true;
+      paint();
     });
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      throw new Error(body.error || `createIdea failed: ${r.status}`);
-    }
-    return r.json();
   }
 
-  // ─── initial load ────────────────────────────────────────────────────────────
-  // Always refetch on mount — `store` is a soft cache, not the source of
-  // truth. Without this, navigating away and back shows stale data after
-  // ideas are created/archived elsewhere (CLI, another tab).
-  let loadError = null;
-  try {
-    const data = await getIdeas();
-    store.setIdeas(data.ideas || data || []);
-  } catch (e) {
-    console.error('Ideas: initial load failed', e);
-    loadError = e;
-    // Preserve any cached data so the user still sees something; if the
-    // cache is also empty, render() will show the empty state on top of
-    // the error banner below.
-    if (!store.getIdeas()) store.setIdeas([]);
-  }
+  const unsubscribe = store.subscribe?.('ideas', paint);
+  loadIdeas();
 
-  if (loadError) {
-    const banner = document.createElement('div');
-    banner.className = 'ideas-error-banner';
-    banner.setAttribute('role', 'alert');
-    banner.textContent = `Failed to load ideas: ${loadError.message}. Showing cached data.`;
-    screen.insertBefore(banner, screen.firstChild);
-  }
-
-  render();
-
-  return () => {};
+  return () => {
+    alive = false;
+    unsubscribe?.();
+    statusRow.destroy?.();
+    rail.el.remove();   // removing the Tags anchor closes its popover
+    screen.remove();
+  };
 }

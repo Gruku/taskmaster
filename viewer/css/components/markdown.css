@@ -1,0 +1,145 @@
+/* User intent: a task's spec, plan and notes read as a document — headings, lists, tables and code set in the
+   viewer's own voices, in both themes — instead of raw markdown syntax. */
+
+.md-body {
+  min-width: 0;
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+
+/* Headings are content, not page titles: the Narrator voice, one modest step apart. */
+.md-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: var(--space-md) 0 var(--space-xs);
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight-semi);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+}
+.md-body h1 { font-size: var(--size-narrator-large); }
+.md-body h2 { font-size: var(--size-narrator-default); }
+.md-body :is(h3, h4, h5, h6) { font-size: var(--size-narrator-small); }
+.md-body :is(h4, h5, h6) { color: var(--foreground-default); }
+
+.md-body p { margin: 0 0 var(--space-sm); }
+.md-body :is(ul, ol) { margin: 0 0 var(--space-sm); padding-left: var(--space-lg); }
+.md-body ol[data-digits="2"] { padding-left: calc(var(--space-lg) + 1ch); }
+.md-body ol[data-digits="3"] { padding-left: calc(var(--space-lg) + 2ch); }
+.md-body ol[data-digits="4"] { padding-left: calc(var(--space-lg) + 3ch); }
+.md-body ol[data-digits="5"] { padding-left: calc(var(--space-lg) + 4ch); }
+.md-body ol[data-digits="6"] { padding-left: calc(var(--space-lg) + 5ch); }
+.md-body li { margin: var(--space-micro) 0; }
+.md-body li > :is(ul, ol) { margin-bottom: 0; }
+.md-body :is(strong, b) { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }
+/* No italics in this system: emphasis is an underline at normal weight, so it never reads as strong. */
+.md-body :is(em, i) {
+  font-style: normal;
+  text-decoration: underline;
+  text-decoration-color: var(--foreground-subtle);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+/* Task lists: the checkbox is an inert mark — an empty box, or a box with a check — in place of the bullet. */
+.md-body li:has(> .md-task, > p:first-child > .md-task) { list-style: none; }
+.md-task {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin: 0 var(--space-micro) 0 calc(-1 * var(--space-lg) + var(--space-micro));
+  border: 2px solid var(--foreground-subtle);
+  border-radius: var(--radius-xs);
+  vertical-align: -2px;
+}
+.md-task--done { background: var(--foreground-subtle); }
+.md-task--done::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--bg-page);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+/* Read aloud, not shown: the box is the visible form of the same words. */
+.md-task__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.md-body hr { height: 0; margin: var(--space-md) 0; border: 0; border-top: 1px solid var(--border-default); }
+
+/* Code is the Technical voice on the recessed ground; the hairline keeps it visible where that ground matches the surface. */
+.md-body code {
+  padding: 0 var(--space-micro);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-recessed);
+  color: var(--foreground-bold);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.md-body pre {
+  max-width: 100%;
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-sm);
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-recessed);
+  color: var(--foreground-bold);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-body);
+  overflow-wrap: normal;
+}
+.md-body pre code { padding: 0; border: 0; background: transparent; font-size: inherit; }
+.md-body pre.md-fallback { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A neutral structural edge, not a status rail. */
+.md-body blockquote {
+  margin: 0 0 var(--space-sm);
+  padding: 0 0 0 var(--space-sm);
+  border-left: 2px solid var(--border-default);
+  color: var(--foreground-subtle);
+}
+
+/* A wide table scrolls inside itself instead of widening the page. */
+.md-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 var(--space-sm);
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+  overflow-wrap: normal;
+}
+.md-body :is(th, td) { padding: var(--space-micro) var(--space-sm); border: 1px solid var(--border-default); vertical-align: top; }
+.md-body th {
+  background: var(--bg-recessed);
+  color: var(--foreground-bold);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.md-body th:not([align]) { text-align: left; }
+
+.md-body a { overflow-wrap: anywhere; }

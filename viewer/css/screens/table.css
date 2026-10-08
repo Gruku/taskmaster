@@ -1,167 +1,139 @@
-/* Table view — sortable, filterable alt to Kanban. */
+/* User intent: the Table shows every task in fixed columns that never cut an ID, keeps ID and title in view while the
+   rest scrolls sideways inside its frame (a fade at either edge says there is more), and reads in both themes. */
+.tbl-screen { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--space-md); }
 
-.tbl-screen {
-  display: flex; flex-direction: column;
-  height: 100%; min-height: 0; min-width: 0;
-  gap: var(--page-gap);
-}
-
+/* The filter rail: one chip row per group. A whole group may move to the next line; chips inside a group never wrap,
+   what does not fit waits behind that row's More. Status and Priority keep their natural width; Epic and Area share
+   what is left. */
 .tbl-chips {
-  display: flex; align-items: center; flex-wrap: wrap;
-  gap: 6px var(--sp-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-lg);
   flex: 0 0 auto;
+  min-width: 0;
 }
-.tbl-chip-group { display: flex; align-items: center; gap: 6px; }
-.tbl-chip-label {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--ink-3); margin-right: 2px;
+.tbl-chips > .chip-row { flex: 0 0 auto; max-width: 100%; }
+.tbl-chips > .chip-row:is([data-kind="epic"], [data-kind="area"]) { flex: 1 1 240px; min-width: 240px; }
+.tbl-chips > .chip-row[hidden] { display: none; }
+.tbl-clear { flex: 0 0 auto; margin-left: auto; }
+/* Touch target: the rail sits in the screen, out of reach of the topbar's own 44px rule; the child selector outranks
+   .btn--sm's 24px whatever order the sheets load in. */
+@media (max-width: 768px) {
+  .tbl-chips > .tbl-clear { min-height: var(--touch-target); }
 }
-.tbl-chip {
-  display: inline-flex; align-items: center;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--ink-2);
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-}
-.tbl-chip:hover { background: var(--bg-card, var(--surface)); color: var(--ink); }
-.tbl-chip.is-active {
-  background: rgba(74,158,255,0.14);
-  border-color: rgba(74,158,255,0.45);
-  color: var(--ink);
-}
-.tbl-chip--clear {
-  margin-left: auto;
-  border-color: rgba(214,107,95,0.35);
-  color: var(--red, #d66b5f);
-}
-.tbl-chip--clear:hover { background: rgba(214,107,95,0.10); }
 
-.tbl-host {
-  flex: 1 1 auto; min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-card, var(--surface, #1f2025));
+.tbl-frame {
+  position: relative; display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--card-bg);
 }
+/* scroll-padding-top (the header's height) is set from table.js. */
+.tbl-host { flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
+/* Above the sticky header (z-index 3) and every cell, so the cut column fades instead of stopping dead: at the end
+   while more columns wait there, and just after the sticky edge (left set from table.js) once some have scrolled under it. */
+.tbl-fade {
+  position: absolute; top: 0; bottom: 0; z-index: 4; width: var(--space-2xl); pointer-events: none; opacity: 0;
+  transition: opacity var(--dur-standard) var(--ease-hourglass);
+}
+.tbl-fade--end { right: 0; background: linear-gradient(to left, var(--card-bg), transparent); }
+.tbl-fade--start { background: linear-gradient(to right, var(--card-bg), transparent); }
+.tbl-frame[data-more-end] .tbl-fade--end,
+.tbl-frame[data-scrolled] .tbl-fade--start { opacity: 1; }
+.tbl-probe { position: absolute; visibility: hidden; white-space: nowrap; }
 
 table.tbl {
-  display: grid;
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-sm);
+  table-layout: fixed; width: 100%; border-collapse: separate; border-spacing: 0;
+  color: var(--foreground-default); font-family: var(--font-narrator); font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
 }
-table.tbl thead, table.tbl tbody, table.tbl tr {
-  display: contents;
-}
-
 .tbl-th {
-  position: sticky; top: 0; z-index: 1;
-  background: var(--bg-panel, var(--surface2, #17181d));
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  user-select: none;
-  display: flex; align-items: center; gap: 4px;
+  position: sticky; top: 0; z-index: 2; padding: var(--space-xs) var(--space-sm);
+  background: var(--card-bg); border-bottom: 1px solid var(--border-default); color: var(--foreground-subtle);
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-wide); text-transform: uppercase; text-align: left; white-space: nowrap; user-select: none;
 }
-.tbl-th.is-sortable { cursor: pointer; }
-.tbl-th.is-sortable:hover { color: var(--ink); }
-.tbl-th.is-active { color: var(--ink); }
-.tbl-th-arrow { font-family: var(--font-sans); font-size: 11px; }
-
-.tbl-row { cursor: pointer; }
-.tbl-row:hover .tbl-cell {
-  background: rgba(255,255,255,0.025);
-  color: var(--ink);
-}
-.tbl-row:focus-visible .tbl-cell {
-  background: rgba(74,158,255,0.08);
-  outline: none;
-}
-
+.tbl-th[aria-sort] { color: var(--foreground-bold); }
+/* Gone under the sticky edge (table.js): no fragment of the word shows; the keyboard on it still sees it. */
+.tbl-th[data-under]:not(:focus-within) > * { visibility: hidden; }
 .tbl-cell {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-soft, rgba(255,255,255,0.05));
-  color: var(--ink-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
+  white-space: nowrap; overflow: hidden; vertical-align: middle;
 }
-.tbl-cell--title { color: var(--ink); font-weight: 500; }
+/* No hand on the row itself: the title link is the row's one real target (a keyboard reaches it; a click anywhere on the
+   row is forwarded to it, table.js). A hand on the row would promise a target no keyboard can reach. */
+.tbl-row:hover > .tbl-cell { background: var(--card-bg-hover); }
 
-.t-id {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  letter-spacing: 0.02em;
+/* ID and title stay in view; the title's left offset is the measured ID width, set from table.js. The fade's right and
+   bottom offsets (the scrollbars' size) are set there too. */
+.tbl-th[data-key="id"], .tbl-cell--id { position: sticky; left: 0; z-index: 1; }
+/* An ID longer than the column (table.js ID_MAX_CH) wraps, at its hyphens first; it is never cut. */
+.tbl-cell--id { white-space: normal; }
+.tbl-cell--id .t-id { white-space: normal; overflow-wrap: anywhere; }
+.tbl-th[data-key="title"], .tbl-cell--title { position: sticky; z-index: 1; border-right: 1px solid var(--border-subtle); }
+.tbl-th:is([data-key="id"], [data-key="title"]) { z-index: 3; }
+.tbl-frame[data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-strong); }
+/* A frame too narrow for both: the title scrolls with the rest, under the ID, which takes the edge. */
+.tbl-frame[data-title-loose] .tbl-cell--title { position: static; }
+.tbl-frame[data-title-loose] .tbl-th[data-key="title"] { z-index: 2; }
+.tbl-frame[data-title-loose] :is(.tbl-th[data-key="id"], .tbl-cell--id) { border-right: 1px solid var(--border-subtle); }
+.tbl-frame[data-title-loose][data-scrolled] :is(.tbl-th[data-key="id"], .tbl-cell--id) { border-right-color: var(--border-strong); }
+.tbl-frame[data-title-loose][data-scrolled] :is(.tbl-th[data-key="title"], .tbl-cell--title) { border-right-color: var(--border-subtle); }
+
+.tbl-link { display: block; min-width: 0; color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); text-decoration: none; }
+.t-id, .t-tech {
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small);
+  color: var(--foreground-default); white-space: nowrap;
 }
+code.t-tech { background: transparent; padding: 0; }
+.t-none { color: var(--foreground-subtle); }
+/* An epic cell: the epic's categorical swatch (a hue only, never text) beside its name. */
+.t-epic-cell { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.epic-swatch { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.epic-swatch--cat-1 { background: var(--cat-1); }
+.epic-swatch--cat-2 { background: var(--cat-2); }
+.epic-swatch--cat-3 { background: var(--cat-3); }
+.epic-swatch--cat-4 { background: var(--cat-4); }
+.epic-swatch--cat-5 { background: var(--cat-5); }
+.epic-swatch--cat-6 { background: var(--cat-6); }
+/* The block's width is the host's visible width (set from table.js) and it sticks to the left edge, so a table wider
+   than the frame never pushes it, or its one action, out of view. */
+.tbl-empty { padding: var(--space-2xl) 0; white-space: normal; }
+.tbl-empty > .tm-empty { position: sticky; left: 0; box-sizing: border-box; }
 
-.t-status {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  background: rgba(255,255,255,0.06);
-  color: var(--ink-2);
-}
-.t-status--in-progress { background: rgba(74,158,255,0.18); color: #a3c8ff; }
-.t-status--in-review   { background: rgba(168,201,88,0.16); color: #b9d273; }
-.t-status--blocked     { background: rgba(214,107,95,0.18); color: #e5887d; }
-.t-status--done        { background: rgba(95,174,110,0.16); color: #87c891; }
-.t-status--todo        { background: rgba(255,255,255,0.06); color: var(--ink-3); }
-
-.t-pri {
-  font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
-  font-weight: 600;
-  padding: 1px 6px; border-radius: 4px;
-}
-.t-pri--critical { color: #e5887d; background: rgba(214,107,95,0.14); }
-.t-pri--high     { color: #e0b46d; background: rgba(214,164,95,0.12); }
-.t-pri--medium   { color: var(--ink-2); }
-.t-pri--low      { color: var(--ink-3); }
-
-.t-epic {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: var(--text-xs);
-  background: rgba(123,104,238,0.14);
-  color: #b6acf2;
-}
-
-.t-area {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
-  font-size: var(--text-xs);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  color: var(--ink-3);
-}
-
-.t-branch {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  background: transparent;
-}
-
-.tbl-empty {
-  padding: var(--sp-8);
-  text-align: center;
-  color: var(--ink-3);
-  font-style: italic;
+/* At phone width the header row gives way to a Sort select and every row is a card whose whole face is its link. */
+.tbl-sortbar { display: none; }
+@media (max-width: 768px) {
+  .tbl-sortbar { display: flex; align-items: center; gap: var(--space-xs); flex: 0 0 auto; }
+  .tbl-sortbar__label {
+    font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);
+    letter-spacing: var(--tracking-ultra); text-transform: uppercase; color: var(--foreground-subtle);
+  }
+  .tbl-sortbar .ef-enum-select { min-height: var(--touch-target); }
+  .tbl-fade { display: none; }
+  /* The measured desktop geometry (inline min-width, title left) does not apply to cards. */
+  table.tbl { display: block; min-width: 0 !important; }
+  .tbl colgroup, .tbl thead { display: none; }
+  .tbl tbody { display: block; }
+  .tbl-row {
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "id priority" "title title" "status size" "epic epic";
+    gap: var(--space-micro) var(--space-sm); min-height: var(--touch-target); padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
+  }
+  .tbl-row:hover { background: var(--card-bg-hover); }
+  .tbl-row > .tbl-cell, .tbl-row:hover > .tbl-cell { position: static; display: block; min-width: 0; padding: 0; border: 0; background: transparent; }
+  .tbl-cell--id { grid-area: id; }
+  /* A card has no columns to divide: the narrow frame's ID edge (data-title-loose) is drawn on the desktop table only. */
+  .tbl-frame[data-title-loose] .tbl-row > .tbl-cell--id { border-right: 0; }
+  .tbl-cell--priority { grid-area: priority; justify-self: end; }
+  /* The cell has no padding here, so it must not clip the link's focus ring; .truncate still cuts the words. */
+  .tbl-row > .tbl-cell--title { overflow: visible; }
+  .tbl-cell--title { grid-area: title; white-space: normal; }
+  .tbl-cell--title .truncate { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
+  .tbl-cell--status { grid-area: status; }
+  .tbl-cell--estimate { grid-area: size; justify-self: end; }
+  .tbl-cell--epic { grid-area: epic; }
+  .tbl-row > :is(.tbl-cell--phase, .tbl-cell--area, .tbl-cell--branch, .tbl-cell--started) { display: none; }
+  .tbl-link::after { content: ''; position: absolute; inset: 0; }
+  .tbl-empty { display: block; }
 }

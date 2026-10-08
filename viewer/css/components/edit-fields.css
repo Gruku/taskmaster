@@ -1,199 +1,286 @@
-/* viewer/css/components/edit-fields.css
-   Shared styling for all field renderers. Per spec §UX patterns: dotted
-   underline at all times for editable fields, hover solidifies + reveals
-   pencil. Read-only fields get no underline. */
+/* User intent: every field looks like one family in both themes — a recessed well with a readable value, a visible
+   edge, and states (hover, invalid, disabled, pressed) that never rest on colour alone or on motion. */
 
-.ef-text {
-  color: var(--ink);
-  font-size: inherit;
-}
-.ef-text.ef-placeholder {
-  color: var(--ink-3);
-  font-style: italic;
-}
+/* ── Read mode ── */
+.ef-placeholder { color: var(--foreground-subtle); }
+
+/* The editable affordance: a text cursor, and a ground step on hover. The negative margin keeps the text where a
+   read-only value would sit. */
 .ef-editable {
-  border-bottom: 1px dotted var(--border-soft);
-  padding-bottom: 1px;
+  margin: 0 calc(-1 * var(--space-micro));
+  padding: 0 var(--space-micro);
+  border-radius: var(--radius-sm);
   cursor: text;
-  position: relative;
-  display: inline-block;
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
 }
-.ef-editable:hover {
-  border-bottom-style: solid;
-  border-bottom-color: var(--border);
+.ef-editable:hover { background: var(--ground-15); }
+.modal .ef-editable:hover { background: var(--overlay-surface-hover); }
+/* A whole document is not filled on hover — links inside it would lose their contrast; it is ringed instead. */
+.ef-md.ef-editable { display: block; transition: none; }
+.ef-md.ef-editable:hover,
+.modal .ef-md.ef-editable:hover { background: transparent; outline: 1px solid var(--border-strong); outline-offset: var(--space-micro); }
+
+/* ── Controls ── */
+.ef-text-input,
+.ef-num-input,
+.ef-date-input,
+.ef-enum-select,
+.ef-md-textarea,
+.ef-chip-input-text,
+.ef-estimate-days-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-size);
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-recessed);
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color-scheme: dark;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
 }
-.ef-editable:hover::after {
-  content: '✎';
+[data-theme="light"] :is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input) { color-scheme: light; }
+
+:is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input):hover:not(:disabled) { border-color: var(--field-border-hover); }
+:is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input)::placeholder { color: var(--foreground-subtle); opacity: 1; }
+:is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input):disabled {
+  border-color: var(--border-subtle);
+  color: var(--foreground-disabled);
+  cursor: not-allowed;
+}
+/* Invalid is the critical edge plus the message under the field (.ef-error) — never the edge alone. */
+:is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input)[aria-invalid="true"],
+:is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input)[aria-invalid="true"]:hover:not(:disabled) { border-color: var(--tone-critical); }
+
+.ef-error,
+.ef-estimate-unreadable {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  margin: var(--space-micro) 0 0;
+  color: var(--foreground-bold);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+}
+.ef-error::before,
+.ef-estimate-unreadable::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  background: var(--tone-critical);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.ef-error:empty,
+.ef-estimate-unreadable:empty { display: none; }
+/* The estimate picker's own message takes a line of its own under the controls. */
+.ef-estimate-unreadable { flex: 1 0 100%; margin: 0; }
+
+/* Editing a title in place keeps the title's own type. */
+.if-wrap > .ef-text-input { font: inherit; letter-spacing: inherit; }
+
+.ef-md-textarea {
+  display: block;
+  min-height: 6lh;
+  resize: vertical;
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-default);
+  line-height: var(--leading-body);
+}
+
+/* The native arrow is replaced by an icon in the text colour: a background image would need a colour literal. */
+.ef-select { position: relative; display: inline-flex; max-width: 100%; vertical-align: middle; }
+.ef-enum-select { appearance: none; padding-right: calc(var(--space-sm) + 16px + var(--space-xs)); cursor: pointer; }
+.ef-enum-select option { background: var(--overlay-surface); color: var(--foreground-bold); }
+.ef-select > .icon {
   position: absolute;
-  right: -16px;
-  top: 0;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  opacity: 0.7;
+  top: 50%;
+  right: var(--space-sm);
+  margin-top: -8px;
+  transform: rotate(90deg);
+  color: var(--foreground-subtle);
+  pointer-events: none;
 }
+.ef-select:has(> select:disabled) > .icon { color: var(--foreground-disabled); }
 
-.ef-text-input {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 2px 6px;
-  min-width: 120px;
-  outline: none;
-}
-.ef-text-input:focus {
-  border-color: var(--accent);
-}
-
-.ef-md {
-  color: var(--ink);
-  line-height: 1.55;
-  white-space: pre-wrap;
+/* ── Chips ── */
+.ef-chips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-micro); max-width: 100%; }
+.ef-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  max-width: 100%;
+  min-height: var(--control-size-sm);
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--overlay-surface);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
   overflow-wrap: anywhere;
 }
-.ef-md-textarea {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px 10px;
-  width: 100%;
-  resize: vertical;
-  outline: none;
-  font-family: var(--font-sans);
-}
-.ef-md-textarea:focus {
-  border-color: var(--accent);
-}
-
-.ef-enum-select {
-  font: inherit;
-  color: var(--ink);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 6px;
-  outline: none;
-}
-.ef-enum-select:focus { border-color: var(--accent); }
-
-.ef-num-input { font: inherit; color: var(--ink); background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; width: 80px; outline: none; }
-.ef-num-input:focus { border-color: var(--accent); }
-
-.ef-date-input { font: inherit; color: var(--ink); background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; outline: none; }
-.ef-date-input:focus { border-color: var(--accent); }
-
-.ef-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.ef-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 6px; font-size: var(--text-sm);
-  background: var(--bg-card); border: 1px solid var(--border-soft);
-  border-radius: 10px; color: var(--ink-2);
-}
-.ef-chip-label { font-family: var(--font-mono); }
 .ef-chip-x {
-  background: none; border: none; color: var(--ink-3);
-  cursor: pointer; padding: 0; font-size: var(--text-xs);
-  opacity: 0; transition: opacity 0.15s;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: calc(-1 * var(--space-micro));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--foreground-subtle);
+  cursor: pointer;
 }
-.ef-chip:hover .ef-chip-x { opacity: 1; }
-.ef-chip-x:hover { color: var(--red); }
+.ef-chip-x:hover { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
 
-.ef-chip-input { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
-.ef-chip-list { display: flex; flex-wrap: wrap; gap: 4px; }
-.ef-chip-input-row { position: relative; }
-.ef-chip-input-text {
-  font: inherit; color: var(--ink); background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 3px;
-  padding: 2px 6px; width: 100%; outline: none;
-}
-.ef-chip-input-text:focus { border-color: var(--accent); }
-.ef-chip-dropdown {
-  position: absolute; left: 0; top: 100%; margin-top: 2px;
-  background: var(--bg-deep); border: 1px solid var(--border);
-  border-radius: 4px; min-width: 240px; max-width: 360px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3); z-index: 10;
-  max-height: 240px; overflow-y: auto;
-}
+.ef-chip-input { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 200px; }
+.ef-chip-list { display: flex; flex-wrap: wrap; gap: var(--space-micro); }
+.ef-chip-list:empty { display: none; }
+/* The suggestion list is a popover (placed and stacked by openPopover, at least as wide as its input) and takes the
+   one popover surface as it is: fill, edge, corners and inset all come from .popover. */
 .ef-chip-dd-row {
-  padding: 4px 8px; cursor: pointer;
-  display: flex; gap: 8px; align-items: center;
-  font-size: var(--text-sm); color: var(--ink-2);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-heading);
+  cursor: pointer;
 }
-.ef-chip-dd-row.ef-chip-dd-active { background: color-mix(in oklch, var(--accent) 20%, transparent); color: var(--ink); }
-.ef-chip-dd-row:hover { background: var(--bg-card); }
-.ef-chip-dd-hint { color: var(--ink-3); font-size: var(--text-xs); margin-left: auto; }
+.ef-chip-dd-row:hover,
+.ef-chip-dd-row.ef-chip-dd-active { background: var(--popover-surface-hover); color: var(--foreground-bold); }
+.ef-chip-dd-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ef-chip-dd-hint {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
 
-.if-wrap { display: inline-block; }
+/* ── Key and value rows (a task's docs) ── */
+.ef-kv { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xs); min-width: 0; }
+.ef-kv-rows { display: flex; flex-direction: column; gap: var(--space-xs); width: 100%; }
+.ef-kv-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.ef-kv-key { flex: 0 1 140px; font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.ef-kv-value { flex: 1 1 0; font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.ef-kv-remove { color: var(--foreground-subtle); }
+
+/* ── Estimate: three sizes or a number of days ── */
+.ef-estimate { font-family: var(--font-technical); font-weight: var(--font-technical-weight); }
+.ef-estimate-edit { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); max-width: 100%; }
+/* The group's own ground shows through the 1px gaps as the dividers and the edge. */
+.ef-estimate-sizes {
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--radius-md);
+  background: var(--field-border);
+}
+.ef-estimate-size {
+  min-width: 40px;
+  min-height: calc(var(--control-size) - 2px);
+  padding: 0 var(--space-sm);
+  border: 0;
+  background: var(--bg-recessed);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-default);
+  line-height: var(--leading-tight);
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
+}
+.ef-estimate-size:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.ef-estimate-size:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.ef-estimate-size:hover:not(:disabled) { background: var(--ground-15); color: var(--foreground-bold); }
+.ef-estimate-size[aria-pressed="true"] { background: var(--signature-fill); color: var(--on-accent-fill); }
+.ef-estimate-size[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-fill-hover); color: var(--on-accent-fill); }
+/* Disabled steps back like the inputs beside it: quieter ink and edge. Fading the buttons instead would let the
+   group's edge colour show through them as a grey slab. */
+.ef-estimate-size:disabled { color: var(--foreground-disabled); cursor: not-allowed; }
+.ef-estimate-sizes:has(:disabled) { background: var(--border-subtle); }
+.ef-estimate-size[aria-pressed="true"]:disabled { background: var(--overlay-surface-active); color: var(--foreground-bold); }
+.ef-estimate-custom:disabled { border-color: var(--border-subtle); }
+/* The ring of a focused size must not be covered by its neighbour. */
+.ef-estimate-size:focus-visible { position: relative; z-index: 1; }
+.ef-estimate-days {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-small);
+}
+.ef-estimate-days-input { width: 72px; }
+/* A stored estimate the picker cannot produce: a choice of its own, with a line saying what it is. */
+.ef-estimate-custom {
+  max-width: 20ch;
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ef-estimate-custom:first-child,
+.ef-estimate-custom:last-child { border-radius: var(--radius-md); }
+.ef-estimate-custom[aria-pressed="true"] { border-color: var(--signature-fill); }
+.ef-estimate-note {
+  flex: 1 0 100%;
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+}
+/* A stored stage the number input cannot show: the input, and the note saying what is kept, under it. */
+.ef-num-edit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); max-width: 100%; }
+.ef-num-note {
+  flex: 1 0 100%;
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-heading);
+}
+.ef-num-input { max-width: 160px; }
+.ef-date-input { max-width: 200px; }
+
+/* ── Inline edit wrapper (detail screens) ── */
+.if-wrap { display: inline-block; max-width: 100%; vertical-align: baseline; }
+/* Controls that want the whole line get it. */
+.if-wrap:has(> .ef-text-input, > .ef-md-textarea, > .ef-chip-input, > .ef-md) { display: block; }
+/* Saving and saved in words, for a screen reader only: the glyph says them on screen. */
+.if-said { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .if-status {
-  display: inline-block; margin-left: 6px;
-  font-size: var(--text-xs); vertical-align: middle;
+  display: inline-block;
+  margin-left: var(--space-xs);
+  font-size: var(--size-technical-small);
+  vertical-align: middle;
 }
-.if-status-saving {
-  color: var(--accent);
-  animation: if-pulse 0.9s ease-in-out infinite;
-}
-@keyframes if-pulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 1.0; }
-}
-.if-status-ok    { color: var(--green); }
-.if-status-error { color: var(--red); cursor: help; }
+/* Idle, it takes no room: beside a field that fills its line it would otherwise open a blank line of its own. */
+.if-status:empty { display: none; }
+.if-status-saving { color: var(--text-accent); animation: pulse calc(var(--dur-macro) * 2) var(--ease-pendulum) infinite; }
+.if-status-ok { color: var(--tone-success); }
+.if-status-error { color: var(--tone-critical); cursor: help; }
 
-/* ---- Mobile (< 768px) — full-width inputs, popover clamp ---- */
 @media (max-width: 768px) {
-  /* Text inputs: fill full container width */
-  .ef-text-input {
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
-  }
-
-  /* Textarea: already width: 100%, ensure box-sizing */
-  .ef-md-textarea {
-    box-sizing: border-box;
-    max-width: 100%;
-  }
-
-  /* Enum select: fill width */
-  .ef-enum-select {
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  /* Number input: allow narrower */
-  .ef-num-input {
-    width: 100%;
-    max-width: 160px;
-    box-sizing: border-box;
-  }
-
-  /* Date input: fill width */
-  .ef-date-input {
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  /* ChipInput container: fill width */
-  .ef-chip-input {
-    min-width: 0;
-    width: 100%;
-  }
-
-  /* Chip dropdown (ChipInput + RelationPicker): clamp to viewport width */
-  .ef-chip-dropdown {
-    min-width: 0;
-    max-width: calc(100vw - 24px);
-    left: 0;
-    right: auto;
-    /* Clamp so the popover doesn't extend past the right edge */
-    width: min(360px, calc(100vw - 24px));
-  }
-
-  /* Editable inline fields: disable hover pencil icon (touch has no hover) */
-  .ef-editable:hover::after {
-    display: none;
-  }
+  .ef-chip-input { min-width: 0; }
+  .ef-chip-dd-row { box-sizing: border-box; align-items: center; min-height: var(--touch-target); }
+  .ef-kv-key { flex-basis: 96px; }
+  /* A one-line field is a touch target at phone width, like every action beside it. */
+  :is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-chip-input-text, .ef-estimate-days-input) { min-height: var(--touch-target); }
 }

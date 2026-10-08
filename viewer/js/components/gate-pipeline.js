@@ -3,18 +3,17 @@
 // Exports:
 //   renderGatePipeline(task)  — HTML string; empty string when no lane.
 //   laneBadge(task)           — HTML string chip showing task.lane; '' when no lane.
+//   gateStateWords(raw)       — the server's gate_state mirror in words, or null when it is not one.
 //
 // VISUAL RULES (hard constraints from CLAUDE.md / design system):
 //   - NO colored left rails / border-left accents. Use tinted fill + full-perimeter border.
 //   - NO hover motion (transform / translate / scale).
 //   - NO box-shadows for elevation — surface stepping only.
-//   - Gate state uses tinted backgrounds matching the existing color tokens:
-//       done     → green tint   (--green  / rgba(95,174,110,...))
-//       pass     → green tint
-//       warn     → amber tint   (--amber  / rgba(214,164,95,...))
-//       fail     → red tint     (--red    / rgba(214,107,95,...))
-//       skipped  → neutral tint (--ink-3  / rgba(124,130,144,...))
-//       pending  → transparent  (--border / dim outline only)
+//   - A gate's state is a shape plus a word (the marker language of status.css); the shape carries the hue:
+//       done / pass → ● success      warn → ▲ warning      fail → ◆ critical
+//       skipped     → ✕ neutral      pending → ○ neutral
+//   - Gates and states are said in words ("Plan review", "passed with warnings"); a machine string such as
+//     `task.gate_state` is never printed as it is.
 //
 // Source of truth: taskmaster_v3.py blocking_gates(). Review gates only — these gate completion.
 // Status gates (spec/plan/tests/impl) are non-blocking plumbing and are not shown in the tracker.
@@ -31,6 +30,33 @@ const BLOCKING_GATES = {
   express:  ['review-gate'],
 };
 
+// state → [marker tone, drawn shape, fallback glyph]
+const STATE_MARK = {
+  done:    ['success', 'dot', '●'],
+  pass:    ['success', 'dot', '●'],
+  warn:    ['warning', 'triangle', '▲'],
+  fail:    ['critical', 'diamond', '◆'],
+  skipped: ['neutral', 'cross', '✕'],
+  pending: ['neutral', 'ring', '○'],
+};
+
+// state → the word a person reads beside the shape
+const STATE_WORD = {
+  done: 'done',
+  pass: 'passed',
+  warn: 'passed with warnings',
+  fail: 'failed',
+  skipped: 'skipped',
+  pending: 'pending',
+};
+
+const GATE_LABEL = {
+  'spec-review': 'Spec review',
+  'plan-review': 'Plan review',
+  'design-review': 'Design review',
+  'review-gate': 'Review gate',
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -38,6 +64,13 @@ const BLOCKING_GATES = {
 function escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// A gate the viewer has no label for is sentence-cased from its id ('security-audit' → 'Security audit').
+function gateLabel(name) {
+  if (Object.hasOwn(GATE_LABEL, name)) return GATE_LABEL[name];
+  const words = String(name).replace(/[-_]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /**
@@ -56,9 +89,35 @@ function gateStateClass(record) {
   return 'pending';
 }
 
+// The server's gate_state mirror: 'blocked@<gate>' (a gate failed) or '<gate>:<state>' with a known state.
+// Anything else (an unknown state, another shape) is null.
+function parseGateState(raw) {
+  if (typeof raw !== 'string') return null;
+  const blocked = /^blocked@([^:@]+)$/.exec(raw);
+  if (blocked) return { blocked: true, gate: blocked[1] };
+  const current = /^([^:@]+):([^:]+)$/.exec(raw);
+  if (current && Object.hasOwn(STATE_WORD, current[2])) return { blocked: false, gate: current[1], state: current[2] };
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * The server's gate_state mirror in words: 'blocked@review-gate' → 'Blocked at Review gate',
+ * 'plan-review:warn' → 'Plan review — passed with warnings'. Plain text (not escaped); null when malformed.
+ *
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+export function gateStateWords(raw) {
+  const parsed = parseGateState(raw);
+  if (!parsed) return null;
+  return parsed.blocked
+    ? `Blocked at ${gateLabel(parsed.gate)}`
+    : `${gateLabel(parsed.gate)} — ${STATE_WORD[parsed.state]}`;
+}
 
 /**
  * Render the gate pipeline tracker for a task.
@@ -77,13 +136,22 @@ export function renderGatePipeline(task) {
   // Build one node per required gate.
   const nodes = gates.map((gateName) => {
     const stateClass = gateStateClass(records[gateName]);
-    return `<span class="gp-gate gate--${stateClass}" title="${escapeHtml(gateName)}">${escapeHtml(gateName)}</span>`;
+    const [tone, shape, glyph] = STATE_MARK[stateClass];
+    const label = escapeHtml(gateLabel(gateName));
+    return `<span class="gp-gate gate--${stateClass} marker marker--${tone}" title="${label}: ${STATE_WORD[stateClass]}">`
+      + `<span class="marker__shape" data-shape="${shape}" aria-hidden="true">${glyph}</span>`
+      + `<span class="marker__word">${label}</span> `
+      + `<span class="gp-gate__state">${STATE_WORD[stateClass]}</span></span>`;
   }).join('');
 
-  // Optional gate_state one-liner (current machine state from server).
-  const stateEl = task.gate_state
-    ? `<span class="gp-state">${escapeHtml(task.gate_state)}</span>`
-    : '';
+  // The server's gate_state mirror, in words. 'blocked@<gate>' (a gate failed) always says where the task is stuck;
+  // '<gate>:<state>' only when its gate is off this lane's track (a node on the track already says it). Anything else
+  // (an unknown state, another shape) is not printed.
+  const parsed = parseGateState(task.gate_state);
+  let stateEl = '';
+  if (parsed && (parsed.blocked || !gates.includes(parsed.gate))) {
+    stateEl = `<span class="gp-state">Current step: ${escapeHtml(gateStateWords(task.gate_state))}</span>`;
+  }
 
   return `<div class="gp-track">${nodes}${stateEl}</div>`;
 }

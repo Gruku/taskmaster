@@ -4,6 +4,7 @@
 import { computeComponentLayout } from './component-graph-layout.js';
 import { renderMinimalCard } from './card.js';
 import { tasksForComponent } from '../lib/epic-format.js';
+import { statusMeta } from './status.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -25,12 +26,13 @@ export function blockVisualState(status) {
   }
 }
 
+// The status word every screen uses ("In progress", "Todo"), plus the blocked count while work is under way.
 function rollupSummary(r) {
-  if (!r) return 'todo';
-  const status = r.status || 'todo';
-  const blocked = r.blocked || 0;
-  if (status === 'in-progress' && blocked) return `in-progress · ${blocked} blocked`;
-  return status;
+  const status = r?.status || 'todo';
+  const word = statusMeta('task', status).label;
+  const blocked = r?.blocked || 0;
+  if (status === 'in-progress' && blocked) return `${word} · ${blocked} blocked`;
+  return word;
 }
 
 // Pure: cubic-bezier `d` from two rendered rects, relative to the host rect.
@@ -94,7 +96,7 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
   } else {
     const empty = document.createElement('div');
     empty.className = 'cd-block__empty';
-    empty.textContent = 'no tasks yet';
+    empty.textContent = 'No tasks yet';
     cards.appendChild(empty);
   }
   block.appendChild(cards);
@@ -110,6 +112,7 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
       fire();
     });
     block.addEventListener('keydown', (ev) => {
+      if (ev.target !== block) return;
       if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fire(); }
     });
   }

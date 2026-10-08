@@ -1,0 +1,555 @@
+// User intent: one repeatable screenshot sweep of the two task modals (detail and Create/Edit), the full task page and the
+// shared components (menus, suggestion lists, the conflict banner, the Ideas form, chips, sortable headers, Filters) and
+// every route (route-<name>), in every state the user meets, in both themes and both widths — from the static viewer with every API call mocked, never a
+// live backlog. Unmocked writes, page errors and native dialogs are listed at the end and fail the run.
+//
+// Usage: node viewer/tests/tools/capture-modals.mjs <out-dir> [--only=name,name] [--themes=dark,light] [--widths=d,m] [--port=8799]
+//   writes <out-dir>/<scene>.<theme>.<d|m>.png and <out-dir>/metrics.json (keys "<scene>.<theme>.<d|m>").
+//   Exits 2 on a bad option or a port in use, before anything is written; Ctrl+C stops the file server too.
+import { chromium } from '@playwright/test';
+import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mockApi, unmockedWrites } from '../mock-api.js';
+import * as F from '../mock-fixtures.js';
+import { ROUTES } from '../route-fixtures.js';
+
+const require = createRequire(import.meta.url);
+const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+const [OUT_ARG, ...FLAGS] = process.argv.slice(2);
+const usage = (why) => {
+  if (why) console.error(why);
+  console.error('usage: node capture-modals.mjs <out-dir> [--only=a,b] [--themes=dark,light] [--widths=d,m] [--port=8799]');
+  process.exit(2);
+};
+if (!OUT_ARG || OUT_ARG.startsWith('--')) usage();
+const flag = (name) => FLAGS.find(f => f.startsWith(`--${name}=`))?.split('=')[1].split(',').filter(Boolean);
+// A misspelt value would otherwise capture nothing and still exit 0.
+const choice = (name, allowed) => {
+  const picked = flag(name);
+  if (!picked) return allowed;
+  const unknown = picked.filter(v => !allowed.includes(v));
+  if (unknown.length || !picked.length) usage(`--${name}: expected any of ${allowed.join(', ')}; got "${picked.join(',')}"`);
+  return picked;
+};
+const THEMES = choice('themes', ['dark', 'light']);
+const WIDTHS = choice('widths', ['d', 'm']);
+const PORT = Number(flag('port')?.[0] ?? 8799);
+if (!Number.isInteger(PORT) || PORT <= 0) usage('--port: expected a port number');
+const BASE = `http://127.0.0.1:${PORT}`;
+const OUT = path.resolve(OUT_ARG);
+
+// Twelve more epics, so the Table's Epic chips overflow behind More; the last four have no task and show disabled.
+const EPICS = [
+  ['linear', 'Linear sync'], ['handovers', 'Handover quotes'], ['mcp', 'MCP tools'], ['hooks', 'Guard hooks'],
+  ['statusline', 'Status line'], ['inbox', 'Feedback inbox'], ['evals', 'Agent evals'], ['release', 'Release 7.2'],
+  ['docs', 'Docs site'], ['ideas', 'Ideas board'], ['perf', 'Suite speed'], ['tui', 'Terminal UI'],
+].map(([id, name]) => ({ id, name, status: 'active', phase: 'P1' }));
+// The fixture board plus enough cards that every column has company behind the modal.
+const EXTRA = [
+  ['T-108', 'Archive view: restore the filter chips', 'todo', 'low', 'viewer'],
+  ['T-109', 'Settings screen reads the new tokens', 'in-progress', 'medium', 'viewer'],
+  ['T-110', 'Writer mutex: bound the wait and report it', 'blocked', 'high', 'store'],
+  ['T-111', 'Drop the legacy JSON mirror', 'done', 'medium', 'store'],
+  ['T-112', 'Handover quotes render as markdown', 'in-review', 'low', 'viewer'],
+  ['T-113', 'Retry failed Linear pushes', 'todo', 'medium', 'linear'],
+  ['T-114', 'Quote blocks keep their headings', 'done', 'low', 'handovers'],
+  ['T-115', 'Name every MCP tool error', 'todo', 'high', 'mcp'],
+  ['T-116', 'Block worktree removal with --force', 'done', 'critical', 'hooks'],
+  ['T-117', 'Show the rate-limit bars', 'in-review', 'low', 'statusline'],
+  ['T-118', 'Archive processed inbox messages', 'todo', 'medium', 'inbox'],
+  ['T-119', 'Seed the eval stores at midnight', 'blocked', 'medium', 'evals'],
+  ['T-120', 'Release notes for 7.2', 'todo', 'high', 'release'],
+].map(([id, title, status, priority, epic]) => ({ id, title, status, priority, epic, phase: 'P1', depends_on: [] }));
+const BOARD = { ...F.BOARD, epics: [...F.BOARD.epics, ...EPICS], tasks: [...F.BOARD.tasks, ...EXTRA], context: { active_epic: 'viewer' } };
+
+const IDEAS = [
+  { id: 'IDEA-1', title: 'Board swimlanes by epic', status: 'exploring', tags: ['ux', 'board'], created: '2026-10-01T09:00:00Z' },
+  { id: 'IDEA-2', title: 'Faster store writes', status: 'candidate', tags: ['perf'], created: '2026-10-02T09:00:00Z' },
+  { id: 'IDEA-3', title: 'Phone layout for the table', status: 'parking-lot', tags: ['ux', 'mobile'], created: '2026-10-03T09:00:00Z' },
+];
+
+// A lost race on T-102: someone else saved first, and the 409 names the revision it lost to.
+const THEIRS = { ...F.DETAIL_TASK, title: 'Re-skin the Kanban board', priority: 'high', last_referenced: '2026-10-01T08:00:00Z' };
+const STALE = { status: 409, json: { ok: false, error: 'stale', current: THEIRS, current_etag: 't1:fresh' } };
+
+const TABLE = {
+  '/api/board': BOARD, '/api/backlog': BOARD,
+  '/api/ideas': { ideas: IDEAS },
+  '/api/task/T-102/detail': F.taskDetail(F.DETAIL_TASK, 't1', F.RICH_RELATED),
+  'PATCH /api/tasks/T-102': STALE,
+  '/api/task/T-104/detail': F.taskDetail(F.EMPTY_TASK),
+  '/api/task/T-105/detail': F.taskDetail(F.LONG_TASK, 't1', F.LONG_RELATED),
+  // The error state: the store answers with a raw message the modal must not print.
+  '/api/task/T-103/detail': { status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } },
+  '/api/epic/viewer': F.epicPayload(BOARD, 'viewer', { design_status: 'locked', done_when: 'All screens pass the audit in both themes.', description: F.EPIC.description }),
+  '/api/epic/epic-01': F.epicPayload(F.LONG_IDS_BOARD, 'epic-01'),
+  '/api/issues': { issues: F.ISSUES },
+};
+const longIdsBoard = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.LONG_IDS_BOARD }))));
+// Plan 3e: Sessions, Archived and Dashboard read the same builders plan 4 reuses; prefs (the loop's theme) and the board stay as above.
+const without = (t, ...keys) => Object.fromEntries(Object.entries(t).filter(([k]) => !keys.includes(k)));
+for (const build of [F.sessionsMocks, F.dashboardMocks, F.archivedMocks]) Object.assign(TABLE, without(build(), '/api/viewer/prefs', '/api/board', '/api/backlog'));
+const archivedRoutes = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: F.archivedMocks()['/api/board'] }))));
+const M1_ROW = '.ho-child[data-handover-id="2026-07-13-m1-shipped"]';
+
+// /api/bugs?found_in=<id> answers only that task's bugs; mockApi keys on the path alone and would hand every task the bug.
+const BUGS = [{ id: 'B-031', title: 'Card edge vanishes on the light ground', status: 'open', found_in: 'T-102' }];
+const bugsByTask = (page) => page.route('**/api/bugs*', (route) => {
+  const found = new URL(route.request().url()).searchParams.get('found_in');
+  return route.fulfill({ json: BUGS.filter((b) => !found || b.found_in === found) });
+});
+
+// ── How each scene is reached ──
+const openCard = (id) => async (page) => {
+  await page.goto(`${BASE}/#/kanban`);
+  // At phone width (plan 3a) one column shows behind the Columns tabs: select the tab of the column holding the card.
+  const sel = `.card-task[data-task-id="${id}"]`;
+  await page.locator(sel).waitFor({ state: 'attached' });
+  if (await page.evaluate(() => innerWidth <= 768)) {
+    const panel = await page.locator(sel).evaluate((c) => c.closest('.kanban-col').id);
+    await page.locator(`[id="${panel}-tab"]`).click();
+  }
+  await page.locator(sel).click();
+  await page.locator('.modal--detail .td-doc--embedded, .modal--detail .tm-empty[data-state="error"], .modal--detail .tm-empty').first().waitFor();
+};
+// Once the fonts have settled topbar row 2, a control is in it or parked behind Filters (row 2 too narrow for it).
+const filters = (page) => page.locator('#topbar-actions > .overflow-more');
+const settleRow = async (page) => {
+  await page.locator('#topbar-actions [data-global-search]').waitFor();
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => ok()))));
+};
+const topbarControl = async (page, selector) => {
+  await settleRow(page);
+  if (await filters(page).isVisible()) {
+    await filters(page).click();
+    await page.getByRole('dialog', { name: 'Filters' }).waitFor();
+  }
+  return page.locator(`#topbar-actions ${selector}`);
+};
+const openCreate = async (page) => {
+  await page.goto(`${BASE}/#/kanban`);
+  await settleRow(page);
+  await page.locator('#topbar-primary [aria-label="Add task"]').click();
+  await page.locator('.modal--form').waitFor();
+};
+const openKanban = async (page) => {
+  await page.goto(`${BASE}/#/kanban`);
+  await page.locator('.card-task[data-task-id] > .link-row__link').first().waitFor();
+  await settleRow(page);
+};
+const LONG_BOARD = F.longBoard();
+const longKanban = (p) => Promise.all(['**/api/board*', '**/api/backlog*'].map((g) => p.route(g, (r) => r.fulfill({ json: LONG_BOARD }))));
+const openPage = (id) => async (page) => {
+  await page.goto(`${BASE}/#/task/${id}`);
+  await page.locator('.td-doc--page').waitFor();
+};
+const ctl = (dialog, key) => dialog.locator(`[data-key="${key}"]`).locator('input, select, textarea').first();
+// A create POST left unanswered: the form stays in its saving state for the shot.
+const holdCreate = (page) => page.route('**/api/tasks', (route) => (route.request().method() === 'POST' ? undefined : route.fallback()));
+// Edit opened over the detail modal, as a user reaches it from the board.
+const editOver = (id) => async (page) => {
+  await openCard(id)(page);
+  await page.locator('.modal--detail [data-action="edit"]').click();
+  await page.locator('.modal--form').waitFor();
+};
+const openIdeas = async (page) => {
+  await page.goto(`${BASE}/#/ideas`);
+  await page.locator('.ideas__list').getByText('Board swimlanes by epic').waitFor();
+  await settleRow(page); await page.locator('#topbar-primary [aria-label="Create a new idea"]').click();
+  await page.getByRole('dialog', { name: 'Create idea' }).waitFor();
+};
+const openTable = async (page) => {
+  await page.goto(`${BASE}/#/table`);
+  await page.locator('table.tbl .tbl-row').first().waitFor();
+  await settleRow(page);
+};
+const openScreen = (hash, ready) => async (page) => {
+  await page.goto(`${BASE}/${hash}`);
+  await page.locator(ready).first().waitFor();
+};
+// Plan 3d: a list GET answered with the scene's own data (registered after bugsByTask, so it wins); POSTs fall through.
+const listRoute = (name, list, key) => (p) => p.route(`**/api/${name}*`, (r) => (r.request().method() === 'GET'
+  ? r.fulfill({ json: key ? { [key]: list } : list }) : r.fallback()));
+const openIssues = () => async (page) => {
+  await page.goto(`${BASE}/#/issues`);
+  await page.locator('.issues-col .issue-card').first().waitFor();
+  await settleRow(page);
+};
+// At 390 the View group is parked behind Filters: open it, pick, and close it again for the shot.
+const issuesView = (name) => async (p) => {
+  if (!(await p.locator('#topbar-actions').getByRole('group', { name: 'View' }).isVisible())) {
+    await filters(p).click();
+    await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+  }
+  await p.getByRole('group', { name: 'View' }).getByRole('button', { name }).click();
+  if (await p.getByRole('dialog', { name: 'Filters' }).isVisible()) await p.keyboard.press('Escape');
+};
+const openShelf = async (p) => {
+  const t = p.locator('.issues-shelf__toggle');
+  if ((await t.getAttribute('aria-expanded')) !== 'true') await t.click();
+};
+
+// [name, { open, drive?, routes?, mocks?, fullPage?, scope? }] — scope is where axe looks (the topmost dialog by default);
+// mocks({ theme }) → the scene's own mockApi table, used instead of the default one (prefs included).
+const ALL_SCENES = [
+  ['detail-rich', { open: openCard('T-102') }],
+  // The rail's last panel in view: beside the body on a wide dialog, below it on a narrow one.
+  ['detail-rich-rail', { open: openCard('T-102'), drive: async (p) => {
+    await p.locator('.modal--detail [data-test="rail"]').evaluate((r) => r.scrollIntoView({ block: 'end' }));
+  } }],
+  ['detail-empty', { open: openCard('T-104') }],
+  ['detail-long', { open: openCard('T-105') }],
+  ['detail-error', { open: openCard('T-103') }],
+  ['detail-edit-stacked', { open: openCard('T-102'), drive: async (p) => {
+    await p.locator('.modal--detail [data-action="edit"]').click();
+    await p.locator('.modal--form').waitFor();
+  } }],
+  // Plan 3a: the Kanban itself (kanbanMocks' board, or longBoard() routed over it) and the detail modal's refused title.
+  ['kanban-board', { open: openKanban, scope: '#screen-mount' }],
+  // At phone width one column shows behind the Columns tabs and there is no collapse control: skipped there, said so.
+  ['kanban-collapsed', { open: openKanban, scope: '#screen-mount', skipAt: { m: 'no collapse control at phone width (columns sit behind tabs)' },
+    drive: async (p) => { await p.locator('.kanban-col button[aria-label^="Collapse"]').first().click(); } }],
+  ['kanban-long', { open: openKanban, routes: longKanban, scope: 'body' }],
+  ['kanban-epic-more', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.kanban-filters__epic .overflow-more').click();
+    await p.locator('.popover').first().waitFor();
+  } }],
+  ['kanban-epic-options', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.epic-options-btn').click();
+    await p.locator('.epic-options').waitFor();
+  } }],
+  ['kanban-archived-phases', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await p.locator('.phase-strip .phase-archived').click();
+    await p.locator('.phase-archived__menu').waitFor();
+  } }],
+  ['kanban-filters', { open: openKanban, routes: longKanban, scope: 'body', drive: async (p) => {
+    await settleRow(p);
+    if (await filters(p).isVisible()) {
+      await filters(p).click();
+      await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+    }
+  } }],
+  ['kanban-empty', { open: openKanban, scope: '#screen-mount', drive: async (p) => {
+    await (await topbarControl(p, '[data-global-search]')).fill('zzzz');
+    await p.locator('#screen-mount .card-task').first().waitFor({ state: 'detached' });
+  } }],
+  ['detail-refused-title', { open: openCard('T-105'), routes: (p) => p.route('**/api/tasks/T-105', (r) => (r.request().method() === 'PATCH'
+    ? r.fulfill({ status: 409, json: { ok: false, error: 'Titles are frozen during review' } }) : r.fallback())), drive: async (p) => {
+    const dialog = p.locator('.modal--detail');
+    await dialog.locator('.modal-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await dialog.locator('.modal-title .ef-editable').click();
+    await dialog.locator('.modal-title input').fill('Renamed while frozen');
+    await dialog.locator('.modal-title input').press('Enter');
+    await p.locator('.modal--detail > .td-title-message').waitFor();
+  } }],
+  ['create-untouched', { open: openCreate }],
+  ['create-validation', { open: openCreate, drive: async (p) => {
+    const dialog = p.locator('.modal--form');
+    await ctl(dialog, 'description').fill('Collect the merged tasks.');
+    await ctl(dialog, 'stage').fill('-1');
+    await ctl(dialog, 'estimate').fill('0');
+    await dialog.locator('[data-save]').click();
+    await dialog.locator('[aria-invalid="true"]').first().waitFor();
+  } }],
+  ['create-saving', { open: openCreate, routes: holdCreate, drive: async (p) => {
+    await p.keyboard.type('Write the release notes for 7.1');
+    await p.locator('.modal--form [data-save]').click();
+  } }],
+  ['discard-confirm', { open: openCreate, drive: async (p) => {
+    await p.keyboard.type('Write the release notes for 7.1');
+    await p.keyboard.press('Escape');
+    await p.locator('.modal--confirm').waitFor();
+  } }],
+  ['page-rich', { open: openPage('T-102'), fullPage: true, scope: '#screen-mount' }],
+  ['page-empty', { open: openPage('T-104'), fullPage: true, scope: '#screen-mount' }],
+  // Plan 2b's shared components. A popover, and the banner, sit outside the topmost dialog, so axe looks at the page.
+  ['handover-menu', { open: openCard('T-102'), scope: 'body', drive: async (p) => {
+    await p.locator('.modal--detail .ho-status-pill').click();
+    await p.locator('.ho-status-menu').waitFor();
+  } }],
+  ['relation-suggestions', { open: editOver('T-102'), scope: 'body', drive: async (p) => {
+    const input = ctl(p.locator('.modal--form'), 'depends_on');
+    // Mid-dialog, so the list has room on either side and the field is not half under the footer.
+    await input.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    // A scroll still running when the list opens would close it (as any scroll of the dialog does): wait until the
+    // field sits still for two animation frames.
+    await input.evaluate((el) => new Promise((done) => {
+      let last = null;
+      const tick = () => {
+        const top = el.getBoundingClientRect().top;
+        if (top === last) done(); else { last = top; requestAnimationFrame(tick); }
+      };
+      requestAnimationFrame(tick);
+    }));
+    await input.fill('T-1');
+    await p.getByRole('listbox', { name: 'Depends on suggestions' }).waitFor();
+  } }],
+  ['conflict-banner', { open: editOver('T-102'), scope: 'body', drive: async (p) => {
+    const dialog = p.locator('.modal--form');
+    await ctl(dialog, 'title').fill('Re-skin the Kanban cards, columns and headers');
+    await dialog.locator('[data-save]').click();
+    await p.locator('#conflict-banner-host .cb-banner').waitFor();
+  } }],
+  ['ideas-create', { open: openIdeas }],
+  ['ideas-create-error', { open: openIdeas,
+    routes: (p) => p.route('**/api/ideas', (route) => (route.request().method() === 'POST'
+      ? route.fulfill({ status: 500, json: { ok: false, error: 'sqlite3.OperationalError: database is locked' } }) : route.fallback())),
+    drive: async (p) => {
+      const dialog = p.getByRole('dialog', { name: 'Create idea' });
+      await p.keyboard.type('Swimlanes that fold away');
+      await dialog.locator('[data-save]').click();
+      await dialog.locator('.modal-footer [role="alert"]').waitFor();
+    } }],
+  ['table-chips', { open: openTable, scope: 'body', drive: async (p) => {
+    await p.getByRole('group', { name: 'Epic' }).locator('.overflow-more').click();
+    await p.getByRole('dialog', { name: 'More Epic' }).waitFor();
+  } }],
+  ['table-sorted', { open: openTable, scope: '#screen-mount', drive: async (p) => {
+    // At 390 the Table shows a Sort select instead of headers.
+    if (await p.locator('#tbl-sort').isVisible()) {
+      await p.locator('#tbl-sort').selectOption('title:asc');
+      await p.locator('#tbl-sort').selectOption('title:desc');
+      return;
+    }
+    const title = p.locator('th[data-key="title"] button.sort-header');
+    await title.click();
+    await p.locator('th[aria-sort="ascending"][data-key="title"]').waitFor();
+    await title.click();
+    await p.locator('th[aria-sort="descending"][data-key="title"]').waitFor();
+  } }],
+  // At the desktop width nothing is parked: the shot is the row itself, with Filters hidden.
+  ['topbar-filters', { open: openTable, scope: 'body', drive: async (p) => {
+    if (!(await filters(p).isVisible())) return;
+    await filters(p).click();
+    await p.getByRole('dialog', { name: 'Filters' }).waitFor();
+  } }],
+  // Plan 3b: Table, Epics and Epic detail, with a real backlog's volume (LONG_IDS_BOARD).
+  ['table-long', { open: openTable, routes: longIdsBoard, scope: '#screen-mount' }],
+  ['table-long-scrolled', { open: openTable, routes: longIdsBoard, scope: '#screen-mount', drive: async (p) => {
+    await p.locator('.tbl-host').evaluate((h) => { h.scrollLeft = h.scrollWidth; h.scrollTop = 600; });
+  } }],
+  ['epics', { open: openScreen('#/epics', '.epic-row'), scope: '#screen-mount' }],
+  ['epics-long', { open: openScreen('#/epics', '.epic-row'), routes: longIdsBoard, fullPage: true, scope: '#screen-mount' }],
+  ['epic-detail', { open: openScreen('#/epic/viewer', '.ed-head'), fullPage: true, scope: '#screen-mount' }],
+  ['epic-detail-long', { open: openScreen('#/epic/epic-01', '.ed-head'), routes: longIdsBoard, fullPage: true, scope: '#screen-mount' }],
+  ['epic-modal', { open: openScreen('#/epics', '.epic-row'), drive: async (p) => {
+    await p.locator('.epic-row').filter({ hasText: 'Viewer re-skin' }).first().click();
+    await p.getByRole('dialog').last().waitFor();
+  } }],
+  ['epic-missing', { open: openScreen('#/epic/nope', '.tm-empty'), scope: '#screen-mount',
+    routes: (p) => p.route('**/api/epic/nope*', (r) => r.fulfill({ status: 404, json: { ok: false, error: 'epic not found' } })) }],
+  // Plan 3e: Sessions (and its right rail), Archived, Dashboard, Settings.
+  ['sessions', { open: openScreen('#/sessions', M1_ROW), fullPage: true, scope: '#screen-mount' }],
+  ['sessions-rail', { open: openScreen('#/sessions', M1_ROW), scope: '#screen-mount', drive: async (p) => {
+    await p.locator(M1_ROW).click();
+    await p.waitForLoadState('networkidle');
+  } }],
+  ['archived', { open: openScreen('#/archived', '.arch-row[data-task-id="T-1001"] .link-row__link'), routes: archivedRoutes, fullPage: true, scope: '#screen-mount' }],
+  ['dashboard', { open: openScreen('#/dashboard', '.dk-note[data-note-id="NOTE-001"] .dk-note__body'), fullPage: true, scope: '#screen-mount' }],
+  ['dashboard-note-expanded', { open: openScreen('#/dashboard', '.dk-note[data-note-id="NOTE-001"] .dk-note__body'), fullPage: true, scope: '#screen-mount', drive: async (p) => {
+    await p.getByRole('button', { name: /Show more/ }).first().click();
+  } }],
+  ['settings', { open: openScreen('#/settings', '.set-control[role="group"] .tm-segmented > button[data-key="system"]'), fullPage: true, scope: '#screen-mount' }],
+  // Plan 3d — Issues, Bugs, Ideas.
+  ['issues-board', { open: openIssues(), drive: openShelf, scope: '#screen-mount' }],
+  ['issues-status', { open: openIssues(), drive: issuesView('Status'), scope: '#screen-mount' }],
+  ['issues-list', { open: openIssues(), drive: issuesView('List'), scope: '#screen-mount' }],
+  // ISS-001's evidence runs past three lines: the shot is its evidence opened with Show all (at 390 its column
+  // sits behind the Investigating tab).
+  ['issues-evidence', { open: openIssues(), routes: listRoute('issues', F.ISSUES, 'issues'), scope: '#screen-mount', drive: async (p) => {
+    const iss = p.locator('.issue-card[data-issue-id="ISS-001"]');
+    if (!(await iss.isVisible())) await p.getByRole('tab', { name: /^Investigating/ }).click();
+    await iss.locator('.issue-card__more').waitFor({ state: 'visible' });
+    // The shot is the expanded state: "Show all" pressed, so the button reads "Show less".
+    await iss.locator('.issue-card__more').click();
+    await iss.locator('.issue-card__more[aria-expanded="true"]').waitFor();
+    await iss.scrollIntoViewIfNeeded();
+  } }],
+  ['issues-long', { open: openIssues(), routes: listRoute('issues', F.LONG_ISSUES, 'issues'), fullPage: true, scope: '#screen-mount' }],
+  ['bugs-list', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.BUGS), scope: '#screen-mount',
+    drive: (p) => p.getByRole('button', { name: /^Show archived/ }).click() }],
+  ['bugs-long', { open: openScreen('#/bugs', '.bugs__list .bug-row'), routes: listRoute('bugs', F.LONG_BUGS), fullPage: true, scope: '#screen-mount' }],
+  ['ideas-list', { open: openScreen('#/ideas/IDEA-1', '.ideas :text("IDEA-1"):visible'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: '#screen-mount' }],
+  ['ideas-tags', { open: openScreen('#/ideas', '.ideas__list .idea-row'), routes: listRoute('ideas', F.LIST_IDEAS, 'ideas'), scope: 'body',
+    drive: async (p) => {
+      await p.locator('.ideas button.tag-filter').click();
+      await p.locator('.tag-filter__list input[type="checkbox"][value="ux"]').check();
+    } }],
+  ['ideas-long', { open: openScreen('#/ideas', '.ideas__list .idea-row'), routes: listRoute('ideas', F.LONG_IDEAS, 'ideas'), fullPage: true, scope: '#screen-mount' }],
+  // Plan 3c's detail pages. The builders' prefs are dropped so the capture's own theme stands (so no issue aging pref).
+  ...((detail) => [
+    ['page-graph', { open: openScreen('#/task/T-102?view=B', '.td-graph-frame'), fullPage: true, scope: '#screen-mount' }],
+    ['page-graph-long', { open: openScreen('#/task/T-105?view=B', '.td-graph-frame'), fullPage: true, scope: '#screen-mount' }],
+    ['page-missing', { open: openScreen('#/task/NOPE-999', '.tm-empty[data-state="missing"]'), routes: detail(F.taskPageMocks()), fullPage: true, scope: '#screen-mount' }],
+    ['page-gates', { open: openPage('T-107'), routes: (p) => p.route('**/api/task/T-107/detail', (r) => r.fulfill({ json: F.taskDetail(F.REVIEW_TASK) })), fullPage: true, scope: '#screen-mount' }],
+    ...[['issue-rich', 'ISS-012'], ['issue-fixed', 'ISS-009'], ['issue-long', 'ISS-1234']].map(([name, id]) =>
+      [name, { open: openScreen(`#/issue/${id}`, '.dp-page--issue h1.td-title'), fullPage: true, scope: '#screen-mount',
+        routes: async (p) => {
+          await detail(F.issueDetailMocks())(p);
+          if (name !== 'issue-rich') return;
+          // aging.High = 30 so the stale tag shows; the theme is merged in from the page's colour scheme, not replaced.
+          await p.route((url) => url.pathname === '/api/viewer/prefs', async (r) => {
+            if (r.request().method() !== 'GET') return r.fulfill({ json: {} });
+            const dark = await r.request().frame().evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches);
+            await r.fulfill({ json: { theme: dark ? 'dark' : 'light', ui: {}, screens: {}, issues: { aging: { High: 30 } } } });
+          });
+        } }]),
+    ['issue-missing', { open: openScreen('#/issue/ISS-999', '.tm-empty[data-state="missing"]'), routes: detail(F.issueDetailMocks()), fullPage: true, scope: '#screen-mount' }],
+    ...[['bug-open', 'B-031'], ['bug-fixed', 'B-030'], ['bug-long', 'B-1234']].map(([name, id]) =>
+      [name, { open: openScreen(`#/bug/${id}`, '.dp-page--bug h1.td-title'), routes: detail(F.bugDetailMocks()), fullPage: true, scope: '#screen-mount' }]),
+    ['bug-missing', { open: openScreen('#/bug/B-999', '.tm-empty[data-state="missing"]'), routes: detail(F.bugDetailMocks()), fullPage: true, scope: '#screen-mount' }],
+    ...[['bug-mark-fixed', 'Mark this bug fixed'], ['bug-promote', 'Promote to issue'], ['bug-shelve-confirm', 'Shelve']].map(([name, label]) =>
+      [name, { open: openScreen('#/bug/B-031', '.dp-page--bug h1.td-title'), routes: detail(F.bugDetailMocks()), drive: async (p) => {
+        await p.locator('#screen-mount, #topbar-primary').getByRole('button', { name: label }).first().click();
+        await p.locator('[role="dialog"], [role="alertdialog"], dialog[open]').last().waitFor();
+      } }]),
+  ])((table) => async (p) => {
+    // Only these paths, routed one by one: a second mockApi would answer the prefs too, and in the dark.
+    for (const [key, val] of Object.entries(table)) {
+      if (key.includes(' ') || key === '/api/viewer/prefs') continue;
+      await p.route((url) => url.pathname === key, (r) => r.fulfill(typeof val?.status === 'number' && 'json' in val ? val : { json: val }));
+    }
+  }),
+  // Plan 4: every route, on the same mocks and ready selector as the a11y gate, the whole page in one shot.
+  ...ROUTES.map((r) => [`route-${r.name}`, { mocks: r.build, fullPage: true, scope: 'body', open: async (page) => {
+    await page.goto(`${BASE}/${r.route}`);
+    await page.locator(r.ready).first().waitFor();
+    await r.open?.(page);
+  } }]),
+];
+const ONLY = flag('only');
+const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));
+if (unknownScenes.length || (ONLY && !ONLY.length)) usage(`--only: unknown scene(s) "${unknownScenes.join(',')}"; known: ${ALL_SCENES.map(([n]) => n).join(', ')}`);
+const SCENES = ALL_SCENES.filter(([name]) => !ONLY || ONLY.includes(name));
+const VIEWPORTS = [['d', 1440, 900], ['m', 390, 844]].filter(([vk]) => WIDTHS.includes(vk));
+
+// A port someone else holds would serve their files (or nothing) to the browser; refuse before starting anything.
+const answers = (port) => new Promise((ok) => {
+  const sock = net.connect({ port, host: '127.0.0.1' });
+  sock.setTimeout(1000);
+  sock.once('connect', () => { sock.destroy(); ok(true); });
+  sock.once('timeout', () => { sock.destroy(); ok(false); });
+  sock.once('error', () => ok(false));
+});
+const bindable = (port) => new Promise((ok) => {
+  const probe = net.createServer();
+  probe.once('error', () => ok(false));
+  probe.listen(port, '127.0.0.1', () => probe.close(() => ok(true)));
+});
+if ((await answers(PORT)) || !(await bindable(PORT))) usage(`port ${PORT} is in use; pass --port=<free port>`);
+fs.mkdirSync(OUT, { recursive: true });
+
+// The full page scrolls inside the app frame, not the document, so a full-page screenshot alone stops at the fold:
+// the viewport is grown by the longest inner scroll first.
+async function growToContent(page, w, h) {
+  const extra = await page.evaluate(() => Math.max(0, ...[...document.querySelectorAll('body *')].map((el) => {
+    const oy = getComputedStyle(el).overflowY;
+    return (oy === 'auto' || oy === 'scroll') ? el.scrollHeight - el.clientHeight : 0;
+  })));
+  if (extra > 0) await page.setViewportSize({ width: w, height: Math.min(h + extra, 12000) });
+}
+
+async function inspect(page, scope) {
+  return page.evaluate((scope) => {
+    const root = scope ? document.querySelector(scope) : [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].pop();
+    const box = root?.getBoundingClientRect();
+    return {
+      theme: document.documentElement.dataset.theme,
+      overflowX: document.documentElement.scrollWidth - innerWidth,
+      root: root ? { w: Math.round(box.width), h: Math.round(box.height), right: Math.round(box.right) } : null,
+      label: root?.getAttribute('aria-labelledby') ? document.getElementById(root.getAttribute('aria-labelledby'))?.textContent.trim().slice(0, 80) : null,
+      focused: document.activeElement ? `${document.activeElement.tagName.toLowerCase()}${document.activeElement.className ? '.' + String(document.activeElement.className).trim().split(/\s+/).join('.') : ''}` : null,
+      mains: document.querySelectorAll('main').length,
+    };
+  }, scope);
+}
+
+async function axe(page, scope) {
+  await page.addScriptTag({ content: AXE });
+  return page.evaluate(async (scope) => {
+    const root = scope ? document.querySelector(scope) : [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].pop();
+    const r = await axe.run(root ?? document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] }, resultTypes: ['violations'] });
+    return r.violations.map(v => ({ id: v.id, n: v.nodes.length, nodes: v.nodes.slice(0, 6).map(n => n.target.join(' ')) }));
+  }, scope);
+}
+
+const server = spawn(process.execPath, [path.join(here, 'static-server.mjs'), String(PORT)], { stdio: ['ignore', 'ignore', 'pipe'] });
+let serverErr = '';
+server.stderr.on('data', (d) => { serverErr += d; });
+let serverGone = false;
+server.on('exit', () => { serverGone = true; });
+const stop = () => { try { server.kill(); } catch { /* already gone */ } };
+process.on('exit', stop);
+// Ctrl+C (or a kill) mid-run must not leave the file server holding the port.
+process.on('SIGINT', () => { stop(); process.exit(130); });
+process.on('SIGTERM', () => { stop(); process.exit(143); });
+let up = false;
+for (let i = 0; i < 50 && !up && !serverGone; i++) {
+  try { up = (await fetch(`${BASE}/index.html`)).ok; } catch { /* not yet */ }
+  if (!up) await new Promise((ok) => setTimeout(ok, 200));
+}
+if (!up) {
+  console.error(`static server did not start on ${PORT}${serverErr.trim() ? `:\n${serverErr.trim()}` : ''}`);
+  process.exit(1);
+}
+
+const browser = await chromium.launch();
+const results = {};
+const problems = [];
+try {
+  for (const theme of THEMES) {
+    for (const [vk, w, h] of VIEWPORTS) {
+      for (const [name, scene] of SCENES) {
+        const key = `${name}.${theme}.${vk}`;
+        if (scene.skipAt?.[vk]) { console.log(`${key} skipped: ${scene.skipAt[vk]}`); continue; }
+        const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1, colorScheme: theme,
+          reducedMotion: 'reduce', serviceWorkers: 'block' });
+        await ctx.addInitScript((t) => { try { localStorage.setItem('tm.theme', t); } catch { /* storage unavailable */ } }, theme);
+        const page = await ctx.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message.slice(0, 200)}`));
+        page.on('dialog', (d) => { errors.push(`[native dialog] ${d.message()}`); d.dismiss(); });
+        try {
+          await mockApi(page, scene.mocks ? scene.mocks({ theme }) : { '/api/viewer/prefs': { theme, ui: {}, screens: {} }, ...TABLE });
+          // A scene's own table answers its bugs as the route does; bugsByTask would replace that list.
+          if (!scene.mocks) await bugsByTask(page);
+          await scene.routes?.(page);
+          await scene.open(page);
+          await page.evaluate(() => document.fonts.ready);
+          await scene.drive?.(page);
+          // The pointer is left where the card was clicked; parked on the overlay corner it hovers nothing in the shot.
+          await page.mouse.move(1, h - 1);
+          if (scene.fullPage) await growToContent(page, w, h);
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(OUT, `${key}.png`), fullPage: !!scene.fullPage });
+          const m = await inspect(page, scene.scope);
+          let ax = [];
+          try { ax = await axe(page, scene.scope); } catch (e) { ax = [{ id: 'axe-error', n: 1, nodes: [e.message] }]; }
+          const writes = unmockedWrites(page);
+          results[key] = { file: `${key}.png`, ...m, errors, unmockedWrites: writes, axe: ax };
+          if (m.theme !== theme) problems.push(`${key}: page is ${m.theme}`);
+          if (errors.length) problems.push(`${key}: ${errors.join('; ')}`);
+          if (writes.length) problems.push(`${key}: unmocked writes ${writes.join(', ')}`);
+          console.log(key, 'overflowX', m.overflowX, 'axe', ax.map(v => `${v.id}×${v.n}`).join(' ') || 'clean');
+        } catch (e) {
+          problems.push(`${key}: ${e.message.split('\n')[0]}`);
+          console.error(`FAILED ${key}: ${e.message.split('\n')[0]}`);
+        } finally {
+          await ctx.close();
+        }
+      }
+    }
+  }
+} finally {
+  fs.writeFileSync(path.join(OUT, 'metrics.json'), JSON.stringify({ results, problems }, null, 1));
+  await browser.close();
+  stop();
+}
+for (const p of problems) console.error('PROBLEM ' + p);
+process.exit(problems.length ? 1 : 0);

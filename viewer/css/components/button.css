@@ -1,0 +1,50 @@
+/* User intent: one button family for the whole viewer — Reality Reprojection's manufactured control without its
+   shadows or hover lift: a state change is a change of fill, border or ink, and every label stays readable. */
+
+.btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  min-height: var(--control-size);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-technical-default);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  text-decoration: none;
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* The display above would otherwise win over the hidden attribute: a button hidden by its code is not drawn. */
+.btn[hidden] { display: none; }
+
+/* Solid fills have no deeper step that keeps the label readable, so hover and press are answered by the border. */
+.btn--primary { background: var(--signature-fill); color: var(--on-accent-fill); }
+.btn--primary:hover:not(:disabled) { background: var(--accent-fill-hover); border-color: var(--foreground-bold); }
+.btn--primary:active:not(:disabled) { background: var(--signature-fill); border-color: var(--foreground-bold); }
+
+.btn--critical { background: var(--color-critical-bold); color: var(--foreground-on-accent); }
+.btn--critical:hover:not(:disabled),
+.btn--critical:active:not(:disabled) { border-color: var(--foreground-bold); }
+
+.btn--secondary { border-color: var(--border-strong); color: var(--foreground-bold); }
+.btn--secondary:hover:not(:disabled) { background: var(--ground-15); border-color: var(--foreground-subtle); }
+.btn--secondary:active:not(:disabled) { background: var(--ground-20); border-color: var(--foreground-subtle); }
+
+.btn--ghost:hover:not(:disabled) { background: var(--ground-15); border-color: var(--border-strong); color: var(--foreground-bold); }
+.btn--ghost:active:not(:disabled) { background: var(--ground-20); border-color: var(--border-strong); color: var(--foreground-bold); }
+
+.btn--sm { padding: var(--space-micro) var(--space-sm); min-height: var(--control-size-sm); font-size: var(--size-technical-small); }
+
+.btn--icon { flex: 0 0 auto; width: var(--control-size); height: var(--control-size); padding: 0; }
+.btn--icon.btn--sm { width: var(--control-size-sm); height: var(--control-size-sm); }

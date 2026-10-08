@@ -1,0 +1,123 @@
+/* User intent: one frame for every modal in the viewer — a frosted backdrop, a Reality Reprojection dialog whose
+   body alone scrolls, and a full-height sheet on a phone. Elevation is surface stepping and a border, never a shadow. */
+
+body.modal-open { overflow: hidden; }
+/* At phone width html clips sideways (shell.css), so body's overflow no longer reaches the viewport: lock html too. */
+html:has(> body.modal-open) { overflow: hidden; }
+
+/* Above the mobile drawer (80), below the conflict banner (90). Stacked modals each bring their own
+   overlay; the later one in the host paints on top. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: grid;
+  place-items: start center;
+  padding: var(--space-2xl) var(--space-md);
+  /* A conflict banner (conflict-banner.js sets its height) sits above the dialog, never over its header. */
+  padding-top: calc(var(--space-2xl) + var(--conflict-banner-height));
+  background: var(--overlay-bg);
+  backdrop-filter: blur(var(--frost-blur-light));
+  animation: modal-overlay-in var(--dur-standard) var(--ease-hourglass) backwards;
+}
+
+.modal {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 2 * var(--space-2xl) - var(--conflict-banner-height));
+  overflow: hidden;
+  background: var(--overlay-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+  animation: modal-rise var(--dur-macro) var(--ease-bell) backwards;
+}
+.modal--sm { width: min(420px, 100%); }
+.modal--md { width: min(640px, 100%); }
+.modal--lg { width: min(960px, 100%); }
+
+@keyframes modal-overlay-in { from { opacity: 0; } }
+@keyframes modal-rise { from { opacity: 0; transform: translateY(var(--space-md)); } }
+
+.modal-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-default);
+}
+/* As tall as the close button, so a one-line title without an eyebrow sits level with it. */
+.modal-heading { flex: 1 1 auto; min-width: 0; min-height: var(--control-size); display: flex; flex-direction: column; justify-content: center; gap: var(--space-micro); }
+.modal-eyebrow {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
+}
+.modal-title {
+  margin: 0;
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-declaration-h4);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  text-transform: uppercase;
+  color: var(--foreground-bold);
+  overflow-wrap: anywhere;
+}
+/* A title that is a sentence (the task detail modal) reads in the Narrator voice. */
+.modal--plain-title .modal-title {
+  font-family: var(--font-narrator);
+  font-weight: 700;
+  font-size: var(--size-narrator-large);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+}
+.modal-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-xs); }
+.modal-actions:empty { display: none; }
+
+/* The shared hover fill is the dialog surface itself in dark, so a transparent button on that surface
+   (the close button is a ghost icon button) steps one further. */
+:is(.modal-header, .modal-body) :is(.btn--secondary, .btn--ghost):hover:not(:disabled) { background: var(--overlay-surface-hover); }
+:is(.modal-header, .modal-body) :is(.btn--secondary, .btn--ghost):active:not(:disabled) { background: var(--overlay-surface-active); }
+
+.modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-lg); }
+.modal-message { margin: 0; color: var(--foreground-default); font-size: var(--size-narrator-small); line-height: var(--leading-body); overflow-wrap: anywhere; }
+
+.modal-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--overlay-surface-sunken);
+}
+.modal-footer:empty { display: none; }
+/* A decision's actions sit at the trailing edge, the answer last. */
+.modal--confirm .modal-footer { justify-content: flex-end; }
+
+@media (max-width: 768px) {
+  .modal-overlay { padding: var(--conflict-banner-height) 0 0; }
+  .modal,
+  .modal--sm,
+  .modal--md,
+  .modal--lg { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 0; }
+  .modal-header { padding-top: max(var(--space-md), env(safe-area-inset-top)); }
+  .modal-footer { padding-bottom: max(var(--space-md), env(safe-area-inset-bottom)); }
+  .modal-close { width: var(--touch-target); height: var(--touch-target); }
+  .modal-heading { min-height: var(--touch-target); }
+  /* A question is not a page: the confirm keeps its frame, its answers right under it. */
+  .modal-overlay:has(> .modal--confirm) { padding: var(--space-2xl) var(--space-md); }
+  .modal.modal--confirm { height: auto; max-height: 100%; border: 1px solid var(--border-default); border-radius: var(--radius-xl); }
+  .modal--confirm .modal-header { padding-top: var(--space-md); }
+  .modal--confirm .modal-footer { padding-bottom: var(--space-md); }
+  .modal--confirm .modal-footer .btn { min-height: var(--touch-target); }
+}

@@ -3802,7 +3802,7 @@ VIEWER_PREFS_SCHEMA_VERSION = 1
 
 VIEWER_PREFS_DEFAULTS = {
     "schema_version": VIEWER_PREFS_SCHEMA_VERSION,
-    "theme": "dark",          # dark | light
+    "theme": "dark",          # dark | light | system
     "card_density": "full",   # full | minimal
     "zoom": 1.0,              # 1.5x baked into source CSS as of T2.24α
     "screens": {

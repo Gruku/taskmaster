@@ -20,6 +20,23 @@ test('edit renders type=number input', () => {
   assert.equal(el.value, '3');
 });
 
+test('a stored value that is not a number is shown beside an empty input, and the note describes the input', () => {
+  const el = NumberField.edit({ value: 'beta', id: 'stage', describedBy: 'stage-error', autoFocus: false });
+  const input = el.control;
+  assert.equal(input.tagName, 'INPUT');
+  assert.equal(input.id, 'stage');
+  assert.equal(input.value, '');
+  const note = el.querySelector('span.ef-num-note');
+  assert.equal(note.textContent, 'Current: beta — not a number. It is kept unless you type one.');
+  assert.ok(note.id);
+  assert.deepEqual(input.getAttribute('aria-describedby').split(' '), ['stage-error', note.id]);
+  assert.equal(NumberField.coerce('beta'), null, 'nothing a form would send');
+  for (const fine of [3, '2', null, undefined, '']) {
+    const plain = NumberField.edit({ value: fine, autoFocus: false });
+    assert.equal(plain.querySelector?.('.ef-num-note') ?? null, null, JSON.stringify(fine));
+  }
+});
+
 test('coerce returns integer or null', () => {
   assert.equal(NumberField.coerce('7'), 7);
   assert.equal(NumberField.coerce(''), null);

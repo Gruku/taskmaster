@@ -1,9 +1,13 @@
-.settings { padding: 20px 24px; max-width: 720px; }
-.set-block { margin-bottom: 28px; }
-.set-h { font-size: var(--text-lg); margin: 0 0 4px; }
-.set-desc { color: var(--ink-3); font-size: var(--text-sm); margin: 0 0 12px; }
-.set-radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
-.set-radio:hover { background: var(--bg-card-hover); }
-.set-radio input { margin-top: 3px; }
-.set-radio__label { display: block; color: var(--ink-1); font-weight: 600; }
-.set-radio__hint { display: block; color: var(--ink-3); font-size: var(--text-xs); }
+/* User intent: Settings reads as three labelled blocks, each a segmented control, on RR tokens only.
+   The page gutter is #screen-mount's; the segmented control's look and 44px phone height come from toolbar.css. */
+.settings { max-width: 720px; }
+.set-block + .set-block { margin-top: var(--space-xl); }
+.set-h {
+  margin: 0 0 var(--space-micro);
+  font-family: var(--font-narrator);
+  font-weight: 700;
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-bold);
+}
+.set-desc { margin: 0 0 var(--space-sm); color: var(--foreground-subtle); font-size: var(--size-narrator-small); }
+.set-control { display: flex; min-width: 0; }

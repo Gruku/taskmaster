@@ -8,8 +8,8 @@ const ROUTES = [
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
 ];
 
-// Number of sidebar links is derived from ROUTES (unique sidebarKeys) so it stays in sync.
-const SIDEBAR_LINK_COUNT = new Set(ROUTES.map(r => r.sidebarKey).filter(Boolean)).size;
+// Every nav entry in components/sidebar.js SECTIONS (task detail is a route, not a nav entry).
+const SIDEBAR_LINK_COUNT = 10;
 
 test.describe('Viewer v3 smoke', () => {
   test('boots and renders sidebar', async ({ page }) => {
@@ -30,7 +30,9 @@ test.describe('Viewer v3 smoke', () => {
       await page.goto('/v3');
       await page.evaluate(h => location.hash = h, r.hash);
       await expect(page.locator('#page-title')).toHaveText(r.title);
-      await expect(page.locator('.screen-mount .stub')).toBeVisible();
+      // Resolved: the screen drew something, and it is not the router's "could not open" block (router.js failureBlock).
+      await expect(page.locator('#screen-mount > *').first()).toBeVisible();
+      await expect(page.locator('#screen-mount .tm-empty[data-state="error"]')).toHaveCount(0);
       if (r.sidebarKey) {
         await expect(page.locator(`.sidebar-link[data-key="${r.sidebarKey}"]`)).toHaveClass(/active/);
       }

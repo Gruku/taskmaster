@@ -1,14 +1,22 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Pre-paint theme apply. Duplicates resolveTheme() in js/lib/theme.js (key 'tm.theme') — keep the two in agreement. -->
+  <script>
+    (function () {
+      var p = 'dark';
+      try { p = localStorage.getItem('tm.theme') || 'dark'; } catch (e) {}
+      var dark = true;
+      try { dark = matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
+      document.documentElement.dataset.theme = p === 'system' ? (dark ? 'dark' : 'light') : (p === 'light' ? 'light' : 'dark');
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Taskmaster</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%234a9eff'/></svg>">
+  <link rel="icon" href="vendor/favicon.ico" sizes="16x16 32x32 48x48 256x256">
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/shell.css">
-  <link rel="stylesheet" href="css/components.css">
-  <link rel="stylesheet" href="css/screens/_placeholders.css">
   <link rel="stylesheet" href="css/screens/desk.css">
   <link rel="stylesheet" href="css/screens/kanban.css">
   <link rel="stylesheet" href="css/screens/table.css">
@@ -19,12 +27,31 @@
   <link rel="stylesheet" href="css/screens/issues.css">
   <link rel="stylesheet" href="css/screens/bugs.css">
   <link rel="stylesheet" href="css/screens/ideas.css">
+  <link rel="stylesheet" href="css/screens/detail-pages.css">
   <link rel="stylesheet" href="css/screens/archived.css">
   <link rel="stylesheet" href="css/screens/continuity.css">
   <link rel="stylesheet" href="css/screens/settings.css">
   <link rel="stylesheet" href="css/components/edit-fields.css">
+  <link rel="stylesheet" href="css/components/markdown.css">
   <link rel="stylesheet" href="css/components/entity-modal.css">
   <link rel="stylesheet" href="css/components/conflict-banner.css">
+  <link rel="stylesheet" href="css/components/button.css">
+  <link rel="stylesheet" href="css/components/copy.css">
+  <link rel="stylesheet" href="css/components/toolbar.css">
+  <link rel="stylesheet" href="css/components/list-toolbar.css">
+  <link rel="stylesheet" href="css/components/issue-card.css">
+  <link rel="stylesheet" href="css/components/status.css">
+  <link rel="stylesheet" href="css/components/modal.css">
+  <link rel="stylesheet" href="css/components/popover.css">
+  <link rel="stylesheet" href="css/components/state.css">
+  <link rel="stylesheet" href="css/components/handover-status.css">
+  <link rel="stylesheet" href="css/components/right-rail.css">
+  <link rel="stylesheet" href="css/components/rows.css">
+  <link rel="stylesheet" href="css/components/overflow-row.css">
+  <link rel="stylesheet" href="css/components/chips.css">
+  <link rel="stylesheet" href="css/components/column-tabs.css">
+  <link rel="stylesheet" href="css/components/tag-filter.css">
+  <link rel="stylesheet" href="css/components/card.css">
   <link rel="stylesheet" href="css/components/detail-modal.css">
   <script src="vendor/marked.min.js"></script>
 </head>
@@ -33,14 +60,18 @@
     <aside class="sidebar" id="sidebar"></aside>
     <main class="main">
       <header class="topbar" id="topbar">
-        <h1 id="page-title">Loading…</h1>
-        <div class="topbar-actions" id="topbar-actions"></div>
+        <div class="topbar-row1">
+          <h1 id="page-title">Loading…</h1>
+          <span class="topbar-count" id="topbar-count"></span>
+          <div class="topbar-primary" id="topbar-primary"></div>
+          <button type="button" class="btn-icon" id="theme-toggle" disabled></button>
+        </div>
+        <div class="topbar-actions topbar-row2" id="topbar-actions"></div>
       </header>
       <section class="screen-mount" id="screen-mount"></section>
     </main>
   </div>
-  <div id="entity-modal-host"></div>
-  <div id="detail-modal-host"></div>
+  <div id="modal-host"></div>
   <div id="conflict-banner-host"></div>
   <script type="module" src="js/main.js"></script>
 </body>

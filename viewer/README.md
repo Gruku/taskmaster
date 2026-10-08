@@ -28,4 +28,9 @@ Root (`/`) serves this viewer shell — no pref flip needed. `/v3` is a kept ali
 ## Test
 
 - Server: `python -m pytest tests/`
-- UI smoke: `bash viewer/tests/run_smoke.sh`
+- Unit: `npm --prefix viewer run test:unit`. Mocked UI (no server, no backlog): `npm --prefix viewer run test:mock`.
+- Live UI smoke: `TM_LIVE_SPECS_OK=1 bash viewer/tests/run_smoke.sh`. These specs write viewer prefs and backlog
+  entities to the server they reach (port 8765), so both `run_smoke.sh` and `tests/playwright.config.js`
+  (`npm run test:e2e`) refuse to start unless `TM_LIVE_SPECS_OK=1` is set.
+- `run_smoke.sh` also refuses a root that holds a `.taskmaster` backlog unless `TM_LIVE_SPECS_ROOT_OK` equals
+  that root exactly (the refusal prints the path), and refuses when a viewer already answers on port 8765.

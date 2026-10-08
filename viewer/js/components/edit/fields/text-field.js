@@ -1,5 +1,6 @@
 // viewer/js/components/edit/fields/text-field.js
 import { h } from '../../../util/h.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 export const TextField = {
   read({ value, readOnly = false, placeholder = '' }) {
@@ -11,7 +12,7 @@ export const TextField = {
     return h('span', { class: cls.join(' ') }, text);
   },
 
-  edit({ value, onChange, onCommit, onCancel, maxLength, required }) {
+  edit({ value, onChange, onCommit, onCancel, maxLength, required, id, describedBy, autoFocus = true }) {
     const input = h('input', {
       type: 'text',
       class: 'ef-text-input',
@@ -19,13 +20,14 @@ export const TextField = {
     });
     if (maxLength != null) input.setAttribute('maxlength', String(maxLength));
     if (required) input.setAttribute('required', '');
+    bindControl(input, { id, describedBy });
     input.addEventListener('input', () => onChange?.(input.value));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onCommit?.(input.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     input.addEventListener('blur', () => onCommit?.(input.value));
-    queueMicrotask(() => { input.focus(); input.select(); });
+    focusOnMount(input, autoFocus, { select: true });
     return input;
   },
 

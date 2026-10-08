@@ -1,0 +1,12 @@
+/* User intent: a copy button says it worked — for a moment it turns success-tinted and reads "copied" — so the user
+   knows the clipboard holds the text without a toast. Set and cleared by bindCopy() in lib/copy.js. */
+
+/* Hover and press repeat the flash: the pointer is still on the button when it lands, and a ghost button's hover fill
+   must not hide it. */
+.cmp-flash-copied,
+.cmp-flash-copied:is(:hover, :active):not(:disabled) {
+  background: var(--color-success-subtle);
+  border-color: var(--tone-success);
+  color: var(--foreground-bold);
+}
+.cmp-flash-copied::after { content: ' copied'; }

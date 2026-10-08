@@ -1,34 +1,44 @@
-/* plugins/taskmaster/viewer/css/screens/epics.css */
-.epics { padding: 16px 20px; }
-.epics-empty { color: var(--ink-3); padding: 24px; }
-.epics-list { display: flex; flex-direction: column; gap: 8px; max-width: 920px; }
+/* User intent: epic rows on the shared card surface, their status, bar and count in columns that line up, stacked on a phone. */
+.epics-screen { display: flex; flex-direction: column; gap: var(--space-md); min-width: 0; }
+/* As wide as the search above it, so their right edges line up. */
+.epics-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
 .epic-row {
-  display: grid;
-  grid-template-columns: 12px 1fr auto auto auto 160px;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--bl, rgba(255,255,255,0.06));
-  border-radius: 8px;
-  text-decoration: none;
-  color: var(--ink-1);
+  display: grid; align-items: center; column-gap: var(--space-md);
+  grid-template-columns: minmax(0, 1fr) 9rem minmax(6rem, 14rem) 4.5rem 6.5rem;
+  grid-template-areas: "name status bar count tags";
+  padding: var(--space-sm) var(--space-md);
+  background: var(--card-bg); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
 }
-.epic-row:hover { background: var(--bg-card-hover); border-color: var(--epic, rgba(255,255,255,0.18)); }
-.epic-row__swatch { width: 10px; height: 10px; border-radius: 3px; background: var(--epic); }
-.epic-row__name { font-weight: 600; }
-.epic-row__ds { font-size: var(--text-xs); color: var(--ink-3); text-transform: capitalize; }
-.epic-row__count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-2); }
-.epic-row__bar { height: 6px; background: var(--bg-deep); border-radius: 3px; overflow: hidden; }
-.epic-row__bar > span { display: block; height: 100%; background: var(--epic); }
-
-/* Closeable badge — tinted background + full-perimeter border, no left rail. */
-.epic-closeable {
-  font-size: var(--text-xs);
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--green) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
-  color: var(--green);
-  white-space: nowrap;
+.epic-row:hover { border-color: var(--border-strong); }
+.epic-row > .link-row__content { display: contents; }
+.epic-row > .link-row__link {
+  grid-area: name; min-width: 0; color: var(--foreground-bold); text-decoration: none;
+  font-family: var(--font-narrator); font-weight: var(--font-narrator-weight-semi); font-size: var(--size-narrator-small);
+}
+.epic-row__name { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+/* The epic's categorical swatch, beside its name: a hue only, never text. */
+.epic-swatch { flex: 0 0 auto; display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.epic-swatch--cat-1 { background: var(--cat-1); }
+.epic-swatch--cat-2 { background: var(--cat-2); }
+.epic-swatch--cat-3 { background: var(--cat-3); }
+.epic-swatch--cat-4 { background: var(--cat-4); }
+.epic-swatch--cat-5 { background: var(--cat-5); }
+.epic-swatch--cat-6 { background: var(--cat-6); }
+.epic-row__status { grid-area: status; }
+/* The empty track is a border-weight neutral that reads on the card in both themes. */
+.epic-row__bar { grid-area: bar; display: block; height: var(--space-micro); border-radius: var(--radius-full); background: var(--border-default); overflow: hidden; }
+.epic-row__fill { display: block; height: 100%; background: var(--signature-fill); }
+.epic-row__count { grid-area: count; text-align: right; font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); color: var(--foreground-default); }
+.epic-row__tags { grid-area: tags; display: flex; justify-content: flex-end; }
+.epic-tag {
+  padding: 0 var(--space-xs); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); color: var(--foreground-default); white-space: nowrap;
+}
+@media (max-width: 768px) {
+  .epic-row {
+    grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--space-xs);
+    grid-template-areas: "name name" "status count" "bar bar" "tags tags";
+  }
+  .epic-row__tags { justify-content: flex-start; }
+  .epic-row__tags:empty { display: none; }
 }

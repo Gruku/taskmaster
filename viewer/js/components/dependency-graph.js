@@ -34,6 +34,8 @@ export function computeGraphLayout(input) {
   const height = input?.height ?? DEFAULT_H;
   const centerY = height / 2;
   const colSpacing = width / 5;
+  const nodeW = input?.nodeW ?? NODE_W;
+  const centerW = input?.centerW ?? CENTER_W;
 
   const columns = [-2, -1, 0, 1, 2].map((depth) => ({
     depth,
@@ -52,9 +54,9 @@ export function computeGraphLayout(input) {
   const centerCol = columns.find((c) => c.depth === 0);
   nodes.push({
     id: input.center.id,
-    x: centerCol.x - CENTER_W / 2,
+    x: centerCol.x - centerW / 2,
     y: centerY - CENTER_H / 2,
-    w: CENTER_W,
+    w: centerW,
     h: CENTER_H,
     depth: 0,
     column: 0,
@@ -78,13 +80,13 @@ export function computeGraphLayout(input) {
   const upstreamFiltered = (input.upstream || []).filter(
     (n) => n.id !== input.center.id
   );
-  placeSide(upstreamFiltered, -1, nodes, edges, columns, centerY, input.center.id);
-  placeSide(downstreamFiltered, +1, nodes, edges, columns, centerY, input.center.id);
+  placeSide(upstreamFiltered, -1, nodes, edges, columns, centerY, input.center.id, nodeW);
+  placeSide(downstreamFiltered, +1, nodes, edges, columns, centerY, input.center.id, nodeW);
 
   return { columns, nodes, edges };
 }
 
-function placeSide(side, sign, nodes, edges, columns, centerY, centerId) {
+function placeSide(side, sign, nodes, edges, columns, centerY, centerId, nodeW = NODE_W) {
   // Group by depth (1 and 2) — the caller passes depth as positive integers.
   const byDepth = new Map();
   for (const n of side) {
@@ -100,9 +102,9 @@ function placeSide(side, sign, nodes, edges, columns, centerY, centerId) {
     for (const item of items) {
       const node = {
         id: item.id,
-        x: col.x - NODE_W / 2,
+        x: col.x - nodeW / 2,
         y,
-        w: NODE_W,
+        w: nodeW,
         h: NODE_H,
         depth: sign * depth,
         column: sign * depth,

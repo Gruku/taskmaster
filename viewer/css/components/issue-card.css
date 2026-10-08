@@ -1,0 +1,138 @@
+/* User intent: one look for an issue in a list — a card whose whole box opens the issue, with its id, severity, meta
+   line and three lines of evidence, its "Show all" and task/bug links beside the link; a resolved issue is a quiet row. */
+
+/* ── Card ── */
+.issue-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  min-width: 0;
+}
+.issue-card > .link-row__link { color: var(--foreground-bold); text-decoration: none; }
+.issue-card__name { display: flex; flex-direction: column; gap: var(--space-micro); }
+.issue-card__line { display: flex; align-items: center; gap: var(--space-sm); }
+.issue-card__id {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  white-space: nowrap;
+  color: var(--foreground-default);
+}
+.issue-card__title {
+  font-family: var(--font-narrator);
+  font-weight: 600;
+  font-size: var(--size-narrator-small);
+  overflow-wrap: break-word;
+}
+.issue-card > .link-row__content { display: flex; flex-direction: column; gap: var(--space-xs); }
+.issue-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-micro) var(--space-sm);
+  min-width: 0;
+}
+.issue-card__blocks,
+.issue-card__location {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+.issue-card__evidence {
+  margin: 0;
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+.issue-card > .link-row__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+}
+.issue-card__more[hidden] { display: none; }
+.issue-card__refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-micro) var(--space-xs);
+}
+.issue-card__refs-label {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-ultra);
+  color: var(--foreground-subtle);
+}
+.issue-card__ref {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--text-accent);
+}
+
+/* ── Resolved row ── id, severity and title share the link's grid; the title keeps column 3 when there is no severity. */
+.issue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.issue-row > .link-row__link {
+  display: grid;
+  grid-template-columns: minmax(8ch, max-content) 6.5rem minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-sm);
+  min-width: 0;
+  color: var(--foreground-default);
+  text-decoration: none;
+}
+.issue-row__id {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  white-space: nowrap;
+}
+.issue-row__title {
+  grid-column: 3;
+  font-family: var(--font-narrator);
+  font-weight: 600;
+  font-size: var(--size-narrator-small);
+}
+.issue-row > .link-row__content { display: flex; align-items: center; gap: var(--space-sm); white-space: nowrap; }
+/* Narrow (a board column), the layout a phone gives every row: id and severity on one line, the title under them, status
+   and date wrapping. Not max-content twice: the title spans both tracks and would size them to its whole line. */
+.issue-row--narrow { grid-template-columns: minmax(0, 1fr); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-lg); }
+.issue-row--narrow > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); align-items: center; row-gap: var(--space-micro); }
+/* In a column the row reads like its neighbouring cards: the title wraps instead of being cut to one line. */
+.issue-row--narrow .issue-row__title { grid-column: 1 / -1; white-space: normal; overflow-wrap: break-word; }
+.issue-row--narrow > .link-row__content { flex-wrap: wrap; }
+.issue-row__when {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+
+@media (max-width: 768px) {
+  .issue-card__more,
+  .issue-card__ref,
+  .issue-card > .link-row__link,
+  .issue-row > .link-row__link { min-height: var(--touch-target); }
+  .issue-card__more,
+  .issue-card__ref { display: inline-flex; align-items: center; }
+  /* Not max-content twice: the title spans both tracks and would size them to its whole line, pushing the severity out. */
+  .issue-row > .link-row__link { grid-template-columns: max-content minmax(0, 1fr); }
+  .issue-row__title { grid-column: 1 / -1; }
+}

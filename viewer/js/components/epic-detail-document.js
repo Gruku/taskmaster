@@ -1,150 +1,178 @@
-// plugins/taskmaster/viewer/js/components/epic-detail-document.js
-// Render an epic's C1 detail into `container`. Pure of page chrome: it never
-// calls claimTopbar() and writes nothing outside `container`, so it drops
-// cleanly into both the /epic/<id> screen and the detail modal.
+// User intent: an epic's detail reads like every detail page — its lifecycle and design state as words, progress and a
+// status breakdown counted from the very task list it draws, its tasks grouped by status as real links — on the
+// /epic/<id> page and in the detail modal alike. Pure of page chrome: it writes nothing outside `container`.
 import { mountMarkdown } from './markdown.js';
-import { assignEpicColors, epicCssVar } from '../lib/epics.js';
 import {
-  designBadge, progressPercent, closeableBadge,
+  designBadge, epicStats, epicProgress, epicBreakdown, isCloseable, epicStatusMeta, statusGroupOf, STATUS_GROUPS,
 } from '../lib/epic-format.js';
+import { epicSwatch } from '../lib/epics.js';
+import { marker, statusMeta, priorityMarker } from './status.js';
+import { linkRow } from './link-row.js';
+import { stateBlock } from './empty-state.js';
+import { truncate } from '../lib/text.js';
+import { h } from '../util/h.js';
+import { icon } from './icon.js';
 import { mountComponentDiagram } from './component-diagram.js';
 
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// "Closeable" nudges an epic that is still open; a done or archived one needs none.
+const OPEN_STATUSES = new Set(['active', 'planned']);
+// Finished work stays folded until asked for.
+const FOLDED = new Set(['done', 'archived']);
+const OTHER = Object.freeze({ label: 'Other', shape: '○', tone: 'neutral' });
+const ATTENTION = {
+  blocked: { label: 'Blocked', shape: '◆', tone: 'critical' },
+  blockers: { label: 'Has blockers', shape: '▲', tone: 'warning' },
+};
+
+const groupMeta = (status) => (status === 'other' ? { ...OTHER } : statusMeta('task', status));
+const swatchEl = (n) => (n ? h('span', { class: `epic-swatch epic-swatch--cat-${n}`, 'aria-hidden': 'true' }) : null);
+const words = (v) => (Array.isArray(v) ? v.filter(Boolean).join('; ') : v == null ? '' : String(v));
+const section = (cls, title, ...body) => h('section', { class: cls }, [h('h2', { class: 'ed-h' }, title), ...body]);
+
+function header(epic, stats, chrome) {
+  const sep = () => h('span', { class: 'ed-sep', 'aria-hidden': 'true' }, '·');
+  const tag = (text) => h('span', { class: 'ed-tag' }, text);
+  const open = epic.status == null || epic.status === '' || OPEN_STATUSES.has(epic.status);
+  const parts = [];
+  if (chrome === 'page') {
+    const meta = [h('span', { class: 'ed-id' }, String(epic.id)), sep(), h('a', { href: '#/epics' }, 'Epics')];
+    if (epic.phase) meta.push(sep(), h('span', {}, String(epic.phase)));
+    parts.push(h('div', { class: 'ed-meta' }, meta), h('h1', { class: 'ed-title' }, String(epic.name || epic.id)));
+  }
+  parts.push(h('div', { class: 'ed-markers' }, [
+    marker(epicStatusMeta(epic.status)),
+    tag(`Design · ${designBadge(epic.design_status).label}`),
+    isCloseable(stats) && open ? tag('Closeable') : null,
+    epic.area ? tag(String(epic.area)) : null,
+  ]));
+  if (epic.done_when) {
+    parts.push(h('p', { class: 'ed-done-when' }, [h('span', { class: 'ed-label' }, 'Done when'), String(epic.done_when)]));
+  }
+  return h('header', { class: 'ed-head' }, parts);
 }
 
-// chrome: 'page' (route screen) | 'embedded' (modal). actionsHost: optional
-// element to receive an actions row (none in C1). onNavigate(taskId): jump to a task.
-// onComponentNav(componentKey): jump to the kanban filtered to that component.
-// Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on
-// the same container — disposeDiagram is captured per-invocation and is the only handle
-// that disconnects the architecture-map ResizeObserver (skipping it leaks the observer).
-export function mountEpicDetail(container, { epic, store, onNavigate, onComponentNav, chrome = 'page' } = {}) {
+function progress(stats) {
+  if (!stats.total) return section('ed-progress', 'Progress', stateBlock({ label: 'Tasks', headline: 'No tasks in this epic yet.' }));
+  const parts = epicBreakdown(stats);
+  const bar = h('div', { class: 'ed-breakdown', 'aria-hidden': 'true' }, parts.map(({ status, count, pct }) => {
+    const seg = h('span', { class: `ed-seg ed-seg--${status}`, title: `${groupMeta(status).label}: ${count}` });
+    seg.style.width = `${pct}%`;
+    return seg;
+  }));
+  const legend = h('ul', { class: 'ed-legend' }, parts.map(({ status, count }) =>
+    h('li', { 'data-status': status }, [
+      h('span', { class: `ed-legend__key ed-seg--${status}`, 'aria-hidden': 'true' }),
+      marker(groupMeta(status)), h('span', { class: 'ed-legend__n' }, String(count))])));
+  return section('ed-progress', 'Progress', h('p', { class: 'ed-progress__label' }, epicProgress(stats).label), bar, legend);
+}
+
+function taskRow(t) {
+  const id = String(t.id);
+  return linkRow({
+    tag: 'li',
+    className: 'ed-task',
+    href: `#/task/${encodeURIComponent(id)}`,
+    name: h('span', { class: 'ed-task__name' }, [h('span', { class: 't-id' }, id), ' ', truncate(t.title || id, { lines: 2 })]),
+    content: t.priority ? [priorityMarker(t.priority)] : [],
+  });
+}
+
+function taskGroups(tasks) {
+  const groups = h('div', { class: 'ed-groups' });
+  for (const status of [...STATUS_GROUPS, 'other']) {
+    const list = tasks.filter((t) => statusGroupOf(t) === status);
+    if (!list.length) continue;
+    const group = h('details', { class: 'ed-group', 'data-status': status }, [
+      h('summary', { class: 'ed-group__head' },
+        [icon('chevron', { size: 16 }), marker(groupMeta(status)), h('span', { class: 'ed-group__n' }, String(list.length))]),
+      h('ul', { class: 'ed-task-list' }, list.map(taskRow)),
+    ]);
+    group.open = !FOLDED.has(status);
+    groups.appendChild(group);
+  }
+  return section('ed-tasks', 'Tasks', groups);
+}
+
+function attention(items) {
+  return section('ed-attention', 'Attention', h('ul', { class: 'ed-attn' }, items.map((a) => {
+    const why = words(a.why);
+    return h('li', {}, [
+      marker(a.blocked ? ATTENTION.blocked : ATTENTION.blockers),
+      h('a', { href: `#/task/${encodeURIComponent(String(a.id))}`, title: a.title ? String(a.title) : null }, String(a.id)),
+      why ? truncate(why) : null,
+    ]);
+  })));
+}
+
+function docsList(docs) {
+  return section('ed-docs-block', 'Docs', h('ul', { class: 'ed-docs' }, Object.entries(docs).map(([key, path]) =>
+    h('li', {}, [
+      h('a', { href: `/file/${path}`, target: '_blank', rel: 'noopener' }, key),
+      h('span', { class: 't-tech' }, String(path)),
+    ]))));
+}
+
+// chrome: 'page' (route screen: the id · Epics line and the title) | 'embedded' (the modal: its heading shows the name).
+// Every task link is a real href: the page's detail interceptor and the modal's own link handler route them.
+// onComponentNav(componentKey) is handed to the architecture map.
+// Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on the same container — it is the
+// only handle that disconnects the architecture map's ResizeObserver and the swatch's board subscription.
+export function mountEpicDetail(container, { epic, store, onComponentNav, chrome = 'page' } = {}) {
   container.classList.add('ed-root');
-  const colors = assignEpicColors((store?.getBacklog?.() || {}).epics || [{ id: epic.id }]);
-  container.setAttribute('style', epicCssVar(colors[epic.id]));
-
-  const go = onNavigate || ((tid) => { location.hash = `#/task/${encodeURIComponent(tid)}`; });
-
   container.replaceChildren();
 
-  // crumb (only meaningful as a screen; harmless in modal)
-  if (chrome === 'page') {
-    const crumb = document.createElement('div');
-    crumb.className = 'ed-crumb';
-    crumb.innerHTML = `<a class="ed-back" href="#/epics">‹ Epics</a>`;
-    container.appendChild(crumb);
-  }
+  // Figures come from the list this document draws, so the label, the breakdown and the groups always agree.
+  const tasks = (Array.isArray(epic.tasks) ? epic.tasks : []).filter((t) => t && typeof t === 'object');
+  const stats = epicStats(tasks);
 
-  // header
-  const badge = designBadge(epic.design_status);
-  const pct = progressPercent(epic.stats);
-  const head = document.createElement('header');
-  head.className = 'ed-head';
-  head.innerHTML = `
-    <div class="ed-meta">
-      <span class="ed-swatch"></span>
-      <span class="ed-id">${esc(epic.id)}</span>
-      <span class="ed-ds ed-ds--${badge.cls}">${badge.locked ? '🔒 ' : ''}${esc(badge.label)}</span>
-      <span class="ed-epic-status">${esc(epic.status || 'active')}</span>
-      ${closeableBadge(epic.stats)}
-      ${epic.area ? `<span class="ed-area">${esc(epic.area)}</span>` : ''}
-    </div>
-    <h1 class="ed-title">${esc(epic.name || epic.id)}</h1>
-    ${epic.done_when ? `<p class="ed-done-when"><strong>Done when:</strong> ${esc(epic.done_when)}</p>` : ''}
-    <div class="ed-progress">
-      <span class="ed-progress__bar"><span style="width:${pct}%"></span></span>
-      <span class="ed-progress__label">${(epic.stats?.done || 0)}/${(epic.stats?.total || 0)} done · ${pct}%</span>
-    </div>`;
-  container.appendChild(head);
+  const main = h('div', { class: 'ed-main' });
+  // A column of the document, not a landmark of its own: a complementary landmark must not sit inside <main>.
+  const side = h('div', { class: 'ed-side' });
+  container.append(header(epic, stats, chrome), h('div', { class: 'ed-grid' }, [main, side]));
 
-  const grid = document.createElement('div');
-  grid.className = 'ed-grid';
-  const main = document.createElement('div'); main.className = 'ed-main';
-  const side = document.createElement('aside'); side.className = 'ed-side';
-  grid.append(main, side);
-  container.appendChild(grid);
+  // The epic's swatch leads the marker row. It is read from the board, which can land after the epic (or reorder its
+  // epics), so it follows every board change; without a board, or for an epic the board does not list, there is none.
+  const markers = container.querySelector('.ed-markers');
+  let swatch = null;
+  let shown = null;
+  const paintSwatch = () => {
+    const n = epicSwatch(epic.id, store?.getBacklog?.()?.epics ?? []);
+    if (n === shown) return;
+    swatch?.remove();
+    shown = n;
+    swatch = swatchEl(n);
+    if (swatch) markers.prepend(swatch);
+  };
+  paintSwatch();
+  const unsubBoard = store?.subscribe?.('backlog', paintSwatch) ?? (() => {});
 
-  // narrative (description field + body markdown)
   const narrative = [epic.description, epic._body].filter(Boolean).join('\n\n');
   if (narrative) {
-    const sec = document.createElement('section');
-    sec.className = 'ed-narrative';
-    const h = document.createElement('h2'); h.className = 'ed-h'; h.textContent = 'Design';
-    const md = document.createElement('div'); md.className = 'ed-md';
+    const md = h('div', { class: 'ed-md' });
     mountMarkdown(md, narrative);
-    sec.append(h, md);
-    main.appendChild(sec);
+    main.appendChild(section('ed-narrative', 'Design', md));
   }
+  main.appendChild(progress(stats));
+  if (stats.total) main.appendChild(taskGroups(tasks));
 
-  // ---- Components (main column)
-  const comps = epic.components || {};
-  const roll = epic.component_rollup || {};
-
-  // C2 — Epic Architecture Map. Replaces the plain component list: blocks in
-  // dependency-rank order, each holding the component's task cards, colored by rollup.
+  // C2 — Epic Architecture Map: blocks in dependency-rank order, each holding the component's task cards.
   let disposeDiagram = () => {};
+  const comps = epic.components || {};
   if (Object.keys(comps).length) {
-    const diagram = document.createElement('section');
-    diagram.className = 'ed-diagram';
-    const dh = document.createElement('h2');
-    dh.className = 'ed-h';
-    dh.textContent = 'Architecture';
-    diagram.appendChild(dh);
-    const canvas = document.createElement('div');
-    canvas.className = 'ed-diagram__canvas';
-    diagram.appendChild(canvas);
-    main.appendChild(diagram);
+    const canvas = h('div', { class: 'ed-diagram__canvas' });
+    main.appendChild(section('ed-diagram', 'Architecture', canvas));
     disposeDiagram = mountComponentDiagram(canvas, {
       components: comps,
-      rollup: roll,
-      tasks: epic.tasks || [],
+      rollup: epic.component_rollup || {},
+      tasks,
       onComponentNav,
     });
   }
 
-  // ---- Attention (side column)
-  if ((epic.attention || []).length) {
-    const sec = document.createElement('section'); sec.className = 'ed-side-block';
-    const h = document.createElement('h2'); h.className = 'ed-h'; h.textContent = 'Attention';
-    sec.appendChild(h);
-    const ul = document.createElement('ul'); ul.className = 'ed-attn';
-    for (const a of epic.attention) {
-      const li = document.createElement('li');
-      const link = document.createElement('a');
-      link.href = `#/task/${encodeURIComponent(a.id)}`;
-      link.addEventListener('click', (e) => { e.preventDefault(); go(a.id); });
-      link.textContent = a.id;
-      li.append(
-        document.createTextNode(`${a.blocked ? '⏸ ' : '⚠ '}`),
-        link,
-        document.createTextNode(a.why ? `: ${a.why}` : ''),
-      );
-      ul.appendChild(li);
-    }
-    sec.appendChild(ul);
-    side.appendChild(sec);
-  }
+  const flagged = (Array.isArray(epic.attention) ? epic.attention : []).filter((a) => a && a.id != null);
+  if (flagged.length) side.appendChild(attention(flagged));
+  const docs = epic.docs && typeof epic.docs === 'object' ? epic.docs : {};
+  if (Object.keys(docs).length) side.appendChild(docsList(docs));
 
-  // ---- Docs (side column)
-  const docs = epic.docs || {};
-  if (Object.keys(docs).length) {
-    const sec = document.createElement('section'); sec.className = 'ed-side-block';
-    const h = document.createElement('h2'); h.className = 'ed-h'; h.textContent = 'Docs';
-    sec.appendChild(h);
-    const ul = document.createElement('ul'); ul.className = 'ed-docs';
-    for (const [k, path] of Object.entries(docs)) {
-      const li = document.createElement('li');
-      const a = document.createElement('a');
-      a.href = `/file/${path}`; a.target = '_blank'; a.rel = 'noopener';
-      a.textContent = k;
-      li.append(a, document.createTextNode(` — ${path}`));
-      ul.appendChild(li);
-    }
-    sec.appendChild(ul);
-    side.appendChild(sec);
-  }
-
-  return () => { disposeDiagram(); container.classList.remove('ed-root'); container.replaceChildren(); };
+  return () => { unsubBoard(); disposeDiagram(); container.classList.remove('ed-root'); container.replaceChildren(); };
 }

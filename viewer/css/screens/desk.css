@@ -1,137 +1,183 @@
 /* Desk — sticky-notes-first dashboard.
-   Paper notes are the ONE place light surfaces appear on the dark canvas:
-   that contrast (plus static tilt + folded corner) is what makes them read
-   as physical notes. No box-shadows, no hover motion — per design rules. */
+   Notes are solid coloured paper with dark ink in both themes: warm paper for the user, cool paper for Claude.
+   The colour, the static tilt and the folded corner are what make them read as physical notes.
+   No box-shadows, no hover motion — per design rules. */
 
-.dk-desk { display: flex; flex-direction: column; gap: var(--sp-7); padding: var(--sp-6) var(--sp-8); }
+.dk-desk { display: flex; flex-direction: column; gap: var(--space-lg); padding: var(--space-lg); }
 
-/* Project label in the topbar slot — muted, low-emphasis. */
-.dk-proj { color: var(--ink-3); font-size: var(--text-sm); }
-
-/* ── Board ──────────────────────────────────────────────────────────────── */
-.dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-5); align-items: start; }
-
-.dk-note {
-  --paper: #e8d98a;            /* user: post-it yellow */
-  --paper-edge: #d8c66f;
-  --paper-ink: #2c2718;
-  --paper-ink-soft: rgba(44, 39, 24, 0.62);
-  position: relative;
-  background: var(--paper);
-  color: var(--paper-ink);
-  border: 1px solid var(--paper-edge);
-  border-radius: 2px;            /* paper, not UI card */
-  padding: var(--sp-4) var(--sp-5) var(--sp-6);
-  min-height: 150px;
-  transform: rotate(var(--tilt, 0deg));
-  font-size: var(--text-sm);
-  line-height: 1.45;
-  overflow-wrap: break-word;
+/* ── Summary strip: four counts, each a link to where they are ─────────────── */
+.dk-summary > ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-sm); margin: 0; padding: 0; list-style: none; }
+.dk-stat {
+  display: flex; flex-direction: column; gap: var(--space-micro);
+  min-height: var(--touch-target); padding: var(--space-sm) var(--space-md);
+  background: var(--card-bg); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  color: var(--foreground-default); text-decoration: none;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
+}
+.dk-stat:hover { background: var(--card-bg-hover); border-color: var(--border-strong); }
+.dk-stat__n {
+  font-family: var(--font-technical); font-weight: var(--font-technical-weight);
+  font-size: var(--size-declaration-h4); color: var(--foreground-bold);
+  /* The link cue link rows give: an underline on the number says the tile opens a filtered list. */
+  text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.15em;
+}
+.dk-stat__label {
+  font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra); text-transform: uppercase; color: var(--foreground-subtle);
 }
 
-/* Folded bottom-right corner — reads against bg-canvas (#14151a). */
+/* ── Board ──────────────────────────────────────────────────────────────── */
+/* Packed (desk.js adds .is-packed where it can measure): the rows are 4px tracks and each note spans as many as its
+   height needs (--note-rows), so a short note leaves no hole under it, and dense placement fills a gap an expanded note
+   leaves before it. Without the measuring the board is a plain grid of rows. The board is the container an expanded
+   note asks whether a second column exists. */
+.dk-board {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-md); align-items: start;
+  container-type: inline-size;
+}
+.dk-board.is-packed { grid-auto-rows: var(--space-micro); grid-auto-flow: row dense; row-gap: 0; }
+.dk-board.is-packed > * { grid-row-end: span var(--note-rows); }
+
+/* A refused note write, said in words across the whole board; hidden while there is nothing to say. */
+.dk-board-error { grid-column: 1 / -1; margin: 0; color: var(--foreground-bold); font-size: var(--size-narrator-small); }
+.dk-board-error:empty { display: none; }
+
+.dk-note {
+  position: relative;
+  background: var(--note-paper-user);
+  color: var(--note-ink);
+  border: 1px solid var(--note-edge-user);
+  border-radius: var(--radius-xs);            /* paper, not UI card */
+  padding: var(--space-md) var(--space-md) var(--space-lg);
+  min-height: 150px;
+  transform: rotate(var(--tilt, 0deg));
+  font-size: var(--size-narrator-small);
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  transition: border-color var(--dur-micro) var(--ease-hourglass);
+}
+.dk-note--claude { background: var(--note-paper-claude); border-color: var(--note-edge-claude); }
+
+/* Folded bottom-right corner — the page ground shows where the paper is turned up. */
 .dk-note::after {
   content: '';
   position: absolute; right: 0; bottom: 0;
   width: 18px; height: 18px;
-  background: linear-gradient(135deg, transparent 50%, var(--bg-canvas) 50%);
+  background: linear-gradient(135deg, transparent 50%, var(--bg-page) 50%);
 }
 
 /* Pinned pushpin dot — only on .is-pinned, so ::before is kept free on base. */
 .dk-note.is-pinned::before {
   content: '';
   position: absolute; left: 50%; right: auto; top: -5px; bottom: auto;
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--red); border: 1px solid rgba(0, 0, 0, 0.25);
+  width: 10px; height: 10px; border-radius: var(--radius-full);
+  background: var(--color-critical); border: 1px solid var(--note-ink-soft);
   transform: translateX(-50%);
 }
 
-.dk-note--claude {
-  --paper: #9fc0e8;            /* claude: cool blue paper */
-  --paper-edge: #86abd6;
-  --paper-ink: #16202e;
-  --paper-ink-soft: rgba(22, 32, 46, 0.62);
-}
-
-/* Hover: brightness lift only — no transform, no movement (design rule). */
-.dk-note:hover { background: color-mix(in srgb, var(--paper) 94%, white); }
+/* Hover: the edge darkens to ink — the paper keeps its colour and never moves (design rule). */
+.dk-note:not(.dk-composer):hover { border-color: var(--note-ink-soft); }
+/* The signature focus ring is lost on the cool paper; on a note the ring is ink. */
+.dk-note:not(.dk-composer) :focus-visible { outline-color: var(--note-ink); }
 
 /* ── Note head ──────────────────────────────────────────────────────────── */
 .dk-note__head {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--paper-ink-soft);
-  margin-bottom: var(--sp-3);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs);
+  font-size: var(--size-technical-small); text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--note-ink-soft);
+  margin-bottom: var(--space-sm);
 }
 .dk-note__who { font-weight: 600; }
-.dk-note__when { margin-right: auto; }
+.dk-note__who, .dk-note__when { white-space: nowrap; }
+.dk-note__tools { display: flex; align-items: center; gap: var(--space-micro); margin-left: auto; }
 
-.dk-note__pin, .dk-note__archive {
-  background: none; border: none; cursor: pointer; padding: 0 2px;
-  font-size: var(--text-xs); color: var(--paper-ink-soft);
+/* The note's controls are ghost buttons in the paper's ink; they show on hover or focus, and always on a phone. */
+.dk-note__head .btn {
+  color: var(--note-ink-soft);
   opacity: 0;
-  transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  transition: opacity var(--dur-micro) var(--ease-hourglass), color var(--dur-micro) var(--ease-hourglass),
+    border-color var(--dur-micro) var(--ease-hourglass);
 }
-.dk-note:hover .dk-note__pin,
-.dk-note:hover .dk-note__archive { opacity: 1; }
+.dk-note__head .btn:hover:not(:disabled) { color: var(--note-ink); background: transparent; border-color: var(--note-ink-soft); }
+.dk-note:hover .dk-note__head .btn,
+.dk-note:focus-within .dk-note__head .btn { opacity: 1; }
 
-/* Pinned note: pin button always visible and full colour. */
-.dk-note.is-pinned .dk-note__pin { opacity: 1; filter: none; }
-.dk-note__pin { filter: grayscale(1); }
-.dk-note__archive:hover { color: var(--red); }
+/* Pinned note: its controls stay visible, so Unpin sits in its row of controls rather than alone mid-header. */
+.dk-note.is-pinned .dk-note__head .btn { opacity: 1; }
 
 /* ── Note body + edit ───────────────────────────────────────────────────── */
-.dk-note__body { cursor: text; max-height: 16em; overflow: hidden; }
-.dk-note__body a { color: inherit; text-decoration: underline; }
-.dk-note__body code {
-  background: rgba(0, 0, 0, 0.08); padding: 0 3px; border-radius: 2px;
-  font-family: var(--font-mono); font-size: 0.92em;
-}
-.dk-note__body p { margin: 0 0 var(--sp-2); }
+.dk-note__body { position: relative; cursor: text; max-height: 16em; overflow: hidden; }
+.dk-note.is-expanded .dk-note__body { max-height: none; }
+/* Expanded, a note stays where it is and sits upright (a tilt on a tall box swings its far corner into the next
+   note). Where the board has a second column it takes two: a readable line that bounds its height, never a full-width
+   wall. 456px = two 220px columns and their gap. */
+.dk-note.is-expanded { transform: none; }
+@container (min-width: 456px) { .dk-note.is-expanded { grid-column: span 2; } }
+.dk-note__body a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 
-.dk-note__edit {
+/* A clamped body fades into its paper; the fade sits inside the body, so the body is its containing block. */
+.dk-note__fade { display: none; }
+.dk-note.is-clamped:not(.is-expanded) .dk-note__fade {
+  display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; pointer-events: none;
+  background: linear-gradient(transparent, var(--note-paper-user));
+}
+.dk-note--claude.is-clamped:not(.is-expanded) .dk-note__fade { background: linear-gradient(transparent, var(--note-paper-claude)); }
+
+/* Show more / Show less, in the paper's ink. Doubled class: button.css loads after this file. */
+.dk-note .dk-note__more { margin-top: var(--space-xs); color: var(--note-ink); border-color: var(--note-ink-soft); }
+.dk-note .dk-note__more:hover:not(:disabled) { color: var(--note-ink); background: transparent; border-color: var(--note-ink); }
+.dk-note.is-editing .dk-note__more { display: none; }
+.dk-note__body code {
+  background: color-mix(in srgb, var(--note-ink) 8%, transparent); padding: 0 3px; border-radius: var(--radius-xs);
+  font-family: var(--font-technical); font-size: var(--size-technical-small);
+}
+.dk-note__body p { margin: 0 0 var(--space-xs); }
+
+.dk-note__editor {
   width: 100%; min-height: 8em; resize: vertical;
-  background: transparent; color: var(--paper-ink);
-  border: 1px dashed var(--paper-ink-soft); border-radius: 2px;
-  font: inherit; padding: var(--sp-2);
+  background: transparent; color: var(--note-ink);
+  border: 1px dashed var(--note-ink-soft); border-radius: var(--radius-xs);
+  font: inherit; padding: var(--space-xs);
   box-sizing: border-box;
 }
 
-/* ── Composer: ghost paper waiting for ink ──────────────────────────────── */
+/* ── Composer: an empty slot waiting for a note — outline only, no paper yet ── */
 .dk-composer {
   background: transparent;
-  border: 1.5px dashed var(--paper-edge);
+  border: 1.5px dashed var(--note-edge-user);
   min-height: 150px;
 }
-/* Override the base hover — use a very light yellow tint instead of color-mix. */
-.dk-composer:hover { background: rgba(232, 217, 138, 0.06); }
+.dk-composer:hover { background: var(--pastel-orange-subtle); }
+/* The slot carries the focus ring, so the ring follows the dashed outline; the input's own ring stays unpainted. */
+.dk-composer:has(.dk-composer__input:focus-visible) { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.dk-composer__input:focus-visible { outline-color: transparent; }
 
 .dk-composer__input {
   display: block;
   width: 100%; height: 100%; min-height: 110px; resize: none;
-  background: transparent; border: none; outline: none;
-  color: var(--ink); font: inherit;
+  background: transparent; border: none;
+  color: var(--foreground-bold); font: inherit;
 }
-.dk-composer__input::placeholder { color: var(--ink-4); }
+.dk-composer__input::placeholder { color: var(--foreground-subtle); }
 
 /* ── Continuity band ────────────────────────────────────────────────────── */
 .dk-continuity {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: var(--sp-6);
+  gap: var(--space-lg);
 }
 .dk-continuity:empty { display: none; }
+/* A band that could not be read says so across its whole width. */
+.dk-continuity > .tm-empty { grid-column: 1 / -1; }
 
-.dk-older {
-  display: block; padding: var(--sp-2) var(--sp-3);
-  color: var(--ink-4); font-size: var(--text-xs); text-decoration: none;
-}
-.dk-older:hover { color: var(--ink-2); }
-
-.dk-empty { color: var(--ink-4); font-size: var(--text-sm); padding: var(--sp-4) 0; }
+.dk-empty { color: var(--foreground-subtle); font-size: var(--size-narrator-small); padding: var(--space-md) 0; }
 
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .dk-summary > ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: var(--touch-target); }
+}
+/* A phone keeps the 220px column floor: one note per row at 390px, not two 130px-wide columns of three-word lines. */
 @media (max-width: 720px) {
-  .dk-desk { padding: var(--sp-4); }
-  .dk-board { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  .dk-desk { padding: var(--space-md); }
 }

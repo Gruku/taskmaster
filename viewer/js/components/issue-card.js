@@ -1,219 +1,168 @@
-import { severityGlyph, injectSeverityDefs } from './severity-glyph.js';
-import { agingBar } from './aging-bar.js';
-import { severityLabel } from '../util/severity-label.js';
+// User intent: an issue in a list is a card that opens the issue — its severity, what it blocks, whether it has gone
+// stale, where it is and the evidence (three lines, with a real "Show all") — and a resolved issue is a quiet row;
+// the task and bug links sit beside the card's link, never inside it, and no issue text is ever parsed as markup (the preview strips its marks).
+import { linkRow } from './link-row.js';
+import { severityMarker, statusMarker } from './status.js';
+import { staleTag } from './stale-tag.js';
+import { truncate } from '../lib/text.js';
+import { formatStamp } from '../lib/time.js';
 import { pluralize } from '../util/pluralize.js';
 import { computeBlocksCount } from '../util/issue-blocks.js';
-import { formatRelative } from '../lib/time.js';
+import { issueEvidence, plainMarkdown } from '../util/issue-fields.js';
 
-const LOCATION_RE = /^(.*?):(\d+)(?::\d+)?$/;
+const issueHref = (id) => `#/issue/${encodeURIComponent(id)}`;
 
-function _renderLocation(loc) {
-  const el = document.createElement('div');
-  el.className = 'issue-card__location';
-  el.textContent = 'at ';
-  for (const item of loc) {
-    const m = LOCATION_RE.exec(item);
-    if (m) {
-      el.appendChild(document.createTextNode(`${m[1]}:`));
-      const num = document.createElement('span');
-      num.className = 'issue-card__location-num';
-      num.textContent = m[2];
-      el.appendChild(num);
-    } else {
-      el.appendChild(document.createTextNode(item));
-    }
-    el.appendChild(document.createTextNode('  '));
-  }
+function span(className, text) {
+  const el = document.createElement('span');
+  el.className = className;
+  if (text != null) el.textContent = text;
   return el;
 }
 
-export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick, suppressSeverityChip = false } = {}) {
-  injectSeverityDefs();
-  const label = issue.severity_label || severityLabel(issue.severity);
-  const url = `#/issue/${encodeURIComponent(issue.id)}`;
-  const card = document.createElement('a');
-  card.className = 'issue-card';
-  card.href = url;
-  card.setAttribute('data-issue-id', issue.id);
-  card.setAttribute('data-status', issue.status || 'open');
+const list = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
 
-  card.addEventListener('click', (ev) => {
-    // Let real link behavior take over for modified clicks (new tab, etc.)
-    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
-    if (ev.target.closest('.issue-card__task-pill')) { ev.preventDefault(); return; }
-    if (ev.target.closest('summary')) { ev.preventDefault(); return; }
-    // Default anchor navigation handles the rest; do nothing here.
-  });
+function locationText(location) {
+  if (Array.isArray(location)) return location.filter(Boolean).join(', ');
+  return typeof location === 'string' ? location : '';
+}
 
-  // ---- head: glyph · id · title · sev chip · blocks chip
-  const head = document.createElement('div');
-  head.className = 'issue-card__head';
-  head.appendChild(severityGlyph(label));
-  const id = document.createElement('span');
-  id.className = 'issue-card__id';
-  id.dataset.sev = label;
-  id.textContent = issue.id;
-  head.appendChild(id);
-  const title = document.createElement('span');
-  title.className = 'issue-card__title';
-  title.textContent = issue.title;
-  head.appendChild(title);
-  if (!suppressSeverityChip) {
-    const sev = document.createElement('span');
-    sev.className = 'issue-card__sev-chip';
-    sev.dataset.sev = label;
-    sev.textContent = label;
-    head.appendChild(sev);
-  }
-
-  const blocks = computeBlocksCount(issue, tasksIndex);
-  if (blocks > 0) {
-    const chip = document.createElement('span');
-    chip.className = 'issue-card__blocks';
-    chip.textContent = `⊘ blocks ${blocks}`;
-    head.appendChild(chip);
-  }
-  card.appendChild(head);
-
-  // ---- console-style location
-  if (issue.location && issue.location.length) {
-    card.appendChild(_renderLocation(issue.location));
-  }
-
-  // ---- italic-serif symptom
-  if (issue.symptom) {
-    const sym = document.createElement('div');
-    sym.className = 'issue-card__symptom';
-    sym.textContent = issue.symptom;
-    card.appendChild(sym);
-  }
-
-  // ---- repro block (collapsed by default in live columns)
-  if (issue.repro && issue.repro.length) {
-    const det = document.createElement('details');
-    det.className = 'issue-card__repro';
-    const sum = document.createElement('summary');
-    sum.className = 'issue-card__repro-summary';
-    sum.textContent = `Repro · ${issue.repro.length} ${pluralize(issue.repro.length, 'step', 'steps')} · click to expand`;
-    det.appendChild(sum);
-    const ol = document.createElement('ol');
-    ol.className = 'issue-card__repro-list';
-    for (const step of issue.repro) {
-      const li = document.createElement('li');
-      li.textContent = step;
-      ol.appendChild(li);
-    }
-    det.appendChild(ol);
-    card.appendChild(det);
-  }
-
-  // ---- impact paragraph
-  if (issue.impact) {
-    const imp = document.createElement('div');
-    imp.className = 'issue-card__impact';
-    imp.innerHTML = issue.impact.replace(/`([^`]+)`/g, '<code>$1</code>');
-    card.appendChild(imp);
-  }
-
-  // ---- aging bar
-  if (agingCfg) {
-    const bar = agingBar({ ...issue, severity_label: label }, agingCfg);
-    if (bar) card.appendChild(bar);
-  }
-
-  // ---- evidence sentence
-  if (issue.evidence) {
-    const ev = document.createElement('div');
-    ev.className = 'issue-card__evidence';
-    const lbl = document.createElement('span');
-    lbl.className = 'lbl';
-    lbl.textContent = 'Evidence: ';
-    ev.appendChild(lbl);
-    ev.appendChild(document.createTextNode(issue.evidence));
-    card.appendChild(ev);
-  }
-
-  // ---- promoted-from bug links
-  if (issue.promoted_from && Array.isArray(issue.promoted_from) && issue.promoted_from.length) {
-    const pf = document.createElement('div');
-    pf.className = 'issue-card__promoted-from';
-    const lbl = document.createElement('span');
-    lbl.className = 'lbl';
-    lbl.textContent = 'Promoted from: ';
-    pf.appendChild(lbl);
-    for (const [i, b] of issue.promoted_from.entries()) {
-      if (i > 0) pf.appendChild(document.createTextNode(', '));
+function refsBlock(issue) {
+  const groups = [
+    ['Tasks', list(issue.related_tasks), (id) => `#/task/${encodeURIComponent(id)}`],
+    ['From bugs', list(issue.promoted_from), (id) => `#/bug/${encodeURIComponent(id)}`],
+  ].filter(([, ids]) => ids.length);
+  if (!groups.length) return null;
+  const refs = document.createElement('div');
+  refs.className = 'issue-card__refs';
+  for (const [label, ids, href] of groups) {
+    refs.append(span('issue-card__refs-label', label));
+    for (const id of ids) {
       const a = document.createElement('a');
-      a.href = `#/bug/${encodeURIComponent(b)}`;
-      a.textContent = b;
-      pf.appendChild(a);
+      a.className = 'issue-card__ref';
+      a.setAttribute('href', href(id));
+      a.dataset.focus = `ref:${issue.id}:${id}`;
+      a.textContent = id;
+      refs.append(a);
     }
-    card.appendChild(pf);
   }
+  return refs;
+}
 
-  // ---- footer: task pills + investigating tag
-  const footer = document.createElement('div');
-  footer.className = 'issue-card__footer';
-  const pills = document.createElement('div');
-  pills.className = 'issue-card__task-pills';
-  for (const tid of (issue.related_tasks || [])) {
-    const p = document.createElement('span');
-    p.className = 'issue-card__task-pill';
-    p.textContent = tid;
-    p.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); onTaskClick?.(tid); });
-    pills.appendChild(p);
+// The clamp is CSS, so only layout knows whether three lines cut anything; the toggle stays hidden until the evidence,
+// in the page, overflows. One frame after creation covers a card appended at once; the ResizeObserver covers one
+// appended later, one in a hidden phone column (laid out only when shown) and a resize that starts cutting it. The
+// observer lets go once the toggle shows, or once it sees the card out of the page after having seen it in (removal
+// reports a size change). A not-yet-appended card is kept watched: a browser's first observation can come before the
+// screen appends it. A card never appended is collected together with its observer.
+function revealWhenCut(card, evidence, toggle) {
+  let observer = null;
+  let wasIn = false;
+  const check = () => {
+    if (card.isConnected) wasIn = true;
+    if (toggle.hidden && card.isConnected && evidence.scrollHeight > evidence.clientHeight + 1) toggle.hidden = false;
+    if (!toggle.hidden || (wasIn && !card.isConnected)) observer?.disconnect();
+  };
+  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+  raf(() => { if (card.isConnected) check(); });
+  if (typeof ResizeObserver === 'function') {
+    observer = new ResizeObserver(check);
+    observer.observe(evidence);
   }
-  footer.appendChild(pills);
-  if (issue.status === 'investigating') {
-    const tag = document.createElement('span');
-    tag.className = 'issue-card__investigating';
-    tag.textContent = 'looking at it';
-    footer.appendChild(tag);
-  }
-  card.appendChild(footer);
+}
 
+// aria-controls needs an id with no spaces that no other card shares, even when two cards show the same issue.
+let evidenceSeq = 0;
+const evidenceId = (id) => `issue-evidence-${String(id ?? '').replace(/[^A-Za-z0-9_-]+/g, '-')}-${++evidenceSeq}`;
+
+/**
+ * An open or investigating issue as a link-row card. The screen owns which cards are expanded: `onToggleEvidence(id)`
+ * asks it to flip one and redraw. `showStatus` adds the status marker (for views that mix statuses in one list).
+ * `revealed`: the screen saw this card's evidence cut when it last drew it, so "Show all" shows at once — a redraw then
+ * neither blinks it out for a frame nor loses the focus that was on it.
+ */
+export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = false, revealed = false, onToggleEvidence,
+  showStatus = false, now = Date.now() } = {}) {
+  const name = span('issue-card__name');
+  const line = span('issue-card__line');
+  line.append(span('issue-card__id', issue.id));
+  const sev = severityMarker(issue.severity_label ?? issue.severity);
+  if (sev) line.append(sev);
+  name.append(line, span('issue-card__title', issue.title ?? ''));
+
+  const content = [];
+  const meta = document.createElement('div');
+  meta.className = 'issue-card__meta';
+  if (showStatus) meta.append(statusMarker('issue', issue.status));
+  const blocks = computeBlocksCount(issue, tasksIndex ?? {});
+  if (blocks > 0) meta.append(span('issue-card__blocks', `Blocks ${blocks} ${pluralize(blocks, 'task', 'tasks')}`));
+  const stale = staleTag(issue, agingCfg ?? {}, now);
+  if (stale) meta.append(stale);
+  const where = locationText(issue.location);
+  if (where) meta.append(truncate(where, { className: 'issue-card__location' }));
+  if (meta.childNodes.length) content.push(meta);
+
+  const controls = [];
+  const text = plainMarkdown(issueEvidence(issue));
+  let evidence = null;
+  let toggle = null;
+  if (text) {
+    evidence = truncate(text, { lines: 3, tag: 'p', className: 'issue-card__evidence' });
+    evidence.id = evidenceId(issue.id);
+    // Both classes: `.truncate` alone is the one-line cut, so an expanded card showing all of it drops it too.
+    if (expanded) evidence.classList.remove('truncate', 'truncate--3');
+    content.push(evidence);
+
+    toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'btn btn--ghost btn--sm issue-card__more';
+    toggle.setAttribute('aria-controls', evidence.id);
+    toggle.setAttribute('aria-expanded', String(!!expanded));
+    toggle.dataset.focus = `evidence:${issue.id}`;
+    toggle.textContent = expanded ? 'Show less' : 'Show all';
+    toggle.hidden = !expanded && !revealed;
+    toggle.addEventListener('click', () => onToggleEvidence?.(issue.id));
+    controls.push(toggle);
+  }
+  controls.push(refsBlock(issue));
+
+  const card = linkRow({ tag: 'article', className: 'issue-card', href: issueHref(issue.id), name, content, controls });
+  card.dataset.issueId = issue.id;
+  card.dataset.status = issue.status || 'open';
+  if (toggle?.hidden) revealWhenCut(card, evidence, toggle);
   return card;
 }
 
-export function issueRow(issue) {
-  const label = issue.severity_label || severityLabel(issue.severity);
-  const row = document.createElement('div');
-  row.className = 'issue-row';
-  row.setAttribute('data-issue-id', issue.id);
+/**
+ * A resolved (fixed, won't-fix, duplicate) issue as a one-line link row: id, severity, title, status, when.
+ * `narrow` is for a place as narrow as a phone (a board column): the title takes its own line, status and date wrap.
+ */
+export function issueRow(issue, { now = Date.now(), narrow = false } = {}) {
+  const name = document.createDocumentFragment();
+  name.append(span('issue-row__id', issue.id));
+  const sev = severityMarker(issue.severity_label ?? issue.severity);
+  if (sev) name.append(sev);
+  const title = truncate(issue.title ?? '', { className: 'issue-row__title' });
+  name.append(title);
 
-  const glyph = severityGlyph(label);
-  glyph.classList.add('issue-row__glyph');
-  row.appendChild(glyph);
-
-  const id = document.createElement('span');
-  id.className = 'issue-card__id';
-  id.dataset.sev = label;
-  id.textContent = issue.id;
-  row.appendChild(id);
-
-  const mark = document.createElement('span');
-  mark.className = `issue-row__mark issue-row__mark--${issue.status}`;
-  mark.textContent = issue.status === 'fixed' ? 'Fixed' : 'Wontfix';
-  row.appendChild(mark);
-
-  const title = document.createElement('span');
-  title.className = 'issue-row__title';
-  title.textContent = issue.title;
-  row.appendChild(title);
-
-  const tp = document.createElement('span');
-  tp.className = 'issue-card__task-pill';
-  tp.textContent = (issue.related_tasks && issue.related_tasks[0]) || '';
-  row.appendChild(tp);
-
-  const when = document.createElement('span');
-  when.className = 'issue-row__when';
-  if (issue.resolved) {
-    const rel = formatRelative(issue.resolved);
-    when.textContent = `${issue.status === 'fixed' ? 'fixed' : 'closed'} ${rel}`;
+  const content = [statusMarker('issue', issue.status)];
+  const stamp = issue.resolved ?? issue.updated;
+  let when = null;
+  if (stamp) {
+    const { text, title: full } = formatStamp(stamp, now);
+    when = document.createElement('time');
+    when.className = 'issue-row__when';
+    when.dateTime = String(stamp);
+    when.textContent = text;
+    if (full) when.title = full;
+    content.push(when);
   }
-  row.appendChild(when);
 
+  // The name is a fragment so its three parts are the link's own grid items; linkRow cannot read titles out of a
+  // fragment it has already emptied, so the link's title is gathered here the way linkRow would.
+  const linkTitle = [title.title, when?.title].filter(Boolean).join('\n');
+  const row = linkRow({ tag: 'div', className: narrow ? 'issue-row issue-row--narrow' : 'issue-row', href: issueHref(issue.id), name, content, title: linkTitle });
+  row.dataset.issueId = issue.id;
+  row.dataset.status = issue.status || '';
   return row;
 }
 

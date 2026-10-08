@@ -1,43 +1,72 @@
-// plugins/taskmaster/viewer/js/screens/settings.js
-import { claimTopbar } from '../lib/topbar.js';
+// User intent: Settings holds the viewer's three choices (theme, card density, detail view) as segmented controls that
+// apply at once; the Theme control stays in step with the topbar toggle, and a theme choice persists with no flash.
+import { claimTopbar, tmSegmented } from '../lib/topbar.js';
 import { detailViewMode } from '../lib/view-mode.js';
+import { currentPref, setThemePref } from '../lib/theme.js';
 
 export const meta = { title: 'Settings', icon: '⚙', sidebarKey: 'settings' };
 
+function block(key, title, description, control) {
+  const sec = document.createElement('section');
+  sec.className = 'set-block';
+  sec.setAttribute('aria-labelledby', `set-${key}-h`);
+  const h = document.createElement('h2');
+  h.className = 'set-h';
+  h.id = `set-${key}-h`;
+  h.textContent = title;
+  const p = document.createElement('p');
+  p.className = 'set-desc';
+  p.id = `set-${key}-desc`;
+  p.textContent = description;
+  const group = document.createElement('div');
+  group.className = 'set-control';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-labelledby', h.id);
+  group.setAttribute('aria-describedby', p.id);
+  group.appendChild(control);
+  sec.append(h, p, group);
+  return sec;
+}
+
+function press(seg, key) {
+  for (const b of seg.querySelectorAll('button')) {
+    const on = b.dataset.key === key;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+}
+
 export async function mount(root, { store, prefs }) {
   root.innerHTML = '';
-  root.classList.add('settings');
   claimTopbar();
+  const page = document.createElement('div');
+  page.className = 'settings';
 
-  const current = detailViewMode(store.getPrefs());
+  const theme = tmSegmented(
+    [{ key: 'dark', label: 'Dark' }, { key: 'light', label: 'Light' }, { key: 'system', label: 'System' }],
+    { value: currentPref(), onChange: (k) => setThemePref(k) },
+  );
+  const density = tmSegmented(
+    [{ key: 'full', label: 'Full' }, { key: 'minimal', label: 'Minimal' }],
+    {
+      value: store.getPrefs()?.card_density === 'minimal' ? 'minimal' : 'full',
+      onChange: (k) => prefs.patch({ card_density: k }),
+    },
+  );
+  const detail = tmSegmented(
+    [{ key: 'modal', label: 'Modal' }, { key: 'full', label: 'Full page' }],
+    { value: detailViewMode(store.getPrefs()), onChange: (k) => prefs.patch({ ui: { detail_view_mode: k } }) },
+  );
 
-  const sec = document.createElement('section');
-  sec.className = 'set-block set-detail-view';
-  sec.innerHTML = `
-    <h2 class="set-h">Detail view</h2>
-    <p class="set-desc">How task and epic detail opens when you click it.</p>`;
+  page.append(
+    block('theme', 'Theme', "Choose the theme. System follows your computer's setting.", theme),
+    block('density', 'Card density', 'How much each Kanban card shows.', density),
+    block('detail', 'Detail view', 'How a task or epic opens when you click it.', detail),
+  );
+  root.appendChild(page);
 
-  for (const [val, label, hint] of [
-    ['modal', 'Open in modal', 'A quick overlay on top of the current screen.'],
-    ['full', 'Open full page', 'Navigate to the dedicated detail route.'],
-  ]) {
-    const row = document.createElement('label');
-    row.className = 'set-radio';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = 'detail_view_mode';
-    input.value = val;
-    input.checked = current === val;
-    input.addEventListener('change', () => {
-      if (input.checked) prefs.patch({ ui: { detail_view_mode: val } });
-    });
-    const txt = document.createElement('span');
-    txt.className = 'set-radio__txt';
-    txt.innerHTML = `<span class="set-radio__label">${label}</span><span class="set-radio__hint">${hint}</span>`;
-    row.append(input, txt);
-    sec.appendChild(row);
-  }
-
-  root.appendChild(sec);
-  return () => { root.classList.remove('settings'); };
+  // The topbar toggle (or another tab's choice applied here) moves the Theme control with it.
+  const onTheme = (e) => press(theme, e.detail.pref);
+  document.addEventListener('theme:changed', onTheme);
+  return () => { document.removeEventListener('theme:changed', onTheme); };
 }

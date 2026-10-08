@@ -1,17 +1,5 @@
 // Pure helpers for the Kanban epic chip row. No DOM.
 
-export const ACTIVE_TASK_STATUSES = new Set(['todo', 'in-progress', 'in-review']);
-
-export function countActiveTasksByEpic(tasks) {
-  const counts = new Map();
-  for (const t of (tasks || [])) {
-    if (!t.epic) continue;
-    if (!ACTIVE_TASK_STATUSES.has(t.status)) continue;
-    counts.set(t.epic, (counts.get(t.epic) || 0) + 1);
-  }
-  return counts;
-}
-
 export function rankEpics(epics, activeCounts) {
   const arr = Array.isArray(epics) ? epics.slice() : [];
   const lr = (e) => e.last_referenced ? Date.parse(e.last_referenced) : 0;
@@ -25,40 +13,6 @@ export function rankEpics(epics, activeCounts) {
     return nm(a).localeCompare(nm(b));
   });
   return arr;
-}
-
-export function splitQuickAndDropdown(rankedEpics, pinnedIds, capacity) {
-  const cap = Math.max(0, capacity | 0);
-  const all = Array.isArray(rankedEpics) ? rankedEpics : [];
-  const byId = new Map(all.map(e => [e.id, e]));
-  const pinSet = new Set();
-  const quick = [];
-
-  // 1. Pinned first (in pin order), skipping ghosts.
-  for (const id of (Array.isArray(pinnedIds) ? pinnedIds : [])) {
-    if (quick.length >= cap) break;
-    const e = byId.get(id);
-    if (!e || pinSet.has(id)) continue;
-    quick.push(e);
-    pinSet.add(id);
-  }
-
-  // 2. Fill remaining slots with top-ranked non-pinned, excluding done/archived
-  // (spec: done/archived only enter quick via explicit pinning).
-  const NEVER_AUTOFILL = new Set(['done', 'archived']);
-  const norm = (s) => String(s || '').toLowerCase();
-  for (const e of all) {
-    if (quick.length >= cap) break;
-    if (pinSet.has(e.id)) continue;
-    if (NEVER_AUTOFILL.has(norm(e.status))) continue;
-    quick.push(e);
-  }
-
-  // 3. Everything else goes to dropdown (preserving ranked order).
-  const quickIds = new Set(quick.map(e => e.id));
-  const dropdown = all.filter(e => !quickIds.has(e.id));
-
-  return { quick, dropdown };
 }
 
 export function sortEpicsForDropdown(epics, sortKey, activeCounts) {

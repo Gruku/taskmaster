@@ -1,29 +1,38 @@
-// Sidebar renderer. Sections + entries are static here; live counts come from the store.
+// Sidebar renderer. Sections + entries are static here.
 // On mobile (< 768px), the sidebar becomes a slide-in drawer triggered by a hamburger
-// button injected into #topbar. The drawer is dismissed by clicking the backdrop scrim
-// or the hamburger button again.
+// button injected into the topbar's first row. The drawer is dismissed by Escape, by its
+// own close button, by clicking the backdrop scrim, or by choosing a nav link.
 
+import { icon } from './icon.js';
+
+// `icon` is a name from components/icon.js.
 const SECTIONS = [
   { label: 'Frontdoor', items: [
-    { key: 'dashboard', icon: '▤', label: 'Dashboard', hash: '#/dashboard' },
-    { key: 'kanban',    icon: '▦', label: 'Kanban',    hash: '#/kanban' },
-    { key: 'table',     icon: '▭', label: 'Table',     hash: '#/table' },
-    { key: 'task',      icon: '◧', label: 'Task',      hash: '#/task' },
-    { key: 'epics',     icon: '⬡', label: 'Epics',     hash: '#/epics' },
+    { key: 'dashboard', icon: 'grid',   label: 'Dashboard', hash: '#/dashboard' },
+    { key: 'kanban',    icon: 'kanban', label: 'Kanban',    hash: '#/kanban' },
+    { key: 'table',     icon: 'table',  label: 'Table',     hash: '#/table' },
+    { key: 'epics',     icon: 'folder', label: 'Epics',     hash: '#/epics' },
   ]},
   { label: 'Temporal', items: [
-    { key: 'sessions', icon: '⌕', label: 'Sessions', hash: '#/sessions' },
+    { key: 'sessions', icon: 'document', label: 'Sessions', hash: '#/sessions' },
   ]},
   { label: 'Knowledge', items: [
-    { key: 'issues',   icon: '⚠', label: 'Issues',   hash: '#/issues' },
-    { key: 'bugs',     icon: '⊘', label: 'Bugs',     hash: '#/bugs' },
-    { key: 'ideas',    icon: '💡', label: 'Ideas',    hash: '#/ideas' },
-    { key: 'archived', icon: '⌫', label: 'Archived', hash: '#/archived' },
+    { key: 'issues',   icon: 'alert',   label: 'Issues',   hash: '#/issues' },
+    { key: 'bugs',     icon: 'bug',     label: 'Bugs',     hash: '#/bugs' },
+    { key: 'ideas',    icon: 'idea',    label: 'Ideas',    hash: '#/ideas' },
+    { key: 'archived', icon: 'archive', label: 'Archived', hash: '#/archived' },
   ]},
   { label: 'System', items: [
-    { key: 'settings', icon: '⚙', label: 'Settings', hash: '#/settings' },
+    { key: 'settings', icon: 'sliders', label: 'Settings', hash: '#/settings' },
   ]},
 ];
+
+function span(className, child) {
+  const el = document.createElement('span');
+  el.className = className;
+  el.append(child);
+  return el;
+}
 
 export function mountSidebar(el, { store, prefs }) {
   el.innerHTML = '';
@@ -33,34 +42,42 @@ export function mountSidebar(el, { store, prefs }) {
   const logo = document.createElement('div');
   logo.className = 'sidebar-logo';
   logo.innerHTML = `
-    <div class="mark"></div>
     <div class="brand">
-      <div class="name">Taskmaster</div>
+      <div class="name">TASKMASTER</div>
       <div class="ver" id="sidebar-version">v?</div>
     </div>
-    <button class="sidebar-collapse-btn" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>
+    <button class="sidebar-collapse-btn" type="button"></button>
+    <button class="sidebar-close-btn" type="button" aria-label="Close navigation" title="Close navigation"></button>
   `;
   el.appendChild(logo);
 
+  // Shown only in the mobile drawer, where it takes the collapse button's place.
+  const closeBtn = logo.querySelector('.sidebar-close-btn');
+  closeBtn.appendChild(icon('dismiss'));
+  closeBtn.addEventListener('click', () => closeDrawer());
+
+  // The chevron is one glyph; CSS turns it to point the way the sidebar will move.
   const collapseBtn = logo.querySelector('.sidebar-collapse-btn');
+  collapseBtn.appendChild(icon('chevron', { size: 16 }));
+  const syncCollapseBtn = (collapsed) => {
+    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    collapseBtn.classList.toggle('is-collapsed', collapsed);
+    collapseBtn.setAttribute('aria-label', label);
+    collapseBtn.title = label;
+  };
   collapseBtn.addEventListener('click', () => {
     const next = !shell.classList.contains('sidebar-collapsed');
     shell.classList.toggle('sidebar-collapsed', next);
-    collapseBtn.textContent = next ? '›' : '‹';
-    collapseBtn.setAttribute('aria-label', next ? 'Expand sidebar' : 'Collapse sidebar');
-    collapseBtn.title = next ? 'Expand sidebar' : 'Collapse sidebar';
+    syncCollapseBtn(next);
     if (prefs) prefs.patch({ ui: { sidebar_collapsed: next } });
   });
-  if (shell?.classList.contains('sidebar-collapsed')) {
-    collapseBtn.textContent = '›';
-    collapseBtn.setAttribute('aria-label', 'Expand sidebar');
-    collapseBtn.title = 'Expand sidebar';
-  }
+  syncCollapseBtn(!!shell?.classList.contains('sidebar-collapsed'));
 
-  // Nav scroll body — sections + footer sit inside here so the logo above
-  // is never inside the overflow region and always has the full sidebar width.
-  const nav = document.createElement('div');
+  // Nav scroll body — sections sit inside here so the logo above is never
+  // inside the overflow region and always has the full sidebar width.
+  const nav = document.createElement('nav');
   nav.className = 'sidebar-nav';
+  nav.setAttribute('aria-label', 'Primary');
   el.appendChild(nav);
 
   // Sections
@@ -72,21 +89,17 @@ export function mountSidebar(el, { store, prefs }) {
 
     for (const item of sect.items) {
       const a = document.createElement('a');
-      a.className = 'sidebar-link' + (item.live ? ' live' : '');
+      a.className = 'sidebar-link';
       a.dataset.key = item.key;
       a.href = item.hash;
       a.title = item.label;
-      a.innerHTML = `<span class="ic">${item.icon}</span><span class="lbl">${item.label}</span><span class="badge"></span>`;
+      a.append(span('ic', icon(item.icon)), span('lbl', item.label));
+      // Closing on the tap itself (not on route:changed) also covers the current page's
+      // link and a screen that fails to mount, and leaves alone a drawer opened mid-mount.
+      a.addEventListener('click', () => closeDrawer());
       nav.appendChild(a);
     }
   }
-
-  // Footer
-  const footer = document.createElement('div');
-  footer.className = 'sidebar-footer';
-  footer.innerHTML = `<span class="pulse"></span><span></span>`;
-  footer.hidden = true;
-  nav.appendChild(footer);
 
   // Active sync + aria-current
   const onRouteChanged = (e) => {
@@ -112,29 +125,67 @@ export function mountSidebar(el, { store, prefs }) {
 
   // ── Mobile hamburger drawer (< 768px) ──────────────────────────────────────
   // The sidebar becomes a fixed overlay; a hamburger button is injected into
-  // #topbar and a backdrop scrim is appended to the shell. Both are torn down
-  // when the screen widens past --bp-md or when the sidebar is unmounted.
+  // the topbar's first row and a backdrop scrim is appended to the shell. Both
+  // are torn down when the screen widens past --bp-md or when the sidebar is
+  // unmounted. Exactly one side is inert at a time: the off-screen sidebar while
+  // the drawer is closed, the page behind the scrim while it is open — so Tab
+  // never lands on something the user cannot see or reach.
 
-  const mql = window.matchMedia('(max-width: 768px)');
+  // A browser that refuses media queries gets the desktop sidebar rather than a failed boot.
+  let mql = null;
+  try { mql = window.matchMedia('(max-width: 768px)'); } catch { /* stay on the desktop layout */ }
+  const mainEl = shell?.querySelector('.main');
   let hamburger = null;
   let backdrop  = null;
 
-  function openDrawer() {
-    shell.classList.add('sidebar-drawer-open');
-    if (hamburger) {
-      hamburger.textContent = '✕';
-      hamburger.setAttribute('aria-label', 'Close navigation');
-      hamburger.title = 'Close navigation';
-    }
+  function syncHamburger(open) {
+    if (!hamburger) return;
+    const label = open ? 'Close navigation' : 'Open navigation';
+    hamburger.replaceChildren(icon(open ? 'dismiss' : 'menu'));
+    hamburger.setAttribute('aria-expanded', String(open));
+    hamburger.setAttribute('aria-label', label);
+    hamburger.title = label;
   }
 
-  function closeDrawer() {
+  // Tab wraps at the drawer's ends: past its last stop the browser would otherwise leave the page for its own chrome.
+  function onDrawerKeydown(e) {
+    if (e.key === 'Escape') { closeDrawer(); return; }
+    if (e.key !== 'Tab') return;
+    const stops = [...el.querySelectorAll('a[href], button:not([disabled])')].filter((n) => n.checkVisibility());
+    if (!stops.length) return;
+    const first = stops[0], last = stops[stops.length - 1];
+    const at = document.activeElement;
+    const to = !el.contains(at) ? (e.shiftKey ? last : first)
+      : !e.shiftKey && at === last ? first
+      : e.shiftKey && at === first ? last
+      : null;
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
+  }
+
+  function openDrawer() {
+    shell.classList.add('sidebar-drawer-open');
+    el.inert = false;
+    if (mainEl) mainEl.inert = true;
+    syncHamburger(true);
+    document.addEventListener('keydown', onDrawerKeydown);
+    el.querySelector('.sidebar-link')?.focus();
+  }
+
+  // Safe to call when the drawer is not open (link clicks on desktop, teardown): focus
+  // goes back to the hamburger, the drawer's opener, only when a drawer really closed.
+  // `widening`: the drawer becomes the desktop sidebar, so it stays reachable and focus stays where it is
+  // (the hamburger is about to go).
+  function closeDrawer({ widening = false } = {}) {
+    const wasOpen = shell.classList.contains('sidebar-drawer-open');
     shell.classList.remove('sidebar-drawer-open');
-    if (hamburger) {
-      hamburger.textContent = '☰';
-      hamburger.setAttribute('aria-label', 'Open navigation');
-      hamburger.title = 'Open navigation';
-    }
+    document.removeEventListener('keydown', onDrawerKeydown);
+    if (mainEl) mainEl.inert = false;
+    syncHamburger(false);
+    if (widening) return;
+    if (hamburger) el.inert = true;
+    if (wasOpen) hamburger?.focus();
   }
 
   function toggleDrawer() {
@@ -148,17 +199,17 @@ export function mountSidebar(el, { store, prefs }) {
   function attachMobileChrome() {
     if (hamburger) return;   // already attached
 
-    // Hamburger button — prepended to #topbar
-    const topbarEl = document.getElementById('topbar');
-    if (topbarEl) {
+    // Hamburger button — prepended to the topbar's first row
+    const row1 = document.querySelector('#topbar .topbar-row1');
+    if (row1) {
       hamburger = document.createElement('button');
       hamburger.type = 'button';
       hamburger.className = 'topbar-hamburger';
-      hamburger.textContent = '☰';
-      hamburger.setAttribute('aria-label', 'Open navigation');
-      hamburger.title = 'Open navigation';
+      hamburger.setAttribute('aria-controls', el.id);
       hamburger.addEventListener('click', toggleDrawer);
-      topbarEl.prepend(hamburger);
+      row1.prepend(hamburger);
+      syncHamburger(false);
+      el.inert = true;
     }
 
     // Backdrop scrim — appended to shell
@@ -169,12 +220,13 @@ export function mountSidebar(el, { store, prefs }) {
   }
 
   function detachMobileChrome() {
-    closeDrawer();
+    closeDrawer({ widening: true });
     if (hamburger) {
       hamburger.removeEventListener('click', toggleDrawer);
       hamburger.remove();
       hamburger = null;
     }
+    el.inert = false;
     if (backdrop) {
       backdrop.removeEventListener('click', closeDrawer);
       backdrop.remove();
@@ -190,14 +242,14 @@ export function mountSidebar(el, { store, prefs }) {
     }
   }
 
-  mql.addEventListener('change', onMqlChange);
-  if (mql.matches) attachMobileChrome();
+  mql?.addEventListener('change', onMqlChange);
+  if (mql?.matches) attachMobileChrome();
 
   // Return teardown function that removes all listeners and subscriptions.
   return () => {
     document.removeEventListener('route:changed', onRouteChanged);
     if (typeof unsubIdentity === 'function') unsubIdentity();
-    mql.removeEventListener('change', onMqlChange);
+    mql?.removeEventListener('change', onMqlChange);
     detachMobileChrome();
   };
 }

@@ -1,0 +1,51 @@
+/* User intent: rows and cards that are real links (the whole row clickable, its own controls beside the link and
+   above it), sortable headers that look like the header they sit in, and cut text that keeps its words in title. */
+
+/* ── Link row ── the link's ::after covers the row, so a click anywhere on it is the link's; the controls are
+   lifted over that layer so they keep their own clicks. */
+.link-row { position: relative; }
+.link-row__link::after { content: ''; position: absolute; inset: 0; }
+.link-row__controls { position: relative; z-index: 1; }
+.link-row:hover { background: var(--card-bg-hover); }
+
+/* The ring follows the row's box (the .tm-search precedent): same ring on the row, the link's own unpainted. */
+.link-row:has(> .link-row__link:focus-visible) { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.link-row__link:focus-visible { outline-color: transparent; }
+
+/* ── Sortable header ── the button takes the header cell's type and colour; only the arrow says it sorts. */
+.sort-header {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sort-header:hover { color: var(--foreground-bold); }
+.sort-header__dir { display: inline-flex; flex: none; }
+/* The chevron points right; it is turned to point up (ascending) or down (descending). Static, not a hover effect. */
+.sort-header__dir--asc .icon { transform: rotate(-90deg); }
+.sort-header__dir--desc .icon { transform: rotate(90deg); }
+.sort-header__dir--none { color: var(--foreground-subtle); }
+
+/* Touch targets: a row's own controls, wrapped or not, and a sort header are at least 44px; icon-only controls are 44
+   wide too. */
+@media (max-width: 768px) {
+  .sort-header { min-height: var(--touch-target); }
+  .link-row__controls :is(button, a[href], input, select, [role="button"]) { min-height: var(--touch-target); min-width: var(--touch-target); }
+  .link-row__controls a[href]:not([hidden]) { display: inline-flex; align-items: center; justify-content: center; }
+}
+
+/* ── Cut text ── truncate() puts the full text in title. */
+.truncate { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.truncate--2, .truncate--3 { display: -webkit-box; -webkit-box-orient: vertical; white-space: normal; }
+.truncate--2 { -webkit-line-clamp: 2; }
+.truncate--3 { -webkit-line-clamp: 3; }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_ORDER } from '../../js/lib/filters.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_ORDER, OPEN_COUNT_HINT } from '../../js/lib/filters.js';
 
 const TASKS = [
   { id: 'v3-001', title: 'A',          status: 'done',        priority: 'low',      estimate: 'S', phase: 'P-01', epic: 'viewer-redesign',     started: '2026-04-25T10:00:00Z' },
@@ -101,6 +101,15 @@ test('groupTasks — by epic with __none__ bucket for missing epic', () => {
   assert.deepEqual(none.tasks.map(t => t.id), ['v3-004']);
 });
 
+test('groupTasks — by epic labels each column with the epic name, falling back to the id', () => {
+  const epics = [{ id: 'viewer-redesign', name: 'Viewer redesign <b>' }];
+  const groups = groupTasks(TASKS, 'epic', undefined, epics);
+  const label = (k) => groups.find(g => g.key === k).label;
+  assert.equal(label('viewer-redesign'), 'Viewer redesign <b>');
+  assert.equal(label('narrative-continuity'), 'narrative-continuity');
+  assert.equal(label('__none__'), '— no epic —');
+});
+
 test('groupTasks — by phase keeps phase order from input list', () => {
   const groups = groupTasks(TASKS, 'phase', ['P-01', 'P-02', 'P-03']);
   assert.deepEqual(groups.map(g => g.key), ['P-01', 'P-02', 'P-03', '__orphans__']);
@@ -192,4 +201,9 @@ test('groupTasks — no normalization patch: underscored statuses do NOT match h
   // With Option A fully applied, underscored statuses come from bad data — they should not be found
   // in the in-progress bucket (no normalization). This asserts the patch is REMOVED.
   assert.deepEqual(inProg.tasks, [], 'underscored in_progress must NOT match in-progress bucket after Option A');
+});
+
+test('OPEN_COUNT_HINT says counts are open tasks and names shift-click', () => {
+  assert.match(OPEN_COUNT_HINT, /open tasks/);
+  assert.match(OPEN_COUNT_HINT, /shift-click/i);
 });

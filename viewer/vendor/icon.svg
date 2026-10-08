@@ -1,0 +1,8 @@
+<!-- User intent: the Taskmaster app icon, the "Board" mark: three board columns on an off-black tile, the last one Periwinkle. Same tile in both themes.
+     Colours are Reality Reprojection ground-0, ground-20, ground-100 (dark) and signature, written as literals because an icon file cannot read CSS variables. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" rx="4" fill="#0d0d0c" stroke="#343331" stroke-width="1"/>
+  <rect x="5" y="5.5" width="3.6" height="13" rx="1" fill="#f5f3ed"/>
+  <rect x="10.2" y="5.5" width="3.6" height="8" rx="1" fill="#f5f3ed"/>
+  <rect x="15.4" y="5.5" width="3.6" height="10.5" rx="1" fill="#5e79e6"/>
+</svg>

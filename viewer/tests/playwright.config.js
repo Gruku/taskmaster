@@ -1,12 +1,17 @@
 import { defineConfig } from '@playwright/test';
+import { requireLiveOptIn } from './live-guard.js';
+
+// These specs write viewer prefs to the live server at baseURL; refuse before anything starts.
+requireLiveOptIn();
 
 export default defineConfig({
   testDir: '.',
   testMatch: /^.*\.spec\.js$/,
   // These specs are route-mocked and self-serve the static viewer via
-  // playwright.threads.config.js; they must NOT run under the live-server
+  // playwright.threads.config.js, or (*.mock.spec.js) via
+  // playwright.mock.config.js; they must NOT run under the live-server
   // bootstrap here (its `/` serves the legacy viewer, not the v3 app).
-  testIgnore: /(threads-board|handover-status)\.spec\.js$/,
+  testIgnore: /(threads-board|handover-status|.*\.mock)\.spec\.js$/,
   timeout: 15_000,
   retries: 0,
   use: {
