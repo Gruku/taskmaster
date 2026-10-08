@@ -91,10 +91,10 @@
    readable floor), each column's list scrolls inside itself, and the shelf below stays in view. */
 @media (min-width: 769px) {
   .issues-board { flex: 0 1 auto; min-height: 320px; }
-  .issues-board__cols { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .issues-board__cols { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); scroll-padding-right: 56px; }
   .issues-col { min-height: 0; }
   .issues-col__head { flex: 0 0 auto; }
-  .issues-col__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .issues-col__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scroll-padding-bottom: 48px; }
   /* A column with more cards below its edge fades out there instead of slicing a card mid-line; scrolled to the end
      the fade is gone. */
   .issues-col__list[data-more] { -webkit-mask-image: linear-gradient(to bottom, var(--foreground-bold) calc(100% - 48px), transparent); mask-image: linear-gradient(to bottom, var(--foreground-bold) calc(100% - 48px), transparent); }

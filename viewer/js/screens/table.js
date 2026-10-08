@@ -360,7 +360,7 @@ export async function mount(root, { store, api, prefs, params }) {
       while (shown < widths.length && min + used + widths[shown] + (shown + 1 < widths.length ? peek : 0) <= room) used += widths[shown++];
       if (shown < widths.length) used += peek;
     }
-    const title = Math.max(min, Math.floor(room - used));
+    const title = loose ? min : Math.max(min, Math.floor(room - used));
     tbl.querySelector('col.tbl-col--title').style.width = `${title}px`;
     tbl.style.minWidth = `${measured.px + title + FIXED_REM * rem}px`;
     const left = loose ? '' : `${measured.px}px`;

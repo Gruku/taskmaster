@@ -15,7 +15,7 @@ indicate schema breaks or removed surfaces.
 
 - Status, severity and priority are a shape and a word everywhere ("In review", "Critical"), never a colour alone and never an abbreviation.
 - A title or ID cut short ends in an ellipsis and shows its full text on hover; IDs never break across lines.
-- On a phone the Kanban and Issues boards show one column at a time behind a row of tabs, the table becomes stacked cards, and no screen scrolls sideways. Every button, link and field you tap there is at least 44px tall.
+- On a phone the Kanban and Issues boards show one column at a time behind a row of tabs, the table becomes stacked cards, and no screen scrolls sideways. Every button, link and field you tap there is at least 44px tall, except as listed under Known limitations.
 - Filter chips stay on one line: those that do not fit wait behind "More", and top-bar controls that do not fit wait behind "Filters". A chip with nothing to show is disabled unless it is switched on. On a phone the Filters button carries no number, so it no longer looks as if filters are on when none are.
 - The Kanban's epic row shows each epic's full name with its colour square, and its phase strip is one line, with archived phases in a menu.
 - The dashboard opens with a summary — In progress, Waiting on you, Open issues, Open bugs — each a link to the filtered screen. Its notes pack without holes, an expanded note opens in place and keeps a readable line, and on a phone they are one column.
@@ -68,6 +68,8 @@ indicate schema breaks or removed surfaces.
 - Ideas: the pane shows status twice, and an idea with no status leaves a blank line.
 - Ideas, phone: the Tags popover shows a fragment of "Clear filters" beside it.
 - In the light theme a popover is told apart from the page by its border only.
+- A preference change made less than a moment before the tab closes can, rarely, be lost.
+- Phone menu: on Safari before 17.4 Tab is not kept inside the open menu.
 - In the light theme the conflict banner's headline keeps the warning colour on its ▲ only; the words are dark text.
 
 ---

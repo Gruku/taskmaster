@@ -786,3 +786,16 @@ for (const width of [1280, 1366]) {
     }
   });
 }
+
+test('at 800 wide with long IDs the title keeps its 20rem minimum, so Status starts inside the frame without scrolling', async ({ page }) => {
+  await boot(page, { width: 800, height: 800, board: LONG_IDS_BOARD });
+  await expect(page.locator('.tbl-frame')).toHaveAttribute('data-title-loose', '');
+  const m = await host(page).evaluate((el) => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const title = el.querySelector('col.tbl-col--title').getBoundingClientRect().width;
+    const status = el.querySelector('.tbl-row .tbl-cell--status').getBoundingClientRect();
+    return { title: title / rem, statusLeft: status.left, hostRight: el.getBoundingClientRect().right };
+  });
+  expect(Math.abs(m.title - 20)).toBeLessThanOrEqual(0.1);
+  expect(m.statusLeft).toBeLessThan(m.hostRight);
+});
