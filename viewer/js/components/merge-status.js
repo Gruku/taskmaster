@@ -8,13 +8,15 @@
 //   - NO colored left rails / border-left accents. Tinted fill + full-perimeter border only.
 //   - NO hover motion (transform / translate / scale).
 //   - NO box-shadows for elevation — surface stepping only.
-//   - Rung states use tinted fills:
-//       filled  → green tint  (--green  / rgba(95,174,110,...))
-//       empty   → transparent ghost outline (--border / dim outline only)
+//   - In the task-detail ladder a rung's state is a shape plus words read aloud (the marker language):
+//       filled  → ● success, "merged"
+//       empty   → ○ neutral, "not merged"
 //
 // Source of truth for default ladder: project.py:DEFAULT_MERGE_TARGETS
 // ("develop", "stage", "master"). Callers may pass a custom mergeTargets array
 // (array of {label:string} objects) to override.
+
+import { formatAbsolute } from '../lib/time.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -43,8 +45,10 @@ function escapeHtml(s) {
  */
 function rungTooltip(record) {
   const parts = [];
-  if (record.merged_at) parts.push(record.merged_at);
-  if (record.merge_commit) parts.push(record.merge_commit.slice(0, 12));
+  // The merge time as a date a person reads, not the stored ISO string.
+  const when = typeof record.merged_at === 'string' ? formatAbsolute(record.merged_at, { year: true }) : '';
+  if (when) parts.push(when);
+  if (typeof record.merge_commit === 'string' && record.merge_commit) parts.push(record.merge_commit.slice(0, 12));
   return parts.join(' · ');
 }
 
@@ -68,10 +72,13 @@ export function renderMergeLadder(task, mergeTargets = DEFAULT_MERGE_TARGETS) {
     const record = statusMap[label];
     // Any present record counts as a reached rung — including a sparse/empty {}
     // (the merge happened even if details are missing or use a future schema).
-    const filled = !!(record && (record.merge_commit || record.merged_at || Object.keys(record).length > 0));
+    const filled = !!(record && typeof record === 'object' && (record.merge_commit || record.merged_at || Object.keys(record).length > 0));
     const stateClass = filled ? 'rung--filled' : 'rung--empty';
-    const tooltip = filled ? escapeHtml(rungTooltip(record)) : escapeHtml(label);
-    return `<span class="ml-rung ${stateClass}" title="${tooltip}">${escapeHtml(label)}</span>`;
+    const tooltip = escapeHtml((filled && rungTooltip(record)) || label);
+    return `<span class="ml-rung ${stateClass} marker marker--${filled ? 'success' : 'neutral'}" title="${tooltip}">`
+      + `<span class="marker__shape" data-shape="${filled ? 'dot' : 'ring'}" aria-hidden="true">${filled ? '●' : '○'}</span>`
+      + `<span class="marker__word">${escapeHtml(label)}</span>`
+      + `<span class="ml-word">${filled ? 'merged' : 'not merged'}</span></span>`;
   });
 
   return `<div class="ml-track">${rungs.join('')}</div>`;

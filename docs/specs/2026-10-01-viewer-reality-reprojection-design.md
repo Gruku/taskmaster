@@ -2,7 +2,7 @@
 
 # Viewer × Reality Reprojection — design
 
-Date: 2026-10-01 · Status: awaiting user review · Branch: `feat/viewer-reality-reprojection` (off `feat/database-native-foundation` @ 75989f3)
+Date: 2026-10-01 · Status: implemented; awaiting release · Branch: `feat/viewer-reality-reprojection` (off `feat/database-native-foundation` @ 75989f3)
 
 ## 1. Goal
 
@@ -56,7 +56,7 @@ Shadow and grain tokens from RR are **not** imported.
 
 ### 3.2 Migration aliases
 
-Stage 1 keeps the old names as aliases so the whole UI flips palette in one commit; stage 5 deletes them.
+Stage 1 keeps the old names as aliases so the whole UI flips palette in one commit; stage 5 deletes them. The aliases were deleted in stage 5, and a unit test (`legacy-aliases`) keeps every name in the table below out of the stylesheets and scripts.
 
 | Old | New |
 |---|---|
@@ -178,9 +178,9 @@ New/rewritten in `css/components.css` + `css/components/*.css` and `js/component
 
 - `npm install` in `viewer/` (Playwright is declared but not installed today).
 - **Unit (`node --test`):** status maps, epic progress, `formatDate`, modal dirty check, markdown sanitizer, theme resolution.
-- **Style-rules test** (`viewer/tests/unit/style-rules.test.js`), fails on: `box-shadow`; `transform` inside a `:hover` rule; a `border-left` whose color is not a `--border-*` token; `outline: none`; hex/rgb literals or raw `font-size` outside `tokens.css`; `var(--x)` with no definition; custom properties defined outside `tokens.css`. Report-only in stage 1, enforcing from stage 5.
+- **Style-rules test** (`viewer/tests/unit/style-rules.test.js`), fails on: `box-shadow`; `transform` inside a `:hover` rule; a `border-left` whose color is not a `--border-*` token; `outline: none`; hex/rgb literals or raw `font-size` outside `tokens.css`; `var(--x)` with no definition; custom properties defined outside `tokens.css`. Enforcing on every stylesheet (stage 5). Plan 4 added: quoted strings parsed safely, radii on the RR scale, one touch-target token, no pseudo-element, gradient or one-sided-border rails, every named colour (not only hex/rgb), and selector lists judged per selector.
 - **Playwright:** existing specs updated; new specs for theme toggle (persistence, no flash), modal focus trap and focus return, keyboard activation of cards/rows/chips/headers, mobile column switcher, Ctrl+K.
-- **Accessibility gate:** axe-core on every route × both themes; zero `color-contrast`, `label`, `select-name`, `nested-interactive`, landmark failures; zero pointer-only targets (the audit's probe, kept as `viewer/tests/a11y.spec.js`).
+- **Accessibility gate:** axe-core on every route × both themes; zero `color-contrast`, `label`, `select-name`, `nested-interactive`, landmark failures; zero pointer-only targets (the audit's probe). The gate is `viewer/tests/a11y.mock.spec.js`: axe's `color-contrast`, `label`, `select-name`, `nested-interactive`, `scrollable-region-focusable` and the `landmark-*` rules, plus the pointer-only probe, no sideways overflow, and (at ≤768px) no touch target under 44px, on every mocked route including the four not-found routes (epic, task, issue, bug), in both themes at 1440 and 390.
 - **Server:** pytest for the bug route (single, 404, list unchanged).
 - **Visual verification:** after each stage a fresh-context agent re-runs the capture script in both themes at both widths and checks the result against this spec; the orchestrator reviews the screenshots.
 
@@ -192,7 +192,7 @@ Each stage is a task in its own worktree, reviewed, then merged locally `--no-ff
 2. **Shared components** — §5.
 3. **Data fixes** — §7; independent, parallel with stage 1.
 4. **Screens** — five parallel tasks after stage 2: (a) Kanban + detail modal; (b) Table + Epics + Epic detail; (c) Task/Issue/Bug detail; (d) Issues + Bugs + Ideas; (e) Sessions + Archived + Dashboard + Settings.
-5. **Cleanup** — remove aliases, style-rules test enforcing, full re-audit in both themes, CHANGELOG entry.
+5. **Cleanup (done)** — remove aliases, style-rules test enforcing, full re-audit in both themes, CHANGELOG entry.
 
 ## 10. Out of scope
 
@@ -201,3 +201,99 @@ Each stage is a task in its own worktree, reviewed, then merged locally `--no-ff
 - New features beyond the dashboard summary strip and the epic task list.
 - Write-path UX not exercised by the audit (drag-and-drop, conflict banner) beyond restyling to tokens.
 - Kanban keyboard reordering.
+
+Accepted at the end of plan 4 (reason in brackets). The user-visible ones are the CHANGELOG's "Known limitations"; these are not.
+
+- First load of `#/kanban` and `#/table` shifts layout by a cumulative 0.0281, under the 0.1 "good" threshold (pinned by `shell.mock.spec.js`).
+- A screen that throws while mounting can leave a MediaQueryList listener, ResizeObservers and store subscriptions behind (the router cannot know what a screen registered; no screen registers a document or window listener or timer before it can throw).
+- `.btn--icon.btn--sm` (24×24) in a link row's controls reaches 44×44 at ≤768px only through `rows.css` min-size, which always wins (verified by `rows.mock`).
+- The modal's `focusableIn` is re-sorted on every Tab, and `rememberView` would re-open a future `[data-focus][aria-expanded]` toggle on a redraw (negligible cost; no such toggle exists).
+- The topbar measures the kept search at its 280px basis rather than its 240px minimum, so a row-2 control can wait behind Filters up to 40px sooner than it must (it stays one press away).
+- The entity form reaches the shell only through its hooks, and every refusal is worded by `describeWriteError` (verified, no change).
+- A zone-less ISO stamp is read as local time (every stamp the store writes in UTC carries its zone; the zone-less ones are written from local time).
+- With the 3 s fallback gone, an overflow layout parked behind a press that closed More waits for that press's release; a release the page never hears leaves the row as it was until the next interaction (bounded, nothing lost).
+- `smoke.spec.js` and `viewer/tests/n10/*.spec.js` stay as live-server specs outside plan 4's retirement sweep (they check real servers; plan 4 does not run them).
+- `.tm-chip-row` has no producer in `viewer/js`; it stays as the shell contract for a bare chip group.
+- `--task-rail-w` and `--graph-canvas-h` stay as viewer layout tokens (no RR token sizes a side rail or a graph).
+- `--epic` stays under "Set from JS" because the dead `epicCssVar()` export still writes it; nothing reads it.
+- `edit-fields.css` keeps literal px for hairlines, the 8px error mark, glyph boxes, the select chevron and content-sized field widths (none is a control size or on an RR scale).
+- Bare 32px/24px control heights remain in 21 declarations in entity-modal, handover-status, popover, tag-filter, toolbar, epic-detail, issues, kanban, task-detail and shell CSS; the values equal `--control-size` and `--control-size-sm`, and swapping them is a no-op.
+- The style rules do not catch a left rail whose width is set in one rule and colour in another (only the same-rule case).
+- In light, popovers and dialogs are separated from the page by their border only: nothing there is lighter than the dialog.
+- The light conflict banner's headline keeps the warning hue on its ▲ only; the words are dark foreground text.
+- The re-audit could not judge four IDs from a still image (SH-06, KB-07, DM-01, EM-07; their behaviour is covered by code or mocked tests) and found KB-10 not applicable (the element is gone).
+
+## 11. Amendments (2026-10-01, after plan 1 and the user's live review)
+
+These override the sections they name.
+
+- **§3.1 contrast.** "Passes by construction" was wrong for RR's values: signature as text fails AA on raised surfaces and on tints. Rule: signature-hued text uses the viewer role `--text-accent` only (dark `signature-vivid`, light `signature`); text on a signature-tinted fill is `foreground-bold`; text on a solid `signature-fill` is `--on-accent-fill` (dark `ground-0`, light `on-signature`). A unit test computes these ratios from the tokens. Known remaining misses in light: `--text-accent` on `--col-bg` (4.01:1) and on `surface-overlay` (3.15:1) — do not place accent text there.
+- **§3.1 themes.** Dark values live on `:root` only (the theme attribute is on `<html>`).
+- **§3.1 / §6 light surfaces.** In light theme cards are the lightest surface: `--card-bg: ground-0`, `--col-bg: ground-10`, hover `ground-5`. RR's light elevation relies on shadows, which this project bans. RR's own semantic tokens are unchanged; screens use `--card-bg`, not `--surface-raised`.
+- **§3.5 theme.** The default is **dark** (user decision). A missing or unknown preference means dark; `system` is honoured only when explicitly stored. The toggle is an action button whose label names the result ("Switch to light theme"); it has no `aria-pressed`, and it is disabled until the saved preference has loaded.
+- **§4 sidebar.** The active item uses `--signature-glow-strong` with a full-perimeter `--signature-dim` border.
+- **§4 landmarks.** The nested `<main>` in task detail is removed in plan 2a (task document template), not plan 1.
+- **§5.4 estimate.** The estimate is `S | M | L | <n>d` (a number of days), not "ND": three size buttons plus a days input.
+- **§6 Dashboard notes.** Notes are solid coloured paper in both themes (user decision): user notes `pastel-orange`, Claude's `pastel-signature`, with a fixed dark ink; tilt and folded corner kept.
+- **§5.10 brand / favicon.** The app icon is the "Board" mark: three board columns on an off-black tile, the last one Periwinkle; shipped as SVG and a multi-size `.ico`.
+- **§9 stages.** Plan series is now: 1 foundation (done) → 2a task modals (shared modal shell, buttons, markers, fields, markdown, task document template) → 2b remaining shared components → 3 screens → 4 cleanup. The carry-forward list is in plan 1's verification report and is copied into each plan as it is written.
+- **Tests.** Live-server Playwright specs write viewer prefs and refuse to run without `TM_LIVE_SPECS_OK=1`; all new UI specs are API-mocked.
+- **§5.7 phone confirm (plan 2a).** On a phone the discard confirm stays a compact framed dialog with its answers right under the question, not a full-height sheet; every other modal still becomes one.
+- **§5.1 priority in light (plan 2a).** Light `--tone-orange` is `--color-warning-bold`, so High and Medium share a hue in light and are told apart by shape (▲ / ●) and word; dark keeps High on `accent-orange`.
+- **§6 detail modal header (plan 2a).** The detail modal has no Technical meta line: its header already carries the id; epic and phase appear as tags in the marker row and the created date in Dates. The full page keeps the meta line.
+- **§3.1 overlay roles (plan 2a).** Modal and popover surfaces use the viewer roles `--overlay-surface`, `--overlay-surface-sunken`, `--overlay-surface-hover` and `--overlay-surface-active`; in light the surface is `ground-0` and the sunken well `ground-5`.
+- **§5.6 Kanban card (plan 2a, interim).** The card is `role=article` with `tabindex=0`, opening on Enter; plan 3 replaces it with §5.6's real `<a href>`.
+- **§5.10 refused writes (plan 2a).** A refused write shows the server's reason as visible, announced text beside the field or in the form footer (a plain sentence for a 404, a 5xx, a network failure or a bare 409; never a method, URL, status code or JSON). Only a 409 carrying `current_etag` is a conflict and raises the banner.
+- **§5.1 bug statuses (plan 2a).** Bugs follow the table by meaning: open ○, fixed ●, adopted (taken into a task) and promoted (to an issue) → moved on, shelved and archived ✕; all but fixed in `foreground-subtle`. The "N open bugs blocking close" line carries the alarm, not each bug's marker.
+- **§5.11 icons (plan 2b).** The icon set stays a JS map in `js/components/icon.js` (plan 1), not an SVG sprite file. Epics, sessions and settings use `folder`, `document` and `sliders`; `sort` is added for sortable headers.
+- **§10 conflict banner (plan 2b).** The banner is changed beyond restyling — field labels as the form names them, one named radio group per field, an AA headline, and dialogs offset below it instead of covered — because plan 2a made it keyboard-reachable and it failed contrast.
+- **§5.8 popover (plan 2b).** A popover is inserted directly after its anchor in the DOM (Tab order follows what is seen, a modal's focus containment includes it) and positioned fixed; it is never appended to `<body>`. A press outside it closes it and still reaches what was pressed; it is never swallowed.
+- **§5.3 chips (plan 2b).** A chip's `title` is its full label; the shift-click hint moves to the group label.
+- **§4 topbar row 2 (plan 2b).** Row 2 parks what does not fit behind "Filters", in order, and brings it back when room returns; the search field always stays in the row.
+- **§9 Table (plan 2b).** The Table adopts chips and sortable headers in plan 2b as the proving consumer of those components; its layout (§6 Table) stays in plan 3b.
+- **§6 Sessions (plan 3e).** Search hides non-matching sessions instead of dimming them (dimmed text failed AA); the rail docks beside the timeline above 1024px and sits above it below.
+- **§5.12 right rail (plan 3e).** The right rail is an in-flow panel the screen places, not a fixed overlay.
+- **§6 Dashboard (plan 3e).** Summary links go to `#/table?status=in-progress` / `#/table?status=in-review` (filtered by 3b Task 2's route parameter), `#/issues` and `#/bugs`; "+N older" is a link styled as a button (it navigates); the dead `dashboard.layout` ids needed no change (the default is already empty).
+- **§6 Settings (plan 3e).** Card density is Full / Minimal; Detail view is Modal / Full page.
+- **§4 Sessions filters (plan 3e).** Sessions' filter chips sit in a bar at the top of the page, as the Table's do, not in topbar row 2 (a chip row's own overflow inside row 2's overflow would fight it).
+- **§4 tags (plan 3e).** Tags (kinds, reasons, type words) are 12px Technical; the 11px uppercase label is for section labels only.
+- **§4 counts (plan 3e).** The Sessions and Archived counts read "n <noun> · m visible".
+- **§5.6 / §6 Table (plan 3b).** Table rows stay `<tr>` (sortable `th` with `aria-sort` need table semantics, and a `<tr>` cannot hold a link as a direct child); each row's title is its one link and a click elsewhere on the row is forwarded to it. Rows open per the detail-view setting, like Kanban cards.
+- **§6 Table at ≤768px (plan 3b).** A card shows ID, priority, title (2 lines), status, size and epic; phase, area, branch and started are left to the detail. The header row gives way to a labelled Sort select.
+- **§5.1 epics (plan 3b).** The lifecycle map (`active` ◐, `planned` ○, `done` ●, `archived` ✕) lives in `lib/epic-format.js` beside the epic figures; a missing status reads "Active". The design status is a tag "Design · <word>" on Epic detail only.
+- **§6 Epic detail / §7 (plan 3b).** Every figure is counted from the task list the page draws (`epicStats(epic.tasks)`), not the server's `stats`; Done and Archived groups start collapsed.
+- **§5.1 (plan 3d).** §6 Ideas "Toolbar: search · status chips · Tags popover · Show archived" and §4 "row 2 = search · view switcher · filters" are read together with the Table's 2b precedent: on Issues, Bugs and Ideas the filters are a rail at the top of the screen, and row 2 keeps the search and the one view control (Issues' View, Bugs' Sort).
+- **§6 Issues (plan 3d).** The card names ID, severity, title and evidence, and keeps status (in the Severity and List views), "blocks n", the stale tag, location and its task/bug links. Impact and repro steps stay on the issue's own page.
+- **§6 Issues (plan 3d).** Status `duplicate` exists server-side; it reads "Duplicate", counts as moved on (→), sits in the resolved shelf, and is a Status-view column whenever any exists.
+- **§6 Issues (plan 3d).** The stale tag shows only for open and investigating issues whose aging tier is Stale, as a warning marker ("stale 45d").
+- **§6 Issues (plan 3d).** Column taglines ("— actively under triage") are dropped; column heads are Technical labels with counts.
+- **§6 Bugs (plan 3d).** Every `BUG_STATUS` value but `archived` is a filter chip; archived bugs (the flag or the status) come in through a "Show archived" toggle, as on Ideas. The default is Open + Shelved pressed. A bug with no severity shows no severity marker.
+- **§6 Bugs (plan 3d).** No chip is ever "archived", so a bug whose status is archived is admitted by "Show archived" alone, whatever status chips are pressed; a bug flagged archived with another status still answers to the chips.
+- **§6 Ideas (plan 3d).** Rows are real links to `#/ideas/<id>`; a plain click selects in place and rewrites the hash with `history.replaceState`, so a new tab or a pasted link opens the same idea. An idea with no status shows no status marker.
+- **§6 Ideas (plan 3d).** The tag filter keeps today's AND semantics, compared case-insensitively. Escape closes the Tags popover and returns focus to the Tags button.
+- **§6 Ideas (plan 3d).** "New idea" is a row-1 action, not part of the filter rail.
+- **§6 detail template (plan 3c).** Task, issue and bug pages share one set of builders (`components/detail-page.js`) and the `td-*` classes; issue and bug specifics are `dp-*` in `css/screens/detail-pages.css`. The graph view keeps the page's head and `h1`.
+- **§6 graph (plan 3c).** "Depth" and "Show all" are removed, not built (they did nothing); nodes are SVG links with the status shape and word; the tabs are ARIA tabs and the raw tab is "Raw JSON".
+- **§6 issue detail (plan 3c).** Staleness on the detail page is 3d's "stale Nd" tag (`staleTag()`, the one the Issues board shows; IS-04), not a bar.
+- **§6 bug detail (plan 3c).** Bug actions are in-app forms on the shared entity form; "Mark fixed" requires a commit (the server always did) and is the page's primary action in row 1; after an action the page shows the bug's new state, and a promote opens the new issue.
+- **§5.10 gates (plan 3c).** Each gate shows its state as a visible word; the raw `gate_state` string is never printed.
+- **§5.7 leaving a page (plan 3c).** Leaving a detail page with a form open asks the form to close, exactly as leaving the detail modal does.
+- **§6 Kanban card (plan 3a).** The card's id is a copy control on line 1; the link carries the id (visually hidden) and the title, so the whole card is one link.
+- **§6 Kanban filters (plan 3a).** Priority chips leave topbar row 2 for the board's filter bar beside the epic chips; row 2 keeps search, density, Group and Sort.
+- **§6 Kanban epic row (plan 3a).** The epic row shows every in-scope epic (pinned first) on one line with More; pins, order and archived epics live in an "Epic options" popover; every filter count is open tasks.
+- **§6 Kanban phase filter (plan 3a).** The phase filter is a one-line strip on an overflow row (All, the current phase and a pressed phase never park), archived phases in a menu; the carousel is gone.
+- **§6 Kanban on a phone (plan 3a).** The phone Columns tablist scrolls sideways inside itself (a tab cannot be parked behind More).
+- **§4 row 1 (plan 3a).** `claimTopbarPrimary()` clears the slot it hands over; `setTopbarCount()` puts the count's full text in its title; at ≤768px a primary with an icon shows its icon only.
+- **§3.2 categorical palette (plan 3a, user decision).** Swatches come from `--cat-N` by position, unless an epic record's own `color` names a swatch 1–6 (`3`, `'cat-3'`, `'--cat-3'`); a hex or any other value is ignored.
+
+Plan 4 (cleanup) rulings:
+
+- **§3.2 aliases.** The alias list is explicit: `legacy-aliases.test.js` bans exactly the names in the table, not a prefix such as `--bg-` or `--ink`, so a new role may use those prefixes. A quoted `'--x'` literal counts as JS-set when a script sets the property through a constant.
+- **§3.4 control sizes.** `--control-size`, `--control-size-sm` and `--touch-target` are viewer layout roles (in `tokens.css`, not RR tokens); every control height and phone touch target names one of them instead of a bare 32/24/44px.
+- **§5.6 link rows.** A link row's full text lives on the row (the cut text's title), not on the link, so the link is named once.
+- **§5.6 / §6 Table rows.** Table rows drop `cursor: pointer`; the title link keeps it. A click elsewhere on the row is still forwarded to the title link. The pointer promised a target a keyboard cannot reach.
+- **§5.2 `hidden`.** `.btn[hidden]` is `display: none`, so a button its code hides is not drawn.
+- **§3.5 preferences.** A failed preference save is retried three times after the first attempt (four in all) and then given up out loud; a closing tab flushes what is pending on `pagehide` with `keepalive`.
+- **§8 gate.** The accessibility gate is `viewer/tests/a11y.mock.spec.js` and excludes axe's `region` rule (a best-practice rule that fires on the banner and modal hosts by design). A link whose `::after` covers its containing block is measured by that block; only an interactive element (native control, or an interactive role with `tabindex` ≥ 0) counts as reachable for the pointer-only probe.
+- **§8 captures.** Route captures are mocked (`capture-modals.mjs` route scenes, 20 of them); `capture.mjs` needs a live server and is the user's tool.
+- **§5.8 dark popovers.** In dark, popovers share the cards' ground-10 and are told apart by their border: the lighter ground-20 took the critical marker under 3:1.

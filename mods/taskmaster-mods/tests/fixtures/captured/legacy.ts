@@ -1,0 +1,161 @@
+// User intent: real Taskmaster MCP replies, captured by scripts/capture_fixtures.py, so the parsers are tested
+// against what the server actually says (legacy store). GENERATED: rerun the script to refresh.
+
+export const LEGACY = {
+  "meta": {
+    "store": "legacy",
+    "captured": "2026-10-06",
+    "redacted": true,
+    "idsPseudonymised": false,
+    "merged": {
+      "captured": "2026-10-06",
+      "keys": [
+        "issues_p0",
+        "issues_p1",
+        "issues_p1_capped"
+      ]
+    }
+  },
+  "replies": {
+    "store_status": {
+      "tool": "backlog_store_status",
+      "args": {},
+      "isError": false,
+      "text": "xxxxx: x:\\xxxxx\\xxxxx\\xxxxx\\xxxxxx\\xxxxxx-xxxxx\\.xxxxxxxxxx\\xxxxx\\xxxxx.xx\nxxxx: x:\\xxxxx\\xxxxx\\xxxxx\\xxxxxx\\xxxxxx-xxxxx  (xxxxxxxx xxx xxx-xxxxxx-xxx, xxxxxx x1, xxxxx 3xx73x2x-4395-48x6-9499-4711x19xx594)\nxxxx: xx=5820416 x  xxx=0 x  xxx seq=617\nxxxxx: 0\nxxxxxxxxxxx: 1  handovers/_xxxxxxx/2026/2026-05-10-xxxxxxx-x3-xxxxxx-041-handover-status-xx.xx\nxxxxx xxxxxxx: 0\nxxxxxxx (xxxx xxxxxxx; xxx xxxxxxx_xxxxxxx_xxxxxxxx): 0\nxxxxxxx: 0\nMerge xxxxxxxxx (24 x): 0\nxxxxxx xxxxx: 0 pending\nxxxx-xxxx xxxxx: 0\nWarning: none\nxxxxxxxx: 0 live\nxxxxxxx (xxxx 20):\n  [617] 2026-10-05T22:59:12.353682+00:00  xxxxxxx_xxx_xxxxxx  xxxxxx xxxxxxx/__xxxxxxx__\n  [616] 2026-10-05T22:59:12.314412+00:00  xxxxxxx_xxx_xxxxxx  xxxxxx xxx/B-095\n  [615] 2026-10-05T21:35:11.002388+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-004\n  [614] 2026-10-05T21:35:10.272750+00:00  xxxxxxx_complete_task  xxxxxx task/tui-mods-003\n  [613] 2026-10-05T21:35:09.720779+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-003\n  [612] 2026-10-05T21:35:05.572913+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-003\n  [611] 2026-10-05T17:09:22.712046+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-003\n  [610] 2026-10-05T17:09:22.428344+00:00  xxxxxxx_complete_task  xxxxxx task/tui-mods-002\n  [609] 2026-10-05T17:09:22.186500+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-002\n  [608] 2026-10-05T17:09:20.580121+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-002\n  [607] 2026-10-05T17:00:02.032450+00:00  xxxxxxx_complete_task  xxxxxx task/tui-mods-001\n  [606] 2026-10-05T17:00:01.450826+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-001\n  [605] 2026-10-05T17:00:00.599959+00:00  xxxxxxx_record_gate  xxxxxx task/tui-mods-001\n  [604] 2026-10-05T16:59:16.710645+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-002\n  [603] 2026-10-05T16:52:26.686032+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-001\n  [602] 2026-10-05T16:44:13.759473+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-008\n  [601] 2026-10-05T16:44:10.633967+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-008\n  [600] 2026-10-05T16:35:40.499145+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-008\n  [599] 2026-10-05T16:35:40.304487+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-007\n  [598] 2026-10-05T16:35:40.126335+00:00  xxxxxxx_xxxxxx_task  xxxxxx task/tui-mods-006"
+    },
+    "list_in_review": {
+      "tool": "backlog_list_tasks",
+      "args": {
+        "status": "in-review",
+        "limit": 40
+      },
+      "isError": false,
+      "text": "**22 tasks:**\n- `v3-skills-002` — xxxxxxxxxx:handover xxxxx — xxxxx/xxxx xxxx (critical, x3-xxxxxx, in-review)\n- `v3-skills-003` — xxxxxxxxxx:xxxxxx xxxxx — xxxxx/xxxxxxxxx/xxxxxxx (critical, x3-xxxxxx, in-review)\n- `v3-skills-004` — xxxxxxxxxx:issue xxxxx — xxx/xxxxx/xxxxx xxxxxxx (critical, x3-xxxxxx, in-review)\n- `v3-release-008` — xxx ISS-003: xxxxxx xxxxx xxxxxxxxxxx/xxxxx xxxx xxxxxxxx x3 task xxxxxxxxxxx (critical, x3-xxxxxxx, in-review)\n- `v3-skills-005` — xxxxxxxxxx:xxxxxxx-x3 xxxxx — xxxxxx xxx-in xxxxxxxxx (high, x3-xxxxxx, in-review)\n- `v3-polish-041` — Handover status field — todo/in-progress/done xxxxxxxxx (high, x3-xxxxxx, in-review)\n- `v3-polish-043` — xxxxxx xxxxxx xxxxxxxxxxxx: archived xxxxxx xxxxxxxx, archived tasks xxxxxx, epic xxxxxxxx xxxxxxx, phase xxxxxx xxxxxxxxxxxx (high, x3-xxxxxx, in-review)\n- `v3-polish-055` — xxxxxxxxxx xxxxxxxxx xxxxxx: xxxxxx xxx, xxxxxx xxxxxx, Resume xxxx, xxx xxx xxxxxxxxx (high, x3-xxxxxx, in-review)\n- `project-structure-visibility-001` — xxxxxxxx xxxxxx: xxx xxxx xxx xxxxxxxxxx + xxxx xxxxxxxx (high, xxxxxxx-xxxxxxxxx-xxxxxxxxxx, in-review) — xxxxxxxx all xxxxxx \"2xx\" xxxxxxx xxxx_xxxxxxxx() xxxx handover.date (date-xxxx xxx). xxxxxx to handover.created; xxxx xxxxxx xx xxxx_xxxxxxxxxx=date-xxxx; xxxxxxx xxxxxxxx in xxxx.\n- `tm-audit-024` — xxxxxx-change lane — xxx-xxxx xxxxxxx xx xxxxx xxxxxxx skip the pipeline (high, xx-xxxxx, in-review) — xxxxxxx \"xxxxxx xxxxxxxxxx for ANY task-related xxxxxxx\" with x xxx-xxxx xxxx: xxxxxx lane (xxxxx xxxx-xxxxxxxxx xxxxxxx, no xxxxxxx xxxxxx) xx xxxxxxx lane, with an xxxxxxxx xxxxxxxxxx xxxxxxx xxxx x change xxxxx.\n- `v3-polish-036` — Phase xxxxxx xxxxxx Epic xxxxxxxx to xxxxx in xxxx phase (medium, x3-xxxxxx, in-review)\n- `v3-polish-042` — xxx xxxx_handover_xxx xxxx: xxxx with id date-xxxxxx (ISS-010) (medium, x3-xxxxxx, in-review)\n- `v3-polish-046` — xxxxxx: xxxxxx/xxxxxxx xxxxxx — xxxxxx tasks xxxxx xxxx xxxx NOT xxxxxxx x xxxxxx (medium, x3-xxxxxx, in-review)\n- `v3-polish-047` — xxxxxx: Epic xxxxxx xxxxxx — phase-xxxxxx xxxxxxxxxx, archived xxxxxx by xxxxxxx, xxxx by phase task xxxxx (medium, x3-xxxxxx, in-review)\n- `v3-polish-053` — xxx ISS-005: xxxxxxx_issue_xxxxx xxxxxxx on date-xxxx `xxxxxxxxxx` field (medium, x3-xxxxxx, in-review)\n- `v3-polish-054` — xxx ISS-006: xxxxxx status xxx xxxxx (in_progress xx in-progress) xxxxx xxxxxx xxxxx (medium, x3-xxxxxx, in-review)\n- `tm-audit-007` — xxxxx xxx xxxx xxxxxxxxxxx — xxxxxxx/limit/error-xxxxx/xxxx_xxxxxx xxxxxxxx (medium, xx-xxxxx, in-review) — One xxxx-xxxxxx xxxx, one error xxxxx, limit on xxxxx xxxx xxxx, and xxxxxxxxxxx xxxxxxxxxx for xxxxx — xxxx the xxx-xxxxxx xxxxx xxxx xxxxx xxxxx fail on first xxxxxxx.\n- `tm-audit-020` — xxxxxxxxxxx xxxxx-xxxxxxxx xxx xxxxx xxxxxxxx xxxxxx action xxxxx + field/xxxxx xxxxxxxx for *_xxxxxx xxxxx (medium, xx-xxxxx, in-review) — Merge xxxxxx_* (8→1), xxxx_* (5→1), link_* (5→1), xxxxxx_xxxxxxxxx_* (4→1), decision xxxxxxx (6→2); xxxxxxxx xxxxxxxx-xxxxx *_xxxxxx xxxxx to field/xxxxx — ~2,800 xxx/session, ~20 xxxxx xxxxx.\n- `repo-split-003` — Phase 3: xxxxx + xxxxxx-xx xxxxxxxx (medium, xxxx-xxxxx, in-review) — xxxxxxxx/xxxxx/ (xxxxxx.xx xxxxxxxx + xxxxxxx/ + xxxxxx.xxxx xxx xxxxxxxxxxxx) and xxxxxxxx/xxxxxx-xx/ (xxxxxxx xxxxx for xxxxxx/xxx/xxxxxxxx).\n- `tm-audit-023` — xxxxxx xxxxxx xxx xxxxxx xxx xxxxxxxxxx→xx + xxxxxx xxxxx-xxxxxx xxxxxxxxxx (medium, xx-xxxxx, in-review) — xxxxxx xxx xxxxxx xxxxxx .xxx.xxxx xxxxxxx the xxxxxx xxxx (xxxxxx:xxxxxxxxxx:xxxxxxxxxx); xxxxxx xxx to xx → xxx__xxxxxx_xxxxxxxxxx_xx__* (~300-400 xxx/session, xxxxxxx xx xxxx).\n- `repo-split-004` — Phase 4: xxxxxx/xxx/xxxxxxxx xxxxxxxxxxxx + xxxxxxxxxx xxxxxx (low, xxxx-xxxxx, in-review) — xxxxxx xxxxxx-xx xxxxxxx in available xxxxxx xxxxx; xxxx in docs/xxxxxxxxxx-xxxxxx.xx xxx xxxx.\n- `tm-audit-026` — xx-xxxx xxxxx xxxxxxxxxxx xxxxx — xxxxxxx-* xxxxxx + xxxxxxx xxx-6 (low, xx-xxxxx, in-review) — 17 xxxxx xxxxxxxxxxxx xxx total 10,272 xxxxx ≈ 2.57x xxx/session (xxxx xxxx-xxxx xxx ~1.8x) — xxx xxxxxxx-xxxxxxx/xxxxxxx-x3 xxxxxxxxxxxx + xxxxxxxx; xx-xxxxx the 021 xxxx xxxxx."
+    },
+    "list_waiting": {
+      "tool": "backlog_list_tasks",
+      "args": {
+        "status": "in-review",
+        "waiting_on_human": true,
+        "limit": 40
+      },
+      "isError": false,
+      "text": "No tasks found matching: status=in-review, waiting_on_human"
+    },
+    "list_in_progress": {
+      "tool": "backlog_list_tasks",
+      "args": {
+        "status": "in-progress",
+        "limit": 3
+      },
+      "isError": false,
+      "text": "**9 tasks (showing first 3):**\n- `store-perf-001` — xxx B-082: xxxxx xxxxxx xxxxxxxxxx xxxxx xxxxxx xxxxx; xxxxxxxxxxx xxxx xxxxx the xxxx; xxxxxxx xxxx-xxxx xxxxxxx (critical, xxxxx-xxxx, in-progress) — xxxxxxxxxxx xxxx xxxxxxx by xxxxx/xxxx/xxxx; xxxx xxxx xxxxx xxxxx the xxxxxx xxxxx; xxxxx xxxxxx-xxxx xxxx; xxxx xxxxxxxx found by xxxxx\n- `v3-release-010` — xxxxxxxxxxxx x3 xxxxxx xxxxx .xxxxxxxxxx/ + xxxxxxxx for xxxxxx xxxxxxxx (high, x3-xxxxxxx, in-progress)\n- `jira-001` — xxxxxxx xxxxxx — xxxxxx, xxxx xxxxxx, xxxxxxxxx xxxxxxxxxxx (high, xxxx, in-progress)\n…6 more tasks — pass status/epic/phase filters or limit=0 for all"
+    },
+    "continuity_review": {
+      "tool": "backlog_continuity_items",
+      "args": {
+        "action_class": "review",
+        "limit": 40
+      },
+      "isError": false,
+      "text": "{\n  \"view\": \"action\",\n  \"total\": 25,\n  \"items\": [\n    {\n      \"id\": \"v3-polish-036\",\n      \"type\": \"task\",\n      \"title\": \"Phase xxxxxx xxxxxx Epic xxxxxxxx to xxxxx in xxxx phase\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-15T23:35\",\n      \"age_days\": 143.74279943140047,\n      \"task_id\": \"v3-polish-036\",\n      \"branch\": \"xxxxxxx/v3-polish-036\"\n    },\n    {\n      \"id\": \"v3-polish-041\",\n      \"type\": \"task\",\n      \"title\": \"Handover status field — todo/in-progress/done xxxxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-09T21:24\",\n      \"age_days\": 149.83377165362268,\n      \"task_id\": \"v3-polish-041\",\n      \"branch\": \"xxxxxxx/v3-polish-041\"\n    },\n    {\n      \"id\": \"v3-polish-042\",\n      \"type\": \"task\",\n      \"title\": \"xxx xxxx_handover_xxx xxxx: xxxx with id date-xxxxxx (ISS-010)\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-10T02:12\",\n      \"age_days\": 149.6337716536227,\n      \"task_id\": \"v3-polish-042\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"v3-polish-043\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxx xxxxxx xxxxxxxxxxxx: archived xxxxxx xxxxxxxx, archived tasks xxxxxx, epic xxxxxxxx xxxxxxx, phase xxxxxx xxxxxxxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-09T23:40\",\n      \"age_days\": 149.73932720917824,\n      \"task_id\": \"v3-polish-043\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"v3-polish-046\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxx: xxxxxx/xxxxxxx xxxxxx — xxxxxx tasks xxxxx xxxx xxxx NOT xxxxxxx x xxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-16T17:58\",\n      \"age_days\": 142.97682720917825,\n      \"task_id\": \"v3-polish-046\",\n      \"branch\": \"xxxxxxx/xxxx-xxxx-x\"\n    },\n    {\n      \"id\": \"v3-polish-047\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxx: Epic xxxxxx xxxxxx — phase-xxxxxx xxxxxxxxxx, archived xxxxxx by xxxxxxx, xxxx by phase task xxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-16T17:58\",\n      \"age_days\": 142.97682720917825,\n      \"task_id\": \"v3-polish-047\",\n      \"branch\": \"xxxxxxx/xxxx-xxxx-x\"\n    },\n    {\n      \"id\": \"v3-polish-053\",\n      \"type\": \"task\",\n      \"title\": \"xxx ISS-005: xxxxxxx_issue_xxxxx xxxxxxx on date-xxxx `xxxxxxxxxx` field\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-16T17:58\",\n      \"age_days\": 142.9768272501736,\n      \"task_id\": \"v3-polish-053\",\n      \"branch\": \"xxxxxxx/xxxx-xxxx-x\"\n    },\n    {\n      \"id\": \"v3-polish-054\",\n      \"type\": \"task\",\n      \"title\": \"xxx ISS-006: xxxxxx status xxx xxxxx (in_progress xx in-progress) xxxxx xxxxxx xxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-16T17:58\",\n      \"age_days\": 142.9768272501736,\n      \"task_id\": \"v3-polish-054\",\n      \"branch\": \"xxxxxxx/xxxx-xxxx-x\"\n    },\n    {\n      \"id\": \"v3-polish-055\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxx xxxxxxxxx xxxxxx: xxxxxx xxx, xxxxxx xxxxxx, Resume xxxx, xxx xxx xxxxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-17T15:37\",\n      \"age_days\": 142.07474391684028,\n      \"task_id\": \"v3-polish-055\",\n      \"branch\": \"xxxxxxx/v3-polish-055\"\n    },\n    {\n      \"id\": \"v3-release-008\",\n      \"type\": \"task\",\n      \"title\": \"xxx ISS-003: xxxxxx xxxxx xxxxxxxxxxx/xxxxx xxxx xxxxxxxx x3 task xxxxxxxxxxx\",\n      \"where\": \"x3-xxxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-05T23:22\",\n      \"age_days\": 153.75182725017362,\n      \"task_id\": \"v3-release-008\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"v3-skills-002\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxx:handover xxxxx — xxxxx/xxxx xxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-03T01:00\",\n      \"age_days\": 156.68377169461806,\n      \"task_id\": \"v3-skills-002\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"v3-skills-003\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxx:xxxxxx xxxxx — xxxxx/xxxxxxxxx/xxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-04T05:16\",\n      \"age_days\": 155.50599391684028,\n      \"task_id\": \"v3-skills-003\",\n      \"branch\": \"xxxxxxx/xxxxxxxxxx-x3\"\n    },\n    {\n      \"id\": \"v3-skills-004\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxx:issue xxxxx — xxx/xxxxx/xxxxx xxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-05T15:47\",\n      \"age_days\": 154.06779947239585,\n      \"task_id\": \"v3-skills-004\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"v3-skills-005\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxx:xxxxxxx-x3 xxxxx — xxxxxx xxx-in xxxxxxxxx\",\n      \"where\": \"x3-xxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-05T16:26\",\n      \"age_days\": 154.0407161390625,\n      \"task_id\": \"v3-skills-005\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"project-structure-visibility-001\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxx xxxxxx: xxx xxxx xxx xxxxxxxxxx + xxxx xxxxxxxx\",\n      \"where\": \"xxxxxxx-xxxxxxxxx-xxxxxxxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-20T13:39\",\n      \"age_days\": 139.15668836128472,\n      \"task_id\": \"project-structure-visibility-001\",\n      \"branch\": \"xxxxxxx/project-structure-visibility-001\"\n    },\n    {\n      \"id\": \"tm-audit-007\",\n      \"type\": \"task\",\n      \"title\": \"xxxxx xxx xxxx xxxxxxxxxxx — xxxxxxx/limit/error-xxxxx/xxxx_xxxxxx xxxxxxxx\",\n      \"where\": \"xx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-10T16:37\",\n      \"age_days\": 88.0330772501736,\n      \"task_id\": \"tm-audit-007\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"tm-audit-020\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxxxxxxx xxxxx-xxxxxxxx xxx xxxxx xxxxxxxx xxxxxx action xxxxx + field/xxxxx xxxxxxxx for *_xxxxxx xxxxx\",\n      \"where\": \"xx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-10T16:14\",\n      \"age_days\": 88.04904947239584,\n      \"task_id\": \"tm-audit-020\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"tm-audit-023\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxx xxxxxx xxx xxxxxx xxx xxxxxxxxxx→xx + xxxxxx xxxxx-xxxxxx xxxxxxxxxx\",\n      \"where\": \"xx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-10T15:48\",\n      \"age_days\": 88.06710502795138,\n      \"task_id\": \"tm-audit-023\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"tm-audit-024\",\n      \"type\": \"task\",\n      \"title\": \"xxxxxx-change lane — xxx-xxxx xxxxxxx xx xxxxx xxxxxxx skip the pipeline\",\n      \"where\": \"xx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-10T15:48\",\n      \"age_days\": 88.06710502795138,\n      \"task_id\": \"tm-audit-024\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"tm-audit-026\",\n      \"type\": \"task\",\n      \"title\": \"xx-xxxx xxxxx xxxxxxxxxxx xxxxx — xxxxxxx-* xxxxxx + xxxxxxx xxx-6\",\n      \"where\": \"xx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-10T16:32\",\n      \"age_days\": 88.03654947239583,\n      \"task_id\": \"tm-audit-026\",\n      \"branch\": \"\"\n    },\n    {\n      \"id\": \"repo-split-003\",\n      \"type\": \"task\",\n      \"title\": \"Phase 3: xxxxx + xxxxxx-xx xxxxxxxx\",\n      \"where\": \"xxxx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-08T15:27\",\n      \"age_days\": 90.08168836128472,\n      \"task_id\": \"repo-split-003\",\n      \"branch\": \"xxxxxxx/repo-split-003\"\n    },\n    {\n      \"id\": \"repo-split-004\",\n      \"type\": \"task\",\n      \"title\": \"Phase 4: xxxxxx/xxx/xxxxxxxx xxxxxxxxxxxx + xxxxxxxxxx xxxxxx\",\n      \"where\": \"xxxx-xxxxx\",\n      \"next\": \"in-review\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-08T15:49\",\n      \"age_days\": 90.06641058350695,\n      \"task_id\": \"repo-split-004\",\n      \"branch\": \"xxxxxxx/repo-split-004\"\n    },\n    {\n      \"id\": \"ISS-017\",\n      \"type\": \"issue\",\n      \"title\": \"xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx\",\n      \"where\": \"xxxxxxxxxx,xxxxxxxxx,xxx-xxxx,xxxx-xxxx\",\n      \"next\": \"P1 · open\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-25T21:45:03Z\",\n      \"age_days\": 133.8191536390625,\n      \"task_id\": null,\n      \"branch\": null\n    },\n    {\n      \"id\": \"ISS-018\",\n      \"type\": \"issue\",\n      \"title\": \"xxxxx xxxxx xxx xxxxxxxxxx on xxxxxxxxx/xxxx xxxxx xxxxxxx of xxxxx xxxxxxxxxx xxxxxxxxxx error\",\n      \"where\": \"xxxxxxxxxx,xxxxxxx-xxxxxxxx,xxx-xxxx,xxxxxx,xxxxxxxx-xxxxx\",\n      \"next\": \"P1 · open\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-05-25T21:45:08Z\",\n      \"age_days\": 133.81909576869214,\n      \"task_id\": null,\n      \"branch\": null\n    },\n    {\n      \"id\": \"ISS-027\",\n      \"type\": \"issue\",\n      \"title\": \"xxxxxxx xxxxx xxx no xxxxxxxxxxx xxxxxxx — xxxxx xxxxxxx, xxxxxx xxxx xxxxxxx, ID xxxxxxxxxx, and xxxxx/xxxx xxxxx xxxxxx xxxxxx xxx xxxxx\",\n      \"where\": \"\",\n      \"next\": \"P1 · open\",\n      \"action_class\": \"review\",\n      \"timestamp\": \"2026-07-04T11:45:42Z\",\n      \"age_days\": 94.23536891684027,\n      \"task_id\": null,\n      \"branch\": null\n    }\n  ]\n}"
+    },
+    "continuity_decide": {
+      "tool": "backlog_continuity_items",
+      "args": {
+        "action_class": "decide",
+        "limit": 40
+      },
+      "isError": false,
+      "text": "{\n  \"view\": \"action\",\n  \"total\": 0,\n  \"items\": []\n}"
+    },
+    "handovers_open": {
+      "tool": "backlog_handover_list",
+      "args": {
+        "format": "json",
+        "status": "open",
+        "limit": 5
+      },
+      "isError": false,
+      "text": "{\n  \"handovers\": [\n    {\n      \"id\": \"2026-10-05-xxxxxxxx-xxxxxxxxxx-xxx-xx-xxx-xxxx-spec\",\n      \"date\": \"2026-10-05\",\n      \"created\": \"2026-10-05T15:02:12.919025+00:00\",\n      \"thread\": \"xxxxxxxx-xxxxxxxxxx-xxx-xx-xxx-xxxx-spec\",\n      \"session_kind\": \"continuity\",\n      \"status\": \"open\",\n      \"tldr\": \"xxxxxxxx xxxxxxxxxx-xxx + xx-xxx xxxx: spec, xxxxxxxxxx, live xxx xxxxx, xxxxxxxxx\",\n      \"next_action\": \"xxx spec xxxxxxxx, xxxx xxxxx the xxxxxxxxxxxxxx plan and xxxxxx the epic\",\n      \"task_ids\": [],\n      \"tip_commit\": \"4264e75\",\n      \"branch\": \"xxxx/xxxxxxxx-xxxxxx-xxxxxxxxxx\",\n      \"links\": [],\n      \"superseded_by\": \"\"\n    },\n    {\n      \"id\": \"2026-07-10-xxxxx-xxxxx-x2-8-0-xxxxxxxx-xxxxxx-xxxxx\",\n      \"date\": \"2026-07-10\",\n      \"created\": \"2026-07-10T11:29:11.260347+00:00\",\n      \"thread\": \"\",\n      \"session_kind\": \"task-complete\",\n      \"status\": \"open\",\n      \"tldr\": \"xxxxx-xxxxx x2.8.0 xxxxxxxx xxxxxx xxxxxxx + xxxxxx (51e263d): xxxxxx one-xxxx xxxxxxxxx, xx xxxxx, xxxxxxxxxx xxxxxxxx; 7 xxxx + 4 issues xxxxxx; xxxx-xxx tasks 001-003 superseded.\",\n      \"next_action\": \"xxxxxxx xxxxx-xxxxx xxxxxx xxxxx to 2.8.0 + xxxxxxx xxxxxxxx; xxxx xxxxxx B-005 xxxxx xxxxxx xxxxxxxxx and xxxxxxx guard-hooks-004 xx xxxxxxxxx.\",\n      \"task_ids\": [],\n      \"tip_commit\": \"\",\n      \"branch\": \"\",\n      \"links\": [\n        {\n          \"type\": \"references\",\n          \"target\": \"ISS-008\"\n        },\n        {\n          \"type\": \"references\",\n          \"target\": \"ISS-026\"\n        },\n        {\n          \"type\": \"references\",\n          \"target\": \"ISS-012\"\n        },\n        {\n          \"type\": \"references\",\n          \"target\": \"ISS-023\"\n        },\n        {\n          \"type\": \"references\",\n          \"target\": \"ISS-016\"\n        }\n      ],\n      \"superseded_by\": \"\"\n    },\n    {\n      \"id\": \"2026-06-18-xxxxxxx-task-xxxxxxx-task-bundle-001-xx\",\n      \"date\": \"2026-06-18\",\n      \"created\": \"2026-06-18T17:11:20.983476+00:00\",\n      \"thread\": \"\",\n      \"session_kind\": \"milestone\",\n      \"status\": \"open\",\n      \"tldr\": \"xxxxxxx Task xxxxxxx (task-bundle-001), xx 3.18.0 xxxxxx to xxxxx xxxxxx — 14 xxxxxxx, all xxxxxxxx\",\n      \"next_action\": \"Decide xxxxxxx to xxxx xx 3.18.0 to xxxxxx/xxxxxx; xxxxxxxxx xxxx next xxxxxxx task\",\n      \"task_ids\": [\n        \"task-bundle-001\"\n      ],\n      \"tip_commit\": \"f484224\",\n      \"branch\": \"xxxxxx\",\n      \"links\": [\n        {\n          \"type\": \"supersedes\",\n          \"target\": \"2026-06-18-xxxxxxx-xxxx-xxxx-xx-3-17-0-xxxxxx-to-xx\"\n        }\n      ],\n      \"superseded_by\": \"\"\n    },\n    {\n      \"id\": \"2026-06-10-xxxxx-xxxx-xxxxxxx-xxxxxxxxxx-3-16-0-xxx\",\n      \"date\": \"2026-06-10\",\n      \"created\": \"2026-06-10T20:13:56.646240+00:00\",\n      \"thread\": \"\",\n      \"session_kind\": \"continuity\",\n      \"status\": \"open\",\n      \"tldr\": \"xxxxx xxxx xxxxxxx: xxxxxxxxxx 3.16.0 xxxxxx to xxxxxx + xxxxxx (b773cfc) — 13 xxxx xxxxx xxxxxx, xxxx_tasks xxxxxxx, xxxxxxxxxxxx/xxxxxxxxxxxx xxxxxxx; tm-audit-019/020 xxxxxx xx the next xxxxx xxxxxx.\",\n      \"next_action\": \"xxxx tm-audit-019 (xxxxxxxxx xxxx, ~2.7x xxx — xxxxxx xxxxxxx xxxx:→xxxxx-xxxxxxxxxxx xxxxxxxxx on one xxxx xxxxxx xxxx-xxxxxxxx) or tm-audit-001 (critical xxxxxxxx-xxxx xxxxxx, xxxxxxxx live xxxxx this session).\",\n      \"task_ids\": [\n        \"tm-audit-006\",\n        \"tm-audit-021\",\n        \"tm-audit-022\",\n        \"tm-audit-019\",\n        \"tm-audit-020\"\n      ],\n      \"tip_commit\": \"b773cfc\",\n      \"branch\": \"xxxxxx\",\n      \"links\": [\n        {\n          \"type\": \"references\",\n          \"target\": \"x-006\"\n        }\n      ],\n      \"superseded_by\": \"\"\n    },\n    {\n      \"id\": \"2026-06-02-spec-x-merge-xxxxxx-xxxxxxx-to-xxxxx-xxx\",\n      \"date\": \"2026-06-02\",\n      \"created\": \"2026-06-02T13:35:45.936974+00:00\",\n      \"thread\": \"\",\n      \"session_kind\": \"milestone\",\n      \"status\": \"open\",\n      \"tldr\": \"Spec x (merge xxxxxx) xxxxxxx to xxxxx xxxxxx (xx 3.13.0); x2 (live component xxxxxxx) plan xxxxxxx & ready — xxxxxxx xx next\",\n      \"next_action\": \"Branch xxxx/x2-live-component-xxxxxxx xxx xxxxxx (164663e — already xxxxxxxx Spec x); xxxxxxx the 6-task x2 plan at docs/xxxxxxxxxxx/xxxxx/2026-06-01-x2-live-component-xxxxxxx.xx xxx xxxxxxxxxxx:xxxxxxxx-xxxxxx-xxxxxxxxxxx.\",\n      \"task_ids\": [],\n      \"tip_commit\": \"164663e\",\n      \"branch\": \"xxxxxx\",\n      \"links\": [\n        {\n          \"type\": \"supersedes\",\n          \"target\": \"2026-06-01-xxxxxxx-spec-x-xxxxx-xx-28-xx-3-12-0-xxx\"\n        }\n      ],\n      \"superseded_by\": \"\"\n    }\n  ],\n  \"returned\": 5,\n  \"total\": 14,\n  \"truncated\": true,\n  \"archived_omitted\": 33\n}"
+    },
+    "get_missing": {
+      "tool": "backlog_get_task",
+      "args": {
+        "task_id": "zz-missing-999"
+      },
+      "isError": false,
+      "text": "Error: task `zz-missing-999` not found"
+    },
+    "pipeline_missing": {
+      "tool": "backlog_task_pipeline",
+      "args": {
+        "task_id": "zz-missing-999"
+      },
+      "isError": false,
+      "text": "Error: task `zz-missing-999` not found"
+    },
+    "get_review": {
+      "tool": "backlog_get_task",
+      "args": {
+        "task_id": "v3-skills-002"
+      },
+      "isError": false,
+      "text": "## `v3-skills-002` — xxxxxxxxxx:handover xxxxx — xxxxx/xxxx xxxx\n\n**status:** in-review\n**priority:** critical\n**estimate:** x\n**phase:** xxxx-x3\n**epic:** x3-xxxxxx\n**depends_on:** ['v3-skills-001']"
+    },
+    "pipeline_review": {
+      "tool": "backlog_task_pipeline",
+      "args": {
+        "task_id": "v3-skills-002"
+      },
+      "isError": false,
+      "text": "`v3-skills-002` is laneless (pre-protocol) — no pipeline enforced."
+    },
+    "get_active": {
+      "tool": "backlog_get_task",
+      "args": {
+        "task_id": "store-perf-001"
+      },
+      "isError": false,
+      "text": "## `store-perf-001` — xxx B-082: xxxxx xxxxxx xxxxxxxxxx xxxxx xxxxxx xxxxx; xxxxxxxxxxx xxxx xxxxx the xxxx; xxxxxxx xxxx-xxxx xxxxxxx\n\n**tldr:** xxxxxxxxxxx xxxx xxxxxxx by xxxxx/xxxx/xxxx; xxxx xxxx xxxxx xxxxx the xxxxxx xxxxx; xxxxx xxxxxx-xxxx xxxx; xxxx xxxxxxxx found by xxxxx\n**next_step:** xxxxxxxxx in worktree with xxx; xxx xxx-xxxx xxxxx xxxxxxxxxx; review-gate\n**status:** in-progress\n**priority:** critical\n**phase:** xxxx-x3\n**epic:** xxxxx-xxxx\n**lane:** full\n**gate_state:** review-gate:pass\n**started:** 2026-09-07T14:50\n**branch:** xxx/xxxxx-xxxx-xxxx\n**worktree:** .xxxxxxxxx/xxx-xxxxx-xxxx-xxxx"
+    },
+    "pipeline_active": {
+      "tool": "backlog_task_pipeline",
+      "args": {
+        "task_id": "store-perf-001"
+      },
+      "isError": false,
+      "text": "## Pipeline `store-perf-001` — lane: **full**\ngate_state: `review-gate:pass`\n\n- `spec`: done\n- `spec-review`: ⚠ skipped — Spec is the B-082 xxx xxxx (xxxxxxxx xxxx xxxxx + xxx xxxxxxxxxx) xxxx the xxxxxxx xxxxx; task created xxxx an xxxxxxx xxx, no xxxxxxxx spec xxx.\n- `plan`: done\n- `plan-review`: ⚠ skipped — Spec is the B-082 xxx xxxx (xxxxxxxx xxxx xxxxx + xxx xxxxxxxxxx) xxxx the xxxxxxx xxxxx; task created xxxx an xxxxxxx xxx, no xxxxxxxx spec xxx.\n- `xxxxx`: done\n- `xxxx`: done\n- `review-gate`: pass\n\n**Outstanding:** none — ready for done ✓"
+    },
+    "issues_p0": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P0",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "No issues xxxxx."
+    },
+    "issues_p1": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 50
+      },
+      "isError": false,
+      "text": "- ISS-017 P1 open           — xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx [xxxxxxxxxx, xxxxxxxxx, xxx-xxxx, xxxx-xxxx]\n- ISS-018 P1 open           — xxxxx xxxxx xxx xxxxxxxxxx on xxxxxxxxx/xxxx xxxxx xxxxxxx of xxxxx xxxxxxxxxx xxxxxxxxxx error [xxxxxxxxxx, xxxxxxx-xxxxxxxx, xxx-xxxx, xxxxxx, xxxxxxxx-xxxxx]\n- ISS-027 P1 open           — xxxxxxx xxxxx xxx no xxxxxxxxxxx xxxxxxx — xxxxx xxxxxxx, xxxxxx xxxx xxxxxxx, ID xxxxxxxxxx, and xxxxx/xxxx xxxxx xxxxxx xxxxxx xxx xxxxx — xxxxxxx xxxxx xxx no xxxxxxxxxxx xxxxxxx — xxxxx xxxxxxx, xxxxxx xxxx xxxxxxx, ID xxxxxxxxxx, and xxxxx/xxxx xxxxx xxxxxx xxxxxx xxx xxxxx"
+    },
+    "issues_p1_capped": {
+      "tool": "backlog_issue_list",
+      "args": {
+        "status": "open",
+        "severity": "P1",
+        "limit": 1
+      },
+      "isError": false,
+      "text": "- ISS-017 P1 open           — xxxxxxxxx/xxxxxxxx state xxxxxxxxxxx xxx xxxxxxxxx xxxxxx xxxxxx xxxxxxxxxx [xxxxxxxxxx, xxxxxxxxx, xxx-xxxx, xxxx-xxxx]\n…2 more issues — xxxxxx with filters or pass limit=0 for all"
+    }
+  }
+} as const

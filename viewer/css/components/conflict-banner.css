@@ -1,70 +1,84 @@
-/* viewer/css/components/conflict-banner.css */
+/* User intent: the conflict banner reads in both themes — its hue lives in the Conflict marker's shape, never in its
+   text — and sits above any open dialog, which the modal overlay pushes down by the banner's height. */
+
+/* Above the modal overlay (85) at every width. Only the field list scrolls: the headline and the actions stay in
+   view however many fields differ. */
 .cb-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 90;
-  background: color-mix(in oklch, var(--amber) 15%, var(--bg-deep));
-  border-bottom: 1px solid var(--amber);
-  color: var(--ink);
-  padding: 10px 16px;
-  font-size: var(--text-sm);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  max-height: 50vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--overlay-surface);
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
 }
-.cb-headline { font-weight: 600; margin-bottom: 6px; color: var(--amber); }
-.cb-diff, .cb-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.cb-row, .cb-multi-row { display: flex; gap: 8px; align-items: baseline; }
-.cb-label, .cb-key { color: var(--ink-3); min-width: 60px; }
-.cb-val { color: var(--ink); overflow-wrap: anywhere; }
-.cb-val-mine   { background: color-mix(in oklch, var(--green) 20%, transparent); padding: 1px 6px; border-radius: 3px; }
-.cb-val-server { background: color-mix(in oklch, var(--red)   20%, transparent); padding: 1px 6px; border-radius: 3px; }
-.cb-multi-actions { display: flex; gap: 12px; margin-left: auto; }
-.cb-radio { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
-.cb-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.cb-actions button {
-  font: inherit; padding: 4px 12px; border-radius: 3px; cursor: pointer;
-  border: 1px solid var(--border);
-}
-.cb-keep-mine, .cb-resolve { background: var(--accent); color: white; border-color: var(--accent); }
-.cb-use-server { background: transparent; color: var(--ink-2); }
 
-/* ---- Mobile (< 768px) — above modal, vertical-stack rows ---- */
+.cb-headline, .cb-actions { flex: 0 0 auto; }
+.cb-diff, .cb-rows { flex: 0 1 auto; min-height: 0; overflow: auto; }
+.cb-headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs) var(--space-sm); margin-bottom: var(--space-sm); }
+.cb-sentence { color: var(--foreground-bold); font-weight: 600; overflow-wrap: anywhere; }
+
+.cb-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); margin-bottom: var(--space-md); }
+/* The inline padding keeps a focused radio's ring inside the scroll clip; the negative margin keeps the rows on the
+   banner's edge. */
+.cb-rows { display: flex; flex-direction: column; margin: 0 calc(-1 * var(--space-micro)) var(--space-md); padding: 0 var(--space-micro); }
+
+/* Field, Yours, Saved, then the choice. */
+.cb-multi-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 2fr) auto;
+  gap: var(--space-sm) var(--space-md);
+  align-items: start;
+  padding: var(--space-sm) 0;
+  border-top: 1px solid var(--border-default);
+}
+.cb-multi-row:last-child { border-bottom: 1px solid var(--border-default); }
+.cb-key { color: var(--foreground-bold); font-weight: 600; overflow-wrap: anywhere; }
+
+.cb-side { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
+.cb-tag {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
+}
+/* Two classes: the shared .truncate rule loads later and would set its own white-space. A map's lines stay lines. */
+.cb-banner .cb-val {
+  padding: var(--space-micro) var(--space-xs);
+  border-radius: var(--radius-md);
+  background: var(--overlay-surface-sunken);
+  color: var(--foreground-bold);
+  font-family: var(--font-technical);
+  font-size: var(--size-technical-small);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.cb-multi-actions { display: flex; flex-wrap: wrap; gap: var(--space-micro) var(--space-md); }
+.cb-radio { display: inline-flex; align-items: center; gap: var(--space-xs); color: var(--foreground-default); cursor: pointer; }
+.cb-radio input { margin: 0; accent-color: var(--signature-fill); }
+
+.cb-actions { display: flex; gap: var(--space-xs); justify-content: flex-end; }
+
+/* ---- Phone: rows stack, every control is a 44px target ---- */
 @media (max-width: 768px) {
-  /* Bump z-index above the modal overlay (z-index: 100) */
-  .cb-banner {
-    z-index: 105;
-  }
-
-  /* Multi-row: stack vertically so label + values + actions don't overflow */
-  .cb-multi-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border-soft);
-  }
-  .cb-multi-row:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
-  }
-
-  /* Actions row inside multi-row: stay horizontal, full width */
-  .cb-multi-actions {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-start;
-    gap: 16px;
-  }
-
-  /* Single-field diff rows: also allow wrapping */
-  .cb-row {
-    flex-wrap: wrap;
-  }
-
-  /* Action buttons: full width on narrow screens */
-  .cb-actions {
-    flex-wrap: wrap;
-  }
-  .cb-actions button {
-    flex: 1;
-    text-align: center;
-    padding: 8px 12px;
-    min-height: 44px;
-  }
+  .cb-banner { padding: var(--space-sm) var(--space-md); }
+  .cb-diff,
+  .cb-multi-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); }
+  .cb-multi-actions { gap: 0 var(--space-lg); }
+  .cb-radio { min-height: var(--touch-target); }
+  .cb-actions { flex-direction: column; }
+  .cb-actions .btn { width: 100%; min-height: var(--touch-target); }
 }

@@ -1,0 +1,48 @@
+{
+  "name": "taskmaster-mods",
+  "version": "0.1.0",
+  "description": "Taskmaster in the terminal: review queue, this session's current task above the prompt, handovers pane, faults-only status line.",
+  "author": { "name": "gruku" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["rr-tui"],
+  "userConfig": {
+    "source": {
+      "type": "string",
+      "title": "Data source",
+      "description": "tm reads the Taskmaster MCP server; demo draws built-in sample data (screenshots and tuning without a backlog).",
+      "default": "tm",
+      "options": ["tm", "demo"]
+    },
+    "reviewScope": {
+      "type": "string",
+      "title": "Review queue scope",
+      "description": "waiting: in-review tasks that name a human action (the sign-off state). all: every in-review task, pre-protocol ones included.",
+      "default": "waiting",
+      "options": ["waiting", "all"]
+    },
+    "reviewPhase": {
+      "type": "string",
+      "title": "Review queue phase",
+      "description": "A phase id to limit the review queue to, as the board's phase filter does. Empty for every phase.",
+      "default": ""
+    },
+    "handoverGuard": {
+      "type": "boolean",
+      "title": "Cache-cold handover guard",
+      "description": "After the idle minutes below with a big context and no handover yet this session, ask the model once to write a handover before the 1-hour prompt cache expires. Arms from the next turn end after enabling or a reload.",
+      "default": false
+    },
+    "handoverGuardIdleMinutes": {
+      "type": "number",
+      "title": "Handover guard: idle minutes",
+      "description": "Minutes idle after a turn before the guard asks (at most 57; the cache expires at 60).",
+      "default": 55
+    },
+    "handoverGuardMinTokens": {
+      "type": "number",
+      "title": "Handover guard: minimum context tokens",
+      "description": "The guard asks only when the context holds at least this many tokens. The 200000 default targets 1M-context models: on a 200k window auto-compact acts first.",
+      "default": 200000
+    }
+  }
+}

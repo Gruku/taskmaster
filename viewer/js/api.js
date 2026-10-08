@@ -5,6 +5,7 @@ import { beginMeasure, endMeasure } from './lib/measure.js';
 
 async function http(method, path, body, options = {}) {
   const init = { method, headers: {...options.headers}, cache: 'no-store' };
+  if (options.keepalive) init.keepalive = true;
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
@@ -15,7 +16,7 @@ async function http(method, path, body, options = {}) {
     if (m) {
       const { store } = await import('./store.js');
       const et = store.getEtag(`task:${decodeURIComponent(m[1])}`);
-      if (et) init.headers['If-Match'] = et;
+      if (et && !init.headers['If-Match']) init.headers['If-Match'] = et;
     }
   }
   const fetchStart = beginMeasure();
@@ -34,15 +35,18 @@ async function http(method, path, body, options = {}) {
     if (path === '/api/backlog') store.setEtag('backlog', et.replace(/^"|"$/g, ''));
   }
   if (resp.status === 409) {
-    const j = await resp.json();
-    const err = new Error('stale');
+    // A lost race names the revision it lost to (`current_etag`). Any other 409 is the server refusing the write
+    // (gates still open, a legacy layout), and its reason is the message — when it is text: anything else would reach
+    // the page as "[object Object]".
+    const j = (await resp.json().catch(() => null)) ?? {};
+    const err = new Error(typeof j.error === 'string' && j.error.trim() ? j.error : 'stale');
     err.code = 409;
     err.current = j.current;
     err.current_etag = j.current_etag;
     throw err;
   }
   if (resp.status === 422) {
-    const j = await resp.json();
+    const j = await resp.json().catch(() => ({}));
     const err = new Error('validation failed');
     err.code = 422;
     err.errors = j.errors || {};
@@ -50,7 +54,14 @@ async function http(method, path, body, options = {}) {
   }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    throw new Error(`${method} ${path} → ${resp.status}: ${text}`);
+    // The message is for the console. What the page says is worded from the status and the server's own reason.
+    const err = new Error(`${method} ${path} → ${resp.status}: ${text}`);
+    err.code = resp.status;
+    try {
+      const j = JSON.parse(text);
+      if (typeof j?.error === 'string') err.reason = j.error;
+    } catch { /* not JSON: there is no reason to give */ }
+    throw err;
   }
   const ctype = resp.headers.get('Content-Type') || '';
   if (ctype.includes('application/json')) {
@@ -61,7 +72,11 @@ async function http(method, path, body, options = {}) {
       endMeasure('parse', parseStart);
       return data;
     } catch (e) {
-      throw new Error(`${method} ${path} → JSON parse failed: ${e.message}`);
+      // The server answered, so this is not a network failure, but whether a write took cannot be known from it.
+      const err = new Error(`${method} ${path} → JSON parse failed: ${e.message}`);
+      err.code = resp.status;
+      err.unreadable = true;
+      throw err;
     }
   }
   if (ctype.includes('text/yaml') || path.endsWith('.yaml')) return resp.text();
@@ -82,7 +97,13 @@ export async function getEpic(id) {
   return http('GET', `/api/epic/${encodeURIComponent(id)}`);
 }
 
+export const createIdea = (payload) => http('POST', '/api/ideas', payload);
+export const updateBug = (bugId, patch) => http('POST', `/api/bugs/${encodeURIComponent(bugId)}`, patch);
+export const promoteBugs = ({ bug_ids, title, severity, evidence_text, components, body }) =>
+  http('POST', '/api/bugs/promote', { bug_ids, title, severity, evidence_text, components, body });
+
 export const api = {
+  updateBug, promoteBugs,
   // Generic HTTP helpers — screens needing arbitrary endpoints (e.g. continuity
   // dashboard hitting /api/continuity, /api/decisions/*) route through these
   // instead of growing the named-method surface.
@@ -93,16 +114,21 @@ export const api = {
   board: (since) => http('GET', '/api/board' + (since ? `?since=${encodeURIComponent(since)}` : ''), undefined,
     {headers: since ? {'If-None-Match': `"${since}"`} : {}}),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
-  savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
+  // `keepalive` lets the save outlive the page (sent on pagehide).
+  savePrefs:       (p, { keepalive = false } = {}) => http('PUT', '/api/viewer/prefs', p, { keepalive }),
   getTask,
   getEpic,
   getTaskRelated,
   getTaskDetail,
-  patchTask:    (id, patch) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch),
+  // `ifMatch` names the revision to write against instead of the stored one (a write settled from the conflict banner).
+  patchTask:    (id, patch, { ifMatch } = {}) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch,
+    ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
   putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
   createTask:   (payload)   => http('POST',  '/api/tasks', payload),
   archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),
   validateTask: (taskId, patch) => http('POST', '/api/tasks/validate', { task_id: taskId, patch }),
+  listBugs,
+  createIdea,
 
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);
@@ -163,16 +189,6 @@ export async function listThreads() {
   return http('GET', '/api/threads');
 }
 
-export async function savePrefs(patch) {
-  const r = await fetch('/api/viewer/prefs', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!r.ok) throw new Error(`savePrefs: ${r.status}`);
-  return r.json();
-}
-
 // --- Issues ----------------------------------------------------------------
 export async function getIssues({ includeResolved = true } = {}) {
   const qs = includeResolved ? '' : '?include_resolved=false';
@@ -194,26 +210,6 @@ export async function getBug(bugId) {
   return http('GET', `/api/bugs/${encodeURIComponent(bugId)}`);
 }
 
-export async function createBug(payload) {
-  const r = await fetch('/api/bugs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(`createBug failed: ${r.status}`);
-  return r.json();
-}
-
-export async function updateBug(bugId, patch) {
-  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!r.ok) throw new Error(`updateBug ${bugId} failed: ${r.status}`);
-  return r.json();
-}
-
 export async function archiveBug(bugId) {
   const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}/archive`, { method: 'POST' });
   if (!r.ok) throw new Error(`archiveBug ${bugId} failed: ${r.status}`);
@@ -230,12 +226,3 @@ export async function bugPatternScan({ mode = 'all' } = {}) {
   return r.json();
 }
 
-export async function promoteBugs({ bug_ids, title, severity, evidence_text, components, body }) {
-  const r = await fetch('/api/bugs/promote', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bug_ids, title, severity, evidence_text, components, body }),
-  });
-  if (!r.ok) throw new Error(`promoteBugs failed: ${r.status}`);
-  return r.json();
-}

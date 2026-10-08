@@ -1,0 +1,60 @@
+/* User intent: filter chips that read as one family on every screen — pressed is a tinted fill, a zero count is
+   dimmed unless pressed, the row never wraps and what does not fit lists behind "More"; touch-sized on a phone. */
+
+.chip-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+/* A bare group of chips handed to the topbar's row 2: shell.css keeps it on one line there and wraps it once it is
+   parked behind Filters, so a long group never scrolls the popover sideways. */
+.tm-chip-row { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; gap: var(--space-micro); min-width: 0; }
+.chip-row__label {
+  flex: none;
+  white-space: nowrap;
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-ultra);
+  color: var(--foreground-subtle);
+}
+.chip-row__chips { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-micro); min-width: 0; flex: 1 1 auto; overflow: hidden; }
+
+.chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  min-height: 28px;
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
+}
+.chip:hover:not([aria-pressed="true"]):not(:disabled) { background: var(--ground-15); border-color: var(--border-strong); color: var(--foreground-bold); }
+.chip[aria-pressed="true"] { background: var(--signature-glow-strong); border-color: var(--signature-dim); color: var(--foreground-bold); }
+.chip:disabled { color: var(--foreground-disabled); border-color: var(--border-subtle); cursor: not-allowed; }
+
+.chip__label { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+.chip__count { color: var(--foreground-subtle); }
+.chip[aria-pressed="true"] .chip__count { color: var(--foreground-default); }
+.chip__swatch { width: 8px; height: 8px; border-radius: var(--radius-xs); }
+.chip__swatch--cat-1 { background: var(--cat-1); }
+.chip__swatch--cat-2 { background: var(--cat-2); }
+.chip__swatch--cat-3 { background: var(--cat-3); }
+.chip__swatch--cat-4 { background: var(--cat-4); }
+.chip__swatch--cat-5 { background: var(--cat-5); }
+.chip__swatch--cat-6 { background: var(--cat-6); }
+
+/* The parked chips, listed in More's popover (overflow-row.css): swatch and label start each line, the count ends it. */
+.overflow-list .chip { justify-content: flex-start; }
+.overflow-list .chip__count { margin-left: auto; padding-left: var(--space-sm); }
+
+@media (max-width: 768px) {
+  .chip { min-height: var(--touch-target); }
+}

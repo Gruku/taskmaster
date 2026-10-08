@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# These specs write viewer prefs (and create backlog entities) on the server they reach.
+# An earlier unguarded run overwrote a real viewer's prefs, so nothing starts without an opt-in.
+if [ "${TM_LIVE_SPECS_OK:-}" != "1" ]; then
+  echo "run_smoke.sh: refusing to run. The live-server specs write viewer prefs and backlog entities" >&2
+  echo "to the backlog they are pointed at. Set TM_LIVE_SPECS_OK=1 to run them on purpose." >&2
+  echo "The mocked specs need no server: npm --prefix viewer run test:mock" >&2
+  exit 2
+fi
+
 cd "$(dirname "$0")/../.."
 
 # Locate the repo root that owns the live .taskmaster so the server can reach
@@ -21,8 +31,23 @@ for _ in 1 2 3 4; do
 done
 export TASKMASTER_ROOT="$REPO_ROOT"
 
+# A root that holds a backlog is real data: it has to be named exactly, so an opt-in given
+# for one checkout never carries over to another.
+if [ -e "$REPO_ROOT/.taskmaster" ] && [ "${TM_LIVE_SPECS_ROOT_OK:-}" != "$REPO_ROOT" ]; then
+  echo "run_smoke.sh: refusing to run. $REPO_ROOT holds a backlog (.taskmaster), and these specs" >&2
+  echo "write viewer prefs and backlog entities to it. If that is intended, set exactly:" >&2
+  echo "  TM_LIVE_SPECS_ROOT_OK=$REPO_ROOT" >&2
+  exit 2
+fi
+
 # Boot the server in the background on a known port.
 PORT=8765
+# If something already answers there, our server cannot bind and the specs would write to that viewer instead.
+if curl -fsS "http://127.0.0.1:$PORT/api/identity" >/dev/null 2>&1; then
+  echo "run_smoke.sh: refusing to run. A viewer already answers on 127.0.0.1:$PORT; the specs would" >&2
+  echo "write viewer prefs to it. Stop it first." >&2
+  exit 2
+fi
 python -c "
 from backlog_server import _make_server
 s, p = _make_server(host='127.0.0.1', port=$PORT)

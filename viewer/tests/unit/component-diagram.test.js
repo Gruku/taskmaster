@@ -62,7 +62,7 @@ test('empty component renders a "no tasks yet" stub', () => {
   });
   const block = host.querySelector('.cd-block[data-id="cdn"]');
   assert.ok(block.querySelector('.cd-block__empty'), 'empty stub present');
-  assert.match(block.textContent, /no tasks yet/i);
+  assert.match(block.querySelector('.cd-block__empty').textContent, /^No tasks yet$/);
 });
 
 test('block visual-state class derives from rollup status', () => {
@@ -79,7 +79,7 @@ test('block summary surfaces blocked count for in-progress rollup', () => {
     rollup: { a: { status: 'in-progress', total: 4, done: 1, blocked: 2 } },
     tasks: [],
   });
-  assert.match(host.querySelector('.cd-block[data-id="a"] .cd-block__summary').textContent, /in-progress · 2 blocked/);
+  assert.match(host.querySelector('.cd-block[data-id="a"] .cd-block__summary').textContent, /^In progress · 2 blocked$/);
 });
 
 test('connector overlay has one cd-edge path per after-edge', () => {
@@ -122,6 +122,15 @@ test('Enter key on a block invokes onComponentNav', () => {
   const ev = new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
   host.querySelector('.cd-block[data-id="ingest"]').dispatchEvent(ev);
   assert.deepEqual(calls, ['ingest']);
+});
+
+test('Enter on a card link inside a block does not navigate the block', () => {
+  const host = freshHost();
+  const calls = [];
+  mountComponentDiagram(host, { components: COMPONENTS, rollup: ROLLUP, tasks: TASKS, onComponentNav: (k) => calls.push(k) });
+  const link = host.querySelector('.cd-block[data-id="ingest"] .card-task .link-row__link');
+  link.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.deepEqual(calls, []);
 });
 
 test('unassigned bucket renders a trailing dashed block', () => {

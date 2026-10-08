@@ -44,5 +44,5 @@ test('first edit is conditioned and refreshes the card with a delta', async ({pa
 
 test('unknown task renders a not-found state', async ({page}) => {
   await page.goto('/#/task/no-such-task');
-  await expect(page.locator('#screen-mount')).toContainText('Could not load');
+  await expect(page.locator('#screen-mount')).toContainText('Task not found');
 });

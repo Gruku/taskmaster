@@ -1,0 +1,72 @@
+/* User intent: the phone column switcher — at 768px and below a board shows one column at a time behind a row of
+   tabs with counts that scrolls inside itself; above that, or with fewer than two columns, the row is gone. */
+
+.column-tabs { display: none; }
+
+@media (max-width: 768px) {
+  .column-tabs:not([hidden]) {
+    display: flex;
+    gap: var(--space-micro);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  /* Scroll cue: a fade from the page surface on each side that still has tabs past the edge (the JS sets the
+     --more-* classes). Sticky, and their negative margins cancel width + gap, so no tab moves or resizes. */
+  .column-tabs:not([hidden])::before,
+  .column-tabs:not([hidden])::after {
+    content: '';
+    position: sticky;
+    z-index: 1;
+    flex: 0 0 var(--space-2xl);
+    align-self: stretch;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--dur-standard) var(--ease-hourglass);
+  }
+  .column-tabs:not([hidden])::before {
+    left: 0;
+    margin-right: calc(-1 * (var(--space-2xl) + var(--space-micro)));
+    background: linear-gradient(to right, var(--column-tabs-fade), transparent);
+  }
+  .column-tabs:not([hidden])::after {
+    right: 0;
+    margin-left: calc(-1 * (var(--space-2xl) + var(--space-micro)));
+    background: linear-gradient(to left, var(--column-tabs-fade), transparent);
+  }
+  .column-tabs--more-start:not([hidden])::before,
+  .column-tabs--more-end:not([hidden])::after { opacity: 1; }
+}
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .column-tabs:not([hidden])::before,
+  .column-tabs:not([hidden])::after { transition: none; }
+}
+
+.column-tabs__tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: var(--touch-target);
+  padding: 0 var(--space-sm);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.column-tabs__tab:hover:not([aria-selected="true"]) { background: var(--ground-15); color: var(--foreground-bold); }
+.column-tabs__tab[aria-selected="true"] { background: var(--signature-glow-strong); border-color: var(--signature-dim); color: var(--foreground-bold); }
+
+.column-tabs__count {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+.column-tabs__tab[aria-selected="true"] .column-tabs__count { color: var(--foreground-default); }

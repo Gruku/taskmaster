@@ -1,44 +1,69 @@
-.archived-page {
-  padding: var(--sp-4);
-}
-.archived-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-}
-.arch-group {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--sp-2);
-}
+/* User intent: Archived reads as full-width groups under epic names; each row is a quiet card-link whose id is never cut
+   and whose title wraps to two lines, with phase and reason as small technical tags. Tokens only. */
+
+.archived-page { display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0; }
+
+.arch-group { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
+
 .arch-group-h {
   display: flex;
   align-items: baseline;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-2);
-  padding: var(--sp-1) var(--sp-2);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--ink-2);
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-xs);
+  font-family: var(--font-narrator);
+  font-weight: 700;
+  font-size: var(--size-narrator-default);
+  color: var(--foreground-bold);
 }
-.arch-group-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-3);
-  font-weight: 400;
+
+.arch-group-count,
+.arch-phase {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
 }
+
 .arch-row {
-  display: grid;
-  grid-template-columns: 110px minmax(220px, 1fr) 90px 1fr;
-  gap: var(--sp-2);
-  padding: 6px var(--sp-2);
-  border-radius: var(--r-sm);
-  text-decoration: none;
-  color: var(--ink-2);
+  display: flex;
   align-items: baseline;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
 }
-.arch-row:hover { background: var(--bg-card-hover); color: var(--ink); }
-.arch-id     { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); }
-.arch-title  { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.arch-meta   { font-size: var(--text-xs); color: var(--ink-3); }
-.arch-reason { font-size: var(--text-xs); color: var(--ink-3); font-style: italic; }
+
+.arch-row > .link-row__link { flex: 1 1 auto; min-width: 0; color: var(--foreground-bold); text-decoration: none; }
+
+.arch-name { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
+
+.arch-id {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+
+.arch-title { min-width: 0; }
+
+.arch-row > .link-row__content { flex: 0 0 auto; display: flex; gap: var(--space-xs); align-items: baseline; }
+
+.arch-reason {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-default);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-micro);
+}
+
+@media (max-width: 768px) {
+  .arch-row { flex-wrap: wrap; min-height: var(--touch-target); }
+  /* The link is the control: it takes the 44px itself, not just the row around it. */
+  .arch-row > .link-row__link { display: flex; align-items: center; min-height: var(--touch-target); }
+  .arch-row > .link-row__content { flex-basis: 100%; }
+}

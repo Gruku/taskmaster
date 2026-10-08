@@ -1,0 +1,42 @@
+/* User intent: one calm block for "nothing here", "still loading", "not found" and "could not load" on every screen
+   and in every dialog — a label, a plain sentence, at most one action — never a raw error string. */
+
+.tm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-lg) var(--space-md);
+  color: var(--foreground-default);
+  text-align: center;
+}
+.tm-empty__label {
+  max-width: 100%;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.tm-empty__headline {
+  color: var(--foreground-bold);
+  font-size: var(--size-narrator-small);
+  font-weight: var(--font-narrator-weight);
+  line-height: var(--leading-heading);
+}
+.tm-empty__hint {
+  max-width: 36ch;
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  line-height: var(--leading-body);
+}
+.tm-empty > .btn { margin-top: var(--space-xs); }
+
+/* Touch target: the block's one action is 44px tall on a phone. */
+@media (max-width: 768px) {
+  .tm-empty > .btn { min-height: var(--touch-target); }
+}

@@ -1,412 +1,445 @@
-import { renderTimeline } from '../components/timeline.js';
-import { RightRail } from '../components/right-rail.js';
+// User intent: the Sessions screen — open threads as link cards, then a timeline of sessions and their handovers whose
+// rows are real buttons that lead with a readable title; chips and search narrow it (search hides, never dims), and
+// the row picked opens beside the timeline in the right rail, which gives focus back to that row when it closes.
+import { renderTimeline, kindLabel, sessionTimeLine } from '../components/timeline.js';
+import { RightRail, statusPill, HO_STATUS_LABEL } from '../components/right-rail.js';
+import { icon } from '../components/icon.js';
+import { chipRow } from '../components/chips.js';
+import { linkRow } from '../components/link-row.js';
+import { stateBlock } from '../components/empty-state.js';
 import { listSessions, getSessionDetail, listThreads } from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
+import { claimTopbar, setTopbarCount, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
-import { emptyState } from '../components/empty-state.js';
-import { chipClickNext } from '../util/chip-toggle.js';
-import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
+import { formatRelative } from '../lib/time.js';
 import { bindCopy } from '../lib/copy.js';
+import { truncate } from '../lib/text.js';
+import { h } from '../util/h.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
-const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const HO_STATUSES = ['open', 'closed', 'superseded'];
 
-export async function mount(root, { params, store, prefs }) {
-  // Gotcha: `prefs` is the patch helper, not the data.
-  // Read persisted state from store.getPrefs() (used below for handover status).
-  const prefsData = store?.getPrefs?.() || {};
-
-  root.innerHTML = `
-    <div class="sessions-page">
-      <div class="thread-board" data-role="board"></div>
-      <div class="sessions-kinds" data-role="kinds">
-        <span class="sessions-kind-chip session on" data-kind="session">
-          <span class="dot"></span> Threads <span class="ct">0</span>
-        </span>
-        <span class="sessions-kind-chip handover on" data-kind="handover">
-          <span class="dot"></span> Handovers <span class="ct">0</span>
-        </span>
-      </div>
-      <div class="handover-status-chips" data-role="ho-status">
-        <span class="status-chip on" data-status="open">open <span class="ct">0</span></span>
-        <span class="status-chip on" data-status="closed">closed <span class="ct">0</span></span>
-        <span class="status-chip" data-status="superseded">superseded <span class="ct">0</span></span>
-      </div>
-      <div class="right-rail-host" data-role="rail-host"></div>
-      <div class="sessions-mount" data-role="mount"></div>
-    </div>
-  `;
-
-  // ── Topbar (#topbar-actions) ───────────────────────────────
-  const topbar = claimTopbar();
-  const subcount = tmSubcount('… sessions');
-  const searchBuilt = tmSearch({
-    placeholder: 'Search sessions…',
-    onInput: (v) => {
-      state.searchTerm = v.trim().toLowerCase();
-      refreshKindCounts(root, _filteredSessions(state), subcount, state.sessions.length);
-      render(root, state, rail);
-    },
-  });
-  const newNoteBtn = tmAction({
-    icon: '+', label: 'New note', variant: 'primary',
-    title: 'New note — coming soon',
-    disabled: true,
-  });
-  topbar?.appendChild(subcount);
-  topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(newNoteBtn);
-
-  const rail = new RightRail({ width: 480 });
-  const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['open', 'closed'];
+export function mount(root, { params, subpath, store, prefs }) {
+  // `prefs` is the patch helper; what was saved is read from the store.
+  const saved = store?.getPrefs?.()?.screens?.sessions?.handoverStatus;
   const state = {
     sessions: [],
     threads: [],
     detailCache: new Map(),
     kinds: { session: true, handover: true },
-    handoverStatus: new Set(persistedStatus),
+    handoverStatus: new Set(Array.isArray(saved) ? saved : ['open', 'closed']),
     searchTerm: '',
-    selectedSessionId: params && params.id || null,
+    selected: null,     // { kind, id } of the row shown in the rail
+    loaded: false,
+    failed: false,
   };
+  let alive = true;
 
-  bindKindChips(root, state, () => render(root, state, rail));
-  bindStatusChips(root, state, () => {
-    window.dispatchEvent(new CustomEvent('viewer:prefs-patch', {
-      detail: { screens: { sessions: { handoverStatus: [...state.handoverStatus] } } },
-    }));
-    render(root, state, rail);
-  });
+  const filters = h('div', { class: 'sessions-filters' });
+  const board = h('div', { class: 'thread-board', 'data-role': 'board', hidden: '' });
+  const list = h('div', { class: 'sessions-mount', 'data-role': 'mount' });
+  const railHost = h('div', { class: 'right-rail-host', 'data-role': 'rail-host' });
+  root.replaceChildren(h('div', { class: 'sessions-page' }, filters, board, h('div', { class: 'sessions-body' }, list, railHost)));
 
-  state.sessions = await listSessions();
-  refreshKindCounts(root, state.sessions, subcount);
-  render(root, state, rail);
-
-  try {
-    state.threads = await listThreads();
-  } catch { state.threads = []; }
-  renderBoard(root, state);
-
-  if (state.selectedSessionId) openSessionDetail(rail, state.selectedSessionId, state);
-
-  return () => { rail.close(); };
-}
-
-function renderBoard(root, state) {
-  const host = root.querySelector('[data-role=board]');
-  if (!host) return;
-  const open = (state.threads || []).filter(t => t.status === 'open');
-  const parked = (state.threads || []).filter(t => t.status === 'parked');
-  host.innerHTML = '';
-  if (!open.length && !parked.length) { host.style.display = 'none'; return; }
-  host.style.display = '';
-  const grid = document.createElement('div');
-  grid.className = 'tb-grid';
-  for (const t of open) grid.appendChild(threadCard(t));
-  host.appendChild(grid);
-  if (parked.length) {
-    const fold = document.createElement('details');
-    fold.className = 'tb-parked';
-    fold.innerHTML = `<summary>${parked.length} parked</summary>`;
-    const pgrid = document.createElement('div');
-    pgrid.className = 'tb-grid';
-    for (const t of parked) pgrid.appendChild(threadCard(t));
-    fold.appendChild(pgrid);
-    host.appendChild(fold);
-  }
-}
-
-function threadCard(t) {
-  const card = document.createElement('div');
-  card.className = `thread-card thread-card-${t.status}`;
-  const stale = t.staleness_days > 0 ? `${t.staleness_days}d` : 'today';
-  card.innerHTML =
-    `<div class="tc-head">`
-    + `<span class="tc-name mono">${escapeHtml(t.name)}</span>`
-    + `<span class="tc-stale mono">${escapeHtml(stale)}</span>`
-    + `</div>`
-    + `<div class="tc-tldr">${escapeHtml(t.tldr || '')}</div>`
-    + (t.next_action ? `<div class="tc-next">→ ${escapeHtml(t.next_action)}</div>` : '')
-    + `<div class="tc-foot">`
-    + (t.task_ids || []).slice(0, 4).map(id => `<span class="pill task mono">${escapeHtml(id)}</span>`).join('')
-    + (t.branch ? `<span class="tc-branch mono">${escapeHtml(t.branch)}</span>` : '')
-    + `<button class="tc-copy" title="Copy resume line">⧉ resume</button>`
-    + `</div>`;
-  const btn = card.querySelector('.tc-copy');
-  bindCopy(btn, `Resume: ${t.name} — ${t.next_action || t.tldr || ''}`);
-  card.addEventListener('click', (ev) => {
-    if (ev.target === btn) return;
-    location.hash = `#/sessions/${encodeURIComponent(t.name)}`;
-  });
-  return card;
-}
-
-function _filteredSessions(state) {
-  const q = state.searchTerm;
-  if (!q) return state.sessions;
-  return state.sessions.filter(s => {
-    const hay = [
-      s.id || '',
-      ...(s.task_ids || []),
-      ...(s.handover_ids || []),
-      s.tldr || '',
-    ].join(' ').toLowerCase();
-    return hay.includes(q);
-  });
-}
-
-function bindKindChips(root, state, onChange) {
-  const row = root.querySelector('[data-role=kinds]');
-  for (const chip of row.querySelectorAll('.sessions-kind-chip')) {
-    chip.addEventListener('click', () => {
-      const k = chip.dataset.kind;
-      state.kinds[k] = !state.kinds[k];
-      chip.classList.toggle('on', state.kinds[k]);
-      onChange();
-    });
-  }
-}
-
-function bindStatusChips(root, state, onChange) {
-  const row = root.querySelector('[data-role=ho-status]');
-  for (const chip of row.querySelectorAll('.status-chip')) {
-    chip.addEventListener('click', (ev) => {
-      const next = new Set(chipClickNext(ev, [...state.handoverStatus], chip.dataset.status));
-      state.handoverStatus = next;
-      for (const c of row.querySelectorAll('.status-chip')) {
-        c.classList.toggle('on', next.has(c.dataset.status));
-      }
-      onChange();
-    });
-  }
-}
-
-function refreshStatusChipCounts(root, handovers) {
-  const counts = { open: 0, closed: 0, superseded: 0 };
-  for (const meta of Object.values(handovers)) {
-    const s = meta.status || 'open';
-    if (counts[s] != null) counts[s] += 1;
-  }
-  const row = root.querySelector('[data-role=ho-status]');
-  if (!row) return;
-  for (const chip of row.querySelectorAll('.status-chip')) {
-    const ct = chip.querySelector('.ct');
-    if (ct) ct.textContent = String(counts[chip.dataset.status] || 0);
-  }
-}
-
-function refreshKindCounts(root, sessions, subcount, totalCount) {
-  const sCount = sessions.length;
-  const hCount = sessions.reduce((n, s) => n + (s.handover_ids || []).length, 0);
-  const chips = root.querySelectorAll('[data-role=kinds] .sessions-kind-chip');
-  chips[0].querySelector('.ct').textContent = sCount;
-  chips[1].querySelector('.ct').textContent = hCount;
-  if (subcount) {
-    const filtered = totalCount != null && totalCount !== sCount;
-    const sLabel = pluralize(sCount, 'thread', 'threads');
-    const hLabel = pluralize(hCount, 'handover', 'handovers');
-    subcount.textContent = filtered
-      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'thread', 'threads')} · ${hCount} ${hLabel}`
-      : `${sCount} ${sLabel} · ${hCount} ${hLabel}`;
-  }
-}
-
-function render(root, state, rail) {
-  const mount = root.querySelector('[data-role=mount]');
-
-  // Search dims non-matching sessions so the timeline keeps its rhythm;
-  // kind-chip toggles still hide rows entirely.
-  const matched = _filteredSessions(state);
-  const matchedIds = new Set(matched.map(s => s.id));
-  const dimmedIds = state.searchTerm
-    ? state.sessions.filter(s => !matchedIds.has(s.id)).map(s => s.id)
-    : [];
-  const visibleSessions = state.kinds.session
-    ? state.sessions.map(s => ({
-        ...s,
-        handover_ids: state.kinds.handover ? (s.handover_ids || []) : [],
-      }))
-    : [];
-
-  const handovers = {}; // id → {viewer_kind, tldr, status}
-  for (const s of state.sessions) {
-    for (const hid of s.handover_ids || []) {
-      if (!handovers[hid]) {
-        // Look up status from session metadata if available; default to 'open' for legacy entries.
-        const meta = (s.handovers || []).find(h => h.id === hid) || {};
-        handovers[hid] = {
-          id: hid,
-          viewer_kind: meta.viewer_kind || 'standalone',
-          tldr: meta.tldr || '',
-          status: meta.status || 'open',
-        };
-      }
-    }
-  }
-
-  // Refresh chip counts using the unfiltered map.
-  refreshStatusChipCounts(root, handovers);
-
-  // Apply status filter — handovers whose status is not in the active set are excluded.
-  const filteredHandovers = {};
-  for (const [hid, meta] of Object.entries(handovers)) {
-    if (state.handoverStatus.has(meta.status || 'open')) {
-      filteredHandovers[hid] = meta;
-    }
-  }
-
-  const independent = []; // standalone handovers come from a Plan 5b feed; empty here.
-
-  // Empty-state: no sessions in the data, OR search dimmed everything out and
-  // the user can't see anything. Kind-chip-only filters leave the rail visible.
-  if (state.sessions.length === 0) {
-    mount.innerHTML = '';
-    mount.appendChild(emptyState({
-      headline: 'No sessions yet',
-      hint: 'Sessions appear here as you start and end your work cycles.',
-    }));
-    return;
-  }
-  if (state.searchTerm && matched.length === 0) {
-    mount.innerHTML = '';
-    mount.appendChild(emptyState({
-      headline: 'No sessions match your search',
-      hint: 'Try a different term or clear the search box.',
-    }));
-    return;
-  }
-
-  renderTimeline(mount, {
-    sessions: visibleSessions,
-    handovers: filteredHandovers,
-    independent,
-    dimmedIds,
-    onSelect: ({ kind, id }) => {
-      if (kind === 'session')  return openSessionDetail(rail, id, state);
-      if (kind === 'handover') return openHandoverDetail(rail, id, state);
+  // ── Row 2: the search ──
+  const topbar = claimTopbar();
+  const search = tmSearch({
+    placeholder: 'Search sessions…',
+    ariaLabel: 'Search sessions',
+    onInput: (v) => {
+      if (!alive) return;
+      state.searchTerm = v.trim().toLowerCase();
+      render();
     },
   });
+  topbar?.appendChild(search.el);
+
+  // ── The page's filter bar: which kinds of row show, and which handover statuses ──
+  const kindRow = chipRow({
+    label: 'Show', chips: kindChips(),
+    onToggle: (value) => { state.kinds[value] = !state.kinds[value]; render(); },
+  });
+  const statusRow = chipRow({
+    label: 'Status', hint: CHIP_CLICK_HINT, chips: statusChips(),
+    onToggle: (value, ev) => {
+      state.handoverStatus = new Set(chipClickNext(ev, [...state.handoverStatus], value));
+      prefs?.patch?.({ screens: { sessions: { handoverStatus: [...state.handoverStatus] } } });
+      render();
+    },
+  });
+  filters.append(kindRow.el, statusRow.el);
+
+  // ── The rail: it marks the row it shows, and the mark goes when it closes ──
+  const rail = new RightRail({ host: railHost, label: 'Session details' });
+  const rowFor = (sel) => sel && list.querySelector(sel.kind === 'session'
+    ? `.ho[data-session-id="${CSS.escape(sel.id)}"]`
+    : `.ho-child[data-handover-id="${CSS.escape(sel.id)}"]`);
+  // Rows say they control the rail only while it is open: closed, `#right-rail` does not exist.
+  function paintSelected() {
+    for (const b of list.querySelectorAll('[aria-current]')) b.removeAttribute('aria-current');
+    for (const b of list.querySelectorAll('.ho, .ho-child')) {
+      if (state.selected) b.setAttribute('aria-controls', 'right-rail');
+      else b.removeAttribute('aria-controls');
+    }
+    rowFor(state.selected)?.setAttribute('aria-current', 'true');
+  }
+  state.onRailOpen = (sel) => { state.selected = sel; paintSelected(); };
+  state.onRailClose = () => {
+    // A detail still loading when the rail is closed must not reopen it when it lands.
+    nextOpen(state);
+    const closed = state.selected;
+    state.selected = null;
+    paintSelected();
+    // A rail swapped for another is still open. One opened by the route, or whose row was redrawn while it was open,
+    // has no opener to give focus back to: its row takes it, else the search.
+    queueMicrotask(() => {
+      if (!alive || rail.isOpen()) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      (rowFor(closed) ?? search.input).focus({ preventScroll: true });
+    });
+  };
+
+  const onSelect = ({ kind, id }, button) => {
+    const open = kind === 'session' ? openSessionDetail : openHandoverDetail;
+    open(rail, id, state, button).catch((e) => console.error('session detail failed', e));
+  };
+
+  // A status changed in the rail is the timeline's too: its row and the chip counts say the new word.
+  const onStatusChanged = (ev) => {
+    if (!alive) return;
+    const { id, status } = ev.detail || {};
+    let hit = false;
+    for (const s of state.sessions) {
+      for (const ho of s.handovers || []) if (ho.id === id) { ho.status = status; hit = true; }
+    }
+    for (const d of state.detailCache.values()) {
+      for (const ho of d?.handovers || []) if (ho.id === id) ho.status = status;
+    }
+    if (hit) render();
+  };
+
+  function kindChips(sessionCount = 0, handoverCount = 0) {
+    return [
+      { value: 'session', label: 'Threads', count: sessionCount, pressed: state.kinds.session },
+      { value: 'handover', label: 'Handovers', count: handoverCount, pressed: state.kinds.handover },
+    ];
+  }
+
+  function statusChips(counts = {}) {
+    return HO_STATUSES.map((s) => ({
+      value: s, label: HO_STATUS_LABEL[s], count: counts[s] || 0, pressed: state.handoverStatus.has(s),
+    }));
+  }
+
+  // No status chip pressed is no status filter.
+  const statusShown = (meta) => state.handoverStatus.size === 0 || state.handoverStatus.has(meta?.status || 'open');
+
+  function render() {
+    const all = state.sessions;
+    const handovers = handoverIndex(all);
+    const counts = {};
+    for (const ho of Object.values(handovers)) counts[ho.status || 'open'] = (counts[ho.status || 'open'] || 0) + 1;
+    const hoCount = Object.keys(handovers).length;
+    kindRow.update(kindChips(all.length, hoCount));
+    statusRow.update(statusChips(counts));
+
+    if (state.failed) {
+      setTopbarCount('');
+      return list.replaceChildren(stateBlock({
+        label: 'Error', headline: 'Sessions could not be loaded.',
+        hint: 'Check that the viewer is still running, then reload the page.',
+      }));
+    }
+    if (!state.loaded) return;
+
+    const matched = matchSessions(all, state.searchTerm);
+    const shown = state.kinds.session ? matched : [];
+    // A handover counts as visible when its thread shows, the Handovers toggle is on and its status chip admits it.
+    const shownHandovers = new Set();
+    if (state.kinds.handover) {
+      for (const s of shown) for (const id of s.handover_ids || []) if (statusShown(handovers[id])) shownHandovers.add(id);
+    }
+    const visible = shown.length + shownHandovers.size;
+    setTopbarCount(`${all.length} ${pluralize(all.length, 'thread', 'threads')} · ${hoCount} ${pluralize(hoCount, 'handover', 'handovers')}`
+      + (visible < all.length + hoCount ? ` · ${visible} visible` : ''));
+
+    if (!all.length) {
+      return list.replaceChildren(stateBlock({
+        label: 'Sessions', headline: 'No sessions yet', hint: 'Sessions appear here as you start and end your work cycles.',
+      }));
+    }
+    if (state.searchTerm && !matched.length) {
+      return list.replaceChildren(stateBlock({
+        label: 'Search', headline: 'No sessions match your search',
+        action: { label: 'Clear search', onClick: clearSearch },
+      }));
+    }
+    if (!shown.length) {
+      return list.replaceChildren(stateBlock({
+        label: 'Filters', headline: 'The Show filters hide every session',
+        action: { label: 'Show everything', onClick: showEverything },
+      }));
+    }
+    renderTimeline(list, {
+      sessions: shown.map((s) => ({
+        ...s,
+        handover_ids: state.kinds.handover ? (s.handover_ids || []).filter((id) => statusShown(handovers[id])) : [],
+      })),
+      handovers,
+      onSelect,
+      selected: state.selected,
+    });
+  }
+
+  function clearSearch() {
+    search.input.value = '';
+    search.input.dispatchEvent(new Event('input', { bubbles: true }));
+    search.input.focus();
+  }
+
+  // The empty state's button goes with the redraw, so focus lands on the first Show chip.
+  function showEverything() {
+    state.kinds = { session: true, handover: true };
+    render();
+    kindRow.el.querySelector('button')?.focus();
+  }
+
+  function renderBoard() {
+    const open = state.threads.filter((t) => t.status === 'open');
+    const parked = state.threads.filter((t) => t.status === 'parked');
+    board.hidden = !open.length && !parked.length;
+    board.replaceChildren(...[
+      open.length ? h('div', { class: 'tb-grid' }, open.map(threadCard)) : null,
+      parked.length ? h('details', { class: 'tb-parked' },
+        h('summary', {}, `${parked.length} parked`),
+        h('div', { class: 'tb-grid' }, parked.map(threadCard))) : null,
+    ].filter(Boolean));
+  }
+
+  // The session the route names (#/sessions/<id>) opens once the list is in; an id with no session opens nothing.
+  function routeId() {
+    try {
+      if (subpath?.[0]) return decodeURIComponent(subpath[0]);
+    } catch { return null; }
+    return params?.id || null;
+  }
+
+  listSessions().then((data) => {
+    if (!alive) return;
+    state.sessions = Array.isArray(data) ? data : [];
+    state.loaded = true;
+    render();
+    const id = routeId();
+    if (id && state.sessions.some((s) => s.id === id)) {
+      openSessionDetail(rail, id, state).catch((e) => console.error('session detail failed', e));
+    }
+  }, (e) => {
+    if (!alive) return;
+    console.error('sessions load failed', e);
+    state.failed = true;
+    render();
+  });
+
+  listThreads().then((data) => {
+    if (!alive) return;
+    state.threads = Array.isArray(data) ? data : [];
+    renderBoard();
+  }, () => {});
+
+  // Last, just before the disposer goes back: a mount that throws earlier leaves no window listener behind.
+  window.addEventListener('viewer:handover-status-changed', onStatusChanged);
+  return () => {
+    alive = false;
+    window.removeEventListener('viewer:handover-status-changed', onStatusChanged);
+    rail.close({ returnFocus: false });
+    kindRow.destroy();
+    statusRow.destroy();
+  };
 }
 
-async function openSessionDetail(rail, sid, state) {
-  const detail = state.detailCache.get(sid) || await getSessionDetail(sid);
-  state.detailCache.set(sid, detail);
-  rail.open({
-    kind: 'session',
-    render: () => renderSessionRail(detail),
-    onMount: (el) => bindRailClose(el, rail),
+// Every handover named by a session: id → { id, viewer_kind, tldr, status }.
+function handoverIndex(sessions) {
+  const out = {};
+  for (const s of sessions) {
+    for (const hid of s.handover_ids || []) {
+      if (out[hid]) continue;
+      const meta = (s.handovers || []).find((ho) => ho.id === hid) || {};
+      out[hid] = { id: hid, viewer_kind: meta.viewer_kind || '', tldr: meta.tldr || '', status: meta.status || 'open' };
+    }
+  }
+  return out;
+}
+
+// A session matches when the search is in its id, tldr, task ids, or a handover's id or tldr.
+function matchSessions(sessions, q) {
+  if (!q) return sessions;
+  return sessions.filter((s) => [
+    s.id || '', s.tldr || '', ...(s.task_ids || []), ...(s.handover_ids || []),
+    ...(s.handovers || []).map((ho) => ho.tldr || ''),
+  ].join(' ').toLowerCase().includes(q));
+}
+
+// An open or parked thread: a link to its session, with its resume line's copy button beside the link.
+function threadCard(t) {
+  const name = String(t.name ?? '');
+  const copy = h('button', {
+    type: 'button', class: 'tc-copy btn btn--ghost btn--sm', 'aria-label': `Copy resume line for ${name}`,
+  }, icon('copy', { size: 14 }), 'Resume line');
+  bindCopy(copy, `Resume: ${name} — ${t.next_action || t.tldr || ''}`);
+  const tags = [
+    ...(t.task_ids || []).slice(0, 4).map((id) => h('span', { class: 'tc-task' }, String(id))),
+    t.branch ? truncate(t.branch, { className: 'tc-branch' }) : null,
+  ].filter(Boolean);
+  return linkRow({
+    href: `#/sessions/${encodeURIComponent(name)}`,
+    name: truncate(name, { className: 'tc-name' }),
+    className: `thread-card thread-card-${t.status}`,
+    content: [
+      h('span', { class: 'tc-stale' }, t.staleness_days > 0 ? `${t.staleness_days}d` : 'today'),
+      t.tldr ? truncate(t.tldr, { lines: 2, className: 'tc-tldr' }) : null,
+      t.next_action ? h('span', { class: 'tc-next' }, `→ ${t.next_action}`) : null,
+      tags.length ? h('span', { class: 'tc-foot' }, tags) : null,
+    ],
+    controls: [copy],
   });
 }
 
-async function openHandoverDetail(rail, hid, state) {
+// Exported for the unit tests. A screen left while the detail loads opens nothing (the rail's host is gone).
+// `state.onRailOpen` / `state.onRailClose`, when the screen sets them, hear which row the rail shows.
+// Only the latest open is applied: a slow fetch for an earlier click must not open over a later one.
+const nextOpen = (state) => (state.openSeq = (state.openSeq || 0) + 1);
+
+export async function openSessionDetail(rail, sid, state, opener = null) {
+  const seq = nextOpen(state);
+  const detail = state.detailCache.get(sid) || await getSessionDetail(sid);
+  state.detailCache.set(sid, detail);
+  if (seq !== state.openSeq || !rail.host.isConnected || !detail?.session) return;
+  const s = detail.session;
+  const el = rail.open({
+    kind: 'session',
+    title: s.tldr || s.id,
+    opener,
+    onClose: () => state.onRailClose?.(),
+    // The button that opens a handover goes with this rail, so the handover's rail hands focus to this rail's opener.
+    ...renderSessionRail(detail, (hid) => openHandoverDetail(rail, hid, state, opener)),
+  });
+  if (el) state.onRailOpen?.({ kind: 'session', id: sid });
+}
+
+export async function openHandoverDetail(rail, hid, state, opener = null) {
   // Locate the session containing this handover, then pull its detail.
   const owner = state.sessions.find(s => (s.handover_ids || []).includes(hid));
   if (!owner) return;
+  const seq = nextOpen(state);
   const detail = state.detailCache.get(owner.id) || await getSessionDetail(owner.id);
   state.detailCache.set(owner.id, detail);
-  const h = (detail.handovers || []).find(x => x.id === hid);
-  if (!h) return;
-  rail.open({
+  if (seq !== state.openSeq || !rail.host.isConnected) return;
+  const ho = (detail?.handovers || []).find(x => x.id === hid);
+  if (!ho) return;
+  const el = rail.open({
     kind: 'handover',
-    render: () => renderHandoverRail(h, owner),
-    onMount: (el) => {
-      const cleanup = bindRailClose(el, rail);
-      const pill = el.querySelector('.ho-status-pill');
-      if (pill) {
-        pill.addEventListener('click', () => {
-          import('../components/right-rail.js').then(({ openStatusMenu }) => {
-            openStatusMenu(pill, h.id, h.status || 'open');
-          });
-        });
-      }
-      const copyBtn = el.querySelector('.rr-resume .copy');
-      if (copyBtn) bindCopy(copyBtn, h.resume_prompt || h.next_action || '');
-      return cleanup;
-    },
+    title: ho.tldr || ho.id,
+    opener,
+    onClose: () => state.onRailClose?.(),
+    ...renderHandoverRail(ho, owner),
   });
+  if (el) state.onRailOpen?.({ kind: 'handover', id: hid });
 }
 
-function bindRailClose(el, rail) {
-  const btn = el.querySelector('[data-role=rail-close]');
-  if (btn) btn.addEventListener('click', () => rail.close());
-  return () => {};
-}
+// The rail shares the timeline's formatter so the two never disagree about a session's span.
+const railSessionTimeLine = sessionTimeLine;
 
-function railSessionTimeLine(s) {
-  const isDateOnly = s.time_resolution === 'date-only';
-  if (isDateOnly) {
-    return formatAbsolute(s.start, { time: false });
-  }
-  const startFmt = formatAbsolute(s.start, { date: false });
-  const endFmt   = formatAbsolute(s.end,   { date: false });
-  let timeLine = (startFmt === endFmt) ? startFmt : `${startFmt} → ${endFmt}`;
-  if (s.duration > 0) {
-    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
-  }
-  return timeLine;
-}
+const taskLinks = (ids) => (ids || []).length
+  ? ids.map(id => h('a', { class: 'rr-task', href: `#/task/${encodeURIComponent(id)}` }, String(id)))
+  : ['—'];
 
-function renderSessionRail(detail) {
+// The rail's head and body for a session; the title (its tldr, or its id) is the rail's own.
+function renderSessionRail(detail, openHandover) {
   const s = detail.session;
-  return (
-    `<div class="rr-h">`
-    + `<span class="kind-pill session">THREAD</span>`
-    + `<span class="ts">${escapeHtml(railSessionTimeLine(s))}</span>`
-    + `<span class="actions">`
-    + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
-    + `</span></div>`
-    + `<div class="rr-title">${escapeHtml(s.id)}</div>`
-    + (s.tldr ? `<div class="rr-meta"><span>${escapeHtml(s.tldr)}</span></div>` : '')
-    + `<div class="rr-meta"><span>Tasks: ${(s.task_ids||[]).map(escapeHtml).join(', ') || '—'}</span></div>`
-    + (detail.handovers || []).map(h =>
-        `<div class="rr-section"><h4>${escapeHtml(h.viewer_kind.toUpperCase())} <span class="ct mono">${escapeHtml(h.id)}</span></h4>`
-        + `<div class="ho-summary">${escapeHtml(h.tldr || '')}</div></div>`).join('')
+  const handovers = detail.handovers || [];
+  const head = [
+    h('span', { class: 'rr-kind' }, 'Thread'),
+    h('span', { class: 'rr-when' }, railSessionTimeLine(s)),
+  ];
+  const body = [
+    s.tldr ? h('div', { class: 'rr-slug' }, s.id) : null,
+    h('div', { class: 'rr-meta' }, h('span', { class: 'rr-label' }, 'Tasks'), ...taskLinks(s.task_ids)),
+    h('section', { class: 'rr-section' },
+      h('h3', {}, 'Handovers ', h('span', { class: 'rr-count' }, String(handovers.length))),
+      ...handovers.map(ho => h('button', {
+        type: 'button',
+        class: 'rr-ho btn btn--ghost btn--sm',
+        'data-handover-id': ho.id,
+        on: { click: () => openHandover(ho.id) },
+      },
+        h('span', { class: 'rr-kind' }, kindLabel(ho.viewer_kind)),
+        h('span', { class: 'rr-ho__id' }, ho.id),
+        h('span', { class: 'rr-when' }, formatRelative(ho.created || ho.date)),
+      )),
+    ),
+  ].filter(Boolean);
+  return { head, body };
+}
+
+const FILES_SHOWN = 8;
+
+function checklist(title, items, mark) {
+  if (!(items || []).length) return null;
+  return h('section', { class: 'rr-section' },
+    h('h3', {}, `${title} `, h('span', { class: 'rr-count' }, String(items.length))),
+    h('ul', { class: 'rr-checklist' }, items.map(item => h('li', { class: 'rr-check' },
+      icon(mark, { size: 14 }),
+      h('span', {}, String(item)),
+    ))),
   );
 }
 
-function renderHandoverRail(h, owner) {
-  const fp = `.taskmaster/handovers/${h.id}.md`;
-  const status = h.status || 'open';
-  return (
-    `<div class="rr-h">`
-    + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
-    + `<span class="ho-status-pill ho-status-pill-${escapeHtml(status)}" `
-    +   `data-handover-id="${escapeHtml(h.id)}" data-status="${escapeHtml(status)}" `
-    +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
-    + `<span class="ts">${escapeHtml(formatRelative(h.created || h.date))}</span>`
-    + `<span class="actions">`
-    + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`
-    + `<button class="ic-btn" title="Open file — coming soon" disabled>↗</button>`
-    + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
-    + `</span></div>`
-    + `<div class="rr-title">${escapeHtml(h.tldr || h.id)}</div>`
-    + `<div class="rr-meta">`
-    + `<span>Session: <a href="#/sessions/${escapeHtml(owner.id)}">${escapeHtml(owner.id)}</a></span>`
-    + `<span class="filepath" title="Click to copy">${escapeHtml(fp)}</span>`
-    + `</div>`
-    + `<div class="rr-resume">`
-    + `<span class="label">RESUME</span>`
-    + `<button class="copy">⧉ copy</button>`
-    + `<div class="body">${escapeHtml(h.resume_prompt || h.next_action || '')}</div>`
-    + `</div>`
-    + `<div class="rr-section"><h4>What's done <span class="ct mono">${(h.done_items||[]).length}</span></h4>`
-    +   (h.done_items||[]).map(i => `<div class="checkitem done"><span class="mark">✓</span><span>${escapeHtml(i)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>What's open <span class="ct mono">${(h.open_items||[]).length}</span></h4>`
-    +   (h.open_items||[]).map(i => `<div class="checkitem open"><span class="mark">○</span><span>${escapeHtml(i)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>Related</h4>`
-    +   (h.task_ids||[]).map(t =>
-        `<div class="related-row"><span class="id">${escapeHtml(t)}</span></div>`).join('')
-    + `</div>`
-    + `<div class="rr-section"><h4>Files touched</h4><div class="files-list">`
-    +   (h.files_touched||[]).slice(0, 8).map(f =>
-        `<div class="files-row mod"><span class="pre">~</span><span>${escapeHtml(typeof f === 'string' ? f : f.path)}</span></div>`).join('')
-    + ((h.files_touched||[]).length > 8
-        ? `<div class="more">+ ${(h.files_touched||[]).length - 8} more…</div>` : '')
-    + `</div></div>`
-  );
+// The rail's head and body for one handover; the title (its tldr, or its id) is the rail's own.
+function renderHandoverRail(ho, owner) {
+  const fp = `.taskmaster/handovers/${ho.id}.md`;
+  const resume = ho.resume_prompt || ho.next_action || '';
+  const files = (ho.files_touched || []).map(f => (typeof f === 'string' ? f : f && f.path)).filter(Boolean);
+
+  const pathBtn = h('button', { type: 'button', class: 'rr-path btn btn--ghost btn--sm', 'aria-label': `Copy path ${fp}` },
+    icon('copy', { size: 14 }), truncate(fp));
+  bindCopy(pathBtn, fp);
+  const copyBtn = h('button', { type: 'button', class: 'btn btn--ghost btn--sm' }, icon('copy', { size: 14 }), 'Copy');
+  bindCopy(copyBtn, resume);
+
+  const head = [
+    h('span', { class: 'rr-kind' }, kindLabel(ho.viewer_kind)),
+    statusPill(ho.id, ho.status || 'open'),
+    h('span', { class: 'rr-when' }, formatRelative(ho.created || ho.date)),
+  ];
+  const body = [
+    h('div', { class: 'rr-slug' }, ho.id),
+    h('div', { class: 'rr-meta' },
+      h('span', { class: 'rr-label' }, 'Session'),
+      h('a', { href: `#/sessions/${encodeURIComponent(owner.id)}` }, owner.id),
+      pathBtn,
+    ),
+    h('section', { class: 'rr-resume' },
+      h('span', { class: 'rr-label' }, 'Resume'),
+      copyBtn,
+      h('div', { class: 'rr-resume__body' }, resume),
+    ),
+    checklist("What's done", ho.done_items, 'check'),
+    checklist("What's open", ho.open_items, 'minus'),
+    (ho.task_ids || []).length ? h('section', { class: 'rr-section' },
+      h('h3', {}, 'Related'),
+      h('div', { class: 'rr-meta' }, ...taskLinks(ho.task_ids)),
+    ) : null,
+    files.length ? h('section', { class: 'rr-section' },
+      h('h3', {}, 'Files touched'),
+      h('ul', { class: 'rr-files' },
+        ...files.slice(0, FILES_SHOWN).map(f => h('li', {}, truncate(f))),
+        files.length > FILES_SHOWN ? h('li', {}, `+ ${files.length - FILES_SHOWN} more`) : null,
+      ),
+    ) : null,
+  ].filter(Boolean);
+  return { head, body };
 }
 
 export default mount;

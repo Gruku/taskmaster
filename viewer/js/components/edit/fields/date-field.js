@@ -1,5 +1,6 @@
 // viewer/js/components/edit/fields/date-field.js
 import { h } from '../../../util/h.js';
+import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 
 const ISO_DATE_RE = /^(\d{4}-\d{2}-\d{2})/;
 
@@ -8,16 +9,17 @@ export const DateField = {
     const cls = ['ef-date']; if (!readOnly) cls.push('ef-editable');
     return h('span', { class: cls.join(' ') }, value == null ? '—' : String(value).slice(0, 10));
   },
-  edit({ value, onChange, onCommit, onCancel }) {
+  edit({ value, onChange, onCommit, onCancel, id, describedBy, autoFocus = true }) {
     const inp = h('input', { type: 'date', class: 'ef-date-input' });
     if (value) inp.value = String(value).slice(0, 10);
+    bindControl(inp, { id, describedBy });
     inp.addEventListener('input', () => onChange?.(inp.value));
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onCommit?.(inp.value); }
-      else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+      else cancelOnEscape(e, onCancel);
     });
     inp.addEventListener('blur', () => onCommit?.(inp.value));
-    queueMicrotask(() => inp.focus());
+    focusOnMount(inp, autoFocus);
     return inp;
   },
   coerce(raw) {

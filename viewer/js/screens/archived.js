@@ -1,92 +1,144 @@
-// Archived tasks — list of all tasks with status === 'archived', grouped by epic.
-// Read-only. No filters apart from search.
+// User intent: Archived lists every archived task, grouped under its epic's name, read-only apart from a search.
+// Rows are links that keep the id whole and the title's words in reach, and a board redraw never loses the reader's place.
 
-import { claimTopbar } from '../lib/topbar.js';
+import { claimTopbar, setTopbarCount, tmSearch } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
-import { emptyState } from '../components/empty-state.js';
+import { linkRow } from '../components/link-row.js';
+import { stateBlock } from '../components/empty-state.js';
+import { truncate } from '../lib/text.js';
+import { priorityMarker } from '../components/status.js';
 
 export const meta = { title: 'Archived', icon: '⌫', sidebarKey: 'archived' };
 
+const NONE = '__none__';
+
+function archivedTasks(backlog) {
+  if (!backlog || typeof backlog !== 'object' || !Array.isArray(backlog.tasks)) return [];
+  return backlog.tasks.filter((t) => t && String(t.status || '').toLowerCase() === 'archived');
+}
+
+/** Archived tasks matching `query` (id or title, case-insensitive), grouped by epic: listed epics in backlog order,
+ *  then unlisted epic ids alphabetically, then '__none__' ("No epic"). Label = epic name, else title, else id. */
+export function archivedGroups(backlog, query = '') {
+  const q = String(query ?? '').trim().toLowerCase();
+  const tasks = archivedTasks(backlog)
+    .filter((t) => !q || `${t.id} ${t.title || ''}`.toLowerCase().includes(q));
+  if (!tasks.length) return [];
+
+  const byKey = new Map();
+  for (const t of tasks) {
+    const key = t.epic ? String(t.epic) : NONE;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(t);
+  }
+  const epics = Array.isArray(backlog.epics) ? backlog.epics.filter((e) => e && e.id != null) : [];
+  const listed = new Map(epics.map((e) => [String(e.id), e]));
+  const order = [
+    ...[...listed.keys()].filter((k) => byKey.has(k)),
+    ...[...byKey.keys()].filter((k) => k !== NONE && !listed.has(k)).sort(),
+    ...(byKey.has(NONE) ? [NONE] : []),
+  ];
+  return order.map((key) => {
+    const e = listed.get(key);
+    const label = key === NONE ? 'No epic' : (e?.name || e?.title || key);
+    return { key, label, tasks: byKey.get(key) };
+  });
+}
+
+function span(className, text) {
+  const el = document.createElement('span');
+  el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+function archivedRow(t) {
+  const name = span('arch-name', '');
+  name.append(span('arch-id', String(t.id)), truncate(t.title || String(t.id), { lines: 2, className: 'arch-title' }));
+  const reason = String(t.archived_reason || '').trim();
+  const row = linkRow({
+    href: `#/task/${encodeURIComponent(t.id)}`,
+    name,
+    content: [
+      t.priority ? priorityMarker(t.priority) : null,
+      t.phase ? span('arch-phase', `Phase ${t.phase}`) : null,
+      reason ? span('arch-reason', reason.charAt(0).toUpperCase() + reason.slice(1)) : null,
+    ].filter(Boolean),
+    className: 'arch-row',
+  });
+  row.dataset.taskId = String(t.id);
+  return row;
+}
+
 export async function mount(root, { store }) {
+  let alive = true;
+  let q = '';
+
   const page = document.createElement('div');
   page.className = 'archived-page';
-
-  const head = claimTopbar();
-  const subcount = document.createElement('span');
-  subcount.className = 'tm-subcount';
-  subcount.textContent = '… archived tasks';
-  head.appendChild(subcount);
-
-  const search = document.createElement('div');
-  search.className = 'tm-search';
-  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Filter by title or id…" /><span class="cmp-kbd">⌘K</span>`;
-  const searchInput = search.querySelector('input');
-  let q = '';
-  let timer = null;
-  searchInput.addEventListener('input', () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { q = searchInput.value.trim().toLowerCase(); paint(); }, 180);
-  });
-  head.appendChild(search);
-
-  const list = document.createElement('div');
-  list.className = 'archived-list';
-  page.appendChild(list);
-
   root.appendChild(page);
 
+  // Row 2: the search only.
+  const topbar = claimTopbar();
+  const search = tmSearch({
+    placeholder: 'Filter by title or id…',
+    ariaLabel: 'Filter archived tasks',
+    onInput: (value) => {
+      if (!alive) return;
+      q = value.trim();
+      paint();
+    },
+  });
+  topbar.appendChild(search.el);
+
+  function clearSearch() {
+    search.input.value = '';
+    // The field's own listener hides its clear button; its debounced repaint after ours is a no-op.
+    search.input.dispatchEvent(new Event('input', { bubbles: true }));
+    q = '';
+    paint();
+    search.input.focus();
+  }
+
   function paint() {
-    const backlog = store.getBacklog() || { tasks: [], epics: [] };
-    const tasks = (Array.isArray(backlog.tasks) ? backlog.tasks : [])
-      .filter(t => String(t.status || '').toLowerCase() === 'archived');
+    if (!alive) return;
+    const active = document.activeElement;
+    const focusedId = active?.classList?.contains('link-row__link')
+      ? active.closest('.arch-row')?.dataset.taskId ?? null
+      : null;
 
-    const filtered = q
-      ? tasks.filter(t => `${t.id} ${t.title || ''}`.toLowerCase().includes(q))
-      : tasks;
+    const backlog = store.getBacklog();
+    const total = archivedTasks(backlog).length;
+    const groups = archivedGroups(backlog, q);
+    const shown = groups.reduce((n, g) => n + g.tasks.length, 0);
+    const noun = `${total} ${pluralize(total, 'archived task', 'archived tasks')}`;
+    setTopbarCount(q && shown < total ? `${noun} · ${shown} visible` : noun);
 
-    subcount.textContent = `${filtered.length} ${pluralize(filtered.length, 'archived task', 'archived tasks')}`;
-
-    list.replaceChildren();
-    if (!filtered.length) {
-      list.appendChild(emptyState({
-        headline: q ? `No archived tasks match "${q}"` : 'No archived tasks yet',
+    if (!total) {
+      page.replaceChildren(stateBlock({ label: 'Archived', headline: 'No archived tasks yet' }));
+    } else if (!shown) {
+      page.replaceChildren(stateBlock({
+        label: 'Search',
+        headline: `No archived tasks match "${q}"`,
+        action: { label: 'Clear search', onClick: clearSearch },
       }));
-      return;
+    } else {
+      page.replaceChildren(...groups.map((g, i) => {
+        const section = document.createElement('section');
+        section.className = 'arch-group';
+        const h = document.createElement('h2');
+        h.className = 'arch-group-h';
+        h.id = `arch-group-${i}`;
+        h.append(span('arch-group-label', g.label), span('arch-group-count', String(g.tasks.length)));
+        section.setAttribute('aria-labelledby', h.id);
+        section.append(h, ...g.tasks.map(archivedRow));
+        return section;
+      }));
     }
 
-    // Group by epic id; "(no epic)" bucket for orphans.
-    const groups = new Map();
-    for (const t of filtered) {
-      const key = t.epic || '__none__';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(t);
-    }
-
-    for (const [epicId, items] of groups) {
-      const grp = document.createElement('section');
-      grp.className = 'arch-group';
-      const h = document.createElement('h3');
-      h.className = 'arch-group-h';
-      h.textContent = epicId === '__none__' ? '— no epic —' : epicId;
-      const cnt = document.createElement('span');
-      cnt.className = 'arch-group-count';
-      cnt.textContent = `${items.length}`;
-      h.appendChild(cnt);
-      grp.appendChild(h);
-
-      for (const t of items) {
-        const row = document.createElement('a');
-        row.className = 'arch-row';
-        row.href = `#/task/${encodeURIComponent(t.id)}`;
-        row.innerHTML = `
-          <span class="arch-id">${escapeHtml(t.id)}</span>
-          <span class="arch-title">${escapeHtml(t.title || '')}</span>
-          <span class="arch-meta">${t.phase ? escapeHtml(t.phase) : '—'}</span>
-          <span class="arch-reason">${escapeHtml(t.archived_reason || '')}</span>
-        `;
-        grp.appendChild(row);
-      }
-      list.appendChild(grp);
+    if (focusedId != null) {
+      const row = [...page.querySelectorAll('.arch-row')].find((r) => r.dataset.taskId === focusedId);
+      (row?.querySelector('.link-row__link') ?? search.input).focus({ preventScroll: true });
     }
   }
 
@@ -94,11 +146,7 @@ export async function mount(root, { store }) {
   paint();
 
   return () => {
-    if (timer) clearTimeout(timer);
+    alive = false;
     unsub();
   };
-}
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }

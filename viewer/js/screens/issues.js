@@ -1,485 +1,353 @@
+// User intent: the Issues board — columns that never collapse and scroll inside themselves, one column at a time behind
+// tabs on a phone, severity and component chips in the page's filter rail, a labelled View switcher, a real resolved
+// shelf, and a list that is read again on every visit and keeps the user's focus when the board changes under it.
 import { issueCard, issueRow } from '../components/issue-card.js';
-import { severityLabel } from '../util/severity-label.js';
-import { pluralize } from '../util/pluralize.js';
-import { emptyState } from '../components/empty-state.js';
+import { columnTabs } from '../components/column-tabs.js';
+import { stateBlock } from '../components/empty-state.js';
+import { chipRow, filterChip } from '../components/chips.js';
+import { filterRail, labelled } from '../components/list-toolbar.js';
+import { icon } from '../components/icon.js';
+import { ISSUE_STATUS, SEVERITY } from '../components/status.js';
 import * as api from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, setTopbarCount, tmSearch, tmSegmented } from '../lib/topbar.js';
+import { keepFocus } from '../lib/keep-focus.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
+import { pluralize } from '../util/pluralize.js';
+import { h } from '../util/h.js';
 import { groupByStatus, groupBySeverity } from '../util/issues-grouping.js';
-import { legacyLinksToTyped } from '../components/link-pills.js';
+import { filterIssues, issueSeverity } from '../util/issues-filter.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
-const SEVERITIES = ['Critical', 'High', 'Medium', 'Low'];
+const VIEWS = [{ key: 'A', label: 'Hybrid' }, { key: 'B', label: 'Status' }, { key: 'D', label: 'Severity' }, { key: 'C', label: 'List' }];
+const PHONE = '(max-width: 768px)';
 
-function _renderSeverityChips(filters, counts, activeSet, onChange) {
-  // Remove only our own chips — the "Severity:" label sibling is preserved.
-  filters.querySelectorAll('.issues__sev-chip').forEach(el => el.remove());
+const statusLabel = (key) => ISSUE_STATUS[key].label;
 
-  const allChip = document.createElement('button');
-  allChip.type = 'button';
-  allChip.className = 'issues__sev-chip issues__sev-chip--all' + (activeSet.size === 0 ? ' is-active' : '');
-  allChip.setAttribute('role', 'button');
-  allChip.setAttribute('aria-pressed', String(activeSet.size === 0));
-  allChip.title = 'Show all severities';
-  allChip.innerHTML = `<span class="lbl">All</span><span class="count">${counts.__all}</span>`;
-  allChip.addEventListener('click', () => onChange(new Set()));
-  filters.appendChild(allChip);
-
-  for (const sev of SEVERITIES) {
-    const c = document.createElement('button');
-    c.type = 'button';
-    c.className = 'issues__sev-chip' + (activeSet.has(sev) ? ' is-active' : '');
-    c.dataset.sev = sev;
-    c.setAttribute('role', 'button');
-    c.setAttribute('aria-pressed', String(activeSet.has(sev)));
-    c.title = CHIP_CLICK_HINT;
-    c.innerHTML = `
-      <span class="dot" aria-hidden="true"></span>
-      <span class="lbl">${sev}</span>
-      <span class="count">${counts[sev] || 0}</span>`;
-    c.addEventListener('click', (ev) => {
-      const current = [...activeSet];
-      const next = new Set(chipClickNext(ev, current, sev));
-      onChange(next);
-    });
-    filters.appendChild(c);
+// The columns a view shows, from the issues the filters let through; `all` decides whether Duplicate has a column.
+function columnsFor(view, shown, all) {
+  const status = groupByStatus(shown);
+  const col = (key, label, items, kind = 'card') => ({ key, label, items, kind });
+  if (view === 'B') {
+    const cols = [col('open', statusLabel('open'), status.open), col('investigating', statusLabel('investigating'), status.investigating),
+      col('fixed', statusLabel('fixed'), status.fixed, 'row'), col('wontfix', statusLabel('wontfix'), status.wontfix, 'row')];
+    if (all.some((i) => i?.status === 'duplicate')) cols.push(col('duplicate', statusLabel('duplicate'), status.duplicate, 'row'));
+    return cols;
   }
+  if (view === 'D') {
+    const bySeverity = groupBySeverity([...status.investigating, ...status.open]);
+    return Object.keys(SEVERITY).map((key) => col(key, SEVERITY[key].label, bySeverity[key]));
+  }
+  if (view === 'C') return [col('active', 'Open and investigating', [...status.investigating, ...status.open])];
+  return [col('investigating', statusLabel('investigating'), status.investigating), col('open', statusLabel('open'), status.open)];
 }
 
-export async function mount(root, { store, prefs }) {
-  // Gotcha: `prefs` is the patch helper, NOT the data object.
-  // Read persisted state from store.getPrefs(), then use prefs.patch() to save.
-  root.innerHTML = '';
-  const screen = document.createElement('section');
-  screen.className = 'issues';
+export function mount(root, { store, prefs }) {
+  // `prefs` is the patch helper; what was saved is read from the store.
+  const saved = store.getPrefs()?.screens?.issues ?? {};
+  let view = VIEWS.some((v) => v.key === saved.view) ? saved.view : 'A';
+  let promotedOnly = saved.promotedFromBug === true;
+  let severities = [];
+  let components = [];
+  let search = '';
+  let failed = false;
+  let alive = true;
+  let shelfOpen = false;
+  const expandedIds = new Set();
+  const selectedByView = {};   // the phone tab picked in each view, for as long as the screen is mounted
 
-  // ---- topbar (#topbar-actions)
+  root.replaceChildren();
+  const screen = h('section', { class: 'issues' });
+
+  // ── Row 2: search and the one view control ──
   const topbar = claimTopbar();
-  const subcount = tmSubcount('… issues');
-  const searchBuilt = tmSearch({
-    placeholder: 'Search issues…',
-    onInput: (v) => { searchTerm = v.trim().toLowerCase(); render(); },
+  const searchBuilt = tmSearch({ placeholder: 'Search issues…', onInput: (v) => { search = v; paint(); } });
+  const searchInput = searchBuilt.input;
+  const viewSwitch = tmSegmented(VIEWS, { value: view, onChange: setView });
+  topbar?.append(searchBuilt.el, labelled({ label: 'View', control: viewSwitch }));
+
+  // ── The filter rail: Severity, Component, From a bug, Clear ──
+  const rail = filterRail({ onClear: clear });
+  const severityRow = chipRow({
+    label: 'Severity', chips: severityChips([]), hint: CHIP_CLICK_HINT,
+    onToggle: (value, ev) => { severities = chipClickNext(ev, severities, value); paint(); },
   });
-
-  // Severity chip row stays as a screen-local element (filters, not a top-level
-  // control) but we move it into the topbar visually so it sits with the rest.
-  const filters = document.createElement('div');
-  filters.className = 'tm-chip-row issues__filters';
-  // Persistent label — _renderSeverityChips() removes only its own chips, keeping this label.
-  const sevLabel = document.createElement('span');
-  sevLabel.className = 'issues__chip-row-label';
-  sevLabel.textContent = 'Severity:';
-  filters.appendChild(sevLabel);
-  // Chips are built (and rebuilt on each render) by _renderSeverityChips() below.
-
-  // Fix: read persisted view from store.getPrefs(), not prefs.getPrefs()
-  const initialView = (store.getPrefs()?.screens?.issues?.view) || 'A';
-  const toggle = tmSegmented(
-    [
-      { key: 'A', label: 'Hybrid' },
-      { key: 'B', label: 'Status' },
-      { key: 'D', label: 'Severity' },
-      { key: 'C', label: 'List' },
-    ],
-    { value: initialView, onChange: setView },
-  );
-  const newBtn = tmAction({
-    icon: '+', label: 'Issue', variant: 'primary',
-    title: 'New issue — coming soon',
-    disabled: true,
+  const componentRow = chipRow({
+    label: 'Component', chips: [], hint: CHIP_CLICK_HINT,
+    onToggle: (value, ev) => { components = chipClickNext(ev, components, value); paint(); },
   });
+  componentRow.el.dataset.grow = '';
+  const promotedChip = filterChip({
+    label: 'From a bug', value: 'promoted', pressed: promotedOnly, count: 0, title: 'Only issues promoted from a bug',
+    onToggle: () => { promotedOnly = !promotedOnly; persist({ promotedFromBug: promotedOnly }); paint(); },
+  });
+  rail.add(severityRow.el, componentRow.el, promotedChip);
 
-  // Component chip-row (populated dynamically once issues load).
-  const compRow = document.createElement('div');
-  compRow.className = 'tm-chip-row issues__components';
-  // Persistent label — _renderComponentChips() removes only its own chips, keeping this label.
-  const compLabel = document.createElement('span');
-  compLabel.className = 'issues__chip-row-label';
-  compLabel.textContent = 'Components:';
-  compRow.appendChild(compLabel);
+  const notice = h('div', { class: 'issues__notice', role: 'status' });
+  notice.hidden = true;
+  const stateHost = h('div', { class: 'issues__state' });
 
-  topbar?.appendChild(subcount);
-  topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(filters);
-  topbar?.appendChild(compRow);
-  topbar?.appendChild(toggle);
-  topbar?.appendChild(newBtn);
+  // ── The board: phone tabs, then the columns, which scroll sideways inside themselves ──
+  const tabs = columnTabs({ label: 'Issue columns', columns: [], selected: null, onSelect: (key) => {
+    selectedByView[view] = key;
+    paintPanels();
+  } });
+  const colsEl = h('div', { class: 'issues-board__cols' });
+  const board = h('div', { class: 'issues-board' }, tabs.el, colsEl);
+  const sections = new Map();   // column key → its section, reused across paints and views
+  let shownCols = [];
+  let drawnView = null;
 
-  // ---- columns + resolved shelf
-  const columns = document.createElement('div');
-  columns.className = 'issues__columns';
-  const investigatingCol = document.createElement('div');
-  investigatingCol.className = 'issues__column';
-  investigatingCol.innerHTML = `
-  <h2 class="issues__column-header">
-    <span class="issues__column-name">Investigating</span>
-    <span class="issues__column-tagline">— actively under triage</span>
-    <span class="issues__column-count" data-count></span>
-  </h2>`;
-  const investigatingList = document.createElement('div');
-  investigatingCol.appendChild(investigatingList);
+  // ── The resolved shelf ──
+  const shelfText = h('span', { class: 'issues-shelf__label' });
+  const shelfToggle = h('button', { type: 'button', class: 'issues-shelf__toggle', 'aria-expanded': 'false',
+    'aria-controls': 'issues-shelf-list', 'data-focus': 'issues-shelf' }, icon('chevron', { size: 14 }), shelfText);
+  const shelfList = h('div', { id: 'issues-shelf-list' });
+  shelfList.hidden = true;
+  shelfToggle.addEventListener('click', () => {
+    shelfOpen = !shelfOpen;
+    shelfToggle.setAttribute('aria-expanded', String(shelfOpen));
+    shelfList.hidden = !shelfOpen;
+  });
+  const shelf = h('section', { class: 'issues-shelf' }, h('h2', { class: 'issues-shelf__head' }, shelfToggle), shelfList);
 
-  const openCol = document.createElement('div');
-  openCol.className = 'issues__column';
-  openCol.innerHTML = `
-  <h2 class="issues__column-header">
-    <span class="issues__column-name">Open</span>
-    <span class="issues__column-tagline">— confirmed, not yet started</span>
-    <span class="issues__column-count" data-count></span>
-  </h2>`;
-  const openList = document.createElement('div');
-  openCol.appendChild(openList);
+  screen.append(rail.el, notice, stateHost, board, shelf);
+  root.append(screen);
 
-  columns.appendChild(investigatingCol);
-  columns.appendChild(openCol);
-  screen.appendChild(columns);
+  const mq = typeof matchMedia === 'function' ? matchMedia(PHONE) : null;
+  const onMedia = () => paint();
+  mq?.addEventListener?.('change', onMedia);
 
-  // ---- Status kanban shell (view B) — built once, toggled per render
-  const kanban = document.createElement('div');
-  kanban.className = 'issues__columns issues__columns--kanban';
-  kanban.style.display = 'none';
-  screen.appendChild(kanban);
-
-  const KANBAN_STATUS_COLS = [
-    { key: 'open',          label: 'Open',          tagline: '— confirmed, not yet started', density: 'card' },
-    { key: 'investigating', label: 'Investigating',  tagline: '— actively under triage',     density: 'card' },
-    { key: 'fixed',         label: 'Fixed',          tagline: '— resolved',                  density: 'row'  },
-    { key: 'wontfix',       label: 'Wontfix',        tagline: '— closed without fix',        density: 'row'  },
-  ];
-
-  function _buildKanbanCol({ key, label, tagline }) {
-    const col = document.createElement('div');
-    col.className = 'issues__kanban-col';
-    col.dataset.key = key;
-    col.innerHTML = `
-      <h2 class="issues__column-header">
-        <span class="issues__column-name">${label}</span>
-        <span class="issues__column-tagline">${tagline}</span>
-        <span class="issues__column-count" data-count></span>
-      </h2>`;
-    const body = document.createElement('div');
-    body.className = 'issues__kanban-col-body';
-    col.appendChild(body);
-    return { col, body };
+  function persist(patch) {
+    prefs?.patch?.({ screens: { issues: patch } });
   }
 
-  const statusKanbanCols = {};
-  for (const desc of KANBAN_STATUS_COLS) {
-    const { col, body } = _buildKanbanCol(desc);
-    statusKanbanCols[desc.key] = { col, body, density: desc.density };
-    kanban.appendChild(col);
+  function setView(next) {
+    view = next;
+    persist({ view });
+    paint();
   }
 
-  const KANBAN_SEVERITY_COLS = [
-    { key: 'Critical', label: 'Critical', tagline: '— must-fix' },
-    { key: 'High',     label: 'High',     tagline: '— prioritize' },
-    { key: 'Medium',   label: 'Medium',   tagline: '— upcoming' },
-    { key: 'Low',      label: 'Low',      tagline: '— backlog' },
-  ];
-
-  const sevKanbanCols = {};
-  for (const desc of KANBAN_SEVERITY_COLS) {
-    const { col, body } = _buildKanbanCol(desc);
-    col.style.display = 'none';
-    sevKanbanCols[desc.key] = { col, body };
-    kanban.appendChild(col);
+  function clear() {
+    severities = [];
+    components = [];
+    if (promotedOnly) { promotedOnly = false; persist({ promotedFromBug: false }); }
+    search = '';
+    searchInput.value = '';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    paint();
   }
 
-  function _showKanbanCols(active /* 'status' | 'severity' */) {
-    for (const k of Object.keys(statusKanbanCols)) {
-      statusKanbanCols[k].col.style.display = (active === 'status') ? '' : 'none';
+  // Only the latest request is applied: a slower earlier reply never overwrites a newer list or says it failed.
+  let loadSeq = 0;
+  function load() {
+    const seq = ++loadSeq;
+    failed = false;
+    paint();
+    api.getIssues({ includeResolved: true }).then((data) => {
+      if (!alive || seq !== loadSeq) return;
+      store.setIssues(data?.issues ?? []);   // the subscription repaints
+    }, (e) => {
+      if (!alive || seq !== loadSeq) return;
+      console.error('issues load failed', e);
+      failed = true;
+      paint();
+    });
+  }
+
+  // A pressed value no issue has any more is still offered, at 0, so it can be released.
+  function severityChips(issues) {
+    const counts = new Map();
+    for (const i of issues) {
+      const key = issueSeverity(i);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    for (const k of Object.keys(sevKanbanCols)) {
-      sevKanbanCols[k].col.style.display = (active === 'severity') ? '' : 'none';
-    }
+    return Object.keys(SEVERITY).map((key) => ({ value: key, label: SEVERITY[key].label, count: counts.get(key) ?? 0,
+      pressed: severities.includes(key) }));
   }
 
-  const resolvedShelf = document.createElement('section');
-  resolvedShelf.className = 'issues__resolved-shelf';
-  const resolvedHeader = document.createElement('header');
-  resolvedHeader.className = 'issues__resolved-header';
-  const resolvedList = document.createElement('div');
-  resolvedList.className = 'issues__resolved-list';
-  resolvedList.hidden = true;
-  resolvedHeader.setAttribute('role', 'button');
-  resolvedHeader.setAttribute('tabindex', '0');
-  resolvedHeader.setAttribute('aria-expanded', 'false');
-  const toggleResolved = () => {
-    resolvedList.hidden = !resolvedList.hidden;
-    resolvedHeader.setAttribute('aria-expanded', String(!resolvedList.hidden));
-    resolvedHeader.querySelector('.caret').textContent = resolvedList.hidden ? '▾' : '▴';
+  function componentChips(issues) {
+    const counts = new Map();
+    for (const i of issues) if (i?.component) counts.set(i.component, (counts.get(i.component) ?? 0) + 1);
+    for (const c of components) if (!counts.has(c)) counts.set(c, 0);
+    return [...counts.keys()].sort().map((c) => ({ value: c, label: c, count: counts.get(c), pressed: components.includes(c) }));
+  }
+
+  // The chip's own paint is private to chips.js; these are the parts a new count or toggle changes.
+  function paintPromotedChip(count) {
+    promotedChip.setAttribute('aria-pressed', String(promotedOnly));
+    promotedChip.disabled = count === 0 && !promotedOnly;
+    promotedChip.querySelector('.chip__count').textContent = String(count);
+  }
+
+  function paintRail(issues) {
+    rail.setClearable(severities.length > 0 || components.length > 0 || promotedOnly || search.trim() !== '');
+    severityRow.update(severityChips(issues));
+    const comps = componentChips(issues);
+    componentRow.el.hidden = comps.length === 0;
+    componentRow.update(comps);
+    paintPromotedChip(issues.filter((i) => Array.isArray(i?.promoted_from) && i.promoted_from.length > 0).length);
+  }
+
+  function showState(block) {
+    board.hidden = true;
+    shelf.hidden = true;
+    stateHost.hidden = false;
+    stateHost.replaceChildren(block);
+  }
+
+  function section(key) {
+    let s = sections.get(key);
+    if (s) return s;
+    const panelId = `issues-col-${key}`;
+    const name = h('span', { class: 'issues-col__name' });
+    const count = h('span', { class: 'issues-col__count' });
+    const head = h('h2', { class: 'issues-col__head', id: `${panelId}-head` }, name, count);
+    const list = h('div', { class: 'issues-col__list' });
+    // The browser scrolls the focused link, not the card around it; the whole card (its ring) must clear the column's fade. Phone lists do not scroll themselves, so they are left to the page.
+    list.addEventListener('focusin', (e) => { if (list.scrollHeight > list.clientHeight && e.target.matches?.(':focus-visible')) e.target.closest?.('.issue-card')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
+    s = { key, el: h('section', { class: 'issues-col', id: panelId }, head, list), head, name, count, list };
+    sections.set(key, s);
+    return s;
+  }
+
+  // The panel contract of columnTabs: tab panels only on a phone with two or more columns, else each column is
+  // labelled by its own head and shows.
+  function paintPanels() {
+    const phone = !!mq?.matches && shownCols.length >= 2;
+    const keys = shownCols.map((c) => c.key);
+    const selected = keys.includes(selectedByView[view]) ? selectedByView[view] : keys[0];
+    for (const c of shownCols) {
+      const s = sections.get(c.key);
+      if (phone) {
+        s.el.setAttribute('role', 'tabpanel');
+        s.el.setAttribute('aria-labelledby', `${s.el.id}-tab`);
+        s.el.hidden = c.key !== selected;
+      } else {
+        s.el.removeAttribute('role');
+        s.el.setAttribute('aria-labelledby', s.head.id);
+        s.el.hidden = false;
+      }
+    }
+    return selected;
+  }
+
+  function drawBoard(shown, all) {
+    const tasksIndex = Object.fromEntries((store.getBacklog()?.tasks ?? []).map((t) => [t.id, t]));
+    const agingCfg = store.getPrefs()?.issues?.aging ?? {};
+    const showStatus = view === 'D' || view === 'C';
+    const onToggleEvidence = (id) => {
+      if (expandedIds.has(id)) expandedIds.delete(id);
+      else expandedIds.add(id);
+      paint();
+    };
+    // Evidence already measured as cut keeps its "Show all" through a redraw of the same view, so focus on it can be put
+    // back; another view lays its cards out at another width and measures them afresh.
+    const revealed = new Set(view !== drawnView ? [] : [...colsEl.querySelectorAll('.issue-card__more:not([hidden])')]
+      .map((b) => b.closest('.issue-card')?.dataset.issueId));
+    drawnView = view;
+    shownCols = columnsFor(view, shown, all);
+    for (const c of shownCols) {
+      const s = section(c.key);
+      s.name.textContent = c.label;
+      s.count.textContent = String(c.items.length);
+      s.list.replaceChildren(...(c.items.length
+        ? c.items.map((i) => (c.kind === 'row' ? issueRow(i, { narrow: true }) : issueCard(i, {
+          tasksIndex, agingCfg, expanded: expandedIds.has(i.id), revealed: revealed.has(i.id), onToggleEvidence, showStatus,
+        })))
+        : [h('p', { class: 'issues-col__empty' }, 'None')]));
+    }
+    // Move sections only when the view's set or order changed: a moved node drops its focus, and the sideways scroll
+    // of the columns must survive a poll.
+    const want = shownCols.map((c) => sections.get(c.key).el);
+    const have = [...colsEl.children];
+    if (want.length !== have.length || want.some((el, i) => el !== have[i])) {
+      const x = colsEl.scrollLeft;
+      colsEl.replaceChildren(...want);
+      colsEl.scrollLeft = x;
+    }
+    const selected = paintPanels();
+    for (const c of shownCols) {
+      const { list } = sections.get(c.key);
+      if (!list.dataset.edge) { list.dataset.edge = '1'; list.addEventListener('scroll', markEdges, { passive: true }); edgeObserver?.observe(list); }
+    }
+    requestAnimationFrame(markEdges);
+    tabs.update({
+      columns: shownCols.map((c) => ({ key: c.key, label: c.label, count: c.items.length, panelId: `issues-col-${c.key}` })),
+      selected,
+    });
+  }
+
+  // A cue for what is cut: data-more marks a scroller with content past its far edge, and the CSS fades that edge.
+  const edgeOf = (el, vertical) => (vertical ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
+    : el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  function markEdges() {
+    colsEl.toggleAttribute('data-more', edgeOf(colsEl, false));
+    for (const s of sections.values()) s.list.toggleAttribute('data-more', edgeOf(s.list, true));
+  }
+  colsEl.addEventListener('scroll', markEdges, { passive: true });
+  const edgeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(markEdges) : null;
+  edgeObserver?.observe(colsEl);
+
+  function drawShelf(shown) {
+    if (view === 'B') { shelf.hidden = true; return; }
+    const status = groupByStatus(shown);
+    const resolved = [...status.fixed, ...status.wontfix, ...status.duplicate];
+    shelfText.textContent = `Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
+    shelfList.replaceChildren(...resolved.map((i) => issueRow(i)));
+    shelf.hidden = resolved.length === 0;
+  }
+
+  function draw() {
+    const all = store.getIssues();
+    const issues = Array.isArray(all) ? all : null;
+    paintRail(issues ?? []);
+    notice.hidden = !(failed && issues);
+    if (!issues) {
+      setTopbarCount('');
+      showState(failed
+        ? stateBlock({ state: 'error', label: 'Issues', headline: 'Could not load issues.', action: { label: 'Try again', onClick: load } })
+        : stateBlock({ state: 'loading', busy: true, headline: 'Loading issues…' }));
+      return;
+    }
+    const narrowed = severities.length > 0 || components.length > 0 || promotedOnly || search.trim() !== '';
+    const shown = filterIssues(issues, { search, severities, components, promotedOnly });
+    setTopbarCount(`${issues.length} ${pluralize(issues.length, 'issue', 'issues')}${narrowed && shown.length < issues.length ? ` · ${shown.length} visible` : ''}`);
+    if (!issues.length) return showState(stateBlock({ label: 'Issues', headline: 'No issues recorded yet.' }));
+    if (!shown.length) {
+      return showState(stateBlock({ label: 'No matches', headline: 'No issues match these filters.', action: { label: 'Clear filters', onClick: clear } }));
+    }
+    stateHost.replaceChildren();
+    stateHost.hidden = true;
+    board.hidden = false;
+    drawBoard(shown, issues);
+    drawShelf(shown);
+  }
+
+  // Focus in the screen is put back on the same control in the fresh DOM, or handed on, never dropped to <body>.
+  function paint() {
+    // A debounced search (or Clear's own input event) can fire after the screen is gone; the topbar is the next screen's.
+    if (!alive) return;
+    const back = keepFocus(screen, {
+      fallback: () => screen.querySelector('.issues-col:not([hidden]) a[href]') ?? stateHost.querySelector('button') ?? searchInput,
+    });
+    draw();
+    back();
+  }
+
+  notice.append(h('span', {}, 'Could not refresh issues — showing the list loaded earlier.'),
+    h('button', { type: 'button', class: 'btn btn--secondary btn--sm', on: { click: load } }, 'Try again'));
+
+  const unsubscribe = [store.subscribe('issues', paint), store.subscribe('backlog', paint)];
+  load();
+
+  return () => {
+    alive = false;
+    for (const off of unsubscribe) off();
+    mq?.removeEventListener?.('change', onMedia);
+    edgeObserver?.disconnect();
+    tabs.destroy();
+    severityRow.destroy();
+    componentRow.destroy();
   };
-  resolvedHeader.addEventListener('click', toggleResolved);
-  resolvedHeader.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleResolved(); }
-  });
-  resolvedShelf.appendChild(resolvedHeader);
-  resolvedShelf.appendChild(resolvedList);
-  screen.appendChild(resolvedShelf);
-
-  root.appendChild(screen);
-
-  let currentView = initialView;
-  let searchTerm = '';
-  const activeComponents = new Set();
-  const activeSevs = new Set();
-  let promotedFromBug = (store.getPrefs()?.screens?.issues?.promotedFromBug) || false;
-  function setActiveSevs(next) {
-    activeSevs.clear();
-    for (const v of next) activeSevs.add(v);
-    render();
-  }
-
-  function _renderComponentChips() {
-    const issues = store.getIssues() || [];
-    const comps = [...new Set(issues.map(i => i.component).filter(Boolean))].sort();
-    // Remove only our own chips — the "Components:" label is preserved.
-    compRow.querySelectorAll('.issues__comp-chip').forEach(el => el.remove());
-    const sevs = activeFilters();
-    for (const c of comps) {
-      // Count issues that pass the current search + severity filters but ignore the
-      // component filter so inactive chips show their potential hit count.
-      const count = issues.filter(i => {
-        if (!_matchesSearch(i)) return false;
-        if (sevs.length > 0 && !sevs.includes(i.severity_label || severityLabel(i.severity))) return false;
-        return i.component === c;
-      }).length;
-      const chip = document.createElement('span');
-      chip.className = 'issues__comp-chip';
-      chip.dataset.comp = c;
-      chip.title = CHIP_CLICK_HINT;
-      chip.setAttribute('role', 'button');
-      chip.setAttribute('aria-pressed', String(activeComponents.has(c)));
-      chip.textContent = `${c} · ${count}`;
-      if (activeComponents.has(c)) chip.classList.add('is-active');
-      chip.addEventListener('click', (ev) => {
-        const next = new Set(chipClickNext(ev, activeComponents, c));
-        activeComponents.clear();
-        for (const k of next) activeComponents.add(k);
-        compRow.querySelectorAll('.issues__comp-chip').forEach(el => {
-          const isActive = activeComponents.has(el.dataset.comp);
-          el.classList.toggle('is-active', isActive);
-          el.setAttribute('aria-pressed', String(isActive));
-        });
-        render();
-      });
-      compRow.appendChild(chip);
-    }
-  }
-
-  function _matchesComponent(i) {
-    if (activeComponents.size === 0) return true;
-    return activeComponents.has(i.component);
-  }
-
-  function _matchesSearch(i) {
-    if (!searchTerm) return true;
-    // Plan C: search the typed-links targets, falling back to legacy fields
-    // for unmigrated projects.
-    const allLinks = (i.links && i.links.length)
-      ? i.links
-      : legacyLinksToTyped(i, 'issue');
-    const linkTargets = allLinks.map((l) => l.target || '');
-    const hay = [
-      i.id || '',
-      i.title || '',
-      i.symptom || '',
-      i.component || '',
-      ...(i.location || []),
-      ...linkTargets,
-    ].join(' ').toLowerCase();
-    return hay.includes(searchTerm);
-  }
-
-  function setView(v) {
-    currentView = v;
-    prefs.patch({ screens: { issues: { view: v } } });
-    render();
-  }
-
-  function activeFilters() {
-    return [...activeSevs];
-  }
-
-  let _lastChipKey = '';
-  function render() {
-    const allIssues = store.getIssues() || [];
-
-    // Compute per-severity counts from allIssues (pre-filter) and rebuild chips.
-    const counts = { __all: allIssues.length, Critical: 0, High: 0, Medium: 0, Low: 0 };
-    for (const i of allIssues) {
-      const lbl = i.severity_label || severityLabel(i.severity);
-      if (lbl in counts) counts[lbl]++;
-    }
-    _renderSeverityChips(filters, counts, activeSevs, setActiveSevs);
-
-    // "Promoted from Bug" toggle chip — appended after severity chips each render.
-    filters.querySelectorAll('.issues__promoted-chip').forEach(el => el.remove());
-    const promotedChip = document.createElement('button');
-    promotedChip.type = 'button';
-    promotedChip.className = 'issues__sev-chip issues__promoted-chip' + (promotedFromBug ? ' is-active' : '');
-    promotedChip.setAttribute('role', 'button');
-    promotedChip.setAttribute('aria-pressed', String(promotedFromBug));
-    promotedChip.title = 'Show only issues promoted from a bug';
-    promotedChip.innerHTML = '<span class="lbl">Promoted from Bug</span>';
-    promotedChip.addEventListener('click', () => {
-      promotedFromBug = !promotedFromBug;
-      prefs.patch({ screens: { issues: { promotedFromBug } } });
-      render();
-    });
-    filters.appendChild(promotedChip);
-
-    // Re-render chips when components change, OR when search/severity changes (counts depend on both).
-    const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|')
-      + '::' + searchTerm + '::' + activeFilters().join(',');
-    if (chipKey !== _lastChipKey) {
-      _renderComponentChips();
-      _lastChipKey = chipKey;
-    }
-    const issues = allIssues.filter(i => {
-      if (!_matchesSearch(i)) return false;
-      if (!_matchesComponent(i)) return false;
-      const sevs = activeFilters();
-      if (sevs.length > 0 && !sevs.includes(i.severity_label || severityLabel(i.severity))) return false;
-      if (promotedFromBug && !(Array.isArray(i.promoted_from) && i.promoted_from.length > 0)) return false;
-      return true;
-    });
-    const filterActive = !!searchTerm || activeFilters().length > 0 || activeComponents.size > 0 || promotedFromBug;
-    subcount.textContent = filterActive
-      ? `${issues.length} of ${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`
-      : `${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`;
-
-    const backlogTasks = store.getBacklog()?.tasks || [];
-    const tasksIndex = Object.fromEntries(backlogTasks.map(t => [t.id, t]));
-    // Fix: read aging config from store.getPrefs(), not prefs.getPrefs()
-    const agingCfg = store.getPrefs()?.issues?.aging || {};
-
-    investigatingList.innerHTML = '';
-    openList.innerHTML = '';
-    resolvedList.innerHTML = '';
-
-    const investigating = issues.filter(i => i.status === 'investigating');
-    const open          = issues.filter(i => i.status === 'open');
-    const resolved      = issues.filter(i => i.status === 'fixed' || i.status === 'wontfix');
-
-    for (const i of investigating) {
-      investigatingList.appendChild(issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }));
-    }
-    for (const i of open) {
-      openList.appendChild(issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }));
-    }
-    for (const i of resolved) {
-      resolvedList.appendChild(issueRow(i));
-    }
-
-    if (investigating.length === 0 && open.length === 0 && filterActive) {
-      openList.appendChild(emptyState({
-        headline: 'No open issues match your filters',
-        hint: 'Try clearing a severity chip or the search box.',
-      }));
-    } else if (investigating.length === 0 && open.length === 0 && resolved.length === 0) {
-      openList.appendChild(emptyState({
-        headline: 'No issues yet',
-        hint: 'Issues appear here as you investigate or fix bugs.',
-      }));
-    }
-    resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
-
-    if (currentView === 'D') {
-      // Severity kanban: 4 columns (Critical / High / Medium / Low).
-      // Resolved (fixed + wontfix) rendered in the resolved shelf below, not as columns.
-      columns.style.display = 'none';
-      kanban.style.display = '';
-      _showKanbanCols('severity');
-      const activeIssues = issues.filter(i => i.status === 'open' || i.status === 'investigating');
-      const grouped = groupBySeverity(activeIssues);
-      for (const desc of KANBAN_SEVERITY_COLS) {
-        const { body } = sevKanbanCols[desc.key];
-        body.innerHTML = '';
-        const items = grouped[desc.key];
-        body.parentElement.querySelector('[data-count]').textContent = String(items.length);
-        if (items.length === 0) {
-          body.appendChild(emptyState({ headline: 'None', hint: '' }));
-          continue;
-        }
-        for (const i of items) {
-          body.appendChild(issueCard(i, {
-            tasksIndex, agingCfg,
-            onTaskClick: id => location.hash = `#/task/${id}`,
-            suppressSeverityChip: true,
-          }));
-        }
-      }
-      // Resolved shelf renders fixed + wontfix issues.
-      resolvedShelf.style.display = '';
-      resolvedList.innerHTML = '';
-      for (const i of resolved) resolvedList.appendChild(issueRow(i));
-      resolvedHeader.innerHTML = `<span class="caret">${resolvedList.hidden ? '▾' : '▴'}</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
-      return;
-    }
-
-    if (currentView === 'B') {
-      // Status kanban: 4 columns (Open / Investigating / Fixed / Wontfix).
-      columns.style.display = 'none';
-      kanban.style.display = '';
-      _showKanbanCols('status');
-      // Clear bodies
-      for (const k of Object.keys(statusKanbanCols)) {
-        statusKanbanCols[k].body.innerHTML = '';
-      }
-      const grouped = groupByStatus(issues);
-      for (const desc of KANBAN_STATUS_COLS) {
-        const { body, density } = statusKanbanCols[desc.key];
-        const items = grouped[desc.key];
-        body.parentElement.querySelector('[data-count]').textContent = String(items.length);
-        if (items.length === 0) {
-          body.appendChild(emptyState({ headline: 'None', hint: '' }));
-          continue;
-        }
-        for (const i of items) {
-          if (density === 'card') {
-            body.appendChild(issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }));
-          } else {
-            body.appendChild(issueRow(i));
-          }
-        }
-      }
-      resolvedShelf.style.display = 'none'; // resolved is inline as own columns
-      return;
-    }
-
-    // Restore defaults for Hybrid / List paths
-    columns.style.display = '';
-    kanban.style.display = 'none';
-    resolvedShelf.style.display = '';
-
-    if (currentView === 'C') {
-      // List view: collapse to a single column
-      columns.style.gridTemplateColumns = '1fr';
-      openCol.querySelector('.issues__column-name').textContent = 'All open';
-      investigatingCol.style.display = 'none';
-      for (const i of investigating) {
-        openList.insertBefore(
-          issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }),
-          openList.firstChild,
-        );
-      }
-      openCol.querySelector('[data-count]').textContent = String(investigating.length + open.length);
-    } else {
-      // Hybrid view (default): Investigating + Open columns side by side.
-      columns.style.gridTemplateColumns = '1fr 1.6fr';
-      investigatingCol.style.display = '';
-      openCol.querySelector('.issues__column-name').textContent = 'Open';
-      investigatingCol.querySelector('[data-count]').textContent = String(investigating.length);
-      openCol.querySelector('[data-count]').textContent = String(open.length);
-    }
-  }
-
-  if (!store.getIssues() || store.getIssues().length === 0) {
-    const data = await api.getIssues({ includeResolved: true });
-    store.setIssues(data.issues);
-  }
-  render();
-  return () => {};
 }

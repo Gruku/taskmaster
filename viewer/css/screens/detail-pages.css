@@ -1,0 +1,39 @@
+/* User intent: the issue and bug detail pages' few rules the shared detail template has no rule for (plan 3c); the legacy rules moved here by 3d Task 2 are gone. */
+/* ─── Detail template additions (plan 3c Task 7) ───
+   User intent: the issue and bug pages' few facts the shared template has no rule for — keys a screen reader hears
+   beside a marker, numbered steps and file paths that wrap inside a phone's width. */
+.dp-key {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dp-steps,
+.dp-paths {
+  margin: 0;
+  padding-left: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
+}
+.dp-paths { padding-left: 0; list-style: none; }
+.dp-paths code {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
+}
+.dp-page .td-title { word-break: break-word; }
+
+/* Bug actions (Task 9): secondary actions under the markers; Mark fixed is topbar row 1. */
+.dp-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.dp-actions__message:empty { display: none; }
+.dp-actions__message { flex: 1 0 100%; color: var(--foreground-bold); }
+@media (max-width: 768px) {
+  .dp-actions .btn { flex: 1 1 100%; min-height: var(--touch-target); }
+}

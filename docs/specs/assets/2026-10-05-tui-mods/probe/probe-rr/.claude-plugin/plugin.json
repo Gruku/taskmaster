@@ -1,0 +1,1 @@
+{ "name": "probe-rr", "version": "0.1.0", "description": "Throwaway probe: can a mod add a $ noun that hands other mods element trees?", "types": "./types/index.d.ts" }

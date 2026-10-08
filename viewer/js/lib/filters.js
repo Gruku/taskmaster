@@ -1,6 +1,9 @@
 // Pure-logic filter / sort / group for the kanban board.
 // No DOM. Tested via node --test.
 
+import { TASK_STATUS } from '../components/status.js';
+import { CHIP_CLICK_HINT } from '../util/chip-toggle.js';
+
 export const STATUS_ORDER = ['blocked', 'todo', 'in-progress', 'in-review', 'done'];
 
 const PRIORITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -75,7 +78,7 @@ export function sortTasks(tasks, sort) {
 }
 
 /** Returns array of {key, label, tasks} preserving spec order. */
-export function groupTasks(tasks, by, phaseOrder) {
+export function groupTasks(tasks, by, phaseOrder, epics) {
   if (by === 'status') {
     return STATUS_ORDER.map(key => ({
       key,
@@ -104,9 +107,10 @@ export function groupTasks(tasks, by, phaseOrder) {
       if (!seen.has(k)) seen.set(k, []);
       seen.get(k).push(t);
     }
+    const names = new Map((Array.isArray(epics) ? epics : []).map(e => [e.id, e.name]));
     return [...seen.entries()].map(([key, ts]) => ({
       key,
-      label: key === '__none__' ? '— no epic —' : key,
+      label: key === '__none__' ? '— no epic —' : (names.get(key) || key),
       tasks: ts,
     }));
   }
@@ -126,13 +130,8 @@ export function groupTasks(tasks, by, phaseOrder) {
   return [{ key: 'all', label: 'All', tasks: tasks || [] }];
 }
 
-export const STATUS_LABELS = {
-  blocked: 'Blocked',
-  todo: 'Todo',
-  'in-progress': 'In Progress',
-  'in-review': 'Waiting on human',
-  done: 'Done',
-};
+// The column words are the status markers' words, so a column and a card never name one status two ways.
+export const STATUS_LABELS = Object.fromEntries(STATUS_ORDER.map((key) => [key, TASK_STATUS[key].label]));
 
 /**
  * Cluster tasks in a single column into an ordered list of render-items.
@@ -174,3 +173,18 @@ export function epicsForPhase(epics, tasks, phase) {
   const inScope = new Set(matches.map(t => t.epic).filter(Boolean));
   return epics.filter(ep => inScope.has(ep.id));
 }
+
+// One open-task count for every filter chip and Epic options row, so a chip and its option never disagree.
+export function countOpen(tasks, field) {
+  const counts = new Map();
+  for (const t of tasks || []) {
+    if (!t || t.status === 'done' || t.status === 'archived') continue;
+    const v = t[field];
+    if (v === undefined || v === null || v === '') continue;
+    const k = String(v);
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  return counts;
+}
+
+export const OPEN_COUNT_HINT = `Counts are open tasks (not done, not archived) · ${CHIP_CLICK_HINT}`;

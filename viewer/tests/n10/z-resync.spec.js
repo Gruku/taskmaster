@@ -29,8 +29,8 @@ test('dependency navigation, back, and removal while detail is open', async ({pa
   await expect(page).toHaveURL(/#\/task\/board-002$/);
   await page.goto('/#/kanban');
   await page.locator('.card-task[data-task-id="board-002"] .card-title').click();
-  await page.locator('.dm-modal .td-dep').filter({hasText: 'board-001'}).click();
-  await expect(page.locator('.dm-modal .td-title')).toBeVisible();
+  await page.locator('.modal--detail .td-dep').filter({hasText: 'board-001'}).click();
+  await expect(page.locator('.modal--detail .td-title-host')).toBeVisible();
   await page.getByRole('link', {name: 'Open full'}).click();
   await expect(page).toHaveURL(/#\/task\/board-001$/);
   await page.goBack();

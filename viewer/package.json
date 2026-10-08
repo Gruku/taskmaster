@@ -4,10 +4,12 @@
   "type": "module",
   "scripts": {
     "test:unit": "node --test \"tests/unit/*.test.js\"",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --config tests/playwright.config.js",
+    "test:mock": "playwright test --config tests/playwright.mock.config.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "axe-core": "^4.13.0",
     "jsdom": "^29.1.1"
   }
 }

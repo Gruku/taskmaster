@@ -1,0 +1,51 @@
+/* User intent: everything that floats over the page — menus, suggestion lists, "More", "Filters" — is one solid
+   surface with one kind of item, the same in both themes, with touch-sized items on a phone. */
+
+/* Placed by openPopover (fixed, after its anchor). Above page content; inside a modal it stacks within the overlay. */
+.popover {
+  z-index: 70;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  max-width: min(360px, calc(100vw - 8px));
+  max-height: min(360px, 60vh);
+  overflow: auto;
+  padding: var(--space-micro);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--popover-surface);
+  color: var(--foreground-default);
+  animation: popover-in var(--dur-micro) var(--ease-hourglass) backwards;
+  /* Placed by measuring from the corner: under reduced motion's near-zero duration on every property it would
+     otherwise glide out of that corner, drawn there for a frame. */
+  transition-property: none;
+}
+@keyframes popover-in { from { opacity: 0; } }
+
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 32px;
+  padding: 0 var(--space-sm) 0 var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-tight);
+  text-align: left;
+  cursor: pointer;
+}
+.popover-item:hover,
+.popover-item:focus-visible { background: var(--popover-surface-hover); color: var(--foreground-bold); }
+/* The current choice is marked by its check and the heavier word, not by a colour. */
+.popover-item[aria-checked="true"],
+.popover-item.is-current { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }
+
+@media (max-width: 768px) {
+  .popover-item { min-height: var(--touch-target); }
+}

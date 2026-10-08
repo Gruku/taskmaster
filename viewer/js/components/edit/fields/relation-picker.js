@@ -4,12 +4,16 @@
 // other field that links to a backlog entity.
 
 import { ChipInput } from './chip-input.js';
+import { statusMeta } from '../../status.js';
 
-const STATUS_BADGE = {
-  todo: 'todo', 'in-progress': '▶', 'in-review': 'rev', done: '✓', blocked: '⛔',
-};
+// `exclude` lists ids never offered: a task is not its own dependency.
+export function makeRelationSource(kind, getBacklog, { exclude = [] } = {}) {
+  const source = _source(kind, getBacklog);
+  if (!exclude.length) return source;
+  return async (q) => (await source(q)).filter((r) => !exclude.includes(r.value));
+}
 
-export function makeRelationSource(kind, getBacklog) {
+function _source(kind, getBacklog) {
   if (kind === 'tasks') {
     return async (q) => {
       const b = getBacklog() || {};
@@ -21,7 +25,8 @@ export function makeRelationSource(kind, getBacklog) {
         .map(t => ({
           value: t.id,
           label: `${t.id} · ${t.title || ''}`,
-          hint: STATUS_BADGE[t.status] || t.status || '',
+          // Said the way every task status is said: a shape plus a word, never the bare word.
+          marker: t.status ? statusMeta('task', t.status) : null,
         }));
     };
   }
@@ -54,11 +59,11 @@ export function makeRelationSource(kind, getBacklog) {
 // Forms can use ChipInput directly + makeRelationSource OR call this helper.
 export const RelationPicker = {
   read: ChipInput.read,
-  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder }) {
-    const source = makeRelationSource(kind, getBacklog);
+  edit({ value, kind, getBacklog, onChange, onCommit, onCancel, placeholder, id, describedBy, autoFocus, label, entityId }) {
+    const source = makeRelationSource(kind, getBacklog, { exclude: entityId ? [entityId] : [] });
     return ChipInput.edit({
       value, source, allowFree: false,
-      onChange, onCommit, onCancel,
+      onChange, onCommit, onCancel, id, describedBy, autoFocus, label,
       placeholder: placeholder || `add ${kind.slice(0, -1)}…`,
     });
   },

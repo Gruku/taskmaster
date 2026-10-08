@@ -1,0 +1,45 @@
+/* User intent: a handover's status is a readable word on a button that plainly opens a menu — the same neutral
+   control for every status, so the word carries the meaning and nothing depends on a faint tint. */
+
+.ho-status-pill {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-wide);
+  text-transform: capitalize;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
+}
+.ho-status-pill:hover,
+.ho-status-pill[aria-expanded="true"] { border-color: var(--foreground-subtle); background: var(--overlay-surface-hover); color: var(--foreground-bold); }
+/* The arrow points down at rest and up while the menu is open. */
+.ho-status-pill > .icon { color: var(--foreground-subtle); transform: rotate(90deg); }
+.ho-status-pill[aria-expanded="true"] > .icon { transform: rotate(-90deg); }
+
+/* The menu itself is a popover (popover.css); only the status words' casing and the check column are its own. */
+.ho-status-menu-item { text-transform: capitalize; }
+.ho-status-menu-check { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; }
+
+/* A refused status change is a sentence under the pill row, wherever the pill sits (Sessions' rail head, the task
+   rail's handover head): it takes a line of its own and is never hue-coloured. */
+.ho-status-error {
+  display: block;
+  flex-basis: 100%;
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+}
+:has(> .ho-status-error) { flex-wrap: wrap; }

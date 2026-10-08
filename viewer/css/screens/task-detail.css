@@ -1,397 +1,623 @@
-/* Task Detail (Variants A and B). Tokens come from tokens.css.
-   Local namespaced tokens are introduced for the graph + node geometry. */
-:root {
-  /* Task detail */
-  --task-rail-w:           280px;
-  --task-grid-gap:         18px;
-  --task-section-mb:       18px;
-  --task-section-h:        12px;
+/* User intent: a task reads as a document — its id and title, its state as markers and quiet tags, then sections of
+   comfortable text at a readable measure, with what it relates to in a subordinate rail — the same in the full page
+   and in the detail modal, in both themes. Geometry for the graph variant comes from the --task-* / --graph-* tokens. */
 
-  /* Graph (Variant B) */
-  --graph-frame-bg:        radial-gradient(120% 80% at 50% 50%, #0a0c11 0%, #060709 100%);
-  --graph-frame-border:    var(--border);
-  --graph-frame-shadow:    inset 0 1px 14px rgba(0,0,0,0.5);
-  --graph-canvas-h:        320px;
-  --graph-node-shadow:     0 4px 14px rgba(0,0,0,0.5);
-  --graph-edge-stroke:     rgba(127,179,240,0.35);
-  --graph-edge-stroke-active: rgba(74,158,255,0.7);
-  --graph-col-guide:       rgba(255,255,255,0.04);
+/* ---------- Document frame (page and modal) ---------- */
+.td-doc {
+  container: td-doc / inline-size;
+  min-width: 0;
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-body);
 }
 
-/* ---------- Shared header / shell ---------- */
-.td-page { padding: 14px 18px; min-width: 0; }
-.td-ph {
-  display: flex; align-items: center; gap: var(--sp-4);
-  padding-bottom: var(--sp-4); margin-bottom: var(--sp-5);
-  border-bottom: 1px solid var(--border);
+/* Read aloud, not shown: the shape beside it is the visible form of the same word. */
+.td-doc .ml-word {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-.td-ph .td-back { color: var(--ink-3); font-size: var(--text-sm); cursor: pointer; }
-.td-ph .td-back:hover { color: var(--ink); }
-.td-ph .td-crumb { color: var(--ink-3); font-size: var(--text-sm); }
 
+.td-head { display: flex; flex-direction: column; gap: var(--space-xs); margin-bottom: var(--space-lg); }
+
+/* Meta line: id · Tasks · epic · phase · created — the Technical voice, quiet. */
+.td-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-micro) var(--space-xs);
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
+}
+.td-meta a { color: var(--foreground-default); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+.td-meta a:hover { color: var(--foreground-bold); text-decoration-color: currentColor; }
+.td-meta .td-id-text { color: var(--foreground-default); }
+.td-sep { color: var(--foreground-subtle); }
+
+.td-title,
+.td-title-host {
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-weight: 700;
+  font-size: var(--size-narrator-large);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-normal);
+  overflow-wrap: anywhere;
+}
+.td-title { margin: 0; max-width: 80ch; }
+/* The title and its save glyph share one row. The glyph's slot is always kept, so saving and saved never re-wrap the
+   title or open a line of their own, and nothing below moves. */
+.td-title,
+.td-title-host { display: flex; align-items: baseline; }
+:is(.td-title, .td-title-host) > .if-wrap { flex: 1 1 auto; min-width: 0; }
+:is(.td-title, .td-title-host) > .if-status,
+:is(.td-title, .td-title-host) > .if-status:empty { display: inline-block; flex: 0 0 auto; width: 1em; text-align: center; }
+
+/* A refused title save is said on its own line under the heading, never inside it: the heading names the dialog.
+   It always holds the field's message element, so "empty" means that element is. */
+.td-title-message { max-width: 80ch; }
+.td-title-message:empty,
+.td-title-message:not(:has(> :not(:empty))) { display: none; }
+/* Holding only the off-screen "Saving…"/"Saved" words, it is drawn (so they are announced) but out of the flow: no
+   room, no margin, and no gap in the page header's column. */
+.td-title-message:not(:has(> .ef-error:not(:empty))) { position: absolute; height: 0; padding: 0; margin: 0; }
+.td-title-message > .ef-error { margin: 0; }
+/* In the dialog it opens the body; hidden, it must not push the marker row down. */
+.td-body > .td-title-message { margin-bottom: var(--space-sm); }
+.td-body > .td-title-message + * { margin-top: 0; }
+
+/* ---------- Copy buttons: the id, the branch, the worktree ---------- */
+.td-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: copy;
+}
+.td-copy__icon { flex: 0 0 auto; display: inline-flex; color: var(--foreground-subtle); }
+.td-copy:hover .td-copy__icon { color: var(--foreground-bold); }
+.td-copy__status { flex: 0 0 auto; color: var(--foreground-bold); }
+.td-copy__status:empty { display: none; }
+.td-id { padding: 0 var(--space-micro); margin-left: calc(-1 * var(--space-micro)); }
+/* The id sits on the page ground, which has no hover role of its own: the hover is told by ink and an underline. */
+.td-id:hover .td-id-text { color: var(--foreground-bold); text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---------- Layout: body, and the rail beside it or — when the document is narrow — below it ---------- */
 .td-grid {
   display: grid;
-  grid-template-columns: 1fr var(--task-rail-w);
-  gap: var(--task-grid-gap);
+  grid-template-columns: minmax(0, 1fr) var(--task-rail-w);
+  align-items: start;
+  gap: var(--space-xl);
 }
-.td-grid > .td-body { min-width: 0; }
+.td-grid--solo { grid-template-columns: minmax(0, 1fr); }
+/* On the page the rail moves under the body once the document is too narrow for both. */
+@container td-doc (max-width: 840px) {
+  .td-doc--page .td-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-lg); }
+}
+.td-body { min-width: 0; }
+.td-body > * + * { margin-top: var(--space-lg); }
+.td-body > :is(.td-strip, .td-lock-banner) { margin-top: var(--space-sm); }
 
-/* ---------- Variant A — Document body ---------- */
-.td-doc-meta { color: var(--ink-3); font-size: var(--text-sm); display: flex; gap: var(--sp-3); align-items: center; flex-wrap: wrap; }
-.td-doc-meta .td-id { font-family: var(--font-mono); color: var(--epic-1); cursor: copy; padding: 1px 5px; border-radius: 3px; }
-.td-doc-meta .td-id:hover { background: rgba(110,168,255,0.1); }
-.td-doc-meta .td-id.copied { background: rgba(95,174,110,0.2); color: var(--green); }
-.td-doc-meta .td-id.copied .td-id-text { display: none; }
-.td-doc-meta .td-id.copied::after { content: 'copied'; }
-.td-doc-meta .td-sep { opacity: 0.4; }
+/* ---------- Marker row: status and priority as markers, the rest as secondary tags ---------- */
+.td-markers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); min-width: 0; }
+.td-marker-host { display: inline-flex; flex-wrap: wrap; align-items: center; min-height: 24px; }
+/* A refused save's reason takes its own line under the marker. */
+.td-marker-host > .if-error { flex: 1 0 100%; }
+.td-markers:has(> .td-marker-host > .if-error:not(:empty)) { align-items: flex-start; }
+.td-marker-host .ef-editable { display: inline-flex; align-items: center; min-height: 24px; cursor: pointer; }
+.td-marker-host .marker { font-size: var(--size-technical-default); color: var(--foreground-bold); }
 
-.td-title { font-size: var(--text-3xl); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); margin: 6px 0 var(--sp-4); line-height: 1.2; }
+.td-tag {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 100%;
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-normal);
+  text-decoration: none;
+}
+.td-tag__k { flex: 0 0 auto; color: var(--foreground-subtle); }
+.td-tag__v { min-width: 0; overflow-wrap: anywhere; }
+:is(a, button).td-tag { transition: border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass); }
+:is(a, button).td-tag:hover { border-color: var(--foreground-subtle); color: var(--foreground-bold); }
+/* The epic's categorical swatch: the --cat-N hue fills the dot only, never text. */
+.td-swatch { flex: 0 0 auto; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--foreground-subtle); }
+.td-swatch--cat-1 { background: var(--cat-1); }
+.td-swatch--cat-2 { background: var(--cat-2); }
+.td-swatch--cat-3 { background: var(--cat-3); }
+.td-swatch--cat-4 { background: var(--cat-4); }
+.td-swatch--cat-5 { background: var(--cat-5); }
+.td-swatch--cat-6 { background: var(--cat-6); }
 
+/* ---------- Lock banner, spec review, gates, merge ladder ---------- */
+/* A tinted fill with a full-perimeter edge; the shape and the word "Locked" say it without the hue. */
 .td-lock-banner {
-  margin: 6px 0 var(--sp-4); padding: 6px 10px; border-radius: 4px;
-  background: color-mix(in oklch, var(--amber) 12%, transparent);
-  color: var(--amber); font-size: var(--text-sm);
-  display: flex; align-items: center; gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-micro);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--tone-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-subtle);
+  color: var(--foreground-bold);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-heading);
 }
+.td-lock-banner .marker { color: var(--foreground-bold); }
 
-.td-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-5); }
-.td-status-pill { font-size: var(--text-xs); padding: 2px 8px; border-radius: 3px; font-weight: 600; background: rgba(74,158,255,0.15); color: var(--accent); }
-.td-pri-pill { font-size: var(--text-xs); padding: 2px 7px; border-radius: 3px; font-weight: 600; }
-.td-pri-pill.crit   { background: color-mix(in oklch, var(--red) 22%, transparent); color: var(--red); }
-.td-pri-pill.high   { background: color-mix(in oklch, var(--amber) 22%, transparent); color: var(--amber); }
-.td-pri-pill.medium { background: color-mix(in oklch, var(--ink-3) 18%, transparent); color: var(--ink-2); }
-.td-pri-pill.low    { color: var(--ink-3); border: 1px solid var(--border); padding: 1px 6px; }
-.td-size-chip { font-size: var(--text-xs); color: var(--ink-3); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono); }
-.td-epic-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px 2px 6px; font-size: var(--text-xs); background: color-mix(in oklch, var(--epic-1) 14%, transparent); border-radius: 10px; color: color-mix(in oklch, var(--epic-1) 92%, white 8%); }
-.td-epic-chip .td-swatch { width: 6px; height: 6px; border-radius: 50%; background: var(--epic-1); }
-.td-branch, .td-worktree { font-family: var(--font-mono); font-size: var(--text-sm); cursor: copy; padding: 2px 6px; border-radius: 3px; transition: background .12s; }
-.td-branch { color: var(--accent-2); }
-.td-branch:hover { background: rgba(127,179,240,0.08); }
-.td-worktree { color: var(--ink-3); border: 1px solid var(--border-soft); }
-.td-worktree:hover { background: rgba(255,255,255,0.04); color: var(--ink-2); }
-.td-release { font-size: var(--text-xs); padding: 2px 7px; border-radius: 3px; background: rgba(95,174,110,0.15); color: var(--green); font-family: var(--font-mono); }
-.td-subrepo { font-size: var(--text-xs); color: var(--ink-3); margin-left: 4px; }
-
-/* spec review */
-.td-spec-block { display: inline-flex; align-items: center; gap: 6px; }
-.td-spec-badge { font-size: var(--text-xs); padding: 2px 6px; border-radius: 3px; font-weight: 600; cursor: pointer; }
-.td-spec-badge.pass { background: rgba(95,174,110,0.18); color: var(--green); }
-.td-spec-badge.warn { background: color-mix(in oklch, var(--amber) 22%, transparent); color: var(--amber); }
-.td-spec-badge.fail { background: color-mix(in oklch, var(--red) 22%, transparent); color: var(--red); }
-.td-codex-note { font-style: italic; font-family: var(--font-serif); color: var(--ink-2); font-size: var(--text-md); margin-left: 6px; display: none; }
-.td-codex-note.open { display: inline; }
-
-/* ── Spec A: gate pipeline tracker (task-detail section) ── */
-/* NO left rails. NO box-shadows. NO hover motion. Full-perimeter borders only. */
-.td-gate-section { margin-bottom: var(--task-section-mb); }
-
-/* Track: horizontal row of gate nodes */
-.gp-track {
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+/* One line per fact: a fixed label column, then its markers. */
+.td-strip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); min-width: 0; }
+.td-strip__label,
+.td-section-h,
+.td-rail-h,
+.td-dates dt {
+  margin: 0;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
 }
+.td-strip__label { flex: 0 0 96px; }
+.td-strip__body { flex: 1 1 0; min-width: 0; }
 
-/* Individual gate node — tinted fill + full border; no left-bar; no shadow */
-.gp-gate {
-  font-size: var(--text-xs); padding: 3px 9px; border-radius: var(--r-sm);
-  font-family: var(--font-mono); border: 1px solid transparent;
-  white-space: nowrap;
-}
-/* pending — ghost outline only */
-.gate--pending {
+.td-spec-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
   background: transparent;
-  border-color: rgba(255,255,255,0.10);
-  color: var(--ink-3);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  cursor: pointer;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
 }
-/* done — green tint */
-.gate--done {
-  background: rgba(95,174,110,0.16);
-  border-color: rgba(95,174,110,0.30);
-  color: var(--green);
+.td-spec-toggle:hover { border-color: var(--foreground-subtle); color: var(--foreground-bold); }
+.td-spec-toggle > .icon { color: var(--foreground-subtle); transition: transform var(--dur-standard) var(--ease-hourglass); }
+.td-spec-toggle[aria-expanded="true"] > .icon { transform: rotate(90deg); }
+.td-spec-badge { text-transform: capitalize; }
+.td-codex-note {
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  max-width: 80ch;
+  padding: var(--space-sm);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-recessed);
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-/* pass — same green tint as done */
-.gate--pass {
-  background: rgba(95,174,110,0.16);
-  border-color: rgba(95,174,110,0.30);
-  color: var(--green);
-}
-/* warn — amber tint */
-.gate--warn {
-  background: rgba(214,164,95,0.16);
-  border-color: rgba(214,164,95,0.30);
-  color: var(--amber);
-}
-/* fail — red tint */
-.gate--fail {
-  background: rgba(214,107,95,0.16);
-  border-color: rgba(214,107,95,0.30);
-  color: var(--red);
-}
-/* skipped — neutral muted tint */
-.gate--skipped {
-  background: rgba(124,130,144,0.12);
-  border-color: rgba(124,130,144,0.22);
-  color: var(--ink-4);
-  text-decoration: line-through;
-  opacity: 0.7;
-}
+.td-codex-note[hidden] { display: none; }
 
-/* gate_state one-liner — appended after gate nodes */
+/* Gate nodes and merge rungs: a bordered tag holding a marker — shape for the state, word for the gate. */
+.gp-track,
+.ml-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+.gp-gate,
+.ml-rung {
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-normal);
+}
+:is(.gate--pending, .gate--skipped, .rung--empty) .marker__word { color: var(--foreground-subtle); }
+/* The gate's state, said beside its name. */
+.gp-gate__state {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+/* The current step, in words, when the server's gate_state names a gate off the lane's track */
 .gp-state {
   margin-left: auto;
-  font-size: var(--text-xs);
-  color: var(--ink-3);
-  font-family: var(--font-mono);
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
 }
 
-/* ── Spec B: merge-rung ladder (task-detail section) ── */
-/* NO left rails. NO box-shadows. NO hover motion. Full-perimeter borders only. */
-.td-merge-section { margin-bottom: var(--task-section-mb); }
+/* ---------- Sections: a Technical label, then the body at a readable measure ---------- */
+.td-section { min-width: 0; }
+.td-body > .td-section,
+.td-body > .td-dates { padding-top: var(--space-md); border-top: 1px solid var(--border-default); }
+.td-section-head { display: flex; align-items: center; gap: var(--space-xs); min-height: 24px; margin-bottom: var(--space-xs); }
+.td-section-edit { color: var(--foreground-subtle); }
+.td-section > :is(.if-wrap, .md-body, .td-activity) { max-width: 80ch; }
+.td-section .md-body { font-size: var(--size-narrator-default); }
+.td-section .md-body :is(h1, h2) { font-size: var(--size-narrator-large); }
+.td-section .md-body :is(h3, h4, h5, h6) { font-size: var(--size-narrator-default); }
 
-/* Track: ordered horizontal row of rung labels */
-.ml-track {
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+.td-activity { margin: 0; padding: 0; list-style: none; }
+.td-activity li {
+  padding: var(--space-micro) 0;
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
 }
 
-/* Individual rung node — tinted fill + full border; no left-bar; no shadow */
-.ml-rung {
-  font-size: var(--text-xs); padding: 3px 9px; border-radius: var(--r-sm);
-  font-family: var(--font-mono); border: 1px solid transparent;
-  white-space: nowrap;
+/* "Empty: Specification · Plan" — the sections with nothing in them, each a button that opens its editor. */
+.td-empties { margin-bottom: 0; color: var(--foreground-subtle); font-size: var(--size-narrator-small); line-height: var(--leading-body); }
+.td-empties__label {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
 }
-/* empty — ghost outline only */
-.ml-rung.rung--empty {
+.td-empties__add {
+  padding: 0 var(--space-micro);
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
-  border-color: rgba(255,255,255,0.10);
-  color: var(--ink-3);
+  color: var(--foreground-default);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
-/* filled — green tint (merged) */
-.ml-rung.rung--filled {
-  background: rgba(95,174,110,0.16);
-  border-color: rgba(95,174,110,0.30);
-  color: var(--green);
+.td-empties__add:hover { color: var(--foreground-bold); text-decoration-color: currentColor; }
+
+/* linked bugs */
+.td-linked-bugs__heading { flex-wrap: wrap; }
+.td-linked-bugs__blocker .marker { color: var(--foreground-bold); font-size: var(--size-technical-small); white-space: normal; }
+.td-linked-bugs__list { display: flex; flex-direction: column; gap: var(--space-micro); margin: 0; padding: 0; list-style: none; }
+.td-linked-bugs__item { display: flex; align-items: baseline; gap: var(--space-xs); font-size: var(--size-narrator-small); }
+.td-linked-bugs__link { flex: 1 1 0; min-width: 0; color: var(--foreground-default); text-decoration: none; overflow-wrap: anywhere; }
+.td-linked-bugs__link:hover { color: var(--foreground-bold); text-decoration: underline; }
+.td-linked-bugs__id { font-family: var(--font-technical); font-weight: var(--font-technical-weight); color: var(--foreground-bold); }
+.td-linked-bugs__status { flex: 0 0 auto; }
+.td-linked-bugs__status .marker { font-size: var(--size-technical-small); }
+
+/* dates */
+.td-dates { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-xl); margin-bottom: 0; }
+.td-date { display: flex; flex-direction: column; gap: var(--space-micro); }
+.td-dates dd { margin: 0; color: var(--foreground-default); font-size: var(--size-narrator-small); line-height: var(--leading-heading); }
+
+/* ---------- Rail: what the task relates to, subordinate to the body ---------- */
+.td-rail { display: flex; flex-direction: column; min-width: 0; font-size: var(--size-narrator-small); line-height: var(--leading-heading); }
+/* On the page the rail is one card; in the modal it sits on the dialog itself behind a hairline. */
+.td-doc--page .td-rail {
+  padding: 0 var(--space-md);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+}
+.td-doc--embedded .td-rail { padding-left: var(--space-lg); border-left: 1px solid var(--border-default); }
+.td-panel { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; padding: var(--space-md) 0; }
+.td-panel + .td-panel { border-top: 1px solid var(--border-default); }
+.td-doc--embedded .td-rail > .td-panel:first-child { padding-top: 0; }
+/* In the dialog the rail sits beside the body only while the dialog has its full 960px; the overlay's content box is
+   the room the dialog is given, so it is the container asked. */
+.modal-overlay:has(> .modal--detail) { container: detail-overlay / inline-size; }
+@container detail-overlay (max-width: 959.98px) {
+  .td-doc--embedded .td-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-lg); }
+  .td-doc--embedded .td-rail { padding: 0; border-left: 0; border-top: 1px solid var(--border-default); }
+  .td-doc--embedded .td-rail > .td-panel:first-child { padding-top: var(--space-md); }
+}
+.td-rail-group { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
+.td-rail-sub {
+  margin: 0;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
+}
+:is(.td-dep-list, .td-blocker-list, .td-doc-list, .td-issue-list) { display: flex; flex-direction: column; gap: var(--space-xs); margin: 0; padding: 0; list-style: none; }
+
+/* A related task or issue: id and marker on one line, the title under them; the whole row is the link. */
+:is(.td-dep, .td-issue) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-micro) var(--space-xs);
+  align-items: center;
+  margin: 0 calc(-1 * var(--space-xs));
+  padding: var(--space-micro) var(--space-xs);
+  border-radius: var(--radius-md);
+  color: var(--foreground-default);
+  text-decoration: none;
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
+}
+.td-doc--page :is(.td-dep, .td-issue, .td-doc-link):hover { background: var(--card-bg-hover); }
+.td-doc--embedded :is(.td-dep, .td-issue, .td-doc-link):hover { background: var(--overlay-surface-hover); }
+/* The dialog's hover fill is too dark in light for the accent to stay AA (3.15:1): on it, an id reads in bold ink. */
+.td-doc--embedded :is(.td-dep, .td-issue, .td-doc-link):hover :is(.td-dep__id, .td-issue-id, .td-doc-type) { color: var(--foreground-bold); }
+:is(.td-dep, .td-issue):hover :is(.td-dep__title, .td-issue-title) { color: var(--foreground-bold); }
+:is(.td-dep__id, .td-issue-id) {
+  min-width: 0;
+  color: var(--text-accent);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
+}
+:is(.td-dep__title, .td-issue-title) { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow-wrap: anywhere; }
+:is(.td-dep, .td-issue) > .marker { grid-column: 2; grid-row: 1; }
+
+.td-blocker { color: var(--foreground-default); overflow-wrap: anywhere; }
+
+/* A document link in the rail: its type as a label, its path under it. */
+.td-doc-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-micro);
+  margin: 0 calc(-1 * var(--space-xs));
+  padding: var(--space-micro) var(--space-xs);
+  border-radius: var(--radius-md);
+  color: var(--foreground-default);
+  text-decoration: none;
+}
+.td-doc-type { color: var(--text-accent); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
+.td-doc-path {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
 }
 
-/* sections */
-.td-section { margin-bottom: var(--task-section-mb); }
-.td-section-h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: var(--task-section-h); }
-.td-section .md-body { color: var(--ink); font-size: var(--text-md); line-height: 1.55; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-.td-section .md-body h1 { font-size: var(--text-xl); margin: 14px 0 8px; }
-.td-section .md-body h2 { font-size: var(--text-lg); margin: 12px 0 6px; }
-.td-section .md-body h3 { font-size: var(--text-md); margin: 10px 0 4px; color: var(--ink-2); }
-.td-section .md-body code { font-family: var(--font-mono); font-size: 0.92em; background: var(--bg-deep); padding: 1px 4px; border-radius: 3px; }
-.td-section .md-body pre { background: var(--bg-deep); padding: 8px 10px; border-radius: 4px; overflow-x: auto; }
-.td-section .md-body blockquote { border-left: 2px solid var(--border-strong); margin: 0; padding-left: 10px; color: var(--ink-2); font-style: italic; }
-
-/* Docs section in body (typed link chips) */
-.td-doc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.td-doc-chips .td-doc-chip { display: inline-flex; gap: 6px; padding: 3px 8px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; font-size: var(--text-sm); color: var(--ink-2); text-decoration: none; }
-.td-doc-chips .td-doc-chip:hover { border-color: var(--accent); color: var(--ink); }
-.td-doc-chips .td-doc-chip .type { font-family: var(--font-mono); color: var(--accent-2); font-size: var(--text-xs); }
-
-/* linked bugs subsection */
-.td-linked-bugs { margin-bottom: var(--task-section-mb); }
-.td-linked-bugs__heading {
-  display: flex; align-items: center; gap: 8px;
-  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em;
-  color: var(--ink-3); margin-bottom: var(--task-section-h);
-}
-.td-linked-bugs__blocker {
-  font-size: var(--text-xs); padding: 2px 7px; border-radius: 3px;
-  background: color-mix(in oklch, var(--red) 14%, transparent);
-  color: var(--red);
-  border: 1px solid color-mix(in oklch, var(--red) 28%, transparent);
-  text-transform: none; letter-spacing: 0;
-}
-.td-linked-bugs__list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
-.td-linked-bugs__item { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
-.td-linked-bugs__link { color: var(--ink-2); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.td-linked-bugs__link:hover { color: var(--ink); }
-.td-linked-bugs__link .mono { font-family: var(--font-mono); color: var(--accent-2); margin-right: 2px; }
-.td-linked-bugs__status {
-  font-size: var(--text-xs); padding: 1px 6px; border-radius: 3px;
-  background: var(--bg-deep); color: var(--ink-3);
-  white-space: nowrap; flex-shrink: 0;
-}
-.td-linked-bugs__status--open    { color: var(--ink-2); }
-.td-linked-bugs__status--shelved { color: var(--ink-3); }
-.td-linked-bugs__status--fixed   {
-  color: var(--accent-green, #5fcdb8);
-  background: rgba(95, 205, 184, 0.10);
-  border: 1px solid rgba(95, 205, 184, 0.25);
-}
-.td-linked-bugs__status--adopted {
-  color: var(--accent-blue, #6ea8ff);
-  background: rgba(110, 168, 255, 0.10);
-  border: 1px solid rgba(110, 168, 255, 0.20);
-}
-.td-linked-bugs__status--archived { opacity: 0.6; }
-
-/* dates footer */
-.td-dates { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--sp-4); margin-top: var(--sp-7); padding-top: var(--sp-4); border-top: 1px solid var(--border-soft); }
-.td-date-cell { display: flex; flex-direction: column; gap: 2px; }
-.td-date-cell .lbl { font-size: var(--text-xs); color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
-.td-date-cell .abs { font-family: var(--font-mono); font-size: var(--text-md); color: var(--ink); }
-.td-date-cell .rel { font-size: var(--text-xs); color: var(--ink-3); }
-
-/* right rail */
-.td-rail { display: flex; flex-direction: column; gap: var(--sp-5); }
-.td-panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-4) var(--sp-5); }
-.td-rail-h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: 6px; }
-.td-rail-h-sub { margin-top: var(--sp-4); }
-.td-rail-hint { font-size: var(--text-xs); color: var(--ink-3); font-style: italic; margin-bottom: 6px; }
-.td-empty { font-size: var(--text-xs); color: var(--ink-3); font-style: italic; }
-.td-doc { display: flex; gap: 6px; padding: 4px 0; color: var(--ink-2); font-size: var(--text-sm); text-decoration: none; }
-.td-doc:hover { color: var(--ink); }
-.td-doc .td-doc-type { color: var(--accent-2); font-family: var(--font-mono); }
-.td-handover, .td-issue, .td-dep { padding: 4px 0; font-size: var(--text-sm); color: var(--ink-2); }
-.td-handover-quote { margin: 4px 0 0; font-size: var(--text-md); color: var(--ink-2); }
-.td-dep-list { list-style: none; padding: 0; margin: 0; }
-.td-dep { cursor: pointer; }
-.td-dep:hover { color: var(--ink); }
-.td-dep-done { color: var(--ink-3); }
-.td-dep-done span.mono { color: var(--green); }
-.td-issue-sev { font-size: var(--text-xs); color: var(--ink-3); margin-left: 4px; }
-.td-issue-critical .td-issue-sev { color: var(--red); }
-.td-issue-high .td-issue-sev    { color: var(--amber); }
-
-/* Variant B */
-.td-page-B .td-head-block { padding: 10px 0 var(--sp-5); border-bottom: 1px solid var(--border-soft); margin-bottom: var(--sp-5); }
-.td-page-B .td-head-title { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); margin: 5px 0 var(--sp-3); line-height: 1.25; }
-
-.td-graph-frame {
-  background: var(--graph-frame-bg);
-  border: 1px solid var(--graph-frame-border);
-  border-radius: var(--r-md);
-  margin-bottom: var(--sp-7);
-  position: relative;
-  overflow: hidden;
-  box-shadow: var(--graph-frame-shadow);
-}
-.td-graph-rail {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border-soft);
-  font-size: var(--text-xs); color: var(--ink-3);
-  background: rgba(255,255,255,0.015);
-}
-.td-graph-rail .axis { letter-spacing: 0.1em; text-transform: uppercase; }
-.td-graph-rail .legend { display: flex; gap: 12px; font-size: var(--text-xs); color: var(--ink-3); }
-.td-graph-rail .legend .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
-.td-graph-rail .legend .dot.s-done { background: var(--green); }
-.td-graph-rail .legend .dot.s-progress { background: var(--accent); }
-.td-graph-rail .legend .dot.s-backlog { background: var(--ink-3); }
-.td-graph-svg { width: 100%; height: var(--graph-canvas-h); display: block; }
-.td-graph-context-band {
-  border-top: 1px solid var(--border-soft);
-  padding: 8px 14px;
-  display: flex; align-items: center; gap: 14px;
-  font-size: var(--text-xs); color: var(--ink-3);
-  background: rgba(255,255,255,0.015);
+.td-handover { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
+.td-handover + .td-handover { padding-top: var(--space-sm); border-top: 1px solid var(--border-default); }
+.td-handover-head {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
 }
-.td-graph-context-band .lbl { letter-spacing: 0.08em; text-transform: uppercase; flex: 0 0 auto; }
+.td-handover-id {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
+}
+.td-handover-quote { color: var(--foreground-default); }
+/* A summary in the rail stays rail-sized: its headings are bold lines, not section titles. */
+.td-rail .td-handover-quote.md-body :is(h1, h2, h3, h4, h5, h6) { font-size: var(--size-narrator-small); }
+
+.td-empty { color: var(--foreground-subtle); font-size: var(--size-narrator-small); }
+
+/* ---------- Link pills: a Technical label, a space, the id ---------- */
+.link-pills { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.link-pill {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 100%;
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-bold);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
+  text-decoration: none;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
+}
+.link-pill:hover { border-color: var(--foreground-subtle); }
+.link-pill__label { flex: 0 0 auto; color: var(--foreground-subtle); }
+/* The signature hue only where the ground is known to carry it (a card, the page, a dialog); elsewhere the id is
+   bold and underlined. */
+.link-pill__id { min-width: 0; overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: 3px; }
+.td-rail .link-pill__id { color: var(--text-accent); text-decoration: none; }
+
+/* ---------- Detail modal: the document inside the shared shell ---------- */
+.modal--detail .modal-actions { align-self: flex-start; }
+.modal--detail .modal-actions [hidden] { display: none; }
+/* The epic peek keeps its own layout; only the frame is the dialog's. */
+.modal--detail .ed-root { max-width: none; padding: 0; }
+
+@media (max-width: 768px) {
+  /* On a phone the id and the actions share the first line and the title takes the full second one. */
+  .modal--detail .modal-header { flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); }
+  .modal--detail .modal-heading { display: contents; }
+  .modal--detail .modal-eyebrow { order: 1; flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+  .modal--detail .modal-actions { order: 2; align-self: center; }
+  .modal--detail .modal-close { order: 3; }
+  .modal--detail .modal-title { order: 4; flex: 1 0 100%; }
+  .modal--detail .modal-actions .btn { min-height: var(--touch-target); }
+  .td-strip__label { flex-basis: 100%; }
+  .td-section-edit.btn--icon.btn--sm { width: var(--touch-target); height: var(--touch-target); }
+  /* Touch targets: every control in the head, the marker row, the strips and the rail is 44px tall. The ID line's
+     borderless links and copy button take the height as a hit area that a negative margin hands back, so the line
+     keeps its height; a bordered pill simply grows. */
+  .td-meta > :is(a[href], button) { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-block: -14px; }
+  :is(.td-head, .td-markers, .td-strip, .td-rail) :is(.td-tag:is(a, button), .td-spec-toggle, .link-pill, .td-dep, .td-issue, .ho-status-pill) { min-height: var(--touch-target); }
+  .td-marker-host .ef-editable { min-height: var(--touch-target); }
+  /* One tidy block: the static 24px tags gather in one run, the 44px chips follow in theirs, so no row mixes heights. */
+  .td-markers > .td-tag:not(a, button) { order: 1; }
+  .td-markers > .td-tag:is(a, button) { order: 2; }
+}
+
+/* ---------- Variant B — graph ---------- */
+/* A bordered recess: no shadow, no gradient. */
+.td-graph-frame {
+  position: relative;
+  margin-bottom: var(--space-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-recessed);
+}
+/* The graph is drawn at its own size: a canvas wider or taller than the frame scrolls inside it, never the page. */
+.td-graph-canvas { overflow: auto; max-height: calc(var(--graph-canvas-h) * 1.5); }
+/* Filling the screen, the canvas takes what the band and the controls leave and scrolls inside it: a tall graph and
+   the way back out both stay in reach. */
+.td-graph-frame:fullscreen { display: flex; flex-direction: column; }
+.td-graph-frame:fullscreen .td-graph-canvas { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+.td-graph-frame:fullscreen :is(.td-graph-context-band, .td-graph-controls) { flex: 0 0 auto; }
+.td-graph-svg { display: block; margin-inline: auto; }
+.td-graph-hint {
+  margin: 0; padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--border-default);
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical); font-size: var(--size-technical-small);
+}
+.td-graph-hint[hidden] { display: none; }
+.td-graph-context-band {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--border-default);
+  color: var(--foreground-subtle);
+  font-size: var(--size-technical-small);
+}
+.td-graph-context-band[hidden] { display: none; }
+.td-graph-context-band .lbl { flex: 0 0 auto; font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label); letter-spacing: var(--tracking-ultra); text-transform: uppercase; }
 .td-graph-context-band .ctx-pill {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; font-size: var(--text-sm); border-radius: 3px;
-  background: var(--bg-card); border: 1px solid var(--border-soft);
-  cursor: pointer; color: var(--ink-2);
+  display: inline-flex; align-items: center;
+  padding: 0 var(--space-xs);
+  min-height: 24px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  overflow-wrap: anywhere;
 }
-.td-graph-context-band .ctx-pill.issue .glyph { color: var(--red); }
-.td-graph-context-band .ctx-pill.handover { font-style: italic; font-family: var(--font-serif); font-size: 11.5px; }
+/* An issue pill is a link: bold ink, underlined, its edge firming on hover. */
+.td-graph-context-band a.ctx-pill {
+  color: var(--foreground-bold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
+}
+.td-graph-context-band a.ctx-pill:hover { border-color: var(--foreground-subtle); }
 
 .td-graph-controls {
-  display: flex; gap: 6px; padding: 8px 14px;
-  border-top: 1px solid var(--border-soft);
-  background: rgba(255,255,255,0.015);
+  display: flex; flex-wrap: wrap; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--border-default);
 }
-.td-graph-controls .gc-btn {
-  background: rgba(0,0,0,0.4); border: 1px solid var(--border-soft);
-  color: var(--ink-2); font-size: var(--text-xs); padding: 3px 8px; border-radius: 4px;
-  cursor: pointer; backdrop-filter: blur(4px);
-}
-.td-graph-controls .gc-btn.on { background: rgba(74,158,255,0.18); color: var(--accent); border-color: rgba(74,158,255,0.4); }
 
-/* SVG: column guides + nodes */
-.td-graph-svg .col-guide { stroke: var(--graph-col-guide); stroke-dasharray: 3 4; }
-.td-graph-svg .col-label { fill: var(--ink-3); font-size: 9px; font-family: var(--font-mono); text-transform: uppercase; }
-.td-graph-svg .node-rect { fill: var(--bg-card); stroke: var(--border); filter: drop-shadow(0 4px 14px rgba(0,0,0,0.5)); }
-.td-graph-svg .node-rect.center { stroke: var(--accent); }
+/* SVG: the side labels, their guides, the edges and the nodes. */
+.td-graph-svg .col-guide { stroke: var(--border-subtle); stroke-dasharray: 3 4; }
+.td-graph-svg .col-label { fill: var(--foreground-subtle); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-label); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+.td-graph-svg .node-rect { fill: var(--card-bg); stroke: var(--border-strong); transition: fill var(--dur-standard) var(--ease-hourglass); }
+.td-graph-svg .node-rect.center { stroke: var(--signature); stroke-width: 2; }
 .td-graph-svg .node-rect.faded { opacity: 0.6; }
-.td-graph-svg .node-id { fill: var(--epic-1); font-family: var(--font-mono); font-size: 10px; }
-.td-graph-svg .node-title { fill: var(--ink); font-size: 11px; font-weight: 600; }
-.td-graph-svg .node-meta { fill: var(--ink-3); font-size: 9px; font-family: var(--font-mono); }
-.td-graph-svg .edge-path { fill: none; stroke: var(--graph-edge-stroke); stroke-width: 1.4; }
-.td-graph-svg .edge-path.active { stroke: var(--graph-edge-stroke-active); }
-.td-graph-svg .status-dot.s-done { fill: var(--green); }
-.td-graph-svg .status-dot.s-progress { fill: var(--accent); }
-.td-graph-svg .status-dot.s-backlog { fill: var(--ink-3); }
+.td-graph-svg a.node { cursor: pointer; }
+.td-graph-svg a.node:hover .node-rect { fill: var(--card-bg-hover); }
+/* An SVG link takes no outline offset: its ring is the node's own edge. */
+.td-graph-svg a.node:focus-visible .node-rect { stroke: var(--border-focus); stroke-width: 2; }
+.td-graph-svg .node-id { fill: var(--text-accent); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
+.td-graph-svg .node-title { fill: var(--foreground-bold); font-family: var(--font-narrator); font-size: var(--size-technical-small); font-weight: var(--font-narrator-weight); }
+.td-graph-svg .node-meta { fill: var(--foreground-default); font-family: var(--font-technical); font-weight: var(--font-technical-weight); font-size: var(--size-technical-small); }
+.td-graph-svg .node-progress-track { fill: var(--border-default); }
+.td-graph-svg .node-progress-fill { fill: var(--signature); }
+.td-graph-svg .edge-path { fill: none; stroke: var(--signature-dim); stroke-width: 1.4; }
+.td-graph-svg .edge-path.active { stroke: var(--signature); }
+/* The status shape carries the hue; the word on the node's last line stays readable ink. */
+.node-shape--neutral { color: var(--tone-neutral); }
+.node-shape--accent { color: var(--tone-accent); }
+.node-shape--warning { color: var(--tone-warning); }
+.node-shape--critical { color: var(--tone-critical); }
+.node-shape--success { color: var(--tone-success); }
+.node-shape--orange { color: var(--tone-orange); }
 
-.td-graph-context-band.hidden { display: none; }
+/* One row: tabs that do not fit scroll sideways inside it, never wrap onto a second line. */
+.td-tabs { display: flex; flex-wrap: nowrap; gap: 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border-default); margin-bottom: var(--space-md); }
+.td-tabs .td-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  cursor: pointer;
+  transition: color var(--dur-standard) var(--ease-hourglass);
+}
+.td-tabs .td-tab:hover { color: var(--foreground-default); }
+/* The open tab: bold ink and an underline in the signature hue. */
+.td-tabs .td-tab[aria-selected="true"] { color: var(--foreground-bold); border-bottom-color: var(--signature); }
+.td-tab-panel[hidden] { display: none; }
+.td-tab-panel > .md-body { max-width: 80ch; font-size: var(--size-narrator-default); }
+.td-tab-panel pre {
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-sm);
+  overflow-x: auto;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-recessed);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.td-anchor-pill {
+  display: inline-block;
+  margin: 0 var(--space-xs) var(--space-xs) 0;
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
 
-.td-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-soft); margin-bottom: var(--sp-5); }
-.td-tabs .td-tab { padding: 6px 12px; font-size: var(--text-sm); color: var(--ink-3); background: transparent; border: 0; cursor: pointer; border-bottom: 2px solid transparent; }
-.td-tabs .td-tab.on { color: var(--ink); border-bottom-color: var(--accent); }
-.td-tab-panel { display: none; }
-.td-tab-panel.on { display: block; }
-.td-tab-panel pre { background: var(--bg-deep); padding: 10px 12px; border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
-.td-anchor-pill { display: inline-block; padding: 2px 8px; margin-right: 6px; font-family: var(--font-mono); background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: 3px; font-size: var(--text-sm); color: var(--ink-2); }
-
-/* ---- Mobile (< 768px) — collapse right rail beneath main column ---- */
 @media (max-width: 768px) {
-  /* Single-column: rail stacks below body */
-  .td-grid {
-    grid-template-columns: 1fr;
-  }
-
-  /* Reduce page padding to use more horizontal space */
-  .td-page {
-    padding: 10px 12px;
-  }
-
-  /* Title: scale down on narrow viewports */
-  .td-title {
-    font-size: var(--text-2xl);
-  }
-
-  /* Dates footer: 2-column on mobile (3 cols is too cramped) */
-  .td-dates {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  /* Chips: ensure wrapping doesn't cause horizontal overflow */
-  .td-chips {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  /* Graph canvas: cap height on mobile for usability */
-  .td-graph-svg {
-    height: 200px;
-  }
-
-  /* Graph context band: allow full wrap */
-  .td-graph-context-band {
-    gap: 8px;
-  }
-
-  /* MdField horizontal overflow prevention (pair with v3-polish-031) */
-  .td-section .md-body pre {
-    max-width: 100%;
-    overflow-x: auto;
-  }
-  .td-section .md-body code {
-    word-break: break-all;
-  }
-  .td-tab-panel pre {
-    max-width: 100%;
-    overflow-x: auto;
-  }
+  .td-tabs .td-tab,
+  .td-graph-controls .btn,
+  .td-graph-context-band a.ctx-pill { min-height: var(--touch-target); }
 }

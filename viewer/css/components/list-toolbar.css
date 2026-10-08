@@ -1,0 +1,40 @@
+/* User intent: one look for the list screens' toolbars — a wrapping filter rail with "Clear filters" at its end,
+   controls labelled in the Technical label voice, and a quiet non-interactive tag for idea and archived rows. */
+
+.list-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-lg); min-width: 0; }
+.list-filters > .chip-row { flex: 0 0 auto; max-width: 100%; }
+.list-filters > .chip-row[data-grow] { flex: 1 1 240px; min-width: 240px; }
+.list-filters > .chip { flex: 0 0 auto; }
+.list-filters__clear { flex: 0 0 auto; margin-left: auto; }
+.list-filters__clear[hidden] { display: none; }
+
+.list-labelled { display: inline-flex; align-items: center; gap: var(--space-xs); flex: 0 0 auto; }
+.list-labelled__label {
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-ultra);
+  color: var(--foreground-subtle);
+}
+
+.list-tag {
+  display: inline-block;
+  max-width: 16ch;
+  padding: 0 var(--space-micro);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  line-height: var(--leading-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+@media (max-width: 768px) {
+  .list-filters > .chip, .list-filters__clear { min-height: var(--touch-target); }
+}

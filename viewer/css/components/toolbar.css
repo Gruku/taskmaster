@@ -1,0 +1,101 @@
+/* User intent: every screen's topbar controls — count, search, view switcher, actions — look and behave as one RR set
+   in both themes, built on the shared button and field styles rather than a screen's own. */
+
+/* Count beside the search: Technical, quiet. */
+.tm-subcount { font-family: var(--font-technical); font-size: var(--size-technical-small); color: var(--foreground-subtle); }
+
+/* Search: a recessed field holding its glyph, the input, the clear button and the shortcut hint. The focus ring is
+   drawn on this wrapper (shell.css), so it follows the field's visible box. */
+.tm-search {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex: 1 1 280px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  background: var(--bg-recessed);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-standard) var(--ease-hourglass);
+}
+.tm-search:hover { border-color: var(--field-border-hover); }
+.tm-search > .icon { flex: 0 0 auto; color: var(--foreground-subtle); }
+/* Stretched so the whole height of the field takes a tap — over the wrapper's 1px border too (the negative margin), so
+   the input is as tall as the field. */
+.tm-search > input {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  margin-block: -1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+  /* A placeholder longer than the box (the phone's) says it is cut; the input already clips (Chromium computes clip). */
+  text-overflow: ellipsis;
+}
+.tm-search > input::placeholder { color: var(--foreground-subtle); }
+.tm-search__clear { display: none; }
+.tm-search--has-value .tm-search__clear { display: inline-flex; }
+.cmp-kbd {
+  flex: 0 0 auto;
+  font-family: var(--font-technical);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-micro);
+}
+
+/* Segmented control: one bordered group of toggle buttons; the pressed one is the solid signature fill.
+   The group does not clip its buttons, so a focused segment's ring shows whole; the end segments carry the corners. */
+.tm-segmented {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+}
+.tm-segmented > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 var(--space-sm);
+  border: 0;
+  background: transparent;
+  color: var(--foreground-default);
+  font-family: var(--font-declaration);
+  font-weight: var(--font-declaration-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  line-height: var(--leading-tight);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
+}
+.tm-segmented > button:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md); }
+.tm-segmented > button:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+.tm-segmented > button:only-child { border-radius: var(--radius-md); }
+/* A neutral structural divider between segments. */
+.tm-segmented > button + button { border-left: 1px solid var(--border-strong); }
+.tm-segmented > button:hover { background: var(--ground-15); color: var(--foreground-bold); }
+/* After :hover so the pressed segment keeps its fill under the pointer. */
+.tm-segmented > button[aria-pressed="true"] { background: var(--signature-fill); color: var(--on-accent-fill); }
+/* Glyph-only segments are square; the glyph reads at body size. */
+.tm-segmented--icon > button { min-width: 32px; padding: 0; font-size: var(--size-narrator-default); }
+
+/* Touch targets: everything in the topbar's control row is at least 44px tall; icon-only controls are 44 wide too. */
+@media (max-width: 768px) {
+  .tm-search,
+  .tm-segmented > button,
+  .tm-search__clear,
+  .topbar-row2 .btn { min-height: var(--touch-target); }
+  .tm-search__clear,
+  .topbar-row2 .btn--icon,
+  .tm-segmented--icon > button { min-width: var(--touch-target); }
+}

@@ -1,15 +1,23 @@
+// User intent: a continuity row on the Dashboard is one honest control — a link when the item has a page, a disclosure
+// when its body opens in place (handovers, decisions), nothing when there is nowhere to go — and never markup from data.
 import { h } from '../../util/h.js';
 import { formatRelative } from '../../lib/time.js';
 import { hasKnownTags, renderInline } from '../../lib/xml-render.js';
+import { linkRow } from '../link-row.js';
+import { truncate } from '../../lib/text.js';
+import { statusMarker, severityMarker } from '../status.js';
 
-const CHIP_BY_TYPE = {
-  decision: ['co-chip co-chip--dec', 'Decision'],
-  handover: ['co-chip co-chip--han', 'Handover'],
-  task:     ['co-chip co-chip--tsk', 'Task'],
-  branch:   ['co-chip co-chip--brn', 'Branch'],
-  idea:     ['co-chip co-chip--ide', 'Idea'],
-  issue:    ['co-chip co-chip--iss', 'Issue'],
+const enc = encodeURIComponent;
+export const ITEM_ROUTE = {
+  task: (id) => `#/task/${enc(id)}`,
+  issue: (id) => `#/issue/${enc(id)}`,
+  idea: () => '#/ideas',
 };
+
+const TYPE_WORD = { decision: 'Decision', handover: 'Handover', task: 'Task', branch: 'Branch', idea: 'Idea', issue: 'Issue' };
+const DISCLOSES = new Set(['handover', 'decision']);
+
+let seq = 0;
 
 // Wrap a possibly-tagged string into a DOM node — chip-render recognized
 // tags, leave plain text alone, return null for empty input.
@@ -21,56 +29,99 @@ function renderField(text) {
   return span;
 }
 
-export function createItemRow({ item, onClick, variant = 'default' }) {
-  const [chipCls, chipLabel] = CHIP_BY_TYPE[item.type] || ['co-chip', item.type];
-  const isCompact = variant === 'compact';
-  const rowCls = 'co-row' + (isCompact ? ' co-row--compact' : '');
+function titleNode(text) {
+  if (!hasKnownTags(text)) return truncate(text, { className: 'co-row__title' });
+  return h('span', { class: 'co-row__title', title: text }, renderInline(text));
+}
 
-  const titleNode = hasKnownTags(item.title)
-    ? renderInline(item.title)
-    : [document.createTextNode(item.title || '')];
-  const titleEl = h('span', { class: 'co-row__title' });
-  for (const n of titleNode) titleEl.appendChild(n);
-
-  const line1 = h('div', { class: 'co-row__line1' },
-    h('span', { class: chipCls }, chipLabel),
-    titleEl,
-    h('span', { class: 'co-row__when' }, formatRelative(item.timestamp, { suffix: '' })),
-  );
-
-  const children = [line1];
-  if (!isCompact) {
-    const nextNode = renderField(item.next);
-    if (nextNode) children.push(h('div', { class: 'co-row__next' }, nextNode));
-    const whereNode = renderField(item.where);
-    if (whereNode) children.push(h('div', { class: 'co-row__where' }, whereNode));
+// The server sends a task's status, and an issue's "severity · status", as stored slugs in `next`; a row says them as
+// a shape plus a word, like every status in the viewer.
+function nextNode(item) {
+  const text = typeof item.next === 'string' ? item.next.trim() : '';
+  if (item.type === 'task' && text) return statusMarker('task', text);
+  if (item.type === 'issue' && text) {
+    const [sev, status] = text.split('·').map((s) => s.trim());
+    if (sev && status) return h('span', { class: 'co-row__markers' }, severityMarker(sev), statusMarker('issue', status));
   }
-  const row = h('div', { class: rowCls, on: { click: () => onClick?.(item, controller) } }, children);
+  if (item.type === 'idea' && text) {
+    // Older idea statuses ("brainstorm", "raw") are not in the idea table; they still read as a word, not a slug.
+    const el = statusMarker('idea', text);
+    const word = el.querySelector('.marker__word');
+    if (word.textContent === text) word.textContent = text.charAt(0).toUpperCase() + text.slice(1).replace(/-/g, ' ');
+    return el;
+  }
+  return renderField(item.next);
+}
 
-  // Expansion controller — caller invokes setExpanded(node) to attach an
-  // expanded body below the row, or clearExpanded() to remove it. State is
-  // per-row so multiple rows can be open at once.
+// An idea's `where` is its status again; the row says it once.
+const whereOf = (item) => (item.type === 'idea' && item.where === item.next ? null : item.where);
+
+// The row's words, as spans so they may sit inside a button: tag, title and age on one line, then next and where.
+function parts(item, word, label) {
+  const chip = h('span', { class: 'co-chip' }, word);
+  const when = h('span', { class: 'co-row__when' }, formatRelative(item.timestamp, { suffix: '' }));
+  const next = nextNode(item);
+  const where = renderField(whereOf(item));
+  return {
+    chip, when, title: titleNode(label),
+    next: next && h('span', { class: 'co-row__next' }, next),
+    where: where && h('span', { class: 'co-row__where' }, where),
+  };
+}
+
+export function createItemRow({ item, onToggle }) {
+  const word = TYPE_WORD[item.type] || String(item.type || '');
+  const label = item.title || item.id || word;
+  const p = parts(item, word, label);
+  const route = item.id ? ITEM_ROUTE[item.type] : null;
+
+  if (route) {
+    const root = linkRow({ href: route(item.id), name: p.title, content: [p.chip, p.when, p.next, p.where], className: 'co-row' });
+    root.dataset.itemId = item.id;
+    return { root };
+  }
+
+  const words = [h('span', { class: 'co-row__line1' }, p.chip, p.title, p.when), p.next, p.where];
+  if (!DISCLOSES.has(item.type) || !item.id) {
+    return { root: h('div', { class: 'co-row', 'data-item-id': item.id }, words) };
+  }
+
+  const regionId = `co-row-${++seq}-body`;
+  const toggle = h('button', {
+    type: 'button', class: 'co-row__toggle', 'aria-expanded': 'false',
+    on: { click: () => onToggle?.(item, controller) },
+  }, words);
+  const root = h('div', { class: 'co-row', 'data-item-id': item.id }, toggle);
+
+  // Expansion controller — the caller fills the region with setExpanded(node) or
+  // empties it with clearExpanded(). State is per-row, so several rows can be open.
   let expandedEl = null;
+  function open(child, busy) {
+    controller.clearExpanded();
+    expandedEl = h('div', {
+      class: 'co-row__expanded', id: regionId, role: 'region', 'aria-label': `${word} ${item.id}`,
+      'aria-busy': busy ? 'true' : null,
+    }, child);
+    root.appendChild(expandedEl);
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-controls', regionId);
+  }
   const controller = {
+    root,
     isExpanded: () => expandedEl !== null,
     setExpanded(node) {
-      controller.clearExpanded();
-      if (!node) return;
-      expandedEl = h('div', { class: 'co-row__expanded' });
-      expandedEl.appendChild(node);
-      row.appendChild(expandedEl);
+      if (!node) { controller.clearExpanded(); return; }
+      open(node, false);
     },
     setLoading() {
-      controller.clearExpanded();
-      expandedEl = h('div', { class: 'co-row__expanded co-row__expanded-loading' }, 'Loading…');
-      row.appendChild(expandedEl);
+      open(h('p', { class: 'co-xblock__p' }, 'Loading…'), true);
     },
     clearExpanded() {
-      if (expandedEl) {
-        expandedEl.remove();
-        expandedEl = null;
-      }
+      expandedEl?.remove();
+      expandedEl = null;
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.removeAttribute('aria-controls');
     },
   };
-  return { root: row, ...controller };
+  return controller;
 }

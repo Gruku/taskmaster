@@ -1,132 +1,116 @@
-/* viewer/css/components/entity-modal.css */
-body.em-open { overflow: hidden; }
+/* User intent: the task form reads as four calm groups on the shared modal — labels above their fields, two columns
+   that pair up, documents folded to a line each — and stays usable as one column on a phone. Layout only: the frame
+   is modal.css, the controls are edit-fields.css. */
 
-.em-overlay {
-  position: fixed; inset: 0; z-index: 100;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center;
-  animation: em-fade-in 0.18s ease-out;
-}
-@keyframes em-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
+.eform { display: flex; flex-direction: column; gap: var(--space-lg); }
 
-.em-modal {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  width: min(640px, calc(100vw - 32px));
-  max-height: calc(100vh - 64px);
-  display: flex; flex-direction: column;
-  animation: em-scale-in 0.18s ease-out;
-}
-@keyframes em-scale-in {
-  from { transform: scale(0.96); opacity: 0; }
-  to   { transform: scale(1); opacity: 1; }
+.eform-group { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; }
+.eform-group + .eform-group { padding-top: var(--space-lg); border-top: 1px solid var(--border-default); }
+.eform-group-title {
+  margin: 0;
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+  color: var(--foreground-subtle);
 }
 
-.em-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.em-title { font-size: var(--text-lg); font-weight: 600; color: var(--ink); }
-.em-close {
-  background: none; border: none; color: var(--ink-3);
-  cursor: pointer; font-size: var(--text-md); padding: 4px;
-}
-.em-close:hover { color: var(--ink); }
+.eform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md); align-items: start; }
+.eform-stack { display: flex; flex-direction: column; gap: var(--space-md); }
 
-.em-body {
-  padding: 16px;
-  overflow-y: auto;
-  flex: 1;
-  display: flex; flex-direction: column; gap: 14px;
+/* Label, control and message sit tight so they read as one unit; the gaps between fields are wider. */
+.eform-field { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
+.eform-field--wide { grid-column: 1 / -1; }
+.eform-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  color: var(--foreground-default);
+  font-size: var(--size-narrator-small);
+  font-weight: var(--font-narrator-weight);
+  line-height: var(--leading-heading);
 }
-.em-field { display: flex; flex-direction: column; gap: 4px; }
-.em-label {
-  font-size: var(--text-xs); text-transform: uppercase;
-  letter-spacing: 0.08em; color: var(--ink-3);
+.eform-required {
+  color: var(--foreground-subtle);
+  font-size: var(--size-narrator-whisper);
+  font-weight: var(--font-narrator-weight-light);
 }
-.em-field-error {
-  font-size: var(--text-xs); color: var(--red); display: none;
+.eform .ef-error { margin: 0; }
+/* In a column every control takes the column's width, so the edges line up. */
+.eform-field > .ef-select { display: flex; }
+.eform-field > .ef-num-input { max-width: none; }
+.eform-field > .ef-chip-input { min-width: 0; }
+/* The estimate picker is as tall as the inputs beside it. */
+.eform-field > .ef-estimate-edit { min-height: 32px; }
+
+/* ── Content: one folding section per document ── */
+.eform-sections { border: 1px solid var(--border-default); border-radius: var(--radius-lg); }
+.eform-section + .eform-section { border-top: 1px solid var(--border-default); }
+.eform-section-head { margin: 0; font-size: var(--size-narrator-small); }
+.eform-section-toggle {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-weight: var(--font-narrator-weight);
+  font-size: var(--size-narrator-small);
+  line-height: var(--leading-heading);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass);
+}
+.eform-section-toggle:hover:not(:disabled) { background: var(--overlay-surface-hover); }
+.eform-section-toggle:disabled { color: var(--foreground-disabled); cursor: not-allowed; }
+.eform-section-toggle > .icon {
+  flex: 0 0 auto;
+  color: var(--foreground-subtle);
+  transition: transform var(--dur-standard) var(--ease-hourglass);
+}
+.eform-section-toggle[aria-expanded="true"] > .icon { transform: rotate(90deg); }
+.eform-section-name { min-width: 0; overflow-wrap: anywhere; }
+.eform-section-hint {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.eform-section-panel { display: flex; flex-direction: column; gap: var(--space-xs); padding: 0 var(--space-sm) var(--space-sm); }
+.eform-section-panel[hidden] { display: none; }
+
+/* A label for assistive tech where the section heading already names the control to the eye. */
+.eform-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.em-footer {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-deep);
-}
-.em-error-summary { font-size: var(--text-xs); color: var(--red); }
-.em-footer-actions { display: flex; gap: 8px; }
-.em-cancel, .em-save {
-  font: inherit; padding: 5px 14px; border-radius: 4px; cursor: pointer;
-  border: 1px solid var(--border);
-}
-.em-cancel { background: transparent; color: var(--ink-2); }
-.em-cancel:hover { background: var(--bg-card); color: var(--ink); }
-.em-save {
-  background: var(--accent); color: white; border-color: var(--accent);
-}
-.em-save:disabled {
-  opacity: 0.5; cursor: not-allowed;
-  background: var(--bg-card); color: var(--ink-3); border-color: var(--border);
-}
+/* ── Footer: what is wrong on the left, the two answers on the right ── */
+.eform-messages { flex: 1 1 auto; min-width: 0; }
+.eform-summary { margin: 0; overflow-wrap: anywhere; }
+/* Both are live regions: they stay in the page while empty, so a message arriving in one is announced. */
+.modal--form .eform-summary:empty { display: block; }
+.eform-summary:empty::before { content: none; }
+.eform-actions { flex: 0 0 auto; display: flex; gap: var(--space-sm); margin-left: auto; }
 
-/* ---- Mobile (< 768px) — full-screen modal ---- */
 @media (max-width: 768px) {
-  /* Overlay: align to top so modal fills from top down */
-  .em-overlay {
-    align-items: flex-start;
-    /* Override scale animation — opacity-only on mobile (no transform) */
-    animation: em-fade-in 0.15s ease-out;
-  }
-
-  /* Modal: fill full viewport */
-  .em-modal {
-    width: 100%;
-    max-width: 100%;
-    height: 100%;
-    max-height: 100%;
-    border-radius: 0;
-    border-left: none;
-    border-right: none;
-    border-bottom: none;
-    /* Reset scale animation — opacity-only on mobile */
-    animation: em-fade-in 0.15s ease-out;
-  }
-
-  /* Header: sticky at top, safe-area aware */
-  .em-header {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--bg-card);
-    padding-top: max(12px, env(safe-area-inset-top));
-  }
-
-  /* Footer: sticky at bottom, safe-area aware */
-  .em-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  /* Footer actions: full-width row */
-  .em-footer-actions {
-    flex: 1;
-    justify-content: flex-end;
-  }
-
-  /* Cancel + Save: full-width on very narrow screens */
-  .em-cancel, .em-save {
-    flex: 1;
-    text-align: center;
-    padding: 8px 14px;
-  }
+  .eform-grid { grid-template-columns: minmax(0, 1fr); }
+  .modal--form .modal-footer { flex-wrap: wrap; }
+  .eform-actions .btn { min-height: var(--touch-target); }
+  .eform-section-toggle { min-height: var(--touch-target); }
 }

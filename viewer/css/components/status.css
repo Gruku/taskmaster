@@ -1,0 +1,45 @@
+/* User intent: status, severity and priority read the same everywhere — a shape that carries the hue and a word that
+   stays plain readable text, so no state depends on colour alone. */
+
+.marker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-micro);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
+  color: var(--foreground-default);
+  white-space: nowrap;
+}
+
+/* Each tone is a per-theme role that holds 3:1 against the page, a card and a modal. */
+.marker__shape { flex: 0 0 auto; color: var(--tone-neutral); }
+.marker--accent .marker__shape { color: var(--tone-accent); }
+.marker--warning .marker__shape { color: var(--tone-warning); }
+.marker--critical .marker__shape { color: var(--tone-critical); }
+.marker--success .marker__shape { color: var(--tone-success); }
+.marker--orange .marker__shape { color: var(--tone-orange); }
+
+/* The local fonts carry none of the shape glyphs, so a named shape is drawn here in the tone colour and its
+   glyph is pushed out of the box; an unnamed one falls back to the glyph. */
+.marker__shape[data-shape] {
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  overflow: hidden;
+  text-indent: 100%;
+  white-space: nowrap;
+  background: currentColor;
+}
+.marker__shape:is([data-shape="ring"], [data-shape="half"], [data-shape="dot"]) { border: 2px solid currentColor; border-radius: var(--radius-full); }
+.marker__shape[data-shape="ring"] { background: transparent; }
+.marker__shape[data-shape="half"] { background: linear-gradient(to right, currentColor 50%, transparent 50%); }
+.marker__shape[data-shape="triangle"] { clip-path: polygon(50% 5%, 100% 95%, 0 95%); }
+.marker__shape[data-shape="diamond"] { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.marker__shape[data-shape="arrow"] { clip-path: polygon(0 40%, 50% 40%, 50% 10%, 100% 50%, 50% 90%, 50% 60%, 0 60%); }
+.marker__shape[data-shape="cross"] {
+  background:
+    linear-gradient(45deg, transparent calc(50% - 1px), currentColor calc(50% - 1px), currentColor calc(50% + 1px), transparent calc(50% + 1px)),
+    linear-gradient(-45deg, transparent calc(50% - 1px), currentColor calc(50% - 1px), currentColor calc(50% + 1px), transparent calc(50% + 1px));
+}

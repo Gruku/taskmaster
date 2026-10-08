@@ -109,7 +109,7 @@ def test_get_static_v3_tokens_css(running_server):
     resp = urllib.request.urlopen(f"{base}/static/v3/css/tokens.css")
     assert resp.status == 200
     assert resp.headers.get("Content-Type", "").startswith("text/css")
-    assert "--bg-canvas" in resp.read().decode()
+    assert "--bg-page" in resp.read().decode()
 
 
 def test_static_v3_path_traversal_blocked(running_server):
@@ -151,3 +151,42 @@ def test_root_ignores_stale_use_v3_pref(running_server):
     html = resp.read().decode()
     assert "<title>Taskmaster</title>" in html
     assert 'src="/static/v3/js/main.js"' in html
+
+
+def test_viewer_font_is_served(running_server):
+    base, _ = running_server
+    with urllib.request.urlopen(f"{base}/static/v3/vendor/fonts/DMSans-Variable.woff2") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"].startswith("font/woff2")
+        assert len(r.read()) > 10_000
+
+
+def test_favicon_ico_is_served_at_the_root(running_server):
+    base, _ = running_server
+    # Browsers request /favicon.ico on their own, whatever the page links to.
+    with urllib.request.urlopen(f"{base}/favicon.ico") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"] in ("image/x-icon", "image/vnd.microsoft.icon")
+        root_body = r.read()
+    assert root_body[:4] == b"\x00\x00\x01\x00"
+    with urllib.request.urlopen(f"{base}/static/v3/vendor/favicon.ico") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"] in ("image/x-icon", "image/vnd.microsoft.icon")
+        assert r.read() == root_body
+
+
+def test_viewer_icon_svg_is_served(running_server):
+    base, _ = running_server
+    with urllib.request.urlopen(f"{base}/static/v3/vendor/icon.svg") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"].startswith("image/svg+xml")
+        assert b"<svg" in r.read()
+
+
+def test_index_icon_links_are_rewritten_under_static(running_server):
+    base, _ = running_server
+    html = urllib.request.urlopen(f"{base}/").read().decode()
+    assert 'href="/static/v3/vendor/favicon.ico"' in html
+    # The tab icon is the ICO's pixel-fitted 16/32 drawings; an SVG link would win in Chrome/Firefox and blur them.
+    assert 'icon.svg' not in html
+    assert 'href="vendor/' not in html

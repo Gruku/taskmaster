@@ -1,0 +1,107 @@
+/* User intent: the generic right rail is a bordered panel in the page, on the same tokens as every card — no
+   floating sheet, no shadow, no hues of its own — so a session or a handover reads as one more surface beside its list. */
+
+/* The host places it: no position, width or stacking here. */
+.right-rail {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 0;
+  padding: var(--space-lg);
+  background: var(--card-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+  overflow-wrap: anywhere;
+}
+
+.rr-h { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+.rr-close { margin-left: auto; }
+
+/* Tags: the Technical voice at 12px, in a thin frame. */
+.rr-kind {
+  padding: 0 var(--space-micro);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  white-space: nowrap;
+}
+
+.rr-when, .rr-slug, .rr-count, .rr-task, .rr-files {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.rr-when, .rr-slug, .rr-count { color: var(--foreground-subtle); }
+
+.rr-title {
+  margin: 0;
+  font-family: var(--font-narrator);
+  font-weight: 700;
+  font-size: var(--size-narrator-large);
+  line-height: var(--leading-heading);
+  color: var(--foreground-bold);
+}
+/* Focused on open (tabindex -1), it shows the global :focus-visible ring when the keyboard brought it there. */
+
+/* Labels: the Technical label voice. */
+.rr-section > h3, .rr-label {
+  margin: 0;
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-ultra);
+  text-transform: uppercase;
+}
+.rr-section > h3 .rr-count { letter-spacing: var(--tracking-normal); }
+
+.rr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); min-width: 0; }
+.rr-section { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-xs); min-width: 0; }
+
+/* A handover of a session: kind, id and time on one control, read left to right. */
+.rr-ho { justify-content: flex-start; min-width: 0; text-transform: none; letter-spacing: var(--tracking-normal); white-space: normal; text-align: left; }
+.rr-ho__id { min-width: 0; color: var(--foreground-bold); font-family: var(--font-technical); }
+.rr-ho .rr-when { margin-left: auto; }
+
+.rr-path { max-width: 100%; min-width: 0; text-transform: none; letter-spacing: var(--tracking-normal); font-family: var(--font-technical); }
+.rr-path > .truncate { min-width: 0; }
+
+.rr-resume {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-md);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+}
+.rr-resume > .btn { align-self: flex-start; }
+.rr-resume__body {
+  color: var(--foreground-bold);
+  font-size: var(--size-narrator-default);
+  line-height: var(--leading-body);
+  white-space: pre-wrap;
+}
+
+.rr-checklist, .rr-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-micro);
+}
+.rr-files > li { min-width: 0; }
+.rr-check { display: flex; gap: var(--space-xs); align-items: flex-start; }
+.rr-check > .icon { flex: 0 0 auto; color: var(--foreground-subtle); }
+
+@media (max-width: 768px) {
+  .right-rail .btn, .right-rail .ho-status-pill { min-height: var(--touch-target); }
+}

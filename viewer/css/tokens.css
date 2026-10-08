@@ -1,134 +1,319 @@
-/* Design tokens — single source of truth.
-   Subsequent CSS files reference these via var(--name).
-   No new global tokens are added in screen-specific CSS files. */
+/* User intent: single source of truth for the viewer's design tokens — Reality Reprojection values (generated),
+   plus the few viewer-specific roles. Screen CSS reads var(--*) only and defines no tokens of its own. */
+
+@font-face { font-family: 'League Spartan'; src: url('../vendor/fonts/LeagueSpartan-Variable.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'DM Sans';        src: url('../vendor/fonts/DMSans-Variable.woff2') format('woff2');        font-weight: 100 1000; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('../vendor/fonts/JetBrainsMono-Variable.woff2') format('woff2'); font-weight: 100 800; font-display: swap; }
+
 :root {
-  /* Surfaces (dark theme — only theme implemented at this stage) */
-  --bg-canvas:        #14151a;
-  --bg-shell:         #0f1014;
-  --bg-panel:         #17181d;
-  --bg-card:          #1f2025;
-  --bg-card-hover:    #25262c;
-  --bg-board-col:     #0f131c;
-  --bg-deep:          #0a0c11;          /* console / input recess */
-  --bg-issue:         #181a20;          /* slightly cooler than bg-card, per spec §3.14 */
+  /* @generated:rr-dark */
+  --signature: #5e79e6;
+  --signature-vivid: #8a9eeb;
+  --signature-muted: #3f58c0;
+  --signature-dim: rgba(94, 121, 230, 0.24);
+  --signature-glow: rgba(94, 121, 230, 0.10);
+  --signature-glow-strong: rgba(94, 121, 230, 0.20);
+  --signature-glow-intense: rgba(94, 121, 230, 0.35);
+  --signature-fill: var(--signature);
+  --signature-fill-hover: var(--signature-vivid);
+  --signature-text: var(--signature);
+  --on-signature: #f5f3ed;
+  --accent-cyan: #00d3fa;
+  --accent-cyan-glow: rgba(0, 211, 250, 0.10);
+  --accent-cyan-glow-strong: rgba(0, 211, 250, 0.20);
+  --accent-cyan-subtle: rgba(0, 211, 250, 0.08);
+  --accent-lime: #64fa00;
+  --accent-lime-glow: rgba(100, 250, 0, 0.10);
+  --accent-lime-glow-strong: rgba(100, 250, 0, 0.20);
+  --accent-lime-subtle: rgba(100, 250, 0, 0.08);
+  --accent-pink: #fa017b;
+  --accent-pink-glow: rgba(250, 1, 123, 0.10);
+  --accent-pink-glow-strong: rgba(250, 1, 123, 0.20);
+  --accent-pink-subtle: rgba(250, 1, 123, 0.08);
+  --accent-orange: #ff660d;
+  --pastel-signature: #b5c2ee;
+  --pastel-signature-glow: rgba(181, 194, 238, 0.10);
+  --pastel-signature-glow-strong: rgba(181, 194, 238, 0.20);
+  --pastel-signature-subtle: rgba(181, 194, 238, 0.08);
+  --pastel-cyan: #8ef0e0;
+  --pastel-cyan-glow: rgba(142, 240, 224, 0.10);
+  --pastel-cyan-glow-strong: rgba(142, 240, 224, 0.20);
+  --pastel-cyan-subtle: rgba(142, 240, 224, 0.08);
+  --pastel-lime: #dcf58a;
+  --pastel-lime-glow: rgba(220, 245, 138, 0.10);
+  --pastel-lime-glow-strong: rgba(220, 245, 138, 0.20);
+  --pastel-lime-subtle: rgba(220, 245, 138, 0.08);
+  --pastel-pink: #ff6070;
+  --pastel-pink-glow: rgba(255, 96, 112, 0.10);
+  --pastel-pink-glow-strong: rgba(255, 96, 112, 0.20);
+  --pastel-pink-subtle: rgba(255, 96, 112, 0.08);
+  --pastel-orange: #ffcb8a;
+  --pastel-orange-glow: rgba(255, 203, 138, 0.10);
+  --pastel-orange-glow-strong: rgba(255, 203, 138, 0.20);
+  --pastel-orange-subtle: rgba(255, 203, 138, 0.08);
+  --pastel-signature-grounded: #3f58c0;
+  --pastel-cyan-grounded: #3fa899;
+  --pastel-lime-grounded: #8fb13d;
+  --pastel-pink-grounded: #d1404f;
+  --pastel-orange-grounded: #c68940;
+  --ground-0: #0d0d0c;
+  --ground-5: #151514;
+  --ground-10: #1d1d1b;
+  --ground-15: #272725;
+  --ground-20: #343331;
+  --ground-30: #4d4c48;
+  --ground-40: #66645f;
+  --ground-50: #7d7b76;
+  --ground-60: #a09c95;
+  --ground-70: #bbb8b1;
+  --ground-80: #d2cfc8;
+  --ground-90: #e6e4dd;
+  --ground-100: #f5f3ed;
+  --fg-bold: var(--ground-100);
+  --fg-default: var(--ground-80);
+  --fg-subtle: var(--ground-60);
+  --fg-disabled: var(--ground-40);
+  --foreground-bold: var(--ground-100);
+  --foreground-default: var(--ground-80);
+  --foreground-subtle: var(--ground-60);
+  --foreground-disabled: var(--ground-40);
+  --foreground-on-accent: #f5f3ed;
+  --bg-page: var(--ground-5);
+  --bg-raised: var(--ground-10);
+  --bg-overlay: var(--ground-15);
+  --bg-recessed: var(--ground-0);
+  --surface-ground: var(--ground-0);
+  --surface-raised: var(--ground-10);
+  --surface-overlay: var(--ground-15);
+  --surface-recessed: var(--ground-5);
+  --column-tabs-fade: var(--surface-recessed);
+  --border-default: var(--ground-20);
+  --border-subtle: var(--ground-15);
+  --border-strong: var(--ground-30);
+  --border-focus: var(--signature);
+  --overlay-bg: rgba(13, 13, 12, 0.6);
+  --frost-bg-light: rgba(13, 13, 12, 0.6);
+  --frost-bg-medium: rgba(13, 13, 12, 0.75);
+  --frost-bg-heavy: rgba(13, 13, 12, 0.85);
+  --color-success: #3a9a5b;
+  --color-success-subtle: rgba(58, 154, 91, 0.12);
+  --color-success-bold: #2d7a47;
+  --color-warning: #c4881d;
+  --color-warning-subtle: rgba(196, 136, 29, 0.12);
+  --color-warning-bold: #a06f14;
+  --color-critical: #d14343;
+  --color-critical-subtle: rgba(209, 67, 67, 0.12);
+  --color-critical-bold: #b33030;
+  --color-info: #5b8fc7;
+  --color-info-subtle: rgba(91, 143, 199, 0.12);
+  --color-info-bold: #4574a6;
+  --font-declaration: 'League Spartan', system-ui, -apple-system, sans-serif;
+  --font-narrator: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-technical: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  --space-base: 8px;
+  --space-micro: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  /* Measured by the Kanban screen (kanban.js) so its phone sticky column head clears the sticky topbar. */
+  --topbar-height: 0px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --emitter-declaration: 96px;
+  --emitter-narrator: 24px;
+  --emitter-technical: 8px;
+  --container-narrow: 720px;
+  --container-max: 1200px;
+  --container-wide: 1440px;
+  --container-padding: 24px;
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-full: 9999px;
+  --size-declaration-hero: clamp(56px, 9vw, 112px);
+  --size-declaration-h1: 48px;
+  --size-declaration-h2: 36px;
+  --size-declaration-h3: 28px;
+  --size-declaration-h4: 22px;
+  --size-declaration-h5: 18px;
+  --size-narrator-large: 20px;
+  --size-narrator-default: 16px;
+  --size-narrator-small: 14px;
+  --size-narrator-whisper: 13px;
+  --size-technical-default: 14px;
+  --size-technical-small: 12px;
+  --size-technical-label: 11px;
+  --size-section-label: 10px;
+  --leading-tight: 1.15;
+  --leading-heading: 1.2;
+  --leading-body: 1.6;
+  --leading-loose: 1.8;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-ultra: 0.12em;
+  --font-declaration-weight: 800;
+  --font-declaration-weight-alt: 700;
+  --font-declaration-alt-weight: 900;
+  --font-narrator-weight: 600;
+  --font-narrator-weight-light: 400;
+  --font-narrator-weight-medium: 600;
+  --font-narrator-weight-semi: 700;
+  --font-technical-weight: 600;
+  --frost-blur-light: 8px;
+  --frost-blur-medium: 16px;
+  --frost-blur-heavy: 24px;
+  --ease-hourglass: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-hourglass-settle: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-pendulum: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-bell: cubic-bezier(0.0, 0.0, 0.2, 1);
+  --dur-micro: 80ms;
+  --dur-standard: 200ms;
+  --dur-macro: 400ms;
+  --stagger-fast: 30ms;
+  --stagger-base: 50ms;
+  --stagger-slow: 80ms;
+  /* @generated:end */
 
-  /* Borders */
-  --border:           rgba(230,230,233,0.07);
-  --border-soft:      rgba(255,255,255,0.05);
-  --border-strong:    #3a3b42;
+  /* ── Viewer roles (not in RR) ── */
+  --page-gutter: var(--space-lg);
+  --col-bg: var(--bg-recessed);              /* board column = milled channel */
+  --card-bg: var(--surface-raised);
+  --card-bg-hover: var(--ground-15);
+  /* The signature hue is too dark to read as text on the raised grounds, so text takes its vivid step.
+     --text-accent is the only token for signature-hued text; --on-accent-fill is text on a --signature-fill ground. */
+  --text-accent: var(--signature-vivid);
+  --on-accent-fill: var(--ground-0);
+  --accent-fill-hover: var(--signature-fill-hover);
+  /* Modals and popovers. The -hover and -active steps are for a transparent control sitting on the surface,
+     where the shared ground-15 hover fill would be the surface itself. */
+  --overlay-surface: var(--surface-overlay);
+  --overlay-surface-sunken: var(--bg-recessed);
+  --overlay-surface-hover: var(--ground-20);
+  --overlay-surface-active: var(--ground-30);
+  /* A popover (menu, suggestion list, Filters) floats over a dialog as often as over the page, so it is not the dialog's
+     ground: it takes the raised ground, below the dialog's, edged by --border-strong. The step up (ground-20) would
+     leave the critical shape under 3:1 (2.88); here it is 3.6, and on the hovered item (ground-15) 3.3. */
+  --popover-surface: var(--surface-raised);
+  --popover-surface-hover: var(--ground-15);
+  /* The hue a status, severity or priority shape is drawn in. A shape is not text: it must reach 3:1 against the
+     page, a card and a modal, so each theme names the step that does. */
+  --tone-neutral: var(--foreground-subtle);
+  --tone-accent: var(--text-accent);
+  --tone-success: var(--color-success);
+  --tone-warning: var(--color-warning);
+  --tone-critical: var(--color-critical);
+  --tone-orange: var(--accent-orange);
+  /* The edge of a form field at rest and under the pointer. A field must be findable before it is touched, so the
+     edge takes the lowest ground step that reaches 3:1 on every surface a field sits on (ground-40 is 2.53 on a
+     modal, 2.86 on a card); the border roles (ground-15 to 30) are for dividers and stay below that. */
+  --field-border: var(--ground-50);
+  --field-border-hover: var(--ground-60);
+  --cat-1: var(--signature);                 /* categorical palette: epics, bundles — swatch only, never text */
+  --cat-2: var(--accent-cyan);
+  --cat-3: var(--accent-pink);
+  --cat-4: var(--accent-orange);
+  --cat-5: var(--accent-lime);
+  --cat-6: var(--pastel-orange);
+  /* Desk notes are paper: the same sheet and the same dark ink in both themes (the ink steps are mirrored in light). */
+  --note-paper-user: var(--pastel-orange);
+  --note-paper-claude: var(--pastel-signature);
+  --note-ink: var(--ground-0);
+  --note-ink-soft: var(--ground-30);
+  --note-edge-user: var(--pastel-orange-grounded);
+  --note-edge-claude: var(--pastel-signature-grounded);
 
-  /* Ink */
-  --ink:              #e6e7eb;
-  --ink-2:            #a8a8ae;
-  --ink-3:            #7c8290;
-  --ink-4:            #4d4d54;
-  --ink-on-accent:    #0a1628;
+  /* ── Layout ── */
+  --sidebar-w: 240px;
+  --rail-w: 720px;
+  --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px;   /* documentation only: @media needs literals */
+  --task-rail-w: 280px;                       /* task detail's side rail column; no RR token sizes it */
+  --graph-canvas-h: 320px;                    /* task detail graph's base height; the canvas scrolls past 1.5× of it */
+  /* Sizes the RR scale has no name for, derived from it where it can be */
+  --control-size: var(--space-xl);            /* 32px: an icon button, a field, a modal heading row */
+  --control-size-sm: var(--space-lg);         /* 24px: a small button, a chip */
+  --touch-target: 44px;                       /* the smallest thing a finger is asked to hit, at ≤768px */
 
-  /* Accents */
-  --accent:           #4a9eff;
-  --accent-2:         #7fb3f0;
-  --accent-soft:      rgba(74,158,255,0.10);
-  --accent-blue:      #6ea8ff;            /* secondary blue used in issue card location nums */
-  --accent-edit:      #6ea8ff;            /* dashboard edit-mode chrome */
-  --accent-green:     #5fcdb8;            /* brighter green than --green; used for fresh aging + fixed marks */
-
-  /* Status */
-  --green:            #5fae6e;
-  --amber:            #d6a45f;
-  --red:              #d66b5f;
-  --purple:           #a07fe0;
-  --gold:             var(--amber); /* semantic alias — identical hue, keep --amber as canonical */
-
-  /* Diff colors (Sessions detail) */
-  --diff-add:         var(--green);
-  --diff-mod:         var(--amber);
-  --diff-del:         var(--red);
-
-  /* Issue severity — used across Issues + Issue detail screens. */
-  --sev-critical:     #e87a85;
-  --sev-high:         #e8a34d;
-  --sev-medium:       #c8b75a;
-  --sev-low:          #888c95;
-
-  /* Epic palette — auto-assigned in order; see spec §5 */
-  --epic-1:           #6ea8ff;
-  --epic-2:           #b585e8;
-  --epic-3:           #5fcdb8;
-  --epic-4:           #e8a34d;
-  --epic-5:           #e87a85;
-  --epic-6:           #a8c958;
-
-  /* Bundle palette — frame hues, deliberately off the blue accent */
-  --bundle-1:          #5fcdb8;
-  --bundle-2:          #a07fe0;
-  --bundle-3:          #d6a45f;
-  --bundle-4:          #e87a85;
-  --bundle-5:          #a8c958;
-  --bundle-6:          #5fb0cd;
-
-  /* Type */
-  --font-sans:        'Inter', -apple-system, system-ui, sans-serif;
-  --font-mono:        'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-serif:       'Source Serif Pro', Georgia, serif;
-
-  --text-xs:          12px;
-  --text-sm:          14px;
-  --text-base:        16px;
-  --text-md:          17px;
-  --text-lg:          19px;
-  --text-xl:          22px;
-  --text-2xl:         24px;
-  --text-3xl:         28px;
-
-  /* Spacing */
-  --sp-1:             6px;
-  --sp-2:             9px;
-  --sp-3:             12px;
-  --sp-4:             15px;
-  --sp-5:             18px;
-  --sp-6:             21px;
-  --sp-7:             24px;
-  --sp-8:             27px;
-  --sp-9:             33px;
-  --sp-10:            36px;
-  --sp-12:            48px;
-  --sp-13:            60px;
-
-  /* Radius */
-  --r-sm:             6px;
-  --r-md:             9px;
-  --r-lg:             12px;
-  --r-xl:             15px;
-  --r-2xl:            18px;
-
-  /* Shadows + recess (graph frame language, Task Detail B / Auto Mode B) */
-  --shadow-card:      0 2px 0 rgba(255,255,255,0.02) inset, 0 6px 18px rgba(0,0,0,0.18);
-  --shadow-lifted:    0 6px 21px rgba(0,0,0,0.4);
-  --recess-inset:     inset 0 0 54px rgba(0,0,0,0.4);
-  --recess-bg:        radial-gradient(ellipse at 50% 50%, #181a22 0%, #0d0e13 100%);
-
-  /* Motion */
-  --t-fast:           120ms;
-  --t-base:           180ms;
-  --t-slow:           320ms;
-  --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
-
-  /* Layout */
-  --sidebar-w:        236px;
-  --rail-w:           720px;            /* right-rail detail surface */
-  --page-pad:         20px;
-  --page-gap:         16px;
-
-  /* Breakpoints — documentation anchors for the mobile-dash epic.
-     CSS custom properties cannot be used inside @media at-rules, so screen-
-     specific CSS files use the matching literal px value (e.g. 768px for --bp-md).
-     Convention: mobile styles go inside @media (max-width: 768px) { … } blocks. */
-  --bp-sm:            480px;            /* small phones (portrait) */
-  --bp-md:            768px;            /* tablet / large phone (landscape) — primary mobile breakpoint */
-  --bp-lg:            1024px;           /* small desktop / large tablet */
+  /* ── Set from JS ── */
+  --conflict-banner-height: 0px;              /* the shown conflict banner's height; the modal overlay starts below it */
+  --tilt: 0deg;                               /* a desk note's tilt (desk/note-card.js) */
+  --note-rows: 1;                             /* the 4px board rows a desk note spans when packed (screens/desk.js) */
+  --epic: var(--foreground-subtle);           /* an epic's swatch, pointed at its --cat-N (lib/epics.js) */
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 1; }
+[data-theme="light"] {
+  /* @generated:rr-light */
+  --signature: #3f58c0;
+  --signature-vivid: #5e79e6;
+  --signature-dim: rgba(63, 88, 192, 0.35);
+  --signature-glow: rgba(63, 88, 192, 0.15);
+  --signature-glow-strong: rgba(63, 88, 192, 0.25);
+  --signature-glow-intense: rgba(63, 88, 192, 0.40);
+  --signature-fill: #3f58c0;
+  --signature-fill-hover: #5066d6;
+  --signature-text: #3f58c0;
+  --ground-0: #f5f3ed;
+  --ground-5: #e6e4dd;
+  --ground-10: #d2cfc8;
+  --ground-15: #bbb8b1;
+  --ground-20: #a09c95;
+  --ground-30: #7d7b76;
+  --ground-50: #4d4c48;
+  --ground-60: #343331;
+  --ground-70: #272725;
+  --ground-80: #1d1d1b;
+  --ground-90: #151514;
+  --ground-100: #0d0d0c;
+  --overlay-bg: rgba(226, 223, 218, 0.6);
+  --frost-bg-light: rgba(226, 223, 218, 0.6);
+  --frost-bg-medium: rgba(226, 223, 218, 0.75);
+  --frost-bg-heavy: rgba(226, 223, 218, 0.85);
+  --color-warning: #d4780e;
+  --color-warning-subtle: rgba(212, 120, 14, 0.15);
+  --color-warning-bold: #b36100;
+  /* @generated:end */
+  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface and its column the
+     darkest. Hover steps the card halfway to the page ground: the page's own step would merge a hovered card into it. */
+  --col-bg: var(--ground-10);
+  --card-bg: var(--ground-0);
+  --card-bg-hover: color-mix(in srgb, var(--ground-0), var(--ground-5));
+  --note-ink: var(--ground-100);
+  --note-ink-soft: var(--ground-50);
+  --text-accent: var(--signature);
+  --on-accent-fill: var(--on-signature);
+  /* RR's light hover fill leaves its label at 4.49:1; the fill holds and the button's border answers the hover instead. */
+  --accent-fill-hover: var(--signature-fill);
+  /* RR's light overlay step is a mid-grey that reads heavy without a shadow: a modal is the lightest surface, like a card. */
+  --overlay-surface: var(--ground-0);
+  --overlay-surface-sunken: var(--ground-5);
+  --overlay-surface-hover: var(--ground-15);
+  --overlay-surface-active: var(--ground-20);
+  /* Nothing is lighter than the dialog's ground-0 here, so a popover shares it and its border carries the edge.
+     Its hovered item steps only to ground-5: on the dialog's ground-15 hover no status shape reached 3:1. */
+  --popover-surface: var(--overlay-surface);
+  --popover-surface-hover: var(--ground-5);
+  /* On the light grounds the plain success and warning steps fall below 3:1, so shapes take the bold step.
+     No orange in RR reaches 3:1 here (accent-orange 2.31, pastel-orange-grounded 2.34 on the page), so the orange
+     tone shares the bold warning step; the shape and the word still tell High from Medium. */
+  --tone-success: var(--color-success-bold);
+  --tone-warning: var(--color-warning-bold);
+  --tone-orange: var(--color-warning-bold);
+  /* A field's fill is the card's and the modal's own ground here, so its edge alone has to show it: 3:1. */
+  --field-border: var(--border-strong);
+  --field-border-hover: var(--foreground-subtle);
+  --cat-2: var(--pastel-cyan-grounded);
+  --cat-3: var(--pastel-pink-grounded);
+  --cat-5: var(--pastel-lime-grounded);
+  --cat-6: var(--pastel-orange-grounded);
+}
+
+@media (max-width: 768px) { :root { --page-gutter: var(--space-md); } }
+
+@keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

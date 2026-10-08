@@ -1,213 +1,153 @@
-/* Sessions / Handovers screen — Hybrid C diary.
-   Reads tokens.css; no new global tokens introduced. */
+/* User intent: the Sessions screen on the RR tokens — rows are cards that lead with a bold title and keep the slug as a
+   Technical subline, tags at 12px with no hues of their own, chips in a page filter bar, and the rail docked beside the
+   timeline (above it on a narrow screen) without ever dimming the timeline. */
 
-/* Bounded scroll container.
-   shell.css already gives .sessions-page flex+overflow via Scroll policy A.
-   We add an explicit height fallback and shift bottom padding INSIDE the
-   scrolling content so the last row doesn't get clipped at the scroll edge.
-   No padding on the scroll container itself — padding inside an overflow
-   container is added to the scroll length, which makes the bottom row sit
-   below the visible bottom edge instead of resting against it. */
-.sessions-page {
-  height: 100%;
+.sessions-page { display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0; }
+
+/* ── Filter bar: a whole chip group may move to the next line; the chips inside a group never wrap. ── */
+.sessions-filters { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-lg); min-width: 0; }
+.sessions-filters > .chip-row { flex: 0 1 auto; min-width: 0; }
+
+/* ── Timeline and rail: the rail takes a column of its own beside the timeline while it is open. ── */
+.sessions-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-lg); align-items: start; min-width: 0; }
+.sessions-body > .right-rail-host:empty { display: none; }
+.sessions-body:has(> .right-rail-host > .right-rail) { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
+.sessions-body:has(> .right-rail-host > .right-rail) > .right-rail-host {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 85vh;
+  overflow-y: auto;
 }
-.sessions-page > .sessions-mount,
-.sessions-page > [data-role="mount"] {
-  padding-bottom: var(--sp-9);
+/* Narrow: one column with the rail above the timeline; opening it focuses its title, which scrolls it into view. */
+@media (max-width: 1024px) {
+  .sessions-body:has(> .right-rail-host > .right-rail) { grid-template-columns: minmax(0, 1fr); }
+  .sessions-body:has(> .right-rail-host > .right-rail) > .right-rail-host {
+    order: -1;
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 
-/* Kind filter row */
-.sessions-kinds {
-  display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-7);
-}
-.sessions-kind-chip {
-  font-size: var(--text-xs); padding: 3px var(--sp-4); border-radius: 12px;
-  cursor: pointer; border: 1px solid var(--border);
-  color: var(--ink-3);
-  display: inline-flex; align-items: center; gap: 5px;
-}
-.sessions-kind-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
-.sessions-kind-chip.session .dot { background: var(--accent); }
-.sessions-kind-chip.handover .dot { background: var(--purple); }
-.sessions-kind-chip.on { color: var(--ink); background: var(--accent-soft);
-  border-color: rgba(74,158,255,0.3); }
-.sessions-kind-chip .ct { color: var(--ink-3); font-family: var(--font-mono); font-size: 9px; }
+.tl { display: flex; flex-direction: column; gap: var(--space-md); min-width: 0; }
+.ses-container { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 
-/* Group/day header */
-.sessions-day {
-  display: flex; align-items: baseline; gap: var(--sp-4);
-  margin: var(--sp-3) 0 var(--sp-4); padding: 0 2px;
-}
-.sessions-day .label {
-  font-family: var(--font-serif); font-size: var(--text-md); color: var(--ink-2);
-}
-.sessions-day .meta { color: var(--ink-3); font-size: var(--text-sm); }
-.sessions-day .rule { flex: 1; height: 1px; background: var(--border-soft); margin-left: 6px; }
-
-/* timeline.js renders into `.tl`. The flex column needs min-height:0 so
-   it can shrink below its content's intrinsic height — otherwise the
-   parent .sessions-page can't honour its overflow:auto and the document
-   gains a scrollbar instead of the screen. */
-.tl {
+/* ── Rows: a session head and its handovers are buttons on the card ground. ── */
+.ho, .ho-child {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
-  min-height: 0;
+  gap: var(--space-micro);
+  width: 100%;
   min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+  background: var(--card-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--foreground-default);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
+}
+.ho:hover, .ho-child:hover { background: var(--card-bg-hover); border-color: var(--border-strong); }
+.ho[aria-current="true"], .ho-child[aria-current="true"] {
+  background: var(--signature-glow-strong);
+  border-color: var(--signature-dim);
+  color: var(--foreground-bold);
 }
 
-.ses-container { margin-bottom: var(--sp-6); transition: opacity 120ms ease; }
-.ses-container.is-dimmed { opacity: 0.28; }
-.ses-container.is-dimmed .ho,
-.ses-container.is-dimmed .ho-child { pointer-events: none; }
+.ho-head, .ho-tasks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); min-width: 0; }
 
-.ho {
-  background: var(--bg-panel); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: var(--sp-4) var(--sp-5);
-  cursor: pointer; transition: background var(--t-fast) var(--ease);
-}
-.ho:hover { background: #1c1d23; }
-.ho.selected { background: rgba(160,127,224,0.10); border-color: rgba(160,127,224,0.45); }
-.ho-head { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-2); }
-.ho-kind {
-  font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
-  padding: 1px 6px; border-radius: 3px; font-weight: 600;
-}
-.ho-kind.session  { background: var(--accent-soft); color: var(--accent); }
-.ho-kind.handover { background: rgba(160,127,224,0.15); color: var(--purple); }
-.ho-kind.handover.mid-task   { background: rgba(160,127,224,0.20); }
-.ho-kind.handover.checkpoint { background: rgba(160,127,224,0.12); }
-.ho-kind.handover.wrap       { background: rgba(95,174,110,0.15); color: var(--green); }
-.ho-kind.handover.standalone { background: transparent;
-  border: 1px dashed rgba(160,127,224,0.45); color: var(--purple); }
-.ho-time { color: var(--ink-3); font-size: 10px; }
-.ho-title { font-size: var(--text-md); color: var(--ink); margin-bottom: var(--sp-1); }
-.ho-summary { color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
-.ho-foot { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
-.ho-foot .pill {
-  font-size: 9px; color: var(--ink-3);
-  background: var(--bg-card); border: 1px solid var(--border-soft);
-  padding: 1px 6px; border-radius: 3px;
+/* Tags: the Technical voice at 12px, in a thin frame. */
+.ho-kind, .ho-status {
+  padding: 0 var(--space-micro);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  white-space: nowrap;
 }
 
-/* Nested children: connector line + L bracket */
+.ho-time, .ho-slug, .ho-task {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+/* On the marked row's tinted fill the sublines step up a tone, as a pressed chip's count does. */
+.ho[aria-current="true"] :is(.ho-time, .ho-slug, .ho-task),
+.ho-child[aria-current="true"] :is(.ho-time, .ho-slug, .ho-task) { color: var(--foreground-default); }
+
+.ho-title { font-weight: 600; color: var(--foreground-bold); }
+
+/* A neutral structural connector from a session to its handovers. */
 .ses-children {
-  position: relative; margin: 0 0 0 14px; padding: var(--sp-1) 0 0 16px;
-  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-left: var(--space-md);
+  padding-left: var(--space-md);
+  border-left: 1px solid var(--border-default);
 }
-.ses-children::before {
-  content: ''; position: absolute; left: -1px; top: 0; height: 8px; width: 12px;
-  border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
-  border-bottom-left-radius: 6px;
-}
-.ho-child {
-  background: var(--bg-card); border: 1px solid var(--border-soft);
-  border-radius: 5px; padding: var(--sp-2) var(--sp-4); margin-top: var(--sp-2);
-  cursor: pointer; position: relative;
-}
-.ho-child::before {
-  content: ''; position: absolute; left: -16px; top: 14px;
-  width: 12px; height: 1px; background: var(--border);
-}
-.ho-child:hover { background: #25262c; }
 
-/* Parallel block */
+/* ── Sessions whose windows overlap ── */
 .par-block {
-  border: 1px dashed rgba(160,127,224,0.35); border-radius: var(--r-lg);
-  padding: var(--sp-4) var(--sp-4) var(--sp-1);
-  margin: var(--sp-2) 0 var(--sp-7);
-  background: rgba(160,127,224,0.04); position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-md);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
 }
 .par-label {
-  position: absolute; top: -7px; left: 12px;
-  font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
-  background: var(--bg-canvas); padding: 0 6px;
-  color: var(--purple); font-weight: 600;
+  font-family: var(--font-technical);
+  font-weight: 800;
+  font-size: var(--size-technical-label);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-ultra);
+  color: var(--foreground-subtle);
 }
-.par-grid { display: grid; gap: var(--sp-4); align-items: start; }
+.par-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-sm); align-items: start; }
 
-/* Standalone (independent) handover row */
-.ho-standalone {
-  border: 1px dashed rgba(160,127,224,0.45);
-  background: rgba(160,127,224,0.05);
-}
-
-/* Right-rail dimming when open */
-body.rail-open .tl { opacity: 0.5; pointer-events: none; }
-body.rail-open .tl .selected { opacity: 1; pointer-events: auto; }
-
-/* Handover status filter chip row */
-.handover-status-chips {
-  display: flex;
-  gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--bl, rgba(0, 0, 0, 0.08));
-}
-.handover-status-chips .status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--bl, rgba(0, 0, 0, 0.18));
-  background: var(--surface-1, transparent);
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-}
-.handover-status-chips .status-chip.on[data-status="open"] {
-  background: var(--amber-tint-bg, rgba(255, 191, 0, 0.15));
-  border-color: var(--amber-tint-border, rgba(255, 191, 0, 0.45));
-}
-.handover-status-chips .status-chip.on[data-status="closed"] {
-  background: var(--muted-tint-bg, rgba(136, 136, 136, 0.15));
-  border-color: var(--muted-tint-border, rgba(136, 136, 136, 0.45));
-}
-.handover-status-chips .status-chip.on[data-status="superseded"] {
-  background: rgba(148, 130, 196, 0.15);
-  border-color: rgba(148, 130, 196, 0.45);
-}
-.handover-status-chips .status-chip:hover {
-  filter: brightness(1.05);
-}
-
-/* Thread board — open lines of work, above the diary. */
-.thread-board { margin-bottom: var(--sp-6); }
-.tb-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--sp-3);
-}
+/* ── Thread board: open threads as link cards, parked ones folded away ── */
+.thread-board { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; }
+.tb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-sm); }
 .thread-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-micro);
+  min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--card-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
+}
+.thread-card:hover { border-color: var(--border-strong); }
+.thread-card > .link-row__link { min-width: 0; color: var(--foreground-bold); font-weight: 600; text-decoration: none; }
+.thread-card > .link-row__content { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
+.thread-card > .link-row__controls { display: flex; justify-content: flex-end; }
+.tc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); min-width: 0; }
+.tc-stale, .tc-task, .tc-branch {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+}
+.tb-parked > summary {
+  color: var(--foreground-subtle);
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
   cursor: pointer;
 }
-.thread-card:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
-.tc-head { display: flex; justify-content: space-between; align-items: baseline; }
-.tc-name { font-weight: 600; color: var(--ink); }
-.tc-stale { color: var(--ink-3); font-size: var(--text-xs); }
-.tc-tldr { margin-top: var(--sp-1); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
-.tc-next { margin-top: var(--sp-1); color: var(--ink-2); font-size: var(--text-xs); }
-.tc-foot { margin-top: var(--sp-3); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.tc-foot .pill {
-  font-size: 9px; color: var(--ink-3);
-  background: var(--bg-panel); border: 1px solid var(--border-soft);
-  padding: 1px 6px; border-radius: 3px;
+.tb-parked > .tb-grid { margin-top: var(--space-sm); }
+
+@media (max-width: 768px) {
+  .tc-copy, .tb-parked > summary { min-height: var(--touch-target); }
 }
-.tc-branch { color: var(--ink-3); font-size: var(--text-xs); }
-.tc-copy {
-  margin-left: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--ink-2);
-  border-radius: var(--r-sm);
-  padding: 2px var(--sp-3);
-  cursor: copy;
-  font-size: var(--text-xs);
-}
-.tc-copy:hover { background: var(--bg-card-hover); }
-.tb-parked { margin-top: var(--sp-3); }
-.tb-parked summary { cursor: pointer; color: var(--ink-3); }

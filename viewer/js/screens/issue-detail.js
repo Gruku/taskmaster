@@ -1,258 +1,180 @@
+// User intent: the issue page reads as the shared detail template — severity and status as markers, a stale tag instead
+// of an aging bar, rendered sections, links in the rail — and a missing or failed load is said in words, never with the
+// server's text.
 import * as api from '../api.js';
 import { claimTopbar } from '../lib/topbar.js';
-import { severityGlyph, injectSeverityDefs } from '../components/severity-glyph.js';
-import { severityLabel } from '../util/severity-label.js';
-import { pluralize } from '../util/pluralize.js';
-import { agingBar } from '../components/aging-bar.js';
-import { formatRelative, formatAbsolute } from '../lib/time.js';
-import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js';
+import { h } from '../util/h.js';
+import { issueDiscovered, issueEvidence } from '../util/issue-fields.js';
+import { statusMarker, severityMarker } from '../components/status.js';
+import { staleTag } from '../components/stale-tag.js';
+import { linkPillsEl, legacyLinksToTyped } from '../components/link-pills.js';
+import { stateBlock } from '../components/empty-state.js';
+import {
+  detailMeta, stampEl, copyId, detailTitle, detailHead, markdownBody, detailSection, datesList, detailGrid, railPanel, railGroup,
+} from '../components/detail-page.js';
 
 export const meta = { title: 'Issue', icon: '!', sidebarKey: 'issues' };
 
-const STATUS_LABEL = {
-  open: 'Open',
-  investigating: 'Investigating',
-  fixed: 'Fixed',
-  wontfix: 'Won’t fix',
-};
+const ROOT_CLASSES = ['td-doc', 'td-doc--page', 'td-page', 'dp-page', 'dp-page--issue'];
+const TO_ISSUES = { label: 'Open Issues', href: '#/issues' };
 
-function _fmtDate(iso) {
-  return iso ? formatAbsolute(iso, { time: false, year: true }) : '—';
+const hasText = (v) => typeof v === 'string' && v.trim() !== '';
+const textList = (v) => (Array.isArray(v) ? v : hasText(v) ? [v] : []).filter(hasText);
+
+// A marker with a visually hidden key, so a screen reader hears "Severity High", not a bare word.
+function markerHost(field, key, marker) {
+  return h('span', { class: 'td-marker-host', 'data-field': field }, [h('span', { class: 'dp-key' }, key), marker]);
 }
 
-function _fmtRel(iso, now) {
-  return iso ? formatRelative(iso, { now: now ? (now instanceof Date ? now.getTime() : now) : Date.now() }) : '—';
+function markers(issue, agingCfg) {
+  const row = h('div', { class: 'td-markers', 'data-test': 'chips' });
+  // Status then severity, as the bug page has them.
+  row.appendChild(markerHost('status', 'Status', statusMarker('issue', issue.status || 'open')));
+  const severity = severityMarker(issue.severity_label ?? issue.severity);
+  if (severity) row.appendChild(markerHost('severity', 'Severity', severity));
+  const stale = staleTag(issue, agingCfg);
+  if (stale) row.appendChild(h('span', { class: 'td-marker-host', 'data-tag': 'stale' }, stale));
+  return row;
 }
 
-export async function mount(root, { params, store, prefs, subpath }) {
-  const id = subpath?.[0] || params?.id || null;
-  root.innerHTML = '';
-  root.classList.add('issue-detail');
-  injectSeverityDefs();
+const REF = /\b(ISS-\d+|T-\d+|B-\d+)\b/g;
+const REF_HREF = (id) => `#/${id.startsWith('ISS-') ? 'issue' : id.startsWith('T-') ? 'task' : 'bug'}/${encodeURIComponent(id)}`;
 
-  if (!id) {
-    root.innerHTML = `<div class="id-empty">No issue selected. <a href="#/issues">Back to Issues</a>.</div>`;
-    claimTopbar();
-    return () => { root.classList.remove('issue-detail'); };
-  }
-
-  if (prefs?.patch) prefs.patch({ ui: { last_issue_id: id } });
-
-  let issues = store?.getIssues?.() || [];
-  if (issues.length === 0) {
-    try {
-      const data = await api.getIssues({ includeResolved: true });
-      issues = data.issues || [];
-      store?.setIssues?.(issues);
-    } catch (e) {
-      const empty = document.createElement('div');
-      empty.className = 'id-empty';
-      empty.textContent = `Could not load issues: ${e.message}`;
-      root.replaceChildren(empty);
-      claimTopbar();
-      return () => { root.classList.remove('issue-detail'); };
+// A record id written in prose ("Tracked in T-102") opens that record, like the ids in the rail.
+function linkRefs(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!n.parentElement.closest('a, code, pre') && n.data.search(REF) !== -1) texts.push(n);
+  for (const node of texts) {
+    REF.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const m of node.data.matchAll(REF)) {
+      frag.append(node.data.slice(at, m.index), h('a', { href: REF_HREF(m[1]) }, m[1]));
+      at = m.index + m[1].length;
     }
+    frag.append(node.data.slice(at));
+    node.replaceWith(frag);
   }
-  const issue = issues.find(i => i.id === id);
-  if (!issue) {
-    const empty = document.createElement('div');
-    empty.className = 'id-empty';
-    empty.textContent = `Issue ${id} not found. `;
-    const back = document.createElement('a');
-    back.href = '#/issues';
-    back.textContent = 'Back to Issues';
-    empty.append(back, '.');
-    root.replaceChildren(empty);
-    claimTopbar();
-    return () => { root.classList.remove('issue-detail'); };
-  }
+  return root;
+}
 
+// The section's own label says "Notes": a leading "## Notes" in the text would say it twice.
+const withoutHeading = (text, label) => text.replace(new RegExp(String.raw`^\s*#{1,6}\s*${label}\s*\n+`, 'i'), '');
+
+function body(issue) {
+  const sections = [];
+  const evidence = issueEvidence(issue);
+  if (hasText(evidence)) sections.push(detailSection({ key: 'evidence', label: 'Evidence', body: markdownBody(evidence) }));
+  const steps = textList(issue.repro);
+  if (steps.length) {
+    sections.push(detailSection({
+      key: 'repro', label: `Reproduction · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`,
+      body: h('ol', { class: 'dp-steps' }, steps.map((s) => h('li', {}, s))),
+    }));
+  }
+  if (hasText(issue.impact)) sections.push(detailSection({ key: 'impact', label: 'Impact', body: markdownBody(issue.impact) }));
+  if (hasText(issue.summary)) sections.push(detailSection({ key: 'notes', label: 'Notes', body: linkRefs(markdownBody(withoutHeading(issue.summary, 'Notes'))) }));
+  const paths = textList(issue.location);
+  if (paths.length) {
+    sections.push(detailSection({ key: 'location', label: 'Location', body: h('ul', { class: 'dp-paths' }, paths.map((p) => h('li', {}, h('code', {}, p)))) }));
+  }
+  if (!sections.length) sections.push(h('p', { class: 'td-empty' }, 'Nothing written for this issue yet.'));
+  return h('div', { class: 'td-body' }, [...sections, datesList([['Resolved', issue.resolved]])]);
+}
+
+function page(issue, { agingCfg, timers }) {
+  const head = detailHead({
+    meta: detailMeta([
+      copyId({ id: issue.id, noun: 'issue', timers }),
+      h('a', { href: '#/issues' }, 'Issues'),
+      stampEl(issueDiscovered(issue), { prefix: 'discovered' }),
+    ]),
+    title: detailTitle(issue.title),
+    after: [markers(issue, agingCfg)],
+  });
+  const links = Array.isArray(issue.links) && issue.links.length ? issue.links : legacyLinksToTyped(issue, 'issue');
+  const panels = links?.length
+    ? [railPanel({ name: 'relations', label: 'Relations', children: [railGroup({ name: 'links', label: 'Links', body: linkPillsEl(links) })] })]
+    : [];
+  return [head, detailGrid({ body: body(issue), panels })];
+}
+
+export function mount(root, { params, store, prefs, subpath }) {
+  const id = subpath?.[0] || params?.id || null;
+  const timers = new Set();
+  let disposed = false;
+  root.classList.add(...ROOT_CLASSES);
   claimTopbar();
 
-  render();
+  // Set by Try again: whatever the retried read paints next takes focus, so it is never left on <body>.
+  let refocus = false;
+  function takeFocus(el) {
+    if (!refocus) return;
+    refocus = false;
+    if (!el) return;
+    if (!el.matches('a[href], button') && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    el.focus();
+  }
 
-  function render() {
-    root.replaceChildren();
+  function showLoading() {
+    const loading = stateBlock({ headline: 'Loading…', busy: true });
+    loading.setAttribute('tabindex', '-1');
+    root.replaceChildren(loading);
+    return loading;
+  }
 
-    const label = issue.severity_label || severityLabel(issue.severity);
-    const status = issue.status || 'open';
+  function retry() {
+    showLoading().focus();
+    refocus = true;
+    void load(true);
+  }
 
-    // Crumb row: ‹ Issues / Status
-    const crumb = document.createElement('div');
-    crumb.className = 'id-crumb';
-    const back = document.createElement('a');
-    back.className = 'id-back';
-    back.href = '#/issues';
-    back.textContent = '‹ Issues';
-    const sep = document.createElement('span');
-    sep.className = 'id-crumb-sep';
-    sep.textContent = '/';
-    const statusCrumb = document.createElement('span');
-    statusCrumb.className = 'id-crumb-status';
-    statusCrumb.textContent = STATUS_LABEL[status] || status;
-    crumb.append(back, sep, statusCrumb);
-    root.appendChild(crumb);
-
-    // Header: glyph · sev · id · status · created
-    const head = document.createElement('header');
-    head.className = 'id-head';
-    const meta = document.createElement('div');
-    meta.className = 'id-meta';
-    const glyph = severityGlyph(label);
-    glyph.classList.add('id-glyph');
-    const sev = document.createElement('span');
-    sev.className = 'id-sev';
-    sev.dataset.sev = label;
-    sev.textContent = label;
-    const idEl = document.createElement('span');
-    idEl.className = 'id-id';
-    idEl.textContent = issue.id;
-    const statusPill = document.createElement('span');
-    statusPill.className = `id-status id-status--${status}`;
-    statusPill.textContent = STATUS_LABEL[status] || status;
-    const created = document.createElement('span');
-    created.className = 'id-created';
-    created.textContent = `since ${_fmtDate(issue.created)}`;
-    meta.append(glyph, sev, idEl, statusPill, created);
-    head.appendChild(meta);
-
-    const title = document.createElement('h1');
-    title.className = 'id-title';
-    title.textContent = issue.title || '(untitled)';
-    head.appendChild(title);
-
-    if (issue.location && issue.location.length) {
-      const loc = document.createElement('div');
-      loc.className = 'id-location';
-      loc.textContent = `at ${issue.location.join(' · ')}`;
-      head.appendChild(loc);
-    }
-    root.appendChild(head);
-
-    // Body grid
-    const grid = document.createElement('div');
-    grid.className = 'id-grid';
-
-    // ---- main column
-    const main = document.createElement('div');
-    main.className = 'id-main';
-
-    if (issue.symptom) {
-      const symSec = document.createElement('section');
-      symSec.className = 'id-symptom';
-      const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Symptom';
-      const body = document.createElement('p');
-      body.className = 'id-body id-body--italic';
-      body.textContent = issue.symptom;
-      symSec.append(h, body);
-      main.appendChild(symSec);
-    }
-
-    if (issue.repro && issue.repro.length) {
-      const reproSec = document.createElement('section');
-      reproSec.className = 'id-repro';
-      const h = document.createElement('h2');
-      h.className = 'id-h';
-      h.textContent = `Reproduction · ${issue.repro.length} ${pluralize(issue.repro.length, 'step', 'steps')}`;
-      reproSec.appendChild(h);
-      const ol = document.createElement('ol');
-      ol.className = 'id-repro-list';
-      for (const step of issue.repro) {
-        const li = document.createElement('li');
-        li.textContent = step;
-        ol.appendChild(li);
+  async function load(fetchFirst = false) {
+    let issue = fetchFirst ? null : (store?.getIssues?.() || []).find((i) => i.id === id);
+    if (!issue) {
+      // Not cached: the cache is empty, or the issue was made after it was filled.
+      try {
+        const data = await api.getIssues({ includeResolved: true });
+        if (disposed) return;
+        const issues = data?.issues || [];
+        store?.setIssues?.(issues);
+        issue = issues.find((i) => i.id === id);
+      } catch {
+        if (disposed) return;
+        root.replaceChildren(stateBlock({
+          state: 'error', label: id, headline: 'Could not load this issue',
+          hint: 'Something went wrong while loading it. Try again in a moment.', action: { label: 'Try again', onClick: retry },
+        }));
+        takeFocus(root.querySelector('.tm-empty button'));
+        return;
       }
-      reproSec.appendChild(ol);
-      main.appendChild(reproSec);
     }
-
-    if (issue.impact) {
-      const impSec = document.createElement('section');
-      impSec.className = 'id-impact';
-      const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Impact';
-      const body = document.createElement('p');
-      body.className = 'id-body';
-      body.innerHTML = String(issue.impact).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
-        .replace(/`([^`]+)`/g, '<code>$1</code>');
-      impSec.append(h, body);
-      main.appendChild(impSec);
+    if (!issue) {
+      root.replaceChildren(stateBlock({
+        state: 'missing', label: id, headline: 'Issue not found', hint: 'It may have been resolved and archived, or renamed.', action: TO_ISSUES,
+      }));
+      takeFocus(root.querySelector('.tm-empty a[href]'));
+      return;
     }
+    root.replaceChildren(...page(issue, { agingCfg: store?.getPrefs?.()?.issues?.aging ?? {}, timers }));
+    takeFocus(root.querySelector('h1'));
+    // Only once painted: remembering an id that does not load would send a bare #/issue to a dead end.
+    prefs?.patch?.({ ui: { last_issue_id: id } });
+  }
 
-    if (issue.summary) {
-      const sumSec = document.createElement('section');
-      sumSec.className = 'id-summary';
-      const h = document.createElement('h2'); h.className = 'id-h'; h.textContent = 'Notes';
-      const body = document.createElement('p');
-      body.className = 'id-body';
-      body.textContent = issue.summary;
-      sumSec.append(h, body);
-      main.appendChild(sumSec);
-    }
-
-    grid.appendChild(main);
-
-    // ---- side column
-    const side = document.createElement('aside');
-    side.className = 'id-side';
-
-    const signals = document.createElement('section');
-    signals.className = 'id-side-block';
-    const sh = document.createElement('h2'); sh.className = 'id-h'; sh.textContent = 'Signals';
-    signals.appendChild(sh);
-
-    // aging bar (if cfg available)
-    const agingCfg = store?.getPrefs?.()?.issues?.aging || {};
-    if (agingCfg && Object.keys(agingCfg).length) {
-      const ab = agingBar({ ...issue, severity_label: label }, agingCfg);
-      ab.classList.add('id-aging');
-      signals.appendChild(ab);
-    }
-
-    const dl = document.createElement('dl');
-    dl.className = 'id-dl';
-    const rows = [
-      ['Severity', label],
-      ['Status', STATUS_LABEL[status] || status],
-      ['Created', _fmtRel(issue.created)],
-    ];
-    if (issue.resolved) rows.push(['Resolved', _fmtRel(issue.resolved)]);
-    for (const [k, v] of rows) {
-      const dt = document.createElement('dt'); dt.textContent = k;
-      const dd = document.createElement('dd'); dd.textContent = v;
-      dl.append(dt, dd);
-    }
-    signals.appendChild(dl);
-    side.appendChild(signals);
-
-    // Plan C: unified typed-links block.
-    // Falls back to legacy fields when project hasn't been migrated yet.
-    const links = issue.links && issue.links.length
-      ? issue.links
-      : legacyLinksToTyped(issue, 'issue');
-    if (links.length) {
-      const rel = document.createElement('section');
-      rel.className = 'id-side-block';
-      const rh = document.createElement('h2'); rh.className = 'id-h'; rh.textContent = 'Links';
-      rel.appendChild(rh);
-      const pillsMount = document.createElement('div');
-      pillsMount.innerHTML = renderLinkPills({ ...issue, links });
-      // Rewrite raw `#TARGET` anchors to navigate within the SPA.
-      pillsMount.querySelectorAll('a.link-pill').forEach((a) => {
-        const target = a.getAttribute('href')?.slice(1) || '';
-        if (!target) return;
-        if (target.startsWith('ISS-')) a.href = `#/issue/${encodeURIComponent(target)}`;
-        else if (target.startsWith('IDEA-')) a.href = `#/idea/${encodeURIComponent(target)}`;
-        else a.href = `#/task/${encodeURIComponent(target)}`;
-      });
-      rel.appendChild(pillsMount);
-      side.appendChild(rel);
-    }
-
-    grid.appendChild(side);
-    root.appendChild(grid);
+  if (!id) {
+    root.replaceChildren(stateBlock({ state: 'empty', label: 'Issue', headline: 'No issue open', hint: 'Pick one from the Issues board.', action: TO_ISSUES }));
+  } else {
+    // Said while the first read runs, so the page is never a blank mount.
+    showLoading();
+    void load();
   }
 
   return () => {
-    root.classList.remove('issue-detail');
+    disposed = true;
+    timers.forEach(clearTimeout);
+    timers.clear();
+    root.classList.remove(...ROOT_CLASSES);
   };
 }

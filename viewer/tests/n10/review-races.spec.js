@@ -45,7 +45,7 @@ test('modal dependency navigation disposes the abandoned edit and pending autosa
   });
   await page.goto('/#/kanban');
   await page.locator('.card-task[data-task-id="board-002"] .card-title').click();
-  const field = page.locator('.dm-modal .if-wrap[data-key="title"]');
+  const field = page.locator('.modal--detail .if-wrap[data-key="title"]');
   await expect(field).toBeVisible();
   await page.clock.install();
   await page.clock.pauseAt(new Date());
@@ -53,8 +53,8 @@ test('modal dependency navigation disposes the abandoned edit and pending autosa
   await field.locator('input').fill('Abandoned modal draft must never autosave');
   // Dispatch navigation without first blurring the editor: blur intentionally
   // commits. This leaves the debounce pending so disposal must cancel it.
-  await page.locator('.dm-modal .td-dep').filter({hasText: 'board-001'}).evaluate(link => link.click());
-  await expect(page.locator('.dm-openfull')).toHaveAttribute('href', '#/task/board-001');
+  await page.locator('.modal--detail .td-dep').filter({hasText: 'board-001'}).evaluate(link => link.click());
+  await expect(page.locator('.modal--detail [data-action="open-full"]')).toHaveAttribute('href', '#/task/board-001');
   const stillEditing = await page.evaluate(async () => (await import('/static/v3/js/store.js')).store.isEditing('board-002'));
   await page.clock.runFor(1000);
   const current = await (await page.request.get('/api/task/board-002/detail')).json();

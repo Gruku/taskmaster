@@ -1,77 +1,60 @@
-// bug-card.js — renders a single bug as a card element.
-// Mirrors issue-card.js conventions: createElement, data-status attribute,
-// status pill as an inline <span> chip (no external status-pill component).
-// UI rules: no colored left rail, no box-shadow, no transform on hover.
+// User intent: a bug in the list is a row that opens the bug — its id, severity, a title that keeps two lines, its status,
+// components and age — with "found in" beside the link opening the task, never nested in it; no bug text is markup.
+import { linkRow } from './link-row.js';
+import { severityMarker, statusMarker } from './status.js';
+import { truncate } from '../lib/text.js';
+import { formatStamp } from '../lib/time.js';
+import { isArchivedBug } from '../util/bugs-filter.js';
 
-export function bugCard(bug, { onClick } = {}) {
-  const card = document.createElement('article');
-  card.className = 'bug-card';
-  card.setAttribute('data-bug-id', bug.id);
-  card.setAttribute('data-status', bug.status || 'open');
-
-  if (onClick) card.addEventListener('click', () => onClick(bug));
-
-  // ---- head: id · title · status chip
-  const head = document.createElement('div');
-  head.className = 'bug-card__head';
-
-  const idEl = document.createElement('span');
-  idEl.className = 'bug-card__id';
-  idEl.textContent = bug.id;
-  head.appendChild(idEl);
-
-  const titleEl = document.createElement('span');
-  titleEl.className = 'bug-card__title';
-  titleEl.textContent = bug.title;
-  head.appendChild(titleEl);
-
-  const statusChip = document.createElement('span');
-  statusChip.className = 'bug-card__status-chip';
-  statusChip.dataset.status = bug.status || 'open';
-  statusChip.textContent = bug.status || 'open';
-  head.appendChild(statusChip);
-
-  card.appendChild(head);
-
-  // ---- meta row: found_in link · components · discovered date
-  const meta = document.createElement('div');
-  meta.className = 'bug-card__meta';
-
-  if (bug.found_in) {
-    const fi = document.createElement('a');
-    fi.className = 'bug-card__found-in';
-    fi.href = `#/task/${bug.found_in}`;
-    fi.textContent = `found in ${bug.found_in}`;
-    fi.addEventListener('click', (ev) => ev.stopPropagation());
-    meta.appendChild(fi);
-  }
-
-  if (bug.components && bug.components.length) {
-    const comps = document.createElement('span');
-    comps.className = 'bug-card__components';
-    comps.textContent = bug.components.join(', ');
-    meta.appendChild(comps);
-  }
-
-  if (bug.discovered) {
-    const d = document.createElement('time');
-    d.className = 'bug-card__discovered';
-    d.dateTime = bug.discovered;
-    d.textContent = bug.discovered.split('T')[0];
-    meta.appendChild(d);
-  }
-
-  if (meta.childElementCount > 0) card.appendChild(meta);
-
-  // ---- description (one-liner if present)
-  if (bug.description) {
-    const desc = document.createElement('div');
-    desc.className = 'bug-card__description';
-    desc.textContent = bug.description;
-    card.appendChild(desc);
-  }
-
-  return card;
+function span(className, text) {
+  const el = document.createElement('span');
+  el.className = className;
+  if (text != null) el.textContent = text;
+  return el;
 }
 
-export default bugCard;
+export function bugRow(bug, { now = Date.now() } = {}) {
+  const archived = isArchivedBug(bug);
+
+  const name = span('bug-row__name');
+  // The severity cell stays when unset, empty and hidden, so every title starts in the same column.
+  const sev = span('bug-row__severity');
+  const marker = severityMarker(bug.severity);
+  if (marker) sev.append(marker);
+  else sev.setAttribute('aria-hidden', 'true');
+  name.append(span('bug-row__id', bug.id), sev, truncate(bug.title || 'Untitled', { lines: 2, className: 'bug-row__title' }));
+
+  // One cell for the status and its Archived tag, so the status column is the same column on every row.
+  const status = span('bug-row__status');
+  status.append(statusMarker('bug', bug.status || 'open'));
+  if (archived) status.append(span('list-tag', 'Archived'));
+  const content = [status];
+  const components = Array.isArray(bug.components) ? bug.components.filter(Boolean) : [];
+  if (components.length) content.push(truncate(components.join(', '), { className: 'bug-row__components' }));
+  if (bug.discovered) {
+    const { text, title } = formatStamp(bug.discovered, now);
+    const age = document.createElement('time');
+    age.className = 'bug-row__age';
+    age.setAttribute('datetime', String(bug.discovered));
+    age.textContent = text;
+    if (title) age.title = title;
+    content.push(age);
+  }
+
+  const controls = [];
+  if (bug.found_in) {
+    const a = document.createElement('a');
+    a.className = 'bug-row__found-in';
+    a.setAttribute('href', `#/task/${encodeURIComponent(bug.found_in)}`);
+    a.textContent = `found in ${bug.found_in}`;
+    a.title = a.textContent;   // cut with an ellipsis when long (bugs.css)
+    controls.push(a);
+  }
+
+  const row = linkRow({
+    tag: 'li', className: 'bug-row' + (archived ? ' bug-row--archived' : ''),
+    href: `#/bug/${encodeURIComponent(bug.id)}`, name, content, controls,
+  });
+  row.dataset.bugId = bug.id;
+  return row;
+}

@@ -1,0 +1,13 @@
+/* User intent: any row that never wraps (chip rows, the topbar's row 2) parks what does not fit behind one "More"
+   button and lists it in More's popover; these rules belong to that row, not to whatever it holds. */
+
+.overflow-more { flex: none; }
+/* .btn sets display, which would otherwise outrank the hidden attribute: More shows only while something is parked. */
+.overflow-more[hidden] { display: none; }
+
+/* The parked children, in order, in More's popover. */
+.overflow-list { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-micro); }
+
+@media (max-width: 768px) {
+  .overflow-more { min-height: var(--touch-target); }
+}

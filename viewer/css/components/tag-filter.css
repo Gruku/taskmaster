@@ -1,0 +1,73 @@
+/* User intent: the Ideas "Tags" filter — a searchable list of tags with counts on the shared popover surface, a list
+   that scrolls inside itself however many tags there are, and touch-sized choices on a phone. */
+
+.tag-filter__on { color: var(--foreground-default); }
+
+/* color-scheme: the search box's clear button and the checkboxes are the browser's own; they follow the theme. */
+.tag-filter__popover { width: min(320px, calc(100vw - 8px)); gap: var(--space-xs); color-scheme: dark; }
+[data-theme="light"] .tag-filter__popover { color-scheme: light; }
+
+.tag-filter__search {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-recessed);
+  color: var(--foreground-bold);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+}
+
+.tag-filter__list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(280px, 45vh);
+  overflow-y: auto;
+}
+
+.tag-filter__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 32px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+  color: var(--foreground-default);
+  cursor: pointer;
+}
+.tag-filter__option:hover { background: var(--popover-surface-hover); color: var(--foreground-bold); }
+.tag-filter__option[hidden] { display: none; }
+.tag-filter__option input { margin: 0; accent-color: var(--signature-fill); }
+
+.tag-filter__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-technical);
+  font-size: var(--size-technical-small);
+}
+
+.tag-filter__count {
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  color: var(--foreground-subtle);
+}
+
+.tag-filter__none {
+  margin: 0;
+  padding: var(--space-xs);
+  color: var(--foreground-default);
+  font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small);
+}
+.tag-filter__none:empty { display: none; }
+.tag-filter__clear[hidden] { display: none; }
+
+@media (max-width: 768px) {
+  .tag-filter__option, .tag-filter__search, .tag-filter__clear, .tag-filter { min-height: var(--touch-target); }
+}
