@@ -40,9 +40,9 @@
   gap: var(--space-sm) var(--space-md);
   align-items: start;
   padding: var(--space-sm) 0;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-default);
 }
-.cb-multi-row:last-child { border-bottom: 1px solid var(--border-subtle); }
+.cb-multi-row:last-child { border-bottom: 1px solid var(--border-default); }
 .cb-key { color: var(--foreground-bold); font-weight: 600; overflow-wrap: anywhere; }
 
 .cb-side { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
