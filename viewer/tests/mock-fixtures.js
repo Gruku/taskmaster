@@ -372,9 +372,8 @@ export const DECISION = {
   id: 'DEC-001', title: 'Land the cutover', options: ['Push the MR', 'Merge develop first', 'Hold'], recommendation: 2, body: '',
 };
 
-// Settings: the prefs, plus the board the shell reads on every route; `prefs` merges any other stored values (card_density, ui.detail_view_mode) into them.
-// Its content is loaded when `.set-control[role="group"] .tm-segmented > button[data-key="system"]` is on the page.
-// The table plan 4's a11y gate reuses for #/settings; loaded when
+// Settings: the prefs, plus the board the shell reads on every route; `prefs` merges any other stored values
+// (card_density, ui.detail_view_mode) into them. The table plan 4's a11y gate reuses for #/settings; loaded when
 // `.set-control[role="group"] .tm-segmented > button[data-key="system"]` is visible.
 export const settingsMocks = ({ theme = 'dark', ...prefs } = {}) => ({
   '/api/viewer/prefs': { theme, card_density: 'full', ui: { detail_view_mode: 'modal' }, screens: {}, ...prefs },

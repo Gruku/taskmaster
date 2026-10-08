@@ -26,8 +26,10 @@ export const ROUTES = [
       await page.locator(`.card-task[data-task-id="T-102"] > .link-row__link`).click();
       await expect(page.locator('.modal--detail .td-doc--embedded')).toBeVisible();
       // The modal fades and rises in; read it once it has landed, not mid-fade (axe would read the fade's contrast).
+      // Only running, finite animations are awaited: a paused one would never finish.
       await page.evaluate(() => Promise.all(document.getAnimations()
-        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished)));
+        .filter((a) => a.playState === 'running' && a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished)));
     } },
   { name: 'table', route: '#/table', build: tableMocks, ready: 'table.tbl .tbl-row' },
   { name: 'epics', route: '#/epics', build: epicsMocks, ready: '.epic-row .link-row__link' },
