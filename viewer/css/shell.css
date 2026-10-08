@@ -205,7 +205,8 @@ body, .shell, .sidebar, .topbar, .main {
 /* A popover opened from the topbar (Filters) floats at the page-popover level: inside the topbar's stacking context
    it would otherwise sit under a screen's sticky chrome. */
 .topbar:has(.popover) { z-index: 70; }
-/* Row 1 never wraps and never scrolls sideways: the count gives way first (its words stay in its title), then the title. */
+/* Row 1 never wraps and never scrolls sideways: the count gives way first, then the title. At phone width the count
+   wraps between its parts rather than being cut (see the mobile block); its title carries the whole text either way. */
 .topbar-row1 { display: flex; align-items: center; gap: var(--space-md); height: 56px; min-width: 0; }
 /* Row 2 is one line that neither wraps nor scrolls: what does not fit waits behind its "Filters" button
    (overflowRow, installed by claimTopbar). The padding leaves room for focus rings inside the clip;
@@ -448,6 +449,11 @@ body, .shell, .sidebar, .topbar, .main {
   .topbar-row1 { gap: var(--space-sm); }
   .topbar-row2 { height: 56px; }
   #page-title { font-size: var(--size-declaration-h5); }
+  /* The count wraps between its parts (setTopbarCount) instead of being cut: three short lines fit the 56px row. */
+  .topbar-count { white-space: normal; line-height: var(--leading-tight); }
+  .topbar-count__part { white-space: nowrap; }
+  /* No keyboard to press it with: the search field drops its shortcut hint. */
+  .tm-search > .cmp-kbd { display: none; }
   /* A primary with an icon shows only the icon; its aria-label still names it. */
   .topbar-primary .btn:has(> .icon) { min-width: var(--touch-target); min-height: var(--touch-target); padding: 0; justify-content: center; }
   .topbar-primary .btn:has(> .icon) > span { display: none; }

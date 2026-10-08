@@ -57,11 +57,18 @@ export function claimTopbarPrimary() {
   return el;
 }
 
-// The count is the first thing row 1 cuts at phone width, so its title carries the whole text.
+// Each " · " part is a span of its own, so at phone width the count wraps between its parts ("2 threads ·" over
+// "3 handovers") rather than inside one; the text read out is unchanged. Its title still carries the whole text.
 export function setTopbarCount(text = '') {
   const el = document.getElementById('topbar-count');
   if (!el) return;
-  el.textContent = text;
+  const parts = text ? text.split(' · ') : [];
+  el.replaceChildren(...parts.flatMap((part, i) => {
+    const span = document.createElement('span');
+    span.className = 'topbar-count__part';
+    span.textContent = i < parts.length - 1 ? `${part} ·` : part;
+    return i ? [' ', span] : [span];
+  }));
   if (text) el.title = text;
   else el.removeAttribute('title');
 }

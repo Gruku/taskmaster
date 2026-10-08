@@ -135,6 +135,17 @@ test('setTopbarCount: the count shows its words and keeps them in its title, so 
   assert.equal(count.hasAttribute('title'), false);
 });
 
+test('setTopbarCount: each " · " part is a span of its own, so a phone wraps between parts, never inside one', () => {
+  document.body.innerHTML = ROW1;
+  const count = document.getElementById('topbar-count');
+  setTopbarCount('2 threads · 3 handovers · 1 visible');
+  assert.equal(count.textContent, '2 threads · 3 handovers · 1 visible');
+  assert.deepEqual([...count.querySelectorAll('.topbar-count__part')].map((p) => p.textContent),
+    ['2 threads ·', '3 handovers ·', '1 visible']);
+  setTopbarCount('12 tasks');
+  assert.deepEqual([...count.children].map((p) => p.textContent), ['12 tasks']);
+});
+
 test('claimTopbarPrimary: a claim clears the slot, so a second claim leaves only its own button', () => {
   document.body.innerHTML = ROW1;
   claimTopbarPrimary().append(tmAction({ label: 'First' }));
