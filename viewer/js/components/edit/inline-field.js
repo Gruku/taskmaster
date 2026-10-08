@@ -269,7 +269,8 @@ export function mountInlineField(parent, {
     if (!kind) return;
     if (kind === 'saving')  status.appendChild(h('span', { class: 'if-status-saving' }, '●'));
     if (kind === 'ok')      status.appendChild(h('span', { class: 'if-status-ok' }, '✓'));
-    if (kind === 'error') {
+    // A field whose words have a line of their own (messageHost) needs no glyph floating beside the editor.
+    if (kind === 'error' && !messageHost) {
       // The message beside the field says it in words; the glyph is not read a second time.
       const x = h('span', { class: 'if-status-error', title: msg || 'save failed', 'aria-hidden': 'true' }, '✕');
       status.appendChild(x);

@@ -42,13 +42,20 @@ export function mountTaskDetailGraph(root, ctx) {
   out.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
   if (keptFrame && !graft(root, out, keptFrame, freshFrame)) root.replaceChildren(...out.childNodes);
   // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it. On a
-  // phone it opens at its left edge instead: centred, both side columns were cut at the frame; this task is a scroll away.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
-    const narrow = globalThis.matchMedia?.('(max-width: 768px)').matches;
-    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : narrow ? 0 : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    // Where the canvas opens: on this task, whichever way it is centred (the nodes are wide, so the left edge cut it).
+    const own = canvas.querySelector('.node--center rect')?.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
+    const toOwn = own ? canvas.scrollLeft + (own.left + own.width / 2) - (view.left + view.width / 2) : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : toOwn;
     canvas.scrollTop = Number.isFinite(kept.scrollTop) ? kept.scrollTop : (canvas.scrollHeight - canvas.clientHeight) / 2;
   }
+  // A canvas wider than its frame says so: otherwise a cut column reads as a broken one.
+  const hint = root.querySelector('.td-graph-hint');
+  const sayScrolls = () => { if (canvas && hint) hint.hidden = canvas.scrollWidth <= canvas.clientWidth + 1; };
+  sayScrolls();
+  window.addEventListener('resize', sayScrolls);
   const fullscreen = root.querySelector('[data-focus="graph:fullscreen"]');
   const sayFullscreen = () => fullscreen?.sayState();
   document.addEventListener('fullscreenchange', sayFullscreen);
@@ -57,6 +64,7 @@ export function mountTaskDetailGraph(root, ctx) {
   // `{ keepFrame: true }`: the next mount repaints this same task and grafts its content around the frame.
   const dispose = ({ keepFrame = false } = {}) => {
     document.removeEventListener('fullscreenchange', sayFullscreen);
+    window.removeEventListener('resize', sayScrolls);
     for (const timer of timers) clearTimeout(timer);
     if (keepFrame) return;
     // The frame is about to go: never leave the screen filled by a node that is no longer there.
@@ -124,6 +132,7 @@ function renderGraphFrame(task, related, uid, kept) {
     return frame;
   }
   frame.appendChild(h('div', { class: 'td-graph-canvas' }, renderGraphSvg(task, related)));
+  frame.appendChild(h('p', { class: 'td-graph-hint', hidden: true, 'data-test': 'graph-hint' }, 'Scroll sideways for the rest of the graph'));
   const band = renderContextBand(related, uid);
   if (band) {
     band.hidden = kept.contextHidden === true;
@@ -151,7 +160,8 @@ function renderGraphSvg(task, related) {
               progress: task.auto_mode?.progress ?? null,
               step: words(task.auto_mode?.step) || null },
     upstream, downstream,
-    width: 820, height: 320,
+    // Wide enough that a title shows ~25 characters: the canvas scrolls inside its frame where the screen is narrower.
+    width: 1000, height: 320, nodeW: 160, centerW: 170,
   });
 
   // The canvas is cut to what is drawn and shown at its own size: a long side is never clipped out of sight (its nodes

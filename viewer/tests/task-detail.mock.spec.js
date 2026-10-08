@@ -297,6 +297,9 @@ test('a refused title says why under the heading, and the dialog keeps the title
   expect(await message.evaluate((el) => el.parentElement.classList.contains('modal--detail') && el.previousElementSibling?.classList.contains('modal-header'))).toBe(true);
   await expect(heading.locator('.if-error')).toHaveCount(0);
   expect(await heading.evaluate((el) => el.textContent)).not.toContain(reason);
+  // The words are the whole message: no bare cross beside the input, and no Edit to open a second editor.
+  await expect(dialog.locator('.if-status-error')).toHaveCount(0);
+  await expect(dialog.locator('[data-action="edit"]')).toBeHidden();
 
   // Closing the editor ends the edit lease, and the dialog reads the task again and draws it anew.
   const reread = page.waitForResponse('**/api/task/T-102/detail');
@@ -654,6 +657,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     const dialog = await openCard(page, 'T-105');
     await expect(dialog.locator('[data-test="sec-plan"] li').last()).toHaveText('step 5000 of the plan');
     await expect(dialog.locator('[data-sub="depends"] a.td-dep')).toHaveCount(40);
+    // The 5,000-step plan's four-digit markers get room; a short list keeps the plain indent.
+    const pads = await dialog.locator('[data-test="sec-plan"] ol').first().evaluate((el) => ({ digits: el.dataset.digits, pad: parseFloat(getComputedStyle(el).paddingLeft) }));
+    expect(pads.digits).toBe('4');
+    expect(pads.pad).toBeGreaterThan(40);
 
     const box = await dialog.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
