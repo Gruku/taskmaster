@@ -771,3 +771,18 @@ test('scrolled sideways, a header cut by the sticky edge shows nothing until it 
   await host(page).evaluate((el) => { el.scrollLeft = 0; });
   await expect.poll(async () => (await look()).every((h) => h.label === 'visible')).toBe(true);
 });
+
+// The sticky ID and title headers never count as gone under the edge, at any frame width (a 1280 laptop's frame scrolls
+// further than the edge is wide, which once blanked them).
+for (const width of [1280, 1366]) {
+  test(`at ${width}, scrolled to the end, the ID and Title headers keep their labels`, async ({ page }) => {
+    await boot(page, { board: LONG_IDS_BOARD, width, height: 800 });
+    await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+    await expect.poll(() => page.locator('th.tbl-th[data-under]').count()).toBeGreaterThan(0);
+    for (const key of ['id', 'title']) {
+      const th = page.locator(`th.tbl-th[data-key="${key}"]`);
+      await expect(th, key).not.toHaveAttribute('data-under', '');
+      expect(await th.evaluate((el) => getComputedStyle(el.firstElementChild).visibility), key).toBe('visible');
+    }
+  });
+}
