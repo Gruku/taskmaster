@@ -24,7 +24,7 @@ import {
   TICKS_PREFIX,
   ticksOf,
 } from './model'
-import { parseHandoverWritten } from './parse'
+import { parseHandoverWritten, replyText } from './parse'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
@@ -53,7 +53,7 @@ function hostOf($: EngineInterface): TmHost {
     call: async (tool, args) => {
       const r = await $.mcp.call('plugin:taskmaster:tm', tool, args)
       const text = r.content.map(block => (block.type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n')
-      return { text, isError: r.isError }
+      return { text: replyText(text, r.structuredContent), isError: r.isError }
     },
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),

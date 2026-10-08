@@ -52,6 +52,23 @@ export function firstParagraph(text: string): string {
   return text.trim().split(/\n\s*\n/)[0]?.trim() ?? ''
 }
 
+/**
+ * A reply's own text. Every tm tool declares an output schema `{"result": <text>}`, and since Claude Code 2.1.295 the
+ * engine hands that structured result over as the text block (`{"result":"…"}`) in place of the text itself; it is
+ * unwrapped here, from `structuredContent` when given, else from the block. Any other reply comes back unchanged.
+ */
+export function replyText(text: string, structured?: unknown): string {
+  if (isObject(structured) && typeof structured.result === 'string') return structured.result
+  const trimmed = text.trim()
+  if (!/^\{\s*"result"\s*:/.test(trimmed)) return text
+  try {
+    const value: unknown = JSON.parse(trimmed)
+    return isObject(value) && Object.keys(value).length === 1 && typeof value.result === 'string' ? value.result : text
+  } catch {
+    return text
+  }
+}
+
 function clean(raw: string): string {
   return (stripSeq(raw).replace(/\r\n/g, '\n').split('\n\nWarning: ')[0] ?? '').trim()
 }

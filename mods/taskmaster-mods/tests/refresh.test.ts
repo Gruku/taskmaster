@@ -112,6 +112,19 @@ describe('faults', () => {
     expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
   })
 
+  test('replies wrapped as {"result": text} (the engine passing on the structured result) read as the text inside', TM, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    world.mcp = (tool, args) => ({ text: JSON.stringify({ result: backlog(tool, args).text }) })
+    await $.session.start(SESSION)
+    await clock.settle()
+    expect(world.statuses).not.toContain('ⓘ tm reply unreadable')
+    expect(world.statuses).not.toContain('◆ tm offline')
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    expect(await ui.find({ type: 'Text', text: /No open handovers/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+  })
+
   test('"Error: … no backlog" from the server reads as offline, with the reason in the pane', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)

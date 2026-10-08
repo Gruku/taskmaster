@@ -17,6 +17,7 @@ import {
   parseIssueList,
   parseListTasks,
   parsePipeline,
+  replyText,
   stripSeq,
 } from '../hooks/parse'
 import type { TmPipeline, TmTaskDetail } from '../types'
@@ -522,4 +523,19 @@ describe('issue_list', () => {
       expect([capped.issues.map(i => i.id), capped.hidden]).toEqual([[...want.capped.ids], want.capped.hidden])
     })
   }
+})
+
+describe('replyText', () => {
+  test('a {"result": text} reply is unwrapped, from structuredContent first; anything else comes back as it was', () => {
+    const list = '**2 tasks:**\n- `x-001` — T (high, x, in-review)'
+    expect(replyText(JSON.stringify({ result: list }))).toBe(list)
+    expect(replyText(`  {"result": ${JSON.stringify(list)}}\n`)).toBe(list)
+    expect(replyText('ignored', { result: list })).toBe(list)
+    expect(replyText(list)).toBe(list)
+    const claim = '{"result": "x", "ok": true}'
+    expect(replyText(claim)).toBe(claim)
+    expect(replyText('{"result": 3}')).toBe('{"result": 3}')
+    expect(replyText('{"result": broken')).toBe('{"result": broken')
+    expect(replyText(list, { other: 1 })).toBe(list)
+  })
 })
