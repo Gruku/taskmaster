@@ -30,9 +30,8 @@
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
 /* Epic chips keep their full names (up to chips.css's 24ch); the free width left after them goes to one more chip
-   when it can show at least --overflow-squeeze of itself (overflow-row.js), and only that one is cut. Its swatch keeps
-   its size. Higher specificity than chips.css .chip. */
-.kanban-filters__epic .chip-row__chips { --overflow-squeeze: 16ch; }
+   when it can show at least 16ch of itself (kanban.js sets data-overflow-squeeze; overflow-row.js), and only that one
+   is cut. Its swatch keeps its size. Higher specificity than chips.css .chip. */
 .kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] .chip__label { min-width: 0; }
 .kanban-filters__epic .chip__swatch { flex: none; }

@@ -67,7 +67,7 @@ export function waitForRelease(doc, view, fn) {
  * - A child whose width changes in place (a new count or label) needs `relayout()`; only the row's width and its list
  *   of children are observed.
  * - Parked children are out of the document while the popover is closed: keep references to them, or use `onLayout`.
- * - A row may set `--overflow-squeeze` to a length: the first child that does not fit at its natural width stays when
+ * - A row may carry `data-overflow-squeeze` (a CSS length): the first child that does not fit at its natural width stays when
  *   it fits at that width, marked `data-overflow-squeezed`; the row's CSS must let that one (and only it) shrink.
  * - Call `destroy()` when the row is unmounted; it disconnects the observers and the web-font listener.
  * The handle: `more`, `isOpen()` (the popover), `relayout()`, `reset()` (everything back in the row), `destroy()`.
@@ -126,8 +126,8 @@ export function overflowRow(row, {
     const shrink = items.map((el) => el.style.flexShrink);
     for (const el of items) el.style.flexShrink = '0';
     const widths = moving.map(size);
-    // A row that sets --overflow-squeeze (a length) keeps one more child when it fits at that width (see fitCount).
-    const squeeze = style.getPropertyValue('--overflow-squeeze').trim();
+    // A row with data-overflow-squeeze (a CSS length) keeps one more child when it fits at that width (see fitCount).
+    const squeeze = row.dataset.overflowSqueeze?.trim();
     const maxes = squeeze ? moving.map((el) => el.style.maxWidth) : null;
     if (squeeze) moving.forEach((el) => { el.style.maxWidth = squeeze; });
     const mins = squeeze ? moving.map(size) : null;
