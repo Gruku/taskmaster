@@ -217,6 +217,13 @@ for (const theme of ['dark', 'light']) {
     const list = page.getByRole('listbox', { name: 'Depends on suggestions' });
     await expect(list).toBeVisible();
     expect(await surface(list)).toEqual(handover);
+    // Re-audit: in dark the list was the dialog's own grey. Light has nothing lighter than the dialog: the edge carries it.
+    const dialogGround = await surface(form);
+    if (theme === 'dark') expect(handover.background).not.toBe(dialogGround.background);
+    expect(handover.border).not.toBe(handover.background);
+    // The highlighted row is a step off the list.
+    const active = await list.locator('.ef-chip-dd-active').evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(active).not.toBe(handover.background);
     await page.keyboard.press('Escape');
   });
 }

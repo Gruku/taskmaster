@@ -107,6 +107,22 @@ test('button labels are AA on their fill in every state, in both themes', () => 
   ]);
 });
 
+// Re-audit: in dark a menu or suggestion list over a dialog was the dialog's own grey, held apart by its edge alone.
+test('dark theme: a popover is its own ground, not the dialog ground, and its hovered item is a step off it', () => {
+  assert.notEqual(resolve('dark', '--popover-surface'), resolve('dark', '--overlay-surface'));
+  assert.notEqual(resolve('dark', '--popover-surface-hover'), resolve('dark', '--popover-surface'));
+  assert.equal(resolve('light', '--popover-surface'), resolve('light', '--overlay-surface'), 'light: nothing is lighter than the dialog');
+  assert.notEqual(resolve('light', '--popover-surface-hover'), resolve('light', '--popover-surface'));
+});
+
+test('popovers: every text, and every status shape, holds on the popover and its hovered item, in both themes', () => {
+  const grounds = ['--popover-surface', '--popover-surface-hover'];
+  assertAA(['--foreground-bold', '--foreground-default', '--foreground-subtle'].map((fg) => [BOTH, fg, grounds]));
+  assertAA([[BOTH, '--text-accent', ['--popover-surface']]]);   // no item in a popover is accent text
+  assertNonText(['--tone-neutral', '--tone-accent', '--tone-success', '--tone-warning', '--tone-critical', '--tone-orange']
+    .map((tone) => [BOTH, tone, grounds]));
+});
+
 test('a hovered control on a modal surface is a visible step off that surface', () => {
   for (const theme of BOTH) {
     assert.notEqual(resolve(theme, '--overlay-surface-hover'), resolve(theme, '--overlay-surface'), theme);
