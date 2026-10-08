@@ -7,6 +7,61 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## Unreleased
+
+**The viewer has a new look, in a dark and a light theme.** Every screen is rebuilt on one design system, so the board, the table, the epics, the task, issue and bug pages, sessions, the archive, the dashboard and settings share one set of colours, type, spacing and controls. The viewer starts dark; the button at the right of the top bar switches theme, and Settings offers Dark, Light or System. Its three fonts ship with the viewer: nothing is loaded from Google Fonts any more, and it looks the same offline.
+
+**Reading the board.**
+
+- Status, severity and priority are a shape and a word everywhere ("In review", "Critical"), never a colour alone and never an abbreviation.
+- A title or ID cut short ends in an ellipsis and shows its full text on hover; IDs never break across lines.
+- On a phone the Kanban and Issues boards show one column at a time behind a row of tabs, the table becomes stacked cards, and no screen scrolls sideways. Every button, link and field you tap there is at least 44px tall.
+- Filter chips stay on one line: those that do not fit wait behind "More", and top-bar controls that do not fit wait behind "Filters". A chip with nothing to show is disabled unless it is switched on. On a phone the Filters button carries no number, so it no longer looks as if filters are on when none are.
+- The Kanban's epic row shows each epic's full name with its colour square, and its phase strip is one line, with archived phases in a menu.
+- The dashboard opens with a summary — In progress, Waiting on you, Open issues, Open bugs — each a link to the filtered screen. Its notes pack without holes, an expanded note opens in place and keeps a readable line, and on a phone they are one column.
+- An epic's page lists its tasks grouped by status, and one progress figure ("35/55 closed · 25 done · 10 archived") is used wherever an epic's progress is shown.
+- The bug list shows status, area, age and where it was found as columns. Archived bugs and ideas come in through a "Show archived" switch. Issue cards show their evidence without the raw Markdown marks.
+- Counts on Sessions and Archived say "visible" only when the list is shorter than the whole.
+
+**Keyboard and screen readers.**
+
+- Every card, row, chip, header and menu is a real link or button: Tab reaches it, Enter opens it, and Ctrl-click (⌘-click) opens a card or row in a new tab. Table rows no longer show a hand cursor, because the row's title is the link a keyboard reaches; a click anywhere on the row still opens the task.
+- Table headers sort from the keyboard and announce the order.
+- Dialogs keep focus inside, close with Escape, and give focus back to what opened them. Ctrl K (⌘K) focuses search.
+- Text meets WCAG AA contrast in both themes, every field has a label, and focus is always visible. An automated check opens every screen in both themes at desktop and phone width and fails on any of these.
+
+**Editing.**
+
+- Creating or editing a task or an idea uses one form: labelled fields, a field's problem shown once you leave it or press Save, and an in-app "Discard changes?" instead of the browser's own dialog.
+- A refused change says why, in words, beside the field or at the foot of the form — never a status code or the server's raw reply.
+- If someone else changed the task while you were editing it, a banner names each changed field with "Keep mine" and "Use server", and moves the dialog down instead of covering it.
+- A task is never offered as its own dependency.
+- Bug actions (Mark fixed, Shelve, Adopt, Promote) are in-app forms; Mark fixed asks for the fix commit.
+
+**Fixed.**
+
+- Bug pages show the bug; they were empty. `GET /api/bugs/<id>` returns one bug or 404, and `GET /api/bugs` still returns the list.
+- Issue pages show the discovered date and the evidence.
+- Epics no longer all read "Exploring", and every epic shows its progress bar.
+- A preference that fails to save is tried again, and the last change is saved when the tab closes.
+- A screen that cannot open says so in a sentence, with a way back to the dashboard.
+
+**Known limitations.**
+
+- A text field whose save the server refused keeps what you typed open beside the reason so you can correct it; a choice list goes back to the stored value.
+- In a form's tag or relation field, Escape pressed inside the field clears the half-typed entry and leaves the form open; a second Escape asks "Discard changes?".
+- The full time shown on hover over a relative time ("3 days ago") follows the browser's locale.
+- Kanban: on a phone the Epic row shows only All and More when there is no room for one readable epic chip. The current phase's done/total count is hidden at 480px and narrower (its progress bar and the exact count in its tooltip remain). With a search that matches nothing, "No match" appears in one column while the others say "No tasks". The "waiting on you" note in the In review column shows only at wide column widths.
+- Table on a phone: a card with no size shows a lone "—" at the end of its status line.
+- Epic page: the header's status carries both a square (the epic's colour) and a shape (its lifecycle).
+- Dashboard: next to an expanded note, a later note can sit above or beside it, so the visual order can differ from the Tab order.
+- In the dark theme a popover over cards is told apart by its border only.
+- Bugs: "Show archived" can leave the list unchanged when the archived bug's status is switched off in the status chips.
+- On a phone a bug card without "found in" has a tighter gap between title and details than the others.
+- Task page: the phone tab strip cuts "Raw JSON" to "Raw" (it scrolls sideways); a task with 40 dependencies shows them all, with no collapse; the S/M/L buttons are 32px tall beside a 44px days field; there is a double gap after the ID's copy icon.
+- Ideas on a phone: the filter rail wraps to two lines, the Tags button is styled unlike the chips, titles wrap at different points and clamp at about 22 characters (the open idea shows each in full), the pane shows status twice, an idea with no status leaves a blank line, and the Tags popover shows a fragment of "Clear filters" beside it.
+
+---
 ## 7.0.0
 
 **A second storage mode, the native authority, opt-in per checkout.** A project moves to it only when an operator runs the explicit cutover, `uv run <plugin>/taskmaster_cli.py cutover --root <project>` (`python -m taskmaster.native.cutover` from a source checkout), never automatically. The legacy store stays the default: this build opens every existing project as a legacy store and serves it as 6.0.3 did, plus the new tools below. On a native store one repository coordinator process owns every write; the Markdown and YAML files under `.taskmaster/` are exported after each commit; hand edits are imported only at an explicit sync, `backlog_sync()`; and `.taskmaster/` is committed with the managed Git command, `uv run <plugin>/taskmaster_cli.py git commit`. Git operations that bypass it are detected as drift and held, never imported silently. The [native store guide](docs/native-store.md) covers receipts, sync and Git obligations, service recovery, compatibility and known limitations; the [cutover runbook](docs/runbooks/native-cutover.md) is the migration procedure. Rehearse the cutover on a copy first. After activation it cannot be rolled back; the escape hatch re-adopts the files into a fresh legacy store and loses database-only state (receipts, sessions, queue leases, history sequence).
