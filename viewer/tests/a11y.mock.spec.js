@@ -59,6 +59,8 @@ for (const r of ROUTES) for (const theme of ['dark', 'light']) for (const [size,
 // (plan 3 ruling; with nothing narrowed, as here, a screen may show either form — Task 9 checks when the suffix shows).
 for (const [size, width, height] of WIDTHS) {
   test(`topbar · two heights and one count wording · ${size}`, async ({ page }) => {
+    // One page load per route, compared across routes: the default 15 s is one route's budget, not nineteen's.
+    test.setTimeout(ROUTES.length * 6_000);
     await page.setViewportSize({ width, height });
     const seen = [];
     for (const r of ROUTES.filter((x) => !x.open)) {
