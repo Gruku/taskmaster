@@ -36,7 +36,7 @@ export function pointerOnlyTargets() {
 }
 
 // Shown, enabled (not disabled, not inert) controls under 43.5px tall. Skips display:inline links (links in running text), anything inside
-// .md-body, and a checkbox/radio whose label is ≥43.5px. "Shown" = width and height > 1 and inside the viewport
+// .md-body, and a checkbox/radio whose label is ≥43.5px; a .link-row link covering its row is measured by the row. "Shown" = width and height > 1 and inside the viewport
 // horizontally. "tag#id.class \"text\" <height>px".
 export function smallTouchTargets() {
   const MIN = 43.5;
@@ -48,11 +48,23 @@ export function smallTouchTargets() {
     const text = (el.textContent || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     return `${el.tagName.toLowerCase()}${id}${cls} "${text}" ${Math.round(h * 10) / 10}px`;
   };
+  // A .link-row's link whose ::after is positioned over the whole row (the stretched-link pattern): the row is what a
+  // finger hits, so the row's box is measured. Strict: the ::after is absolute at inset 0, the link is the row's own
+  // child and unpositioned, and the row is positioned — so the ::after's box is the row's.
+  const rowCover = (el) => {
+    if (!el.matches('.link-row > .link-row__link')) return null;
+    const row = el.parentElement;
+    const after = getComputedStyle(el, '::after');
+    if (after.content === 'none' || after.position !== 'absolute') return null;
+    if (![after.top, after.right, after.bottom, after.left].every((v) => v === '0px')) return null;
+    if (getComputedStyle(el).position !== 'static' || getComputedStyle(row).position === 'static') return null;
+    return row;
+  };
   const out = [];
   for (const el of document.querySelectorAll(SEL)) {
     // Inert content (the page behind an open modal) cannot be tapped; its own route is read without the modal.
     if (el.disabled || el.closest('[inert]') || el.closest('.md-body')) continue;
-    const r = el.getBoundingClientRect();
+    const r = (rowCover(el) ?? el).getBoundingClientRect();
     if (r.width <= 1 || r.height <= 1 || r.right <= 0 || r.left >= innerWidth) continue;
     if (getComputedStyle(el).visibility === 'hidden') continue;
     if (el.matches('a[href]') && getComputedStyle(el).display === 'inline') continue;
