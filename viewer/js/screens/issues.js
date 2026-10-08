@@ -205,7 +205,7 @@ export function mount(root, { store, prefs }) {
     const head = h('h2', { class: 'issues-col__head', id: `${panelId}-head` }, name, count);
     const list = h('div', { class: 'issues-col__list' });
     // The browser scrolls the focused link, not the card around it; the whole card (its ring) must clear the column's fade. Phone lists do not scroll themselves, so they are left to the page.
-    list.addEventListener('focusin', (e) => { if (list.scrollHeight > list.clientHeight) e.target.closest?.('.issue-card')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
+    list.addEventListener('focusin', (e) => { if (list.scrollHeight > list.clientHeight && e.target.matches?.(':focus-visible')) e.target.closest?.('.issue-card')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); });
     s = { key, el: h('section', { class: 'issues-col', id: panelId }, head, list), head, name, count, list };
     sections.set(key, s);
     return s;

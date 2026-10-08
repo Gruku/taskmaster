@@ -670,3 +670,17 @@ test('Tabbing down a column keeps the focused card above the bottom fade', async
   });
   expect(gap.atEnd || gap.room >= 47).toBe(true);
 });
+
+test('a mouse press on a card cut by the bottom fade opens it instead of scrolling it from under the pointer', async ({ page }) => {
+  await boot(page, { height: 600, '/api/issues': { issues: LONG_ISSUES } });
+  const list = page.locator('.issues-col__list[data-more]').first();
+  await expect(list).toBeVisible();
+  const target = await list.evaluate((el) => {
+    const lr = el.getBoundingClientRect();
+    const c = [...el.querySelectorAll('.issue-card')].find((x) => x.getBoundingClientRect().top < lr.bottom - 10 && x.getBoundingClientRect().bottom > lr.bottom);
+    const l = c.querySelector('.link-row__link').getBoundingClientRect();
+    return { id: c.dataset.issueId, x: l.left + 20, y: Math.min(l.top + l.height / 2, lr.bottom - 4) };
+  });
+  await page.mouse.click(target.x, target.y);
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(`#/issue/${target.id}`);
+});
