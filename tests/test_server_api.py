@@ -109,7 +109,7 @@ def test_get_static_v3_tokens_css(running_server):
     resp = urllib.request.urlopen(f"{base}/static/v3/css/tokens.css")
     assert resp.status == 200
     assert resp.headers.get("Content-Type", "").startswith("text/css")
-    assert "--bg-canvas" in resp.read().decode()
+    assert "--bg-page" in resp.read().decode()
 
 
 def test_static_v3_path_traversal_blocked(running_server):
