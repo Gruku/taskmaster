@@ -221,6 +221,10 @@ for (const theme of ['dark', 'light']) {
     const dialogGround = await surface(form);
     if (theme === 'dark') expect(handover.background).not.toBe(dialogGround.background);
     expect(handover.border).not.toBe(handover.background);
+    // X-01: each row says its task's status as the shared shape plus word.
+    const first = list.getByRole('option').first();
+    await expect(first.locator('.marker .marker__shape')).toBeVisible();
+    await expect(first.locator('.marker .marker__word')).toHaveText('In progress');
     // The highlighted row is a step off the list.
     const active = await list.locator('.ef-chip-dd-active').evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(active).not.toBe(handover.background);
