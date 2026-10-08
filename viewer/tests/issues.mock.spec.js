@@ -654,3 +654,19 @@ test('a Status board wider than the page fades its right edge until it is scroll
   await cols.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
   await expect(cols).not.toHaveAttribute('data-more', '');
 });
+
+test('Tabbing down a column keeps the focused card above the bottom fade', async ({ page }) => {
+  await boot(page, { height: 600, '/api/issues': { issues: LONG_ISSUES } });
+  const list = page.locator('.issues-col__list[data-more]').first();
+  await expect(list).toBeVisible();
+  const cards = list.locator('.issue-card');
+  const n = await cards.count();
+  expect(n).toBeGreaterThan(4);
+  await cards.nth(n - 3).locator('.link-row__link').focus();
+  const gap = await list.evaluate((el) => {
+    const f = el.querySelector('.issue-card:focus-within').getBoundingClientRect();
+    const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    return { atEnd, room: el.getBoundingClientRect().bottom - f.bottom };
+  });
+  expect(gap.atEnd || gap.room >= 47).toBe(true);
+});
