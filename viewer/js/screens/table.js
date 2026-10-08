@@ -156,6 +156,12 @@ export async function mount(root, { store, api, prefs, params }) {
   const cue = () => {
     frame.toggleAttribute('data-more-end', tableHost.scrollLeft + tableHost.clientWidth < tableHost.scrollWidth - 1);
     frame.toggleAttribute('data-scrolled', tableHost.scrollLeft > 0);
+    // A header that has gone under the sticky edge, even in part, hides its label: a cut one would leave a fragment of
+    // its word under the fade ("IC ⇕"). The scrolling columns are those that start at or past the edge.
+    const edge = parseFloat(fadeStart.style.left) || 0;
+    for (const th of tableHost.querySelectorAll('th.tbl-th')) {
+      th.toggleAttribute('data-under', th.offsetLeft >= edge - 0.5 && th.offsetLeft - tableHost.scrollLeft < edge - 0.5);
+    }
   };
   // What depends on the host's size rather than its scroll: run on resize and after every paint, reads before writes.
   const fit = () => {

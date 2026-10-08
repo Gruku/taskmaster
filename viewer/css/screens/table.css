@@ -53,6 +53,8 @@ table.tbl {
   letter-spacing: var(--tracking-wide); text-transform: uppercase; text-align: left; white-space: nowrap; user-select: none;
 }
 .tbl-th[aria-sort] { color: var(--foreground-bold); }
+/* Gone under the sticky edge (table.js): no fragment of the word shows; the keyboard on it still sees it. */
+.tbl-th[data-under]:not(:focus-within) > * { visibility: hidden; }
 .tbl-cell {
   padding: var(--space-xs) var(--space-sm); border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
   white-space: nowrap; overflow: hidden; vertical-align: middle;

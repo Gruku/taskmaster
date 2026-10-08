@@ -750,3 +750,24 @@ test('scrolled sideways, a fade starts at the sticky edge over the columns that 
   }));
   expect(Math.abs(at.fade - at.edge), JSON.stringify(at)).toBeLessThanOrEqual(1);
 });
+
+// A header cut by the sticky edge would show a fragment of its word under the fade ("IC ⇕" of EPIC, re-audit N2).
+test('scrolled sideways, a header cut by the sticky edge shows nothing until it comes back out', async ({ page }) => {
+  await boot(page, { board: LONG_IDS_BOARD });
+  const look = () => page.evaluate(() => {
+    const edge = document.querySelector('th[data-key="title"]').getBoundingClientRect().right;
+    return [...document.querySelectorAll('th.tbl-th:not([data-key="id"]):not([data-key="title"])')].map((th) => {
+      const r = th.getBoundingClientRect();
+      const label = th.firstElementChild ? getComputedStyle(th.firstElementChild).visibility : 'visible';
+      return { key: th.dataset.key, cut: r.left < edge - 0.5 && r.right > edge + 0.5, under: r.right <= edge + 0.5, label };
+    });
+  });
+  await host(page).evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  // The cue follows the scroll event: wait for it, then every header cut or under the edge is blank and the rest show.
+  await expect.poll(async () => (await look()).filter((h) => h.cut || h.under).every((h) => h.label === 'hidden')).toBe(true);
+  const scrolled = await look();
+  expect(scrolled.some((h) => h.cut)).toBe(true);
+  for (const h of scrolled) expect(h.label, JSON.stringify(h)).toBe(h.cut || h.under ? 'hidden' : 'visible');
+  await host(page).evaluate((el) => { el.scrollLeft = 0; });
+  await expect.poll(async () => (await look()).every((h) => h.label === 'visible')).toBe(true);
+});
