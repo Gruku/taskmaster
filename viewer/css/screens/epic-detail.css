@@ -99,4 +99,8 @@
   .ed-grid { grid-template-columns: minmax(0, 1fr); }
   .ed-group__head { min-height: var(--touch-target); }
   .ed-task { min-height: var(--touch-target); }
+  /* Touch targets: the meta line's link takes the height as a hit area that a negative margin hands back, so the line
+     keeps its height (the .td-meta precedent); a link in the side lists simply grows its line. */
+  .ed-meta a { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-block: -12px; }
+  .ed-attn a, .ed-docs a { display: inline-flex; align-items: center; min-height: var(--touch-target); }
 }
