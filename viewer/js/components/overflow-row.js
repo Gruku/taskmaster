@@ -70,14 +70,16 @@ export function waitForRelease(doc, view, fn) {
  * - A row may carry `data-overflow-squeeze` (a CSS length): the first child that does not fit at its natural width stays when
  *   it fits at that width, marked `data-overflow-squeezed`; the row's CSS must let that one (and only it) shrink.
  * - Call `destroy()` when the row is unmounted; it disconnects the observers and the web-font listener.
+ * - `counted: false` hides More's count, where a number would misread (beside "Filters" it reads as that many filters on).
  * The handle: `more`, `isOpen()` (the popover), `relayout()`, `reset()` (everything back in the row), `destroy()`.
  */
 export function overflowRow(row, {
-  moreLabel = 'More', moreIcon = null, popoverLabel = moreLabel, keep = () => false, onLayout,
+  moreLabel = 'More', moreIcon = null, popoverLabel = moreLabel, keep = () => false, onLayout, counted = true,
 } = {}) {
   const doc = row.ownerDocument;
   const view = doc.defaultView;
   const count = h('span', { class: 'overflow-more__count' }, '0');
+  count.hidden = !counted;
   const more = h('button', { type: 'button', class: 'btn btn--ghost btn--sm overflow-more' },
     moreIcon ? icon(moreIcon, { size: 16 }) : null, h('span', { class: 'overflow-more__label' }, moreLabel), count);
   more.hidden = true;

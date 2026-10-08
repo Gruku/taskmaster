@@ -720,7 +720,17 @@ test.describe('topbar row 2 at phone width', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Filters counts the controls it holds; an empty chip group is neither parked nor counted', async ({ page }) => {
+  // A number beside "Filters" reads as that many filters on; what it holds is controls, set or not.
+  test('Filters on the Kanban at 390 shows no number while nothing is filtered', async ({ page }) => {
+    await mockApi(page, withContent());
+    await page.goto('/#/kanban');
+    await expect(page.locator('.card-task').first()).toBeAttached();
+    await expect(filters(page)).toBeVisible();
+    await expect(filters(page)).toHaveAccessibleName('Filters');
+    expect(await filters(page).innerText()).not.toMatch(/\d/);
+  });
+
+  test('Filters holds the controls that do not fit; an empty chip group is never parked', async ({ page }) => {
     await mockApi(page, withContent());
     await page.goto('/#/settings');
     await expect(page.locator('#page-title')).toHaveText('Settings');
@@ -754,7 +764,7 @@ test.describe('topbar row 2 at phone width', () => {
     }));
     expect(look.sizes.every((w) => w > 0)).toBe(true);
     expect(look.empties).toBe(0);
-    await expect(filters(page).locator('.overflow-more__count')).toHaveText(String(look.sizes.length));
+    await expect(filters(page).locator('.overflow-more__count')).toBeHidden();
     await page.evaluate(() => { location.hash = '#/kanban'; });
     await expect(page.locator('#page-title')).toHaveText('Kanban');
   });
@@ -817,8 +827,6 @@ test('at desktop width the Table parks nothing and Filters is hidden', async ({ 
   await expect(page.locator('#topbar-count')).not.toBeEmpty();
   await expect(filters(page)).toHaveCount(1);
   await expect(filters(page)).toBeHidden();
-  // Parked controls leave the document, so the row is checked from what stays: everything, and a count of none.
-  await expect(filters(page).locator('.overflow-more__count')).toHaveText('0');
   expect(await rowFits(page)).toEqual({ overflow: 0, cut: [] });
 });
 

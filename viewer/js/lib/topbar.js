@@ -15,8 +15,9 @@ function topbarRow(root) {
   if (row) return row;
   let mo = null;
   // Every layout writes each child's flex-shrink while it measures; those writes are its own, not news.
+  // No count on Filters: it holds controls, set or not, and "Filters 3" would read as three filters on.
   row = overflowRow(root, {
-    moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search'),
+    moreLabel: 'Filters', moreIcon: 'sliders', popoverLabel: 'Filters', keep: (el) => el.matches('.tm-search'), counted: false,
     onLayout: () => mo?.takeRecords(),
   });
   rows.set(root, row);
