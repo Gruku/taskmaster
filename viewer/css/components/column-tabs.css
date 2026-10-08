@@ -18,7 +18,7 @@
     content: '';
     position: sticky;
     z-index: 1;
-    flex: 0 0 var(--space-xl);
+    flex: 0 0 var(--space-2xl);
     align-self: stretch;
     pointer-events: none;
     opacity: 0;
@@ -26,12 +26,12 @@
   }
   .column-tabs:not([hidden])::before {
     left: 0;
-    margin-right: calc(-1 * (var(--space-xl) + var(--space-micro)));
+    margin-right: calc(-1 * (var(--space-2xl) + var(--space-micro)));
     background: linear-gradient(to right, var(--column-tabs-fade), transparent);
   }
   .column-tabs:not([hidden])::after {
     right: 0;
-    margin-left: calc(-1 * (var(--space-xl) + var(--space-micro)));
+    margin-left: calc(-1 * (var(--space-2xl) + var(--space-micro)));
     background: linear-gradient(to left, var(--column-tabs-fade), transparent);
   }
   .column-tabs--more-start:not([hidden])::before,

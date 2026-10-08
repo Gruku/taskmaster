@@ -89,6 +89,7 @@ export async function mount(root, { store, api, prefs }) {
   });
   dens.setAttribute('role', 'group');
   dens.setAttribute('aria-label', 'Card density');
+  dens.classList.add('kanban-density');
   head.appendChild(dens);
 
   // A labelled select: the visible label names the control, the chevron is the shared edit-field one.

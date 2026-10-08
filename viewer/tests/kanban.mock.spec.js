@@ -1094,3 +1094,23 @@ test('1440: a card inside a bundle frame keeps its age on line 1, with the same 
   expect(Math.abs(m.room[0] - m.room[1]), `content width framed vs loose ${m.room}`).toBeLessThanOrEqual(1);
   expect(m.wrapped).toEqual([]);
 });
+
+// Re-audit 2e/2g: parked in Filters the density control filled half its frame; Epic options listed names in the body face.
+test('390: in Filters, Minimal and Full share the density control\'s width', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  await page.locator('#topbar-actions > .overflow-more').click();
+  const dens = page.getByRole('dialog', { name: 'Filters' }).locator('.kanban-density');
+  await expect(dens).toBeVisible();
+  const m = await dens.evaluate((el) => ({ frame: el.clientWidth, halves: [...el.children].map((b) => b.getBoundingClientRect().width) }));
+  expect(Math.abs(m.halves[0] - m.halves[1]), JSON.stringify(m)).toBeLessThanOrEqual(1);
+  expect(m.halves[0] + m.halves[1], JSON.stringify(m)).toBeGreaterThanOrEqual(m.frame - 2);
+});
+
+test('1440: Epic options lists its epics in the Technical face of the Epic row\'s More list', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.locator('.epic-options-btn').click();
+  const name = page.locator('.epic-options .epic-option__name').first();
+  await expect(name).toBeVisible();
+  const chip = await page.locator('.kanban-filters__epic .chip').first().evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize]);
+  expect(await name.evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize])).toEqual(chip);
+});

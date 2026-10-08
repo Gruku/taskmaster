@@ -44,6 +44,16 @@
 .kanban-filters .kanban-clear[hidden] { display: none; }
 
 /* ─────────── EPIC OPTIONS POPOVER (the epic hue is the swatch only; words stay foreground) ─────────── */
+/* The list runs past the popover's height: an edge with rows beyond it shows a soft band (backgrounds only: the
+   'local' covers move with the content and hide each band once its end is reached). */
+.popover.epic-options {
+  background:
+    linear-gradient(var(--overlay-surface) 40%, transparent) top / 100% var(--space-lg) no-repeat local,
+    linear-gradient(transparent, var(--overlay-surface) 60%) bottom / 100% var(--space-lg) no-repeat local,
+    linear-gradient(var(--border-strong), transparent) top / 100% var(--space-sm) no-repeat scroll,
+    linear-gradient(transparent, var(--border-strong)) bottom / 100% var(--space-sm) no-repeat scroll,
+    var(--overlay-surface);
+}
 .epic-options__body { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-xs); min-width: 0; }
 .epic-options__field { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
 .epic-options__label,
@@ -74,8 +84,13 @@
   min-width: 0;
 }
 .epic-option:hover { background: var(--overlay-surface-hover); }
+/* The Technical face, as in the Epic row's More list. */
 .epic-option__name {
   flex: 1 1 auto;
+  font-family: var(--font-technical);
+  font-weight: var(--font-technical-weight);
+  font-size: var(--size-technical-small);
+  letter-spacing: var(--tracking-wide);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -94,6 +109,9 @@
 .epic-option__count { font-variant-numeric: tabular-nums; }
 .epic-option__pin { flex: 0 0 auto; }
 .epic-option__pin[aria-pressed="true"] { color: var(--foreground-bold); }
+
+/* Parked in Filters the density control spans the list's width; its two halves share it. */
+.overflow-list > .kanban-density > button { flex: 1 1 0; justify-content: center; }
 
 /* Row 2's labelled selects: a Technical label beside the shared edit-field select. */
 .kanban-field { display: inline-flex; align-items: center; gap: var(--space-xs); }
