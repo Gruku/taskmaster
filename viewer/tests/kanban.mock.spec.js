@@ -1114,3 +1114,24 @@ test('1440: Epic options lists its epics in the Technical face of the Epic row\'
   const chip = await page.locator('.kanban-filters__epic .chip').first().evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize]);
   expect(await name.evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize])).toEqual(chip);
 });
+
+// Epic options is a popover like every other: its ground (and the scroll cue painted in it) and its row hover are the
+// popover's tokens, not the dialog's.
+test('Epic options sits on the popover ground and its rows hover with the popover hover', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const token = (name) => page.evaluate((v) => {
+    const d = document.createElement('div');
+    d.style.background = `var(${v})`;
+    document.body.append(d);
+    const c = getComputedStyle(d).backgroundColor;
+    d.remove();
+    return c;
+  }, name);
+  await page.locator('.epic-options-btn').click();
+  const pop = page.locator('.popover.epic-options');
+  await expect(pop).toBeVisible();
+  expect(await pop.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await token('--popover-surface'));
+  const row = pop.locator('.epic-option').first();
+  await row.hover();
+  await expect.poll(() => row.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await token('--popover-surface-hover'));
+});

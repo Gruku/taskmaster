@@ -47,11 +47,11 @@
    'local' covers move with the content and hide each band once its end is reached). */
 .popover.epic-options {
   background:
-    linear-gradient(var(--overlay-surface) 40%, transparent) top / 100% var(--space-lg) no-repeat local,
-    linear-gradient(transparent, var(--overlay-surface) 60%) bottom / 100% var(--space-lg) no-repeat local,
+    linear-gradient(var(--popover-surface) 40%, transparent) top / 100% var(--space-lg) no-repeat local,
+    linear-gradient(transparent, var(--popover-surface) 60%) bottom / 100% var(--space-lg) no-repeat local,
     linear-gradient(var(--border-strong), transparent) top / 100% var(--space-sm) no-repeat scroll,
     linear-gradient(transparent, var(--border-strong)) bottom / 100% var(--space-sm) no-repeat scroll,
-    var(--overlay-surface);
+    var(--popover-surface);
 }
 .epic-options__body { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-xs); min-width: 0; }
 .epic-options__field { display: flex; flex-direction: column; gap: var(--space-micro); min-width: 0; }
@@ -82,7 +82,7 @@
   border-radius: var(--radius-md);
   min-width: 0;
 }
-.epic-option:hover { background: var(--overlay-surface-hover); }
+.epic-option:hover { background: var(--popover-surface-hover); }
 /* The Technical face, as in the Epic row's More list. */
 .epic-option__name {
   flex: 1 1 auto;
