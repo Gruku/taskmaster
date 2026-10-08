@@ -216,5 +216,5 @@ div.co-row:has(> .co-row__toggle) { display: block; }
 /* ── Touch targets ─────────────────────────────────────────────────────── */
 /* .btn--sm loads later at one class, so the older link is named through its rail to stay 44px. */
 @media (max-width: 768px) {
-  .co-row__toggle, .co-decision__opt, .co-decision .btn, .co-spine > .dk-older { min-height: 44px; }
+  .co-row__toggle, .co-decision__opt, .co-decision .btn, .co-spine > .dk-older { min-height: var(--touch-target); }
 }

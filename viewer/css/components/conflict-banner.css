@@ -78,7 +78,7 @@
   .cb-diff,
   .cb-multi-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); }
   .cb-multi-actions { gap: 0 var(--space-lg); }
-  .cb-radio { min-height: 44px; }
+  .cb-radio { min-height: var(--touch-target); }
   .cb-actions { flex-direction: column; }
-  .cb-actions .btn { width: 100%; min-height: 44px; }
+  .cb-actions .btn { width: 100%; min-height: var(--touch-target); }
 }

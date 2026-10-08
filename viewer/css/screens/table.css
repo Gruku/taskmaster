@@ -20,7 +20,7 @@
 /* Touch target: the rail sits in the screen, out of reach of the topbar's own 44px rule; the child selector outranks
    .btn--sm's 24px whatever order the sheets load in. */
 @media (max-width: 768px) {
-  .tbl-chips > .tbl-clear { min-height: 44px; }
+  .tbl-chips > .tbl-clear { min-height: var(--touch-target); }
 }
 
 .tbl-frame {
@@ -99,7 +99,7 @@ code.t-tech { background: transparent; padding: 0; }
     font-family: var(--font-technical); font-weight: 800; font-size: var(--size-technical-label);
     letter-spacing: var(--tracking-ultra); text-transform: uppercase; color: var(--foreground-subtle);
   }
-  .tbl-sortbar .ef-enum-select { min-height: 44px; }
+  .tbl-sortbar .ef-enum-select { min-height: var(--touch-target); }
   .tbl-fade { display: none; }
   /* The measured desktop geometry (inline min-width, title left) does not apply to cards. */
   table.tbl { display: block; min-width: 0 !important; }
@@ -108,7 +108,7 @@ code.t-tech { background: transparent; padding: 0; }
   .tbl-row {
     position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas: "id priority" "title title" "status size" "epic epic";
-    gap: var(--space-micro) var(--space-sm); min-height: 44px; padding: var(--space-sm) var(--space-md);
+    gap: var(--space-micro) var(--space-sm); min-height: var(--touch-target); padding: var(--space-sm) var(--space-md);
     border-bottom: 1px solid var(--border-subtle); background: var(--card-bg);
   }
   .tbl-row:hover { background: var(--card-bg-hover); }

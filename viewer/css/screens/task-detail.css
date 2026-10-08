@@ -468,14 +468,14 @@
   .modal--detail .modal-actions { order: 2; align-self: center; }
   .modal--detail .modal-close { order: 3; }
   .modal--detail .modal-title { order: 4; flex: 1 0 100%; }
-  .modal--detail .modal-actions .btn { min-height: 44px; }
+  .modal--detail .modal-actions .btn { min-height: var(--touch-target); }
   .td-strip__label { flex-basis: 100%; }
-  .td-section-edit.btn--icon.btn--sm { width: 44px; height: 44px; }
+  .td-section-edit.btn--icon.btn--sm { width: var(--touch-target); height: var(--touch-target); }
   /* Touch targets: every control in the head, the marker row, the strips and the rail is 44px tall. The ID line's
      borderless links and copy button take the height as a hit area that a negative margin hands back, so the line
      keeps its height; a bordered pill simply grows. */
-  .td-meta > :is(a[href], button) { display: inline-flex; align-items: center; min-height: 44px; margin-block: -14px; }
-  :is(.td-head, .td-markers, .td-strip, .td-rail) :is(.td-tag:is(a, button), .td-spec-toggle, .link-pill, .td-dep, .td-issue, .ho-status-pill) { min-height: 44px; }
+  .td-meta > :is(a[href], button) { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-block: -14px; }
+  :is(.td-head, .td-markers, .td-strip, .td-rail) :is(.td-tag:is(a, button), .td-spec-toggle, .link-pill, .td-dep, .td-issue, .ho-status-pill) { min-height: var(--touch-target); }
 }
 
 /* ---------- Variant B — graph ---------- */
@@ -608,5 +608,5 @@
 @media (max-width: 768px) {
   .td-tabs .td-tab,
   .td-graph-controls .btn,
-  .td-graph-context-band a.ctx-pill { min-height: 44px; }
+  .td-graph-context-band a.ctx-pill { min-height: var(--touch-target); }
 }

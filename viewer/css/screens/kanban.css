@@ -270,7 +270,7 @@
 
 @media (max-width: 768px) {
   /* Scoped so it outranks .btn--sm's 24px whatever the stylesheet order: the touch target, and one height in the row. */
-  .phase-strip .phase-archived { min-height: 44px; }
+  .phase-strip .phase-archived { min-height: var(--touch-target); }
   /* Natural flow: one column at a time (the Columns tabs pick it), the page ends with it, nothing scrolls sideways. */
   .kanban-page, .kanban-board { height: auto; min-height: 0; overflow: visible; flex: 0 0 auto; }
   .kanban-board-grid { flex-direction: column; gap: var(--space-lg); min-height: 0; height: auto; }
@@ -292,10 +292,10 @@
   /* Scoped so they outrank .btn--sm's 24px: phone touch targets. */
   .kanban-filters .overflow-more,
   .kanban-filters .epic-options-btn,
-  .kanban-filters .kanban-clear { min-height: 44px; min-width: 44px; }
+  .kanban-filters .kanban-clear { min-height: var(--touch-target); min-width: var(--touch-target); }
   .epic-option,
   .epic-options__check,
   .epic-options__filter,
-  .epic-options .epic-option__pin { min-height: 44px; }
-  .kanban-field .ef-enum-select { min-height: 44px; }
+  .epic-options .epic-option__pin { min-height: var(--touch-target); }
+  .kanban-field .ef-enum-select { min-height: var(--touch-target); }
 }

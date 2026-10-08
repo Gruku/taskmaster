@@ -36,5 +36,5 @@
 }
 
 @media (max-width: 768px) {
-  .list-filters > .chip, .list-filters__clear { min-height: 44px; }
+  .list-filters > .chip, .list-filters__clear { min-height: var(--touch-target); }
 }

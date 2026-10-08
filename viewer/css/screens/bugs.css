@@ -69,8 +69,8 @@
   .bug-row__title { grid-column: 1 / -1; }
   .bug-row > .link-row__content { flex-wrap: wrap; }
   .bug-row > .link-row__link,
-  .bug-row__found-in { min-height: 44px; }
+  .bug-row__found-in { min-height: var(--touch-target); }
   .bug-row__found-in { display: inline-flex; align-items: center; }
   /* The Sort select sits in row 2 or, parked, in its Filters popover. */
-  #bugs-sort { min-height: 44px; }
+  #bugs-sort { min-height: var(--touch-target); }
 }

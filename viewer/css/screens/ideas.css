@@ -123,9 +123,9 @@
 @media (max-width: 768px) {
   .ideas__content--detail-open { grid-template-columns: minmax(0, 1fr); }
   .ideas__content--detail-open .ideas__list { display: none; }
-  .btn.ideas-detail__back { display: inline-flex; min-height: 44px; }
+  .btn.ideas-detail__back { display: inline-flex; min-height: var(--touch-target); }
   .ideas-detail__grid { grid-template-columns: minmax(0, 1fr); }
   .idea-row { grid-template-columns: minmax(0, 1fr); }
-  .idea-row > .link-row__link { min-height: 44px; }
+  .idea-row > .link-row__link { min-height: var(--touch-target); }
   .idea-row__age { display: none; }
 }

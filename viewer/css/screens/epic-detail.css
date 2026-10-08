@@ -97,6 +97,6 @@
 
 @media (max-width: 768px) {
   .ed-grid { grid-template-columns: minmax(0, 1fr); }
-  .ed-group__head { min-height: 44px; }
-  .ed-task { min-height: 44px; }
+  .ed-group__head { min-height: var(--touch-target); }
+  .ed-task { min-height: var(--touch-target); }
 }

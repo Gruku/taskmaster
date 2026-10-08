@@ -9,7 +9,7 @@
 .dk-summary > ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-sm); margin: 0; padding: 0; list-style: none; }
 .dk-stat {
   display: flex; flex-direction: column; gap: var(--space-micro);
-  min-height: 44px; padding: var(--space-sm) var(--space-md);
+  min-height: var(--touch-target); padding: var(--space-sm) var(--space-md);
   background: var(--card-bg); border: 1px solid var(--border-default); border-radius: var(--radius-lg);
   color: var(--foreground-default); text-decoration: none;
   transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass);
@@ -164,7 +164,7 @@
 /* ── Mobile ─────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .dk-summary > ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: 44px; }
+  .dk-note__head .btn, .dk-note .dk-note__more { opacity: 1; min-height: var(--touch-target); }
 }
 @media (max-width: 720px) {
   .dk-desk { padding: var(--space-md); }

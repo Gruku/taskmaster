@@ -9,5 +9,5 @@
 .overflow-list { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-micro); }
 
 @media (max-width: 768px) {
-  .overflow-more { min-height: 44px; }
+  .overflow-more { min-height: var(--touch-target); }
 }

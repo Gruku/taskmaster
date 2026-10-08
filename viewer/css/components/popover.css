@@ -47,5 +47,5 @@
 .popover-item.is-current { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }
 
 @media (max-width: 768px) {
-  .popover-item { min-height: 44px; }
+  .popover-item { min-height: var(--touch-target); }
 }

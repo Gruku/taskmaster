@@ -149,5 +149,5 @@
 .tb-parked > .tb-grid { margin-top: var(--space-sm); }
 
 @media (max-width: 768px) {
-  .tc-copy, .tb-parked > summary { min-height: 44px; }
+  .tc-copy, .tb-parked > summary { min-height: var(--touch-target); }
 }

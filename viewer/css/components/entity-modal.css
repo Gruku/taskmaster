@@ -111,6 +111,6 @@
 @media (max-width: 768px) {
   .eform-grid { grid-template-columns: minmax(0, 1fr); }
   .modal--form .modal-footer { flex-wrap: wrap; }
-  .eform-actions .btn { min-height: 44px; }
-  .eform-section-toggle { min-height: 44px; }
+  .eform-actions .btn { min-height: var(--touch-target); }
+  .eform-section-toggle { min-height: var(--touch-target); }
 }

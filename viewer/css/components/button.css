@@ -8,7 +8,7 @@
   justify-content: center;
   gap: var(--space-xs);
   padding: var(--space-xs) var(--space-md);
-  min-height: 32px;
+  min-height: var(--control-size);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
@@ -44,7 +44,7 @@
 .btn--ghost:hover:not(:disabled) { background: var(--ground-15); border-color: var(--border-strong); color: var(--foreground-bold); }
 .btn--ghost:active:not(:disabled) { background: var(--ground-20); border-color: var(--border-strong); color: var(--foreground-bold); }
 
-.btn--sm { padding: var(--space-micro) var(--space-sm); min-height: 24px; font-size: var(--size-technical-small); }
+.btn--sm { padding: var(--space-micro) var(--space-sm); min-height: var(--control-size-sm); font-size: var(--size-technical-small); }
 
-.btn--icon { flex: 0 0 auto; width: 32px; height: 32px; padding: 0; }
-.btn--icon.btn--sm { width: 24px; height: 24px; }
+.btn--icon { flex: 0 0 auto; width: var(--control-size); height: var(--control-size); padding: 0; }
+.btn--icon.btn--sm { width: var(--control-size-sm); height: var(--control-size-sm); }

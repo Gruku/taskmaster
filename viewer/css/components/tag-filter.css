@@ -69,5 +69,5 @@
 .tag-filter__clear[hidden] { display: none; }
 
 @media (max-width: 768px) {
-  .tag-filter__option, .tag-filter__search, .tag-filter__clear, .tag-filter { min-height: 44px; }
+  .tag-filter__option, .tag-filter__search, .tag-filter__clear, .tag-filter { min-height: var(--touch-target); }
 }
