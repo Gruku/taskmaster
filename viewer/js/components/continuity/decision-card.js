@@ -7,7 +7,8 @@ export function createDecisionCard({ item, decision, onResolve, onDrop }) {
   const root = h('div', { class: 'co-decision', 'data-item-id': decision.id });
   root.appendChild(h('div', { class: 'co-decision__rail' },
     h('span', { class: 'co-chip' }, 'Decision'),
-    h('span', { class: 'co-decision__id' }, `${decision.id} · ${item.title}`),
+    // The item's title only when it says something the heading below does not.
+    h('span', { class: 'co-decision__id' }, item.title && item.title !== decision.title ? `${decision.id} · ${item.title}` : decision.id),
   ));
   root.appendChild(h('h3', { class: 'co-decision__title' }, decision.title));
 

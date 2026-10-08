@@ -14,7 +14,7 @@
   padding: var(--space-micro);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background: var(--overlay-surface);
+  background: var(--popover-surface);
   color: var(--foreground-default);
   animation: popover-in var(--dur-micro) var(--ease-hourglass) backwards;
   /* Placed by measuring from the corner: under reduced motion's near-zero duration on every property it would
@@ -41,7 +41,7 @@
   cursor: pointer;
 }
 .popover-item:hover,
-.popover-item:focus-visible { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
+.popover-item:focus-visible { background: var(--popover-surface-hover); color: var(--foreground-bold); }
 /* The current choice is marked by its check and the heavier word, not by a colour. */
 .popover-item[aria-checked="true"],
 .popover-item.is-current { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }

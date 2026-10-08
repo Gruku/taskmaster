@@ -90,6 +90,16 @@ export async function mount(root, { store, api }) {
   // Notes the person expanded stay expanded across redraws.
   const expandedNotes = new Set();
 
+  // Packs the board (desk.css .is-packed): each child spans the 4px rows its height and one gap need, re-measured
+  // whenever it changes size (expanded, edited, re-wrapped). Without ResizeObserver the board stays a plain grid.
+  const packer = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => {
+    const cs = getComputedStyle(boardEl);
+    const unit = parseFloat(cs.gridAutoRows) || 4;
+    const gap = parseFloat(cs.columnGap) || 0;
+    for (const { target } of entries) target.style.setProperty('--note-rows', String(Math.ceil((target.offsetHeight + gap) / unit)));
+  }) : null;
+  if (packer) boardEl.classList.add('is-packed');
+
   const composer = createComposer({ onCreate: (text) => act(() => api.createNote(text)) });
 
   // The error line and the composer stay in place across redraws, so the composer keeps its focus and its text.
@@ -117,6 +127,10 @@ export async function mount(root, { store, api }) {
     // Measured now rather than a frame later, so a remembered "Show more" exists to take focus back.
     for (const card of cards.values()) card.measure();
     if (notes.length === 0) boardEl.appendChild(h('p', { class: 'dk-empty' }, 'Your desk is clear.'));
+    if (packer) {
+      packer.disconnect();
+      for (const el of boardEl.children) packer.observe(el);
+    }
 
     if (!focusedNote) return;
     const card = cards.get(focusedNote)?.root;
@@ -333,11 +347,12 @@ export async function mount(root, { store, api }) {
   renderStrip();
   renderBoard();
   await renderBand();
-  if (!strip.root.isConnected) { unsubscribe?.(); return () => {}; }
+  if (!strip.root.isConnected) { unsubscribe?.(); packer?.disconnect(); return () => {}; }
 
   // Leaving with a note mid-edit: blurring its editor saves it, once, before the screen is torn down.
   return async () => {
     unsubscribe?.();
+    packer?.disconnect();
     if (boardEl.contains(document.activeElement)) document.activeElement.blur();
   };
 }

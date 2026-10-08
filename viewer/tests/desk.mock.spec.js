@@ -629,38 +629,86 @@ test('at 390px the "+N older" control of the real dashboard is at least 44px tal
 });
 
 // Final review: an expanded note stayed in its column — a ~2,400px strip at 1440 (5,000px at 390) beside empty columns,
-// overlapping a neighbour. Expanded, it takes the board's full width, sits upright, and nothing intersects it.
+// overlapping a neighbour. Re-audit: taking the board's full width instead made ~1,100px lines and left holes above it.
+// Expanded, it sits upright and takes two columns where there are two (one on a phone), and nothing intersects it.
 for (const width of [1440, 390]) {
-  test(`an expanded note spans the notes grid and overlaps no other note (${width})`, async ({ page }) => {
+  test(`an expanded note takes two columns (one on a phone) and overlaps no other note (${width})`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openDesk(page, deskRoutes({ notes: { notes: [...NOTES.notes, LONG_NOTE] } }));
     await page.goto('/#/dashboard');
     const card = note(page, 'NOTE-099');
     await expect(card).toBeVisible();
-    const bandTop = () => page.locator('.dk-continuity').evaluate((el) => el.getBoundingClientRect().top + scrollY);
-    const before = await bandTop();
     await card.getByRole('button', { name: 'Show more' }).click();
     await expect(card).toHaveClass(/is-expanded/);
+    await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
     const geo = await page.evaluate(() => {
       const box = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
       const board = document.querySelector('.dk-board');
       const cs = getComputedStyle(board);
-      const inner = box(board);
-      inner.l += parseFloat(cs.paddingLeft); inner.r -= parseFloat(cs.paddingRight);
+      const cols = cs.gridTemplateColumns.split(' ').map(parseFloat);
       const me = document.querySelector('.dk-note[data-note-id="NOTE-099"]');
       const others = [...board.querySelectorAll('.dk-note')].filter((n) => n !== me).map(box);
-      return { board: inner, me: box(me), others };
+      return { cols, gap: parseFloat(cs.columnGap), board: board.clientWidth, me: box(me), transform: getComputedStyle(me).transform, others };
     });
-    expect(Math.abs(geo.me.l - geo.board.l)).toBeLessThanOrEqual(2);
-    expect(Math.abs(geo.me.r - geo.board.r)).toBeLessThanOrEqual(2);
+    expect(geo.transform).toBe('none');
+    const want = geo.cols.length >= 2 ? geo.cols[0] + geo.cols[1] + geo.gap : geo.board;
+    expect(Math.abs((geo.me.r - geo.me.l) - want)).toBeLessThanOrEqual(2);
+    if (width === 1440) expect(geo.me.r - geo.me.l).toBeLessThan(geo.board / 2 + geo.gap);   // never the full-width wall
     for (const o of geo.others) {
-      const hit = o.l < geo.me.r && o.r > geo.me.l && o.t < geo.me.b && o.b > geo.me.t;
+      const hit = o.l < geo.me.r - 1 && o.r > geo.me.l + 1 && o.t < geo.me.b - 1 && o.b > geo.me.t + 1;
       expect(hit).toBe(false);
     }
-    const after = await bandTop();
-    expect(after - before).toBeLessThanOrEqual(geo.me.b - geo.me.t);
   });
 }
+
+// Re-audit: a row was as tall as its tallest note, leaving ~140px of page under the short ones. The board is packed:
+// under every note the next one in its column starts one gap (plus at most one 4px row) below it.
+test('the notes are packed: no note has a hole under it before the next note in its column', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDesk(page, deskRoutes({ notes: { notes: [LONG_NOTE, ...NOTES.notes] } }));
+  await page.goto('/#/dashboard');
+  await expect(page.locator('.dk-note__more')).toBeVisible();
+  await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+  const holes = await page.evaluate(() => {
+    const board = document.querySelector('.dk-board');
+    const gap = parseFloat(getComputedStyle(board).columnGap);
+    // Layout boxes, not the tilted paint: offset geometry ignores the transform.
+    const items = [...board.children].filter((el) => el.offsetParent !== null)
+      .map((el) => ({ id: el.dataset.noteId || el.className, l: el.offsetLeft, t: el.offsetTop, b: el.offsetTop + el.offsetHeight }));
+    const out = [];
+    for (const a of items) {
+      const below = items.filter((b) => b.l === a.l && b.t > a.t).sort((x, y) => x.t - y.t)[0];
+      if (below && below.t - a.b > gap + 4) out.push(`${a.id}: ${below.t - a.b}px`);
+    }
+    return { holes: out, count: items.length };
+  });
+  expect(holes.count).toBeGreaterThanOrEqual(5);
+  expect(holes.holes).toEqual([]);
+});
+
+test('at 390 the notes are one column of readable width, not two narrow ones', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDesk(page);
+  await page.goto('/#/dashboard');
+  await expect(note(page, 'NOTE-002')).toBeVisible();
+  const cols = await page.locator('.dk-board').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+  expect(cols).toBe(1);
+  expect((await note(page, 'NOTE-002').boundingBox()).width).toBeGreaterThanOrEqual(300);
+});
+
+// Re-audit: on a pinned note at rest only Unpin showed, floating mid-header beside the hidden Edit.
+test('a pinned note shows its controls together, at rest', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDesk(page);
+  await page.goto('/#/dashboard');
+  const pinned = page.locator('.dk-note.is-pinned').first();
+  await expect(pinned).toBeVisible();
+  await page.mouse.move(0, 0);
+  const op = await pinned.locator('.dk-note__head .btn').evaluateAll((els) => els.map((b) => getComputedStyle(b).opacity));
+  expect(op).toEqual(['1', '1', '1']);
+  const unpinned = page.locator('.dk-note:not(.is-pinned):not(.dk-composer)').first();
+  expect(await unpinned.locator('.dk-note__pin').evaluate((b) => getComputedStyle(b).opacity)).toBe('0');
+});
 
 // Final review: nothing said the four count tiles were links — the number carries the link-row underline cue.
 test('each count tile is a link whose number is underlined', async ({ page }) => {

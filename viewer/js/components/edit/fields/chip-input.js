@@ -3,6 +3,7 @@ import { h } from '../../../util/h.js';
 import { icon } from '../../icon.js';
 import { bindControl, cancelOnEscape, focusOnMount } from './control.js';
 import { openPopover } from '../../popover.js';
+import { marker } from '../../status.js';
 
 const MAX_DROPDOWN = 8;
 let seq = 0;
@@ -113,7 +114,9 @@ export const ChipInput = {
         // One line per suggestion; the full text is the tooltip when it had to be cut.
         const row = h('div', { class: 'ef-chip-dd-row', role: 'option', id: `${optionId}-${i}`, title: _displayLabel(s) });
         row.appendChild(h('span', { class: 'ef-chip-dd-val' }, _displayLabel(s)));
-        if (s.hint) row.appendChild(h('span', { class: 'ef-chip-dd-hint' }, s.hint));
+        // A status is the shared shape plus word ({ label, shape, tone }); any other hint is plain text.
+        if (s.marker) row.appendChild(h('span', { class: 'ef-chip-dd-hint' }, marker(s.marker)));
+        else if (s.hint) row.appendChild(h('span', { class: 'ef-chip-dd-hint' }, s.hint));
         // Picked on the press, which keeps focus in the input.
         row.addEventListener('mousedown', (e) => { e.preventDefault(); commitChoice(s); });
         return row;

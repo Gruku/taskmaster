@@ -165,7 +165,7 @@
   cursor: pointer;
 }
 .ef-chip-dd-row:hover,
-.ef-chip-dd-row.ef-chip-dd-active { background: var(--overlay-surface-hover); color: var(--foreground-bold); }
+.ef-chip-dd-row.ef-chip-dd-active { background: var(--popover-surface-hover); color: var(--foreground-bold); }
 .ef-chip-dd-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ef-chip-dd-hint {
   flex: 0 0 auto;

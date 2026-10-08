@@ -24,6 +24,15 @@ test('decision-card renders title + N options + primary "Pick option N"', () => 
   assert.equal(picked, 2);
 });
 
+// Re-audit: the meta line read "DEC-001 · Land the cutover" right above the heading "Land the cutover".
+test('the meta line names the decision once: its id, and the item title only when it differs from the heading', () => {
+  const same = createDecisionCard({ item, decision });
+  assert.equal(same.root.querySelector('.co-decision__id').textContent, 'DEC-001');
+  assert.equal(same.root.querySelector('.co-decision__title').textContent, 'Land 086');
+  const other = createDecisionCard({ item: { ...item, title: 'Cutover window' }, decision });
+  assert.equal(other.root.querySelector('.co-decision__id').textContent, 'DEC-001 · Cutover window');
+});
+
 test('options are buttons, the recommended one says so, and clicking option 3 resolves with 3', () => {
   let picked = null;
   const card = createDecisionCard({ item, decision, onResolve: (n) => { picked = n; } });

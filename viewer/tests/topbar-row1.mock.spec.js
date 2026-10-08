@@ -1,5 +1,5 @@
 // User intent: on a phone, topbar row 1 keeps the title, the count, the screen's primary action and the theme toggle on
-// one line — the count gives way first and keeps its words in its title, a primary shows only its icon — and a new route
+// one line — the count wraps between its parts rather than being cut, a primary shows only its icon — and a new route
 // leaves none of the last screen's count or primary behind.
 import { test, expect } from '@playwright/test';
 import { mockApi, unmockedWrites } from './mock-api.js';
@@ -53,10 +53,35 @@ test('at 390 row 1 keeps title, count, primary and theme toggle on one 56px line
   expect(pb.height).toBeGreaterThanOrEqual(44);
   await expect(primary.locator('span')).toBeHidden();
 
+  // Re-audit: the count was cut ("230 tasks · 23…"). It wraps between its parts instead, every word in sight.
   const count = page.locator('#topbar-count');
   await expect(count).toHaveAttribute('title', COUNT);
-  const cut = await count.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-  expect(cut.scroll).toBeGreaterThan(cut.client);
+  await expect(count).toHaveText(COUNT);
+  const fit = await count.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return {
+      scroll: [el.scrollWidth, el.clientWidth, el.scrollHeight, el.clientHeight],
+      parts: [...el.querySelectorAll('.topbar-count__part')].map((p) => {
+        const r = p.getBoundingClientRect();
+        return { text: p.textContent, inside: r.left >= box.left - 0.5 && r.right <= box.right + 0.5 };
+      }),
+    };
+  });
+  expect(fit.scroll[0]).toBeLessThanOrEqual(fit.scroll[1]);
+  expect(fit.scroll[2]).toBeLessThanOrEqual(fit.scroll[3]);   // no line below the box: every part is on a line of its own
+  expect(fit.parts).toEqual([{ text: '230 tasks ·', inside: true }, { text: '230 visible', inside: true }]);
+});
+
+test('the search field shows its shortcut hint on a desktop and not on a phone', async ({ page }) => {
+  for (const [width, shown] of [[1440, true], [390, false]]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#/table');
+    await expect(page.locator('table.tbl')).toBeVisible();
+    const search = page.locator('#topbar-actions .tm-search');
+    await expect(search).toBeVisible();
+    if (shown) await expect(search.locator('.cmp-kbd')).toBeVisible();
+    else await expect(search.locator('.cmp-kbd')).toBeHidden();
+  }
 });
 
 test('at 1440 the primary shows its label and the count is not cut', async ({ page }) => {
