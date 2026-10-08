@@ -294,7 +294,7 @@ export function mount(root, { store, prefs }) {
     }
     const narrowed = severities.length > 0 || components.length > 0 || promotedOnly || search.trim() !== '';
     const shown = filterIssues(issues, { search, severities, components, promotedOnly });
-    setTopbarCount(`${issues.length} ${pluralize(issues.length, 'issue', 'issues')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    setTopbarCount(`${issues.length} ${pluralize(issues.length, 'issue', 'issues')}${narrowed && shown.length < issues.length ? ` · ${shown.length} visible` : ''}`);
     if (!issues.length) return showState(stateBlock({ label: 'Issues', headline: 'No issues recorded yet.' }));
     if (!shown.length) {
       return showState(stateBlock({ label: 'No matches', headline: 'No issues match these filters.', action: { label: 'Clear filters', onClick: clear } }));

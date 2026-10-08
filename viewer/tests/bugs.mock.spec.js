@@ -239,3 +239,15 @@ for (const theme of ['dark', 'light']) {
     expect(result.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
   });
 }
+
+test('the count says "visible" only while the list is shorter than the total, not merely while a filter is set', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  await expect(count).toHaveText('7 bugs · 4 visible');
+  // Press every status chip the fixtures offer: all pressed hides nothing.
+  const unpressed = page.getByRole('group', { name: 'Status' }).locator('button[aria-pressed="false"]');
+  while (await unpressed.count()) await unpressed.first().click({ modifiers: ['Shift'] });
+  await expect(count).toHaveText('7 bugs');
+  await statusChip(page, 'Fixed').click({ modifiers: ['Shift'] });
+  await expect(count).toContainText('visible');
+});

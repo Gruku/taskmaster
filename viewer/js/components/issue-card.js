@@ -1,6 +1,6 @@
 // User intent: an issue in a list is a card that opens the issue — its severity, what it blocks, whether it has gone
 // stale, where it is and the evidence (three lines, with a real "Show all") — and a resolved issue is a quiet row;
-// the task and bug links sit beside the card's link, never inside it, and no issue text is ever parsed as markup.
+// the task and bug links sit beside the card's link, never inside it, and no issue text is ever parsed as markup (the preview strips its marks).
 import { linkRow } from './link-row.js';
 import { severityMarker, statusMarker } from './status.js';
 import { staleTag } from './stale-tag.js';
@@ -8,7 +8,7 @@ import { truncate } from '../lib/text.js';
 import { formatStamp } from '../lib/time.js';
 import { pluralize } from '../util/pluralize.js';
 import { computeBlocksCount } from '../util/issue-blocks.js';
-import { issueEvidence } from '../util/issue-fields.js';
+import { issueEvidence, plainMarkdown } from '../util/issue-fields.js';
 
 const issueHref = (id) => `#/issue/${encodeURIComponent(id)}`;
 
@@ -102,7 +102,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg = {}, expanded = fa
   if (meta.childNodes.length) content.push(meta);
 
   const controls = [];
-  const text = issueEvidence(issue);
+  const text = plainMarkdown(issueEvidence(issue));
   let evidence = null;
   let toggle = null;
   if (text) {

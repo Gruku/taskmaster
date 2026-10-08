@@ -106,7 +106,7 @@ export function mount(root, { store, prefs }) {
 
     const admitted = bugs.filter((b) => state.archived || !isArchivedBug(b));
     const shown = sortBugs(filterBugs(bugs, { ...state, search }), state.sort);
-    setTopbarCount(`${admitted.length} ${pluralize(admitted.length, 'bug', 'bugs')}${narrowed ? ` · ${shown.length} visible` : ''}`);
+    setTopbarCount(`${admitted.length} ${pluralize(admitted.length, 'bug', 'bugs')}${shown.length < admitted.length ? ` · ${shown.length} visible` : ''}`);
     statusRow.update(bugStatusChips(admitted, state.statuses));
     paintArchivedChip(bugs.filter(isArchivedBug).length);
 

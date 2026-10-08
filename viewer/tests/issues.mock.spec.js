@@ -622,3 +622,17 @@ for (const theme of ['dark', 'light']) {
     expect(shadows.filter((s) => s !== 'none')).toEqual([]);
   });
 }
+
+test('the count says "visible" only while the list is shorter than the total', async ({ page }) => {
+  await boot(page);
+  const count = page.locator('#topbar-count');
+  await chip(page, 'Severity', 'Critical').click();
+  await expect(count).toContainText('visible');
+  for (const name of ['High', 'Medium', 'Low']) await chip(page, 'Severity', name).click({ modifiers: ['Shift'] });
+  await expect(count).toHaveText('12 issues');
+});
+
+test('a card shows the evidence without markdown marks', async ({ page }) => {
+  await boot(page);
+  await expect(card(page, 'ISS-012').locator('.issue-card__evidence')).toHaveText('Seen on three laptops in light theme.');
+});
