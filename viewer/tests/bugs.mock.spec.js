@@ -251,3 +251,13 @@ test('the count says "visible" only while the list is shorter than the total, no
   await statusChip(page, 'Fixed').click({ modifiers: ['Shift'] });
   await expect(count).toContainText('visible');
 });
+
+test('status, age and found-in are columns: each at the same x on every row', async ({ page }) => {
+  await boot(page);
+  const xs = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => ({
+    status: r.querySelector('.bug-row__status').getBoundingClientRect().left,
+    age: r.querySelector('.bug-row__age')?.getBoundingClientRect().left,
+    found: r.querySelector('.bug-row__found-in')?.getBoundingClientRect().left,
+  })));
+  for (const k of ['status', 'age', 'found']) expect(new Set(xs.map((x) => x[k]).filter((v) => v != null)).size, k).toBe(1);
+});

@@ -75,13 +75,15 @@
 .bug-row__found-in:focus-visible { text-decoration: underline; }
 
 @media (max-width: 768px) {
-  .bug-row { grid-template-columns: minmax(0, 1fr); }
+  /* The name takes the first line; the meta and "found in" share the second instead of "found in" standing alone. */
+  .bug-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+  .bug-row > .link-row__link { grid-column: 1 / -1; }
   /* Not max-content twice: the title spans both tracks and would size them to its whole unwrapped line. */
   .bug-row__name { grid-template-columns: max-content minmax(0, 1fr); }
   .bug-row__title { grid-column: 1 / -1; }
   /* The columns collapse to a wrapped line under the name: the contents are a flex row again. */
   .bug-row > .link-row__content { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); min-width: 0; }
-  .bug-row > .link-row__controls { display: block; }
+  .bug-row > .link-row__controls { display: block; justify-self: end; }
   .bug-row__status, .bug-row__components, .bug-row__age, .bug-row__found-in { grid-row: auto; grid-column: auto; }
   .bug-row > .link-row__link { grid-row: auto; }
   .bug-row > .link-row__link,
@@ -93,3 +95,6 @@
 @media (min-width: 769px) {
   .bug-row__found-in { position: relative; z-index: 1; }
 }
+
+/* The chip row's "More" is a chip among chips: bordered like them, not bare text. */
+.bugs .chip-row .overflow-more { border: 1px solid var(--border-default); }
