@@ -96,5 +96,8 @@ export const EPIC_STATUS = freeze({
 export function epicStatusMeta(value) {
   if (value == null || value === '') return { ...EPIC_STATUS.active };
   if (typeof value !== 'string') return { label: '—', shape: '○', tone: 'neutral' };
-  return Object.hasOwn(EPIC_STATUS, value) ? { ...EPIC_STATUS[value] } : { label: value, shape: '○', tone: 'neutral' };
+  if (Object.hasOwn(EPIC_STATUS, value)) return { ...EPIC_STATUS[value] };
+  // An unknown status reads like the known ones: "on-hold" → "On hold".
+  const words = value.replace(/[-_]+/g, ' ').trim();
+  return { label: words ? words[0].toUpperCase() + words.slice(1) : '—', shape: '○', tone: 'neutral' };
 }

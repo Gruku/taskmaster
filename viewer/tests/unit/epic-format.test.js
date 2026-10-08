@@ -120,12 +120,14 @@ test('epicBreakdown — group order, non-zero only, percents sum to exactly 100'
   assert.deepEqual(STATUS_GROUPS, ['in-progress', 'in-review', 'blocked', 'todo', 'done', 'archived']);
 });
 
-test('EPIC_STATUS — lifecycle by meaning; missing is Active, unknown is shown as it is', () => {
+test('EPIC_STATUS — lifecycle by meaning; missing is Active, unknown is shown in words, capitalised', () => {
   assert.deepEqual(Object.keys(EPIC_STATUS), ['active', 'planned', 'done', 'archived']);
   assert.deepEqual(epicStatusMeta('done'), { label: 'Done', shape: '●', tone: 'success' });
   assert.deepEqual(epicStatusMeta(undefined), { label: 'Active', shape: '◐', tone: 'accent' });
   assert.deepEqual(epicStatusMeta(''), { label: 'Active', shape: '◐', tone: 'accent' });
-  assert.deepEqual(epicStatusMeta('paused'), { label: 'paused', shape: '○', tone: 'neutral' });
+  assert.deepEqual(epicStatusMeta('paused'), { label: 'Paused', shape: '○', tone: 'neutral' });
+  assert.deepEqual(epicStatusMeta('on-hold'), { label: 'On hold', shape: '○', tone: 'neutral' });
+  assert.deepEqual(epicStatusMeta('--'), { label: '—', shape: '○', tone: 'neutral' });
   assert.deepEqual(epicStatusMeta(7), { label: '—', shape: '○', tone: 'neutral' });
   epicStatusMeta('done').label = 'x';
   assert.equal(EPIC_STATUS.done.label, 'Done');

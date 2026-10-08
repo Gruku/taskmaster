@@ -435,3 +435,20 @@ for (const theme of ['dark', 'light']) for (const [w, h] of [[1440, 900], [390, 
     expect(await run('[role="dialog"]'), 'modal').toEqual([]);
   });
 }
+
+// Re-audit B 2k/2l: the legend showed two glyphs per entry, Archived was a near-black block in light, and with no
+// attention list or docs the task rows stopped at about 600px of the modal.
+test('the legend has one glyph per entry, Archived is hatched rather than solid, and with an empty side column the rows take the width', async ({ page }) => {
+  await boot(page, { theme: 'light', route: '#/epic/epic-01', board: LONG_IDS_BOARD,
+    extra: { '/api/epic/epic-01': epicPayload(LONG_IDS_BOARD, 'epic-01') } });
+  const m = await page.evaluate(() => {
+    const shapes = [...document.querySelectorAll('.ed-legend li')].map((li) => [...li.querySelectorAll('.marker__shape, .ed-legend__key')].filter((el) => el.getClientRects().length).length);
+    const arch = document.querySelector('.ed-breakdown .ed-seg--archived');
+    const main = document.querySelector('.ed-main').getBoundingClientRect().width;
+    const grid = document.querySelector('.ed-grid').getBoundingClientRect().width;
+    return { shapes, archived: arch ? getComputedStyle(arch).backgroundImage : null, main, grid, side: document.querySelector('.ed-side').children.length };
+  });
+  expect(m.shapes.every((n) => n === 1), JSON.stringify(m.shapes)).toBe(true);
+  expect(m.archived).toMatch(/repeating-linear-gradient/);
+  if (!m.side) expect(Math.abs(m.main - m.grid)).toBeLessThanOrEqual(1);
+});
