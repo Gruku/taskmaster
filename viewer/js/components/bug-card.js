@@ -47,6 +47,7 @@ export function bugRow(bug, { now = Date.now() } = {}) {
     a.className = 'bug-row__found-in';
     a.setAttribute('href', `#/task/${encodeURIComponent(bug.found_in)}`);
     a.textContent = `found in ${bug.found_in}`;
+    a.title = a.textContent;   // cut with an ellipsis when long (bugs.css)
     controls.push(a);
   }
 

@@ -104,4 +104,8 @@
   .bugs__list { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: var(--space-xs) 0; }
   .bugs__list[hidden] { display: none; }
   .bug-row { grid-template-columns: subgrid; grid-column: 1 / -1; column-gap: var(--space-md); }
+  /* The shared tracks fit their widest cell, so one long list or task ID would widen its column for every row and
+     squeeze every title: both are capped, cut with an ellipsis, and keep their full text in their title. */
+  .bug-row__components { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; }
+  .bug-row__found-in { max-width: 24ch; }
 }

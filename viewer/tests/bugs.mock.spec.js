@@ -271,3 +271,25 @@ test('at 1440 the title keeps at least half the row, and the cells of a row shar
   }));
   for (const x of m) { expect(x.share).toBeGreaterThanOrEqual(0.5); expect(x.spread).toBeLessThanOrEqual(6); }
 });
+
+// One bug's long components list or found-in ID must not widen its column for every row: both are capped, cut with an
+// ellipsis, and keep their full text in a title.
+test('at 1280 one long components list and found-in ID leave every title at least 40% of the row', async ({ page }) => {
+  const long = {
+    ...BUGS[0], id: 'B-777', title: 'Card edge vanishes on the light ground',
+    components: ['viewer-ui', 'store-native', 'linear-sync', 'handover-quotes', 'guard-hooks', 'status-line'],
+    found_in: 'database-native-n17-cutover-follow-up-task',
+  };
+  await boot(page, { width: 1280, height: 800, '/api/bugs': [long, ...BUGS] });
+  const m = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => ({
+    id: r.dataset.bugId,
+    share: r.querySelector('.link-row__link').getBoundingClientRect().width / r.getBoundingClientRect().width,
+  })));
+  for (const x of m) expect(x.share, x.id).toBeGreaterThanOrEqual(0.4);
+  const cells = row(page, 'B-777');
+  await expect(cells.locator('.bug-row__components')).toHaveAttribute('title', long.components.join(', '));
+  await expect(cells.locator('.bug-row__found-in')).toHaveAttribute('title', `found in ${long.found_in}`);
+  for (const sel of ['.bug-row__components', '.bug-row__found-in']) {
+    expect(await cells.locator(sel).evaluate((el) => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow), sel).toBe('ellipsis');
+  }
+});
