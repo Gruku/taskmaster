@@ -1135,3 +1135,27 @@ test('Epic options sits on the popover ground and its rows hover with the popove
   await row.hover();
   await expect.poll(() => row.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await token('--popover-surface-hover'));
 });
+
+// On a phone the current phase's count gives way to its name, and a progress bar under the name still shows how far
+// it is (re-audit N1: the chip's flex layout had squeezed the bar to nothing). At desktop width the count says it.
+test('at 390 the current phase shows its progress as a bar under its name, inside the chip', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
+  const cur = page.locator('.phase-strip .phase-chip--current');
+  const look = await cur.evaluate((el) => {
+    const r = (s) => el.querySelector(s).getBoundingClientRect();
+    const [name, bar, chip] = [r('.phase-chip__name'), r('.phase-chip__bar'), el.getBoundingClientRect()];
+    return { barW: bar.width, nameW: name.width, below: bar.top >= name.bottom, inside: bar.bottom <= chip.bottom };
+  });
+  expect(look.barW).toBeGreaterThan(0);
+  expect(look.barW).toBeCloseTo(look.nameW, 0);
+  expect(look).toMatchObject({ below: true, inside: true });
+  await expect(cur).toHaveAttribute('title', /\d+\/\d+ done/);
+});
+
+test('at desktop width the current phase says its count on its one row', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  const cur = page.locator('.phase-strip .phase-chip--current');
+  await expect(cur.locator('.phase-chip__count')).toBeVisible();
+  await expect(cur.locator('.phase-chip__count')).toHaveText(/^\d+\/\d+$/);
+  await expect(cur.locator('.phase-chip__bar')).toBeHidden();
+});

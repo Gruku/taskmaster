@@ -142,17 +142,9 @@
 }
 .phase-chip--done { color: var(--foreground-subtle); }
 .phase-chip--done[aria-pressed="true"] { color: var(--foreground-bold); }
-/* The current phase: number, name and count on one row, the progress bar spanning under the name. */
-.phase-chip--current {
-  display: inline-grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  align-items: center;
-  column-gap: var(--space-micro);
-  row-gap: var(--space-micro);
-}
-/* Kept in the row whatever its width: at 390 it gives way (its name truncates) so More stays on screen. Two classes:
-   chips.css loads after this sheet and its .chip sets flex: 0 0 auto. */
+/* The current phase: number, name and count on one row, as the other chips. Kept in the row whatever its width: at
+   390 it gives way (its name truncates) so More stays on screen. Two classes: chips.css loads after this sheet and its
+   .chip sets flex: 0 0 auto. */
 .phase-chip.phase-chip--current { flex-shrink: 1; min-width: 0; }
 /* Phone: one line (§6). The other phases go behind More first; All, Archived and More keep their width and the current
    phase takes the rest, its name ending in an ellipsis; its count gives way to the bar, which still shows progress
@@ -162,16 +154,22 @@
   .kanban-filterbar { padding: var(--space-sm) var(--space-xs); }
   .phase-strip { gap: var(--space-micro); }
   .phase-chip--current .phase-chip__name { max-width: 16ch; }
+  /* Its count gives way to a progress bar under the name, in the 44px chip's own height (the count stays in its
+     title). Two classes: chips.css's .chip is inline-flex, which would squeeze the bar to nothing. */
+  .phase-chip.phase-chip--current {
+    display: inline-grid; grid-template-columns: auto minmax(0, 1fr);
+    align-items: center; column-gap: var(--space-micro); row-gap: var(--space-micro);
+  }
   .phase-chip--current .phase-chip__count { display: none; }
+  .phase-chip--current .phase-chip__bar { display: block; grid-column: 2; grid-row: 2; }
   /* A slimmer inset on the strip's own controls (never under the 44px touch width) leaves the current name its room. */
   .phase-strip .phase-chip, .phase-strip .phase-archived { padding-inline: var(--space-xs); min-width: var(--touch-target); justify-content: center; }
   /* Archived is its icon and count; the word stays its accessible name. */
   .phase-strip .phase-archived > .icon { display: inline-block; flex: none; }
   .phase-archived__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
-.phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
-  display: block; height: 4px; overflow: hidden;
+  display: none; height: 4px; overflow: hidden;
   background: var(--surface-recessed); border-radius: var(--radius-full);
 }
 .phase-chip__bar > span { display: block; height: 100%; background: var(--tone-success); border-radius: var(--radius-full); }
