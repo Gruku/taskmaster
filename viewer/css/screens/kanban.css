@@ -29,11 +29,13 @@
 .kanban-filters__epic { flex: 1 1 240px; min-width: 240px; }
 .kanban-filters .epic-options-btn,
 .kanban-filters .kanban-clear { flex: 0 0 auto; }
-/* Epic chips are counted at a short basis (the overflow row measures them unshrunk, and an overflowing row cannot
-   grow them), then the ones left grow into the free width up to their full name: the row fills before it parks and a
-   name is cut only when the visible chips together outgrow the row. Higher specificity than chips.css .chip. */
-.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) { flex: 1 0 16ch; min-width: 0; max-width: max-content; overflow: hidden; }
-.kanban-filters__epic .chip-row__chips > .chip:not([data-value="__all__"]) .chip__label { max-width: none; min-width: 0; }
+/* Epic chips keep their full names (up to chips.css's 24ch); the free width left after them goes to one more chip
+   when it can show at least --overflow-squeeze of itself (overflow-row.js), and only that one is cut. Its swatch keeps
+   its size. Higher specificity than chips.css .chip. */
+.kanban-filters__epic .chip-row__chips { --overflow-squeeze: 16ch; }
+.kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] { flex-shrink: 1; min-width: 0; overflow: hidden; }
+.kanban-filters__epic .chip-row__chips > .chip[data-overflow-squeezed] .chip__label { min-width: 0; }
+.kanban-filters__epic .chip__swatch { flex: none; }
 /* One control height across the bar: More, Epic options and Clear filters match the chips (chips.css .chip). */
 .kanban-filters .overflow-more,
 .kanban-filters .epic-options-btn,

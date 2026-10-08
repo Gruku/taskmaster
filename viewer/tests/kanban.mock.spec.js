@@ -320,23 +320,42 @@ test('the epic row is one line with More at 1440 and at 390', async ({ page }) =
   }
 });
 
-test('1440, the long board: the epic row fills its width before it parks, and no chip is cut while there is room', async ({ page }) => {
-  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
-  await expect(page.locator('.kanban-filters__epic .overflow-more')).toBeVisible();
-  const m = await page.evaluate(() => {
-    const row = document.querySelector('.kanban-filters__epic .chip-row__chips');
-    const group = row.parentElement;   // the chip-row: its label and the chips
-    const kids = [...row.children].filter((el) => el.getClientRects().length);
-    const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    const used = kids.reduce((s, el) => s + el.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1);
-    const chips = [...row.querySelectorAll(':scope > .chip')].filter((el) => el.getClientRects().length);
-    const cut = chips.map((c) => c.querySelector('.chip__label')).filter((l) => l && l.scrollWidth > l.clientWidth).map((l) => l.textContent);
-    return { width: group.clientWidth, free: row.clientWidth - used, epics: chips.filter((c) => c.dataset.value !== '__all__' && c.textContent.trim() !== 'All').length, cut };
+// KB-05: names were cut to ~7 characters (every chip counted at 16ch) and the swatches squeezed to slivers.
+for (const [name, fixture] of [['the board', BOARD], ['the long board', longBoard()]]) {
+  test(`1440, ${name}: epic chips show their names, only the one the free width squeezes in is cut, swatches keep their size`, async ({ page }) => {
+    await board(page, { board: fixture, viewport: { width: 1440, height: 900 } });
+    await page.evaluate(() => document.fonts.ready);
+    const m = await page.evaluate(() => {
+      const row = document.querySelector('.kanban-filters__epic .chip-row__chips');
+      const kids = [...row.children].filter((el) => el.getClientRects().length);
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      const used = kids.reduce((s, el) => s + el.getBoundingClientRect().width, 0) + gap * Math.max(0, kids.length - 1);
+      const chips = [...row.querySelectorAll(':scope > .chip:not([data-value="__all__"])')].filter((el) => el.getClientRects().length);
+      // Cut below its own cap (chips.css: 24ch): a label narrower than both its text and that cap.
+      const cut = (c) => {
+        const l = c.querySelector('.chip__label');
+        return l.clientWidth + 1 < Math.min(l.scrollWidth, parseFloat(getComputedStyle(l).maxWidth) || Infinity);
+      };
+      const squeezed = chips.filter((c) => c.hasAttribute('data-overflow-squeezed'));
+      return {
+        free: row.clientWidth - used,
+        squeezeMin: (() => { const p = document.createElement('span'); p.className = 'chip'; p.style.width = '16ch'; row.append(p); const w = p.getBoundingClientRect().width; p.remove(); return w; })(),
+        epics: chips.length,
+        parked: !row.querySelector(':scope > .overflow-more').hidden,
+        squeezed: squeezed.length,
+        cut: chips.filter((c) => !c.hasAttribute('data-overflow-squeezed') && cut(c)).map((c) => c.textContent),
+        squeezedWidth: squeezed[0]?.getBoundingClientRect().width ?? null,
+        swatches: [...row.querySelectorAll(':scope > .chip .chip__swatch')].map((s) => [s.getBoundingClientRect().width, s.getBoundingClientRect().height]),
+      };
+    });
+    expect(m.epics, JSON.stringify(m)).toBeGreaterThanOrEqual(2);
+    expect(m.cut, 'no chip but the squeezed one is cut below its cap').toEqual([]);
+    expect(m.squeezed).toBeLessThanOrEqual(1);
+    if (m.squeezed) expect(m.squeezedWidth, 'the squeezed chip keeps at least 16ch').toBeGreaterThanOrEqual(m.squeezeMin - 1);
+    if (m.parked) expect(m.free, 'with chips parked, the free width left is less than one more chip could use').toBeLessThan(m.squeezeMin);
+    for (const [w, hgt] of m.swatches) expect([w, hgt], 'a swatch is a square, never a sliver').toEqual([8, 8]);
   });
-  expect(m.width, `the epic row is at least 600px wide (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(600);
-  expect(m.epics, `at least three epic chips visible (${JSON.stringify(m)})`).toBeGreaterThanOrEqual(3);
-  if (m.free >= 80) expect(m.cut, `no chip is cut while the row has ${Math.round(m.free)}px free`).toEqual([]);
-});
+}
 
 test('at 390 Epic options sits on the epic line, not on a row of its own', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
