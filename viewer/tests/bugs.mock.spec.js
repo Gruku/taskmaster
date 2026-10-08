@@ -261,3 +261,13 @@ test('status, age and found-in are columns: each at the same x on every row', as
   })));
   for (const k of ['status', 'age', 'found']) expect(new Set(xs.map((x) => x[k]).filter((v) => v != null)).size, k).toBe(1);
 });
+
+test('at 1440 the title keeps at least half the row, and the cells of a row share one top', async ({ page }) => {
+  await boot(page);
+  const m = await page.locator('.bug-row').evaluateAll((rows) => rows.map((r) => {
+    const box = r.getBoundingClientRect();
+    const tops = ['.bug-row__id', '.bug-row__status', '.bug-row__age'].map((s) => r.querySelector(s)?.getBoundingClientRect().top).filter((v) => v != null);
+    return { share: r.querySelector('.link-row__link').getBoundingClientRect().width / box.width, spread: Math.max(...tops) - Math.min(...tops) };
+  }));
+  for (const x of m) { expect(x.share).toBeGreaterThanOrEqual(0.5); expect(x.spread).toBeLessThanOrEqual(6); }
+});

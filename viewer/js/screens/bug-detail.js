@@ -11,7 +11,7 @@ import { statusMarker, severityMarker } from '../components/status.js';
 import { linkRoute } from '../components/link-pills.js';
 import { stateBlock } from '../components/empty-state.js';
 import {
-  detailMeta, stampEl, copyId, copyButton, detailTitle, detailHead, detailTag, markdownBody, detailSection, datesList,
+  detailMeta, stampEl, copyId, copyButton, detailTitle, detailHead, detailTag, markdownBody, detailSection,
   detailGrid, railPanel, railGroup,
 } from '../components/detail-page.js';
 
@@ -55,7 +55,7 @@ function body(bug) {
     sections.push(detailSection({ key: 'location', label: 'Location', body: h('ul', { class: 'dp-paths' }, paths.map((p) => h('li', {}, h('code', {}, p)))) }));
   }
   if (!sections.length) sections.push(h('p', { class: 'td-empty' }, 'Nothing written for this bug yet.'));
-  return h('div', { class: 'td-body' }, [...sections, datesList([['Discovered', bug.discovered]])]);
+  return h('div', { class: 'td-body' }, [...sections]);
 }
 
 function taskRow(id, tasks) {
