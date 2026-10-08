@@ -264,8 +264,8 @@ test('every phase is named in full or in its title, and the current one is wider
 test('at 390 the phase row is one line; More lists the rest and picking one filters the board', async ({ page }) => {
   await board(page, { board: longBoard(), viewport: { width: 390, height: 844 } });
   const tops = await page.locator('.phase-strip__items > *').evaluateAll((els) => [...new Set(els.filter((e) => e.offsetParent).map((e) => e.offsetTop))]);
-  // At most two lines: the current phase keeps a readable name, so Archived and More may take a second line (fix round 1).
-  expect(tops.length).toBeLessThanOrEqual(2);
+  // One line (§6): Archived shrinks to its icon and count and the current phase takes what is left (re-audit 2b).
+  expect(tops).toHaveLength(1);
   const more = page.locator('.phase-strip .overflow-more');
   await expect(more).toBeVisible();
   await more.click();

@@ -92,8 +92,10 @@ export function phaseStrip({ onSelect }) {
   }
 
   function archivedButton() {
+    // The icon stands in for the word on a phone (kanban.css), where the strip's one line needs the room.
     const b = h('button', { type: 'button', class: 'btn btn--ghost btn--sm phase-archived', 'aria-pressed': 'false' },
-      h('span', { class: 'phase-archived__label' }, 'Archived'), h('span', { class: 'phase-archived__count' }, ''));
+      icon('archive', { size: 16 }), h('span', { class: 'phase-archived__label' }, 'Archived'),
+      h('span', { class: 'phase-archived__count' }, ''));
     b.addEventListener('click', () => openArchived(b));
     return b;
   }

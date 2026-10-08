@@ -137,15 +137,20 @@
 /* Kept in the row whatever its width: at 390 it gives way (its name truncates) so More stays on screen. Two classes:
    chips.css loads after this sheet and its .chip sets flex: 0 0 auto. */
 .phase-chip.phase-chip--current { flex-shrink: 1; min-width: 0; }
-/* Phone: the current phase never shrinks past a readable name (it ends in an ellipsis); the other phases go behind
-   More first; All, the current phase, Archived and More do not fit one line at 390, so the strip takes a second. */
+/* Phone: one line (§6). The other phases go behind More first; All, Archived and More keep their width and the current
+   phase takes the rest, its name ending in an ellipsis; its count gives way to the bar, which still shows progress
+   (the count stays in its title). */
 @media (max-width: 480px) {
-  /* A slimmer side inset hands the rows 16px: room for a second priority chip and slack on the strip's second line. */
+  /* A slimmer side inset hands the rows 16px: room for a second priority chip and for the current phase's name. */
   .kanban-filterbar { padding: var(--space-sm) var(--space-xs); }
   .phase-strip { gap: var(--space-micro); }
-  .phase-strip__items { flex-wrap: wrap; row-gap: var(--space-micro); }
-  .phase-chip.phase-chip--current { flex-shrink: 0; }
   .phase-chip--current .phase-chip__name { max-width: 16ch; }
+  .phase-chip--current .phase-chip__count { display: none; }
+  /* A slimmer inset on the strip's own controls (never under the 44px touch width) leaves the current name its room. */
+  .phase-strip .phase-chip, .phase-strip .phase-archived { padding-inline: var(--space-xs); min-width: var(--touch-target); justify-content: center; }
+  /* Archived is its icon and count; the word stays its accessible name. */
+  .phase-strip .phase-archived > .icon { display: inline-block; flex: none; }
+  .phase-archived__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 .phase-chip--current .phase-chip__bar { grid-column: 2; grid-row: 2; }
 .phase-chip__bar {
@@ -153,6 +158,7 @@
   background: var(--surface-recessed); border-radius: var(--radius-full);
 }
 .phase-chip__bar > span { display: block; height: 100%; background: var(--tone-success); border-radius: var(--radius-full); }
+.phase-archived > .icon { display: none; }
 .phase-archived__reason { color: var(--foreground-subtle); }
 .phase-archived__menu .popover-item { display: flex; gap: var(--space-xs); align-items: baseline; }
 
