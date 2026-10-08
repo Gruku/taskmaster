@@ -275,11 +275,11 @@
   --color-warning-subtle: rgba(212, 120, 14, 0.15);
   --color-warning-bold: #b36100;
   /* @generated:end */
-  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface,
-     its column the darkest, and hover steps the card down to the page ground. */
+  /* No shadows here, so elevation is carried by lightness alone: a card is the lightest surface and its column the
+     darkest. Hover steps the card halfway to the page ground: the page's own step would merge a hovered card into it. */
   --col-bg: var(--ground-10);
   --card-bg: var(--ground-0);
-  --card-bg-hover: var(--ground-5);
+  --card-bg-hover: color-mix(in srgb, var(--ground-0), var(--ground-5));
   --note-ink: var(--ground-100);
   --note-ink-soft: var(--ground-50);
   --text-accent: var(--signature);

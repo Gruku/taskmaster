@@ -12,13 +12,18 @@ async function openBoard(page, theme) {
   await expect(page.locator('.card-task').first()).toBeVisible();
 }
 
-test('light theme: card is ground-0 on a ground-10 column, and hover steps it to ground-5', async ({ page }) => {
+// Hover is halfway from ground-0 to ground-5: ground-5 itself is the page, so a hovered card merged into it.
+test('light theme: card is ground-0 on a ground-10 column, and hover steps it halfway to the page ground', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });   // the hover fill is read at once, not mid-transition
   await openBoard(page, 'light');
   const card = page.locator('.card-task').first();
   await expect(card).toHaveCSS('background-color', 'rgb(245, 243, 237)');
   await expect(page.locator('.kanban-col').first()).toHaveCSS('background-color', 'rgb(210, 207, 200)');
   await card.hover();
-  await expect(card).toHaveCSS('background-color', 'rgb(230, 228, 221)');
+  const hover = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(hover).not.toBe('rgb(245, 243, 237)');
+  expect(hover).not.toBe(await page.locator('body').evaluate((el) => getComputedStyle(el).backgroundColor));
+  expect(hover).not.toBe('rgb(210, 207, 200)');
   await expect(card.locator('.card-title')).toHaveCSS('color', 'rgb(13, 13, 12)');
 });
 

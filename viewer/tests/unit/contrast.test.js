@@ -13,13 +13,18 @@ const declsOf = (re) => Object.fromEntries(
 const root = declsOf(/:root\s*\{([^}]*)\}/);
 const THEMES = { dark: root, light: { ...root, ...declsOf(/\[data-theme="light"\]\s*\{([^}]*)\}/) } };
 
-// A token's value in a theme, with var() aliases followed to the literal.
+// A token's value in a theme, with var() aliases followed to the literal and an even sRGB mix of two tokens worked out.
 export function resolve(theme, name, seen = []) {
   const v = THEMES[theme][name];
   assert.ok(v !== undefined, `${name} is not defined (${theme})`);
   assert.ok(!seen.includes(name), `alias cycle at ${name}`);
   const alias = v.match(/^var\(\s*(--[a-z0-9-]+)\s*\)$/i);
-  return alias ? resolve(theme, alias[1], [...seen, name]) : v;
+  if (alias) return resolve(theme, alias[1], [...seen, name]);
+  const mix = v.match(/^color-mix\(in srgb,\s*var\((--[a-z0-9-]+)\),\s*var\((--[a-z0-9-]+)\)\)$/i);
+  if (!mix) return v;
+  const [a, b] = [mix[1], mix[2]].map((t) => resolve(theme, t, [...seen, name]));
+  return '#' + [1, 3, 5].map((i) => Math.round((parseInt(a.slice(i, i + 2), 16) + parseInt(b.slice(i, i + 2), 16)) / 2)
+    .toString(16).padStart(2, '0')).join('');
 }
 
 function luminance(hex) {
@@ -65,6 +70,9 @@ test('light theme: cards are the lightest surface, columns the darkest (no shado
   assert.ok(lum('light', '--bg-page') > lum('light', '--col-bg'), 'column is darker than the page');
   assert.ok(lum('light', '--card-bg') > lum('light', '--card-bg-hover'), 'hover is a visible step');
   assert.ok(lum('light', '--card-bg-hover') > lum('light', '--col-bg'), 'a hovered card still stands off its column');
+  // Re-audit: hover was the page's own ground, so a hovered card or a selected idea row merged into the page.
+  assert.ok(lum('light', '--card-bg-hover') > lum('light', '--bg-page'), 'a hovered card is not the page');
+  assert.equal(resolve('light', '--card-bg-hover'), '#eeece5', 'halfway from ground-0 to ground-5');
 });
 
 test('sticky notes: both inks are AA on both papers, and the paper is the same in both themes', () => {
