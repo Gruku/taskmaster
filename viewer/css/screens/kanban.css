@@ -250,6 +250,9 @@
   scrollbar-width: thin;
 }
 .kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
+/* A card inside a bundle frame gives back the frame's padding and border in its own inline padding, so its line 1 has
+   the same room as a loose card's and its age stays on that line. */
+.kanban-col-body .bundle-frame > .card-task { padding-inline: calc(var(--space-sm) - var(--space-micro) - 1px); }
 .kanban-col-empty {
   margin: 0;
   padding: var(--space-xl) 0;

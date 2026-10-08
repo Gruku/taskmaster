@@ -181,7 +181,8 @@ for (const [name, make] of [['the fixture board', richBoard], ['the long board',
 }
 
 test('in a narrow card "New" and the age give way: they wrap below the id, which keeps its priority beside it', async ({ page }) => {
-  await board(page, { board: richBoard(), viewport: { width: 1440, height: 900 } });
+  // 1280: five columns, each card too narrow for id, priority, "New" and the age on one line.
+  await board(page, { board: richBoard(), viewport: { width: 1280, height: 900 } });
   const recent = card(page, 'T-102');
   const [id, pri, tag, title] = await Promise.all(['.card-id', '.card-pri', '.card-new', '.card-title']
     .map((s) => recent.locator(s).boundingBox()));
@@ -1069,4 +1070,27 @@ test('a collapsed In review rail hides its whisper (nothing cut) and its title k
   expect(s.whisperCut).toBe(false);
   expect(s.title).toBe('In review, waiting on you');
   await expect(colOf(page, 'in-review').getByRole('heading', { level: 2 })).toHaveAccessibleName(/waiting on you/);
+});
+
+// Re-audit 2a: a card inside a bundle frame was 10px narrower than a loose one, and T-1015's "37d" dropped under "Critical".
+test('1440: a card inside a bundle frame keeps its age on line 1, with the same room as a loose card', async ({ page }) => {
+  await board(page, { board: longBoard(), viewport: { width: 1440, height: 900 } });
+  await page.evaluate(() => document.fonts.ready);
+  const m = await page.evaluate(() => {
+    const inner = (c) => { const cs = getComputedStyle(c); return c.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
+    const framed = [...document.querySelectorAll('.bundle-frame > .card-task')];
+    const col = framed[0].closest('.kanban-col');
+    const loose = col.querySelector('.kanban-col-body > .card-task');
+    return {
+      n: framed.length,
+      room: [inner(framed[0]), inner(loose)],
+      wrapped: framed.filter((c) => {
+        const age = c.querySelector('.card-age');
+        return age && Math.abs(age.getBoundingClientRect().top - c.querySelector('.card-id').getBoundingClientRect().top) > 4;
+      }).map((c) => c.dataset.taskId),
+    };
+  });
+  expect(m.n).toBeGreaterThan(0);
+  expect(Math.abs(m.room[0] - m.room[1]), `content width framed vs loose ${m.room}`).toBeLessThanOrEqual(1);
+  expect(m.wrapped).toEqual([]);
 });
