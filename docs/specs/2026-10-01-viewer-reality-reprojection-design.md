@@ -219,6 +219,8 @@ Accepted at the end of plan 4 (reason in brackets). The user-visible ones are th
 - `edit-fields.css` keeps literal px for hairlines, the 8px error mark, glyph boxes, the select chevron and content-sized field widths (none is a control size or on an RR scale).
 - Bare 32px/24px control heights remain in 21 declarations in entity-modal, handover-status, popover, tag-filter, toolbar, epic-detail, issues, kanban, task-detail and shell CSS; the values equal `--control-size` and `--control-size-sm`, and swapping them is a no-op.
 - The style rules do not catch a left rail whose width is set in one rule and colour in another (only the same-rule case).
+- In light, popovers and dialogs are separated from the page by their border only: nothing there is lighter than the dialog.
+- The light conflict banner's headline keeps the warning hue on its ▲ only; the words are dark foreground text.
 - The re-audit could not judge four IDs from a still image (SH-06, KB-07, DM-01, EM-07; their behaviour is covered by code or mocked tests) and found KB-10 not applicable (the element is gone).
 
 ## 11. Amendments (2026-10-01, after plan 1 and the user's live review)

@@ -28,7 +28,7 @@ indicate schema breaks or removed surfaces.
 - Every card, row, chip, header and menu is a real link or button: Tab reaches it, Enter opens it, and Ctrl-click (⌘-click) opens a card or row in a new tab. Table rows no longer show a hand cursor, because the row's title is the link a keyboard reaches; a click anywhere on the row still opens the task.
 - Table headers sort from the keyboard and announce the order.
 - Dialogs keep focus inside, close with Escape, and give focus back to what opened them. Ctrl K (⌘K) focuses search.
-- Text meets WCAG AA contrast in both themes, every field has a label, and focus is always visible. An automated check opens every screen in both themes at desktop and phone width and fails on any of these.
+- Text meets WCAG AA contrast in both themes, every field has a label, and focus is always visible. An automated check opens every screen in both themes at desktop and phone width and fails on contrast, missing labels, landmark mistakes, mouse-only controls and touch targets under 44px on a phone.
 
 **Editing.**
 
@@ -58,8 +58,17 @@ indicate schema breaks or removed surfaces.
 - In the dark theme a popover over cards is told apart by its border only.
 - Bugs: "Show archived" can leave the list unchanged when the archived bug's status is switched off in the status chips.
 - On a phone a bug card without "found in" has a tighter gap between title and details than the others.
-- Task page: the phone tab strip cuts "Raw JSON" to "Raw" (it scrolls sideways); a task with 40 dependencies shows them all, with no collapse; the S/M/L buttons are 32px tall beside a 44px days field; there is a double gap after the ID's copy icon.
-- Ideas on a phone: the filter rail wraps to two lines, the Tags button is styled unlike the chips, titles wrap at different points and clamp at about 22 characters (the open idea shows each in full), the pane shows status twice, an idea with no status leaves a blank line, and the Tags popover shows a fragment of "Clear filters" beside it.
+- Task page, phone: the tab strip cuts "Raw JSON" to "Raw" (it scrolls sideways).
+- Task page: a task with 40 dependencies shows them all, with no collapse.
+- Task page, phone: the S/M/L buttons are 32px tall beside a 44px days field.
+- Task page: there is a double gap after the ID's copy icon.
+- Ideas, phone: the filter rail wraps to two lines.
+- Ideas, phone: the Tags button is styled unlike the chips.
+- Ideas, phone: titles wrap at different points and clamp at about 22 characters (the open idea shows each in full).
+- Ideas: the pane shows status twice, and an idea with no status leaves a blank line.
+- Ideas, phone: the Tags popover shows a fragment of "Clear filters" beside it.
+- In the light theme a popover is told apart from the page by its border only.
+- In the light theme the conflict banner's headline keeps the warning colour on its ▲ only; the words are dark text.
 
 ---
 ## 7.0.0
