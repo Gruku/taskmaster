@@ -447,16 +447,18 @@ test('at 390 the graph\'s issue links and controls are touch-sized', async ({ pa
   }
 });
 
-test('at 390 the graph opens at its left edge, and this task is reached by scrolling', async ({ page }) => {
+test('at 390 the graph opens on this task: its node is inside the canvas, and the rest is a scroll away', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, GRAPH);
   const canvas = page.locator('#screen-mount .td-graph-canvas');
   await expect(canvas.locator('svg.td-graph-svg')).toBeVisible();
-  const m = await canvas.evaluate((c) => ({ left: c.scrollLeft, wide: c.scrollWidth > c.clientWidth }));
+  const m = await canvas.evaluate((c) => {
+    const view = c.getBoundingClientRect();
+    const own = c.querySelector('.node--center rect').getBoundingClientRect();
+    return { wide: c.scrollWidth > c.clientWidth, inside: own.left >= view.left - 0.5 && own.right <= view.right + 0.5 };
+  });
   expect(m.wide).toBe(true);
-  expect(m.left).toBe(0);
-  await canvas.evaluate((c) => { c.scrollLeft = c.scrollWidth; });
-  expect(await canvas.evaluate((c) => c.scrollLeft)).toBeGreaterThan(0);
+  expect(m.inside).toBe(true);
 });
 
 test('at 390 the graph view\'s tabs stay one row that scrolls sideways', async ({ page }) => {

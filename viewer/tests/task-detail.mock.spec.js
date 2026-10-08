@@ -657,9 +657,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     const dialog = await openCard(page, 'T-105');
     await expect(dialog.locator('[data-test="sec-plan"] li').last()).toHaveText('step 5000 of the plan');
     await expect(dialog.locator('[data-sub="depends"] a.td-dep')).toHaveCount(40);
-    // A four-digit marker hangs inside the body column, not left of it.
-    const ol = dialog.locator('[data-test="sec-plan"] ol').first();
-    expect(await ol.evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft) >= 3 * parseFloat(getComputedStyle(el).fontSize) * 0.5 + 24)).toBe(true);
+    // The 5,000-step plan's four-digit markers get room; a short list keeps the plain indent.
+    const pads = await dialog.locator('[data-test="sec-plan"] ol').first().evaluate((el) => ({ digits: el.dataset.digits, pad: parseFloat(getComputedStyle(el).paddingLeft) }));
+    expect(pads.digits).toBe('4');
+    expect(pads.pad).toBeGreaterThan(40);
 
     const box = await dialog.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);

@@ -30,7 +30,11 @@
 
 .md-body p { margin: 0 0 var(--space-sm); }
 .md-body :is(ul, ol) { margin: 0 0 var(--space-sm); padding-left: var(--space-lg); }
-.md-body ol { padding-left: calc(var(--space-lg) + 3ch); }
+.md-body ol[data-digits="2"] { padding-left: calc(var(--space-lg) + 1ch); }
+.md-body ol[data-digits="3"] { padding-left: calc(var(--space-lg) + 2ch); }
+.md-body ol[data-digits="4"] { padding-left: calc(var(--space-lg) + 3ch); }
+.md-body ol[data-digits="5"] { padding-left: calc(var(--space-lg) + 4ch); }
+.md-body ol[data-digits="6"] { padding-left: calc(var(--space-lg) + 5ch); }
 .md-body li { margin: var(--space-micro) 0; }
 .md-body li > :is(ul, ol) { margin-bottom: 0; }
 .md-body :is(strong, b) { color: var(--foreground-bold); font-weight: var(--font-narrator-weight-semi); }

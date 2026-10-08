@@ -42,11 +42,13 @@ export function mountTaskDetailGraph(root, ctx) {
   out.appendChild(detailGrid({ body, panels: railPanels({ task, related: ctx.related, level: 2 }) }));
   if (keptFrame && !graft(root, out, keptFrame, freshFrame)) root.replaceChildren(...out.childNodes);
   // A canvas larger than its frame opens on this task, not on its first neighbour — or where a repaint found it. On a
-  // phone it opens at its left edge instead: centred, both side columns were cut at the frame; this task is a scroll away.
   const canvas = root.querySelector('.td-graph-canvas');
   if (canvas) {
-    const narrow = globalThis.matchMedia?.('(max-width: 768px)').matches;
-    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : narrow ? 0 : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    // Where the canvas opens: on this task, whichever way it is centred (the nodes are wide, so the left edge cut it).
+    const own = canvas.querySelector('.node--center rect')?.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
+    const toOwn = own ? canvas.scrollLeft + (own.left + own.width / 2) - (view.left + view.width / 2) : (canvas.scrollWidth - canvas.clientWidth) / 2;
+    canvas.scrollLeft = Number.isFinite(kept.scrollLeft) ? kept.scrollLeft : toOwn;
     canvas.scrollTop = Number.isFinite(kept.scrollTop) ? kept.scrollTop : (canvas.scrollHeight - canvas.clientHeight) / 2;
   }
   // A canvas wider than its frame says so: otherwise a cut column reads as a broken one.
