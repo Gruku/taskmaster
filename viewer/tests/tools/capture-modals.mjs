@@ -1,6 +1,6 @@
 // User intent: one repeatable screenshot sweep of the two task modals (detail and Create/Edit), the full task page and the
-// shared components (menus, suggestion lists, the conflict banner, the Ideas form, chips, sortable headers, Filters) in
-// every state the user meets, in both themes and both widths — from the static viewer with every API call mocked, never a
+// shared components (menus, suggestion lists, the conflict banner, the Ideas form, chips, sortable headers, Filters) and
+// every route (route-<name>), in every state the user meets, in both themes and both widths — from the static viewer with every API call mocked, never a
 // live backlog. Unmocked writes, page errors and native dialogs are listed at the end and fail the run.
 //
 // Usage: node viewer/tests/tools/capture-modals.mjs <out-dir> [--only=name,name] [--themes=dark,light] [--widths=d,m] [--port=8799]
@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mockApi, unmockedWrites } from '../mock-api.js';
 import * as F from '../mock-fixtures.js';
+import { ROUTES } from '../route-fixtures.js';
 
 const require = createRequire(import.meta.url);
 const AXE = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -412,6 +413,12 @@ const ALL_SCENES = [
       await p.route((url) => url.pathname === key, (r) => r.fulfill(typeof val?.status === 'number' && 'json' in val ? val : { json: val }));
     }
   }),
+  // Plan 4: every route, on the same mocks and ready selector as the a11y gate, the whole page in one shot.
+  ...ROUTES.map((r) => [`route-${r.name}`, { mocks: r.build, fullPage: true, scope: 'body', open: async (page) => {
+    await page.goto(`${BASE}/${r.route}`);
+    await page.locator(r.ready).first().waitFor();
+    await r.open?.(page);
+  } }]),
 ];
 const ONLY = flag('only');
 const unknownScenes = (ONLY || []).filter(n => !ALL_SCENES.some(([name]) => name === n));
@@ -507,7 +514,8 @@ try {
         page.on('dialog', (d) => { errors.push(`[native dialog] ${d.message()}`); d.dismiss(); });
         try {
           await mockApi(page, scene.mocks ? scene.mocks({ theme }) : { '/api/viewer/prefs': { theme, ui: {}, screens: {} }, ...TABLE });
-          await bugsByTask(page);
+          // A scene's own table answers its bugs as the route does; bugsByTask would replace that list.
+          if (!scene.mocks) await bugsByTask(page);
           await scene.routes?.(page);
           await scene.open(page);
           await page.evaluate(() => document.fonts.ready);
