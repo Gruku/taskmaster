@@ -476,6 +476,7 @@
      keeps its height; a bordered pill simply grows. */
   .td-meta > :is(a[href], button) { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-block: -14px; }
   :is(.td-head, .td-markers, .td-strip, .td-rail) :is(.td-tag:is(a, button), .td-spec-toggle, .link-pill, .td-dep, .td-issue, .ho-status-pill) { min-height: var(--touch-target); }
+  .td-marker-host .ef-editable { min-height: var(--touch-target); }
 }
 
 /* ---------- Variant B — graph ---------- */

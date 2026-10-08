@@ -35,3 +35,8 @@
   line-height: var(--leading-body);
 }
 .tm-empty > .btn { margin-top: var(--space-xs); }
+
+/* Touch target: the block's one action is 44px tall on a phone. */
+@media (max-width: 768px) {
+  .tm-empty > .btn { min-height: var(--touch-target); }
+}

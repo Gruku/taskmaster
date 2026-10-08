@@ -316,6 +316,9 @@ test('at 1440 with 230 long rows the ID column fits its longest ID and ID and ti
 
 test('a click on a row opens its task; Ctrl+click on its link is the browser\'s', async ({ page }) => {
   await boot(page);
+  // The row shows no hand (it would promise a target no keyboard reaches); its title link, the real target, does.
+  await expect(page.locator('.tbl-row[data-task-id="T-102"]')).not.toHaveCSS('cursor', 'pointer');
+  await expect(page.locator('.tbl-row[data-task-id="T-102"] .tbl-link')).toHaveCSS('cursor', 'pointer');
   await page.locator('.tbl-row[data-task-id="T-102"] .tbl-cell--status').click();
   await expect(page.getByRole('dialog', { name: DETAIL_TASK.title })).toBeVisible();
   await page.keyboard.press('Escape');

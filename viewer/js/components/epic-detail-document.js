@@ -126,7 +126,8 @@ export function mountEpicDetail(container, { epic, store, onComponentNav, chrome
   const stats = epicStats(tasks);
 
   const main = h('div', { class: 'ed-main' });
-  const side = h('aside', { class: 'ed-side' });
+  // A column of the document, not a landmark of its own: a complementary landmark must not sit inside <main>.
+  const side = h('div', { class: 'ed-side' });
   container.append(header(epic, stats, chrome), h('div', { class: 'ed-grid' }, [main, side]));
 
   // The epic's swatch leads the marker row. It is read from the board, which can land after the epic (or reorder its
