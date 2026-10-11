@@ -363,15 +363,7 @@ export function isStaleTicks(stored: unknown, now: number): boolean {
   return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
 }
 
-/** The phase filter's `$.store` key is this plus the repo root: one choice per project, machine-wide. */
-export const PHASE_PREFIX = 'phase:'
 export const PAGE_SIZE = 5
-
-/** A stored phase choice: its id ('' every phase, kept as an explicit choice), or null for none / unreadable. */
-export function storedPhase(value: unknown): string | null {
-  const phase = typeof value === 'object' && value !== null ? (value as { phase?: unknown }).phase : undefined
-  return typeof phase === 'string' ? phase : null
-}
 
 const decodeAmp = (text: string): string => text.replace(/&amp;/g, '&')
 
@@ -380,25 +372,6 @@ export function phaseName(p: TmPhase): string {
   return decodeAmp(p.name.split(' — ')[0] ?? '').trim() || p.id
 }
 
-/** The review pane's filter line: `phase: all`, or `phase: <name> (<count>)`; the bare id while the phase list is not known. */
-export function phaseLabel(choice: string, phases: readonly TmPhase[]): string {
-  if (choice === '') return 'phase: all'
-  const known = phases.find(p => p.id === choice)
-  return known === undefined ? `phase: ${choice}` : `phase: ${phaseName(known)} (${known.count})`
-}
-
-/**
- * The phase `f` moves to: all, the active phase (offered even with nothing waiting: the board's marker can lag, but it is
- * the usual start), then every other phase with waiting tasks, newest (highest order) first, then all again. A current
- * phase the cycle does not offer goes to all.
- */
-export function nextPhase(current: string, phases: readonly TmPhase[]): string {
-  const active = phases.find(p => p.status === 'active')
-  const others = phases.filter(p => p.id !== active?.id && p.count > 0).sort((a, b) => b.order - a.order)
-  const cycle = ['', ...(active === undefined ? [] : [active.id]), ...others.map(p => p.id)]
-  const at = cycle.indexOf(current)
-  return at < 0 ? '' : (cycle[(at + 1) % cycle.length] ?? '')
-}
 
 export type HandoverPage = {
   readonly entries: readonly TmHandover[]

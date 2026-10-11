@@ -9,6 +9,7 @@ import type {
   TmHandoverNotice,
   TmHandoverSummary,
   TmPhase,
+  TmPhasePane,
   TmPhaseView,
   TmSnapshot,
   TmTaskDetail,
@@ -21,13 +22,12 @@ import {
   FRESH_CURSOR,
   handoverCopyText,
   HANDOVERS,
-  nextPhase,
-  PHASE_PREFIX,
   REVIEW,
   TICKS_PREFIX,
   ticksOf,
   toggleTick,
 } from './model'
+import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
 
 export type TmWriter = {
   snapshot: (change: (s: TmSnapshot | null) => TmSnapshot | null) => Promise<void>
@@ -42,7 +42,7 @@ export type TmWriter = {
   ) => Promise<void>
   summaryOpen: (change: (id: string) => string) => Promise<void>
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
-  phaseView: (change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
+  phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
   handoverPage: (page: number) => Promise<void>
 }
 
@@ -64,10 +64,10 @@ export type TmFlowDeps = {
    * cannot. Absent in demo, whose summaries are seeded like the task details.
    */
   summary?: (handoverId: string) => Promise<TmHandoverSummary | null>
-  /** Reads the phases the review filter cycles through (null: could not; the filter stays). Demo answers its own list. */
-  readPhases?: () => Promise<readonly TmPhase[] | null>
-  /** The review filter moved to this phase id ('' all): the scope follows and a refresh is asked. */
-  phaseChosen?: (phaseId: string) => void
+  /** Reads one pane's phases for its strip (null: could not; the strip stays as it was). Demo answers its own lists. */
+  readPhases?: (pane: TmPhasePane) => Promise<readonly TmPhase[] | null>
+  /** A pane's strip moved to this phase id ('' All): review's scope follows and a refresh is asked. */
+  phaseChosen?: (pane: TmPhasePane, phaseId: string) => void
 }
 
 export type TmFlows = ReturnType<typeof createFlows>
@@ -176,10 +176,42 @@ export function createFlows(d: TmFlowDeps) {
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
   }
-  const loadPhases = async (): Promise<readonly TmPhase[] | null> => {
-    const phases = (await d.readPhases?.()) ?? null
-    if (phases !== null) await d.write.phaseView(v => ({ ...v, phases }))
+  const keepChoice = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
+    if (d.source !== 'demo') await saveChoice(phaseStoreOf(d.host), pane, await d.host.repoRoot(), phaseId)
+  }
+  // A pane's phases, read fresh: a remembered choice the list no longer holds falls back to All, with a toast (spec §5).
+  const loadPhases = async (pane: TmPhasePane): Promise<readonly TmPhase[] | null> => {
+    const phases = (await d.readPhases?.(pane)) ?? null
+    if (phases === null) return null
+    let lost = ''
+    await d.write.phaseView(pane, v => {
+      const kept = fallback({ ...v, phases, loaded: true })
+      lost = kept.lost
+      return { ...v, phases, loaded: true, choice: kept.choice }
+    })
+    if (lost !== '') {
+      await keepChoice(pane, ALL)
+      d.host.toast(`taskmaster-mods: phase ${lost} no longer exists; showing All`)
+      d.phaseChosen?.(pane, ALL)
+    }
     return phases
+  }
+  // A tab, ‹ ›, a digit, an overlay pick or 0 All: kept per pane and project (not in demo), the overlay closes, and the pane
+  // starts over at its top (review's cursor: skips forgotten, or a skipped task of the new phase would hide).
+  const choosePhase = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
+    let changed = false
+    await d.write.phaseView(pane, v => {
+      changed = v.choice !== phaseId
+      return { ...v, choice: phaseId, overlay: false }
+    })
+    if (!changed) return
+    await keepChoice(pane, phaseId)
+    if (pane === 'review') await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [] }))
+    if (pane === 'handovers') {
+      await d.write.handoverPage(0)
+      await pick('')
+    }
+    d.phaseChosen?.(pane, phaseId)
   }
   const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
     await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
@@ -187,7 +219,7 @@ export function createFlows(d: TmFlowDeps) {
     // The phase list is read when the pane opens, off the open: the pane draws at once, the filter label follows.
     if (pin === '') {
       d.host.after(0, () => {
-        void loadPhases().catch(() => undefined)
+        void loadPhases('review').catch(() => undefined)
       })
     }
     if (mode === 'note') await d.host.focus(REVIEW, 'note')
@@ -201,22 +233,16 @@ export function createFlows(d: TmFlowDeps) {
       await d.write.handoverPage(0)
       await open(HANDOVERS, 'Handovers')
     },
-    // f: the next phase of the cycle (all → active → the others → all), read fresh; kept per project unless demo. The cursor
-    // goes back to the first card (skips are forgotten, or a skipped task of the new phase would hide) and the scope follows.
-    // A phase list that cannot be read leaves the filter as it is.
-    cyclePhase: async (): Promise<void> => {
-      const phases = await loadPhases()
-      if (phases === null) return
-      let current = ''
-      await d.write.phaseView(v => {
-        current = v.choice
-        return v
-      })
-      const next = nextPhase(current, phases)
-      if (d.source !== 'demo') await d.host.storeSet(`${PHASE_PREFIX}${await d.host.repoRoot()}`, { phase: next })
-      await d.write.phaseView(v => ({ ...v, choice: next }))
-      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [] }))
-      d.phaseChosen?.(next)
+    loadPhases,
+    choosePhase,
+    /** `◐ done`: flips from what the strip shows now (the default rule until the person first presses it). */
+    toggleDone: async (pane: TmPhasePane): Promise<void> => {
+      await d.write.phaseView(pane, v => ({ ...v, showDone: !isDoneShown(orderPhases(v.phases, 0), v.showDone) }))
+    },
+    /** `+N ▾` / `f`: opens the overlay list (reading the phases fresh) or closes it. */
+    setOverlay: async (pane: TmPhasePane, open: boolean): Promise<void> => {
+      await d.write.phaseView(pane, v => ({ ...v, overlay: open }))
+      if (open) await loadPhases(pane)
     },
     askDone: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'confirm', refusal: '', currentId: id }))

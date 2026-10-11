@@ -26,7 +26,8 @@ import {
   truncate,
   wrapText,
 } from './model'
-import { fit, type Piece, type Ui } from './kit'
+import { fit, kitOf, phaseEmpty, phaseSection, type Piece, type StripHandlers, type StripView, type Ui } from './kit'
+import { ALL } from './phases'
 import type { Rr, RrButtonProps, RrNode, RrTokens, RrTone, RrTreatment } from './rr'
 
 const node = (n: RrNode): RenderNode => n as unknown as RenderNode
@@ -344,8 +345,12 @@ export type ReviewView = {
   /** The ticked check items of a task (local UI state, never Taskmaster's). */
   ticks: (taskId: string) => Promise<readonly string[]>
   detailsOpen: boolean
-  /** The phase filter's line: `phase: all` or `phase: <name> (<count>)`. */
-  phaseLabel: string
+  /** The phase strip (spec §5): this pane's phase view and counts. */
+  strip: StripView
+  /** The surface drawn on, for the kit (keycap face, panel title). */
+  surface: RenderSurface
+  /** Toasts a line: a dim keycap's why. */
+  say: (text: string) => void
   /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
   connecting?: boolean
 }
@@ -363,8 +368,7 @@ export type ReviewHandlers = {
   toggleDetails: () => void
   openViewer: (id: string) => void
   copyCheck: (id: string, text: string, surface: RenderSurface) => void
-  /** `f`: the next phase of the filter's cycle. */
-  cyclePhase: () => void
+  strip: StripHandlers
 }
 
 /** `done <id>?` in `room` cells of chip text: the id shortens to MIN_ID, never away; the word goes before it does. */
@@ -418,26 +422,21 @@ function lines(ui: Ui, color: string, text: string, width: number, indent = 0): 
   )
 }
 
-/** `f: phase`: the review pane's filter chip. */
-const phaseChip = (ui: Ui, rr: Rr, on: ReviewHandlers): Promise<Piece> =>
-  chip(ui, rr, { id: 'phase', hotkey: 'f', label: 'phase', treatment: 'chip', tone: 'signature', onPress: () => on.cyclePhase() })
 
 export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderElement> {
   const { Box, Text, Button, Input } = ui
   const t = await rr.tokens()
   const title = node(await rr.label({ text: 'review' }))
   if (v.snapshot === null || !v.snapshot.reachable) return paneStatus(ui, rr, t, title, v.snapshot, v.connecting === true)
+  const k = await kitOf(ui, rr, v.surface, v.say)
   const card = cardPosition(reviewQueue(v.snapshot, v.cursor, v.details), v.cursor, v.snapshot.queueTotal)
   const item = card.item
   if (item === null) {
     const tally = `${v.cursor.done.length} done · ${v.cursor.skipped.length} skipped this pass`
-    // Under a filter the queue can be clear while other phases still wait: f stays reachable.
-    return paneRoot(ui, rr, [
-      title,
-      <Text color={t.fg.subtle}>{truncate(v.phaseLabel, Math.max(10, width - 2))}</Text>,
-      node(await rr.signal({ kind: 'success', word: 'Queue clear', detail: tally })),
-      chipRow(ui, [(await phaseChip(ui, rr, on)).el]),
-    ])
+    // Under a phase the queue can be clear while other phases still wait: the strip stays, and `0 All` goes back.
+    const clear =
+      v.strip.view.choice === ALL ? node(await rr.signal({ kind: 'success', word: 'Queue clear', detail: tally })) : phaseEmpty(k, v.strip, on.strip)
+    return paneRoot(ui, rr, [title, ...phaseSection(k, v.strip, on.strip, Math.max(10, width - 2), [clear])])
   }
   const inner = Math.max(10, width - 2)
   const raised = await rr.surfaceProps({ level: 'raised' })
@@ -614,7 +613,6 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
       chip(ui, rr, { id: 'skip', hotkey: 's', label: 'skip', treatment: 'chip', tone: 'signature', onPress: () => on.skip(item.id) }),
       chip(ui, rr, { id: 'open', hotkey: 'o', label: 'open in prompt', treatment: 'chip', tone: 'signature', onPress: () => on.fill(openText) }),
     ])
-    const phase = await phaseChip(ui, rr, on)
     const extras = isTask
       ? await Promise.all([
           chip(ui, rr, { id: 'viewer', hotkey: 'v', label: 'viewer', treatment: 'chip', tone: 'signature', onPress: () => on.openViewer(item.id) }),
@@ -628,22 +626,23 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
           }),
         ])
       : []
-    actions = chipRows(ui, [...taskOnly, ...always, phase, ...extras], inner, extras.length)
+    actions = chipRows(ui, [...taskOnly, ...always, ...extras], inner, extras.length)
   }
 
   return paneRoot(ui, rr, [
     await headerStrip(ui, rr, t, card.n, card.total, v.cursor.done.length, inner),
-    <Text color={t.fg.subtle}>{truncate(v.phaseLabel, inner)}</Text>,
-    <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
-      {head}
-      <Text color={t.fg.default}>{truncate(oneLine(item.title), room)}</Text>
-      <Box flexDirection="column" marginTop={1}>
-        {body}
-      </Box>
-      {more}
-      {refusal}
-    </Box>,
-    ...actions,
+    ...phaseSection(k, v.strip, on.strip, inner, [
+      <Box {...raised} borderStyle="round" borderColor={t.border.strong}>
+        {head}
+        <Text color={t.fg.default}>{truncate(oneLine(item.title), room)}</Text>
+        <Box flexDirection="column" marginTop={1}>
+          {body}
+        </Box>
+        {more}
+        {refusal}
+      </Box>,
+      ...actions,
+    ]),
   ])
 }
 

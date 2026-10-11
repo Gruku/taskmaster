@@ -11,13 +11,14 @@ import type {
   TmFault,
   TmHandoverNotice,
   TmHandoverSummary,
+  TmPhasePane,
   TmPhaseView,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
 import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_PHASES, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree, handoversPaneTree, reviewPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
@@ -31,16 +32,13 @@ import {
   handoverPage,
   HANDOVERS,
   isStaleTicks,
-  PHASE_PREFIX,
-  phaseLabel,
   REVIEW,
   reviewQueue,
-  storedPhase,
   TICKS_PREFIX,
   ticksOf,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
-import { FRESH_PHASE_VIEW } from './phases'
+import { FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
@@ -57,7 +55,7 @@ const BAND = atom({ plugin: 'taskmaster-mods', key: 'band' } as const, { confirm
 const FAULT = atom({ plugin: 'taskmaster-mods', key: 'fault' } as const, 'none' as TmFault)
 const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, null as TmBinding | null)
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
-const PHASE_VIEW = atom({ plugin: 'taskmaster-mods', key: 'phaseView' } as const, FRESH_PHASE_VIEW as TmPhaseView)
+const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
@@ -159,8 +157,8 @@ function writerOf($: EngineInterface): TmWriter {
     notice: async change => {
       await update($, NOTICE, change)
     },
-    phaseView: async change => {
-      await update($, PHASE_VIEW, change)
+    phaseView: async (pane, change) => {
+      await update($, PHASE_VIEWS, all => ({ ...all, [pane]: change(all[pane]) }))
     },
     handoverPage: async page => {
       await update($, HANDOVER_PAGE, () => page)
@@ -235,8 +233,9 @@ function ensureFlows($: EngineInterface): TmFlows {
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id) } : {}),
-    readPhases: mod.source === 'demo' ? () => Promise.resolve(DEMO_PHASES) : () => readPhases(host, 'review', mod.scope.waitingOnly),
-    phaseChosen: phase => {
+    readPhases: mod.source === 'demo' ? pane => Promise.resolve(demoPhases(pane)) : pane => readPhases(host, pane, mod.scope.waitingOnly),
+    phaseChosen: (pane, phase) => {
+      if (pane !== 'review') return
       mod.scope = { ...mod.scope, phase }
       mod.refresher?.request()
     },
@@ -252,21 +251,37 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   await update($, SNAPSHOT, s => (isCurrentDemo(s) ? s : demoSnapshot(now)))
   await update($, DETAILS, () => DEMO_DETAILS)
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
+  await update($, PHASE_VIEWS, all => ({
+    review: { ...all.review, phases: demoPhases('review'), loaded: true },
+    handovers: { ...all.handovers, phases: demoPhases('handovers'), loaded: true },
+    restore: { ...all.restore, phases: demoPhases('restore'), loaded: true },
+  }))
 }
 
 /**
- * The phase filter this project last chose (`$.store` `phase:<repo root>`, an explicit all included) replaces the reviewPhase
- * option's default, once per instance and before the first refresh asks the server; the atom mirrors it for the drawings.
+ * Each pane's remembered phase (`$.store` `phase:<pane>:<repo root>`, an explicit All included; review's legacy
+ * `phase:<repo root>` moves there on this read), once per instance and before the first refresh asks the server. Review's
+ * replaces the reviewPhase option's default and is the scope; the atom mirrors every pane's for the drawings.
  */
-async function restorePhase($: EngineInterface, host: TmHost): Promise<void> {
+async function restorePhases($: EngineInterface, host: TmHost): Promise<void> {
+  const chosen: Partial<Record<TmPhasePane, string>> = {}
   try {
-    const stored = storedPhase(await host.storeGet(`${PHASE_PREFIX}${await host.repoRoot()}`))
-    if (stored !== null) mod.scope = { ...mod.scope, phase: stored }
+    const root = await host.repoRoot()
+    const store = phaseStoreOf(host)
+    for (const pane of PHASE_PANES) {
+      const stored = await loadChoice(store, pane, root)
+      if (stored !== null) chosen[pane] = stored
+    }
   } catch {
-    // an unreadable store keeps the option's default
+    // an unreadable store keeps the option's default (review) and All (the others)
   }
-  const choice = mod.scope.phase
-  await update($, PHASE_VIEW, v => (v.choice === choice ? v : { ...v, choice }))
+  if (chosen.review !== undefined) mod.scope = { ...mod.scope, phase: chosen.review }
+  const review = mod.scope.phase
+  await update($, PHASE_VIEWS, all => ({
+    review: all.review.choice === review ? all.review : { ...all.review, choice: review },
+    handovers: { ...all.handovers, choice: chosen.handovers ?? all.handovers.choice },
+    restore: { ...all.restore, choice: chosen.restore ?? all.restore.choice },
+  }))
 }
 
 /** Every acting hook's entry: the flows from its `$`, the session id, demo's seed, and tm's first refresh of this instance. */
@@ -274,7 +289,7 @@ async function ready($: EngineInterface): Promise<TmFlows> {
   const flows = ensureFlows($)
   if (mod.sessionId === '') mod.sessionId = await $.session.id()
   await ensureSeeded($)
-  if (mod.source === 'tm' && mod.host !== null) await (mod.phaseRestore ??= restorePhase($, mod.host))
+  if (mod.source === 'tm' && mod.host !== null) await (mod.phaseRestore ??= restorePhases($, mod.host))
   if (mod.source === 'tm' && !mod.refreshAsked) {
     mod.refreshAsked = true
     mod.refresher?.request()
@@ -570,7 +585,9 @@ export const register: Register = (on, options) => {
       const item = cardPosition(reviewQueue(snapshot, cursor, details), cursor, snapshot.queueTotal).item
       if (item !== null && item.kind === 'task' && details[item.id] === undefined) askDetail(item.id)
     }
-    const phaseView = await read($, PHASE_VIEW)
+    const views = await read($, PHASE_VIEWS)
+    // Demo draws its phases before the seed lands, as dataOf draws its snapshot (a render writes nothing).
+    const phaseView = mod.source === 'demo' && !views.review.loaded ? { ...views.review, phases: demoPhases('review'), loaded: true } : views.review
     const view = {
       snapshot,
       details,
@@ -579,7 +596,10 @@ export const register: Register = (on, options) => {
       ticks: (taskId: string) => ticksFor($, taskId),
       detailsOpen: await read($, DETAILS_OPEN),
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
-      phaseLabel: phaseLabel(phaseView.choice, phaseView.phases),
+      surface: e.surface,
+      say: (text: string) => mod.host?.toast(text),
+      // Digits stay with the check items' ticks until Stage 3 moves ticks to `t` + digit.
+      strip: { pane: 'review' as const, view: phaseView, allCount: snapshot?.queueTotal ?? 0, focused: e.props.isFocused, digits: false, empty: 'Nothing waiting' },
     }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
@@ -597,7 +617,11 @@ export const register: Register = (on, options) => {
         toggleDetails: () => act(f => f.toggleDetails()),
         openViewer: id => act(f => f.openViewer(id)),
         copyCheck: (id, text, surface) => act(f => f.copyCheck(id, text, surface)),
-        cyclePhase: () => act(f => f.cyclePhase()),
+        strip: {
+          choose: id => act(f => f.choosePhase('review', id)),
+          toggleDone: () => act(f => f.toggleDone('review')),
+          overlay: open => act(f => f.setOverlay('review', open)),
+        },
       },
       e.props.bodyColumns,
     )

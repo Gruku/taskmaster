@@ -138,8 +138,8 @@ declare module 'claude-code' {
       summaries: Readonly<Record<string, TmHandoverSummary>>
       /** The handover whose summary is expanded ('' none); it shows only while that handover is the picked one. */
       summaryOpen: string
-      /** The review pane's phase filter, mirrored from `$.store` `phase:<repo root>`; `choice` is what the band's count follows. */
-      phaseView: TmPhaseView
+      /** Each pane's phase strip, its choice mirrored from `$.store` `phase:<pane>:<repo root>` (spec §5). */
+      phaseViews: Readonly<Record<TmPhasePane, TmPhaseView>>
       /** The handovers pane's page (0 first); reset when the pane opens. */
       handoverPage: number
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
