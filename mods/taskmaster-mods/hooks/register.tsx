@@ -110,6 +110,19 @@ function hostOf($: EngineInterface): TmHost {
         return ''
       }
     },
+    launchEnv: async () => ({
+      os: await $.env.get('OS'),
+      termProgram: await $.env.get('TERM_PROGRAM'),
+      configDir: await $.env.get('CLAUDE_CONFIG_DIR'),
+    }),
+    run: async (argv, timeoutMs) => {
+      try {
+        const r = await $.process.run(argv, { timeoutMs })
+        return { exitCode: r.exitCode, stdout: r.stdout }
+      } catch {
+        return null
+      }
+    },
   }
 }
 
@@ -249,8 +262,8 @@ function ensureFlows($: EngineInterface): TmFlows {
     },
     boundId: () => boundTaskId($),
     source: mod.source,
-    // demo seeds DEMO_SUMMARIES instead, as it does the task details
-    ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id) } : {}),
+    // demo seeds DEMO_SUMMARIES instead, as it does the task details; every demo handover is in its open list
+    ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id), readHandover: (id: string) => readHandover(host, id) } : {}),
     readPhases: mod.source === 'demo' ? pane => Promise.resolve(demoPhases(pane)) : pane => readPhases(host, pane, mod.scope.waitingOnly),
     phaseChosen: (pane, phase) => {
       if (pane !== 'review') return
@@ -738,7 +751,7 @@ export const register: Register = (on, options) => {
       view,
       {
         pick: id => act(f => f.pick(id)),
-        copy: (handover, surface) => act(f => f.copyHandover(handover, surface)),
+        copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
         resume: handover => act(f => f.resumeHandover(handover)),
         toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),

@@ -15,6 +15,8 @@ import type {
 
 export const REVIEW = 'tm-review'
 export const HANDOVERS = 'tm-handovers'
+export const SESSION = 'tm-session'
+export const RESTORE = 'tm-restore'
 export const FRESH_CURSOR: TmCursor = { currentId: '', done: [], skipped: [], mode: 'card', refusal: '' }
 
 export const PRIORITY_RANK: Readonly<Record<TmPriority, number>> = { critical: 0, high: 1, medium: 2, low: 3 }

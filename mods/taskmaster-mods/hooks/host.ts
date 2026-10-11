@@ -2,6 +2,8 @@
 // the logic modules stay testable and never hold `$` itself.
 import type { RenderSurface } from 'claude-code'
 
+import type { LaunchEnv } from './launch'
+
 export type TmReply = { readonly text: string; readonly isError: boolean }
 export type TmCopyResult = { readonly isCopied: boolean; readonly reason: string }
 
@@ -26,4 +28,8 @@ export type TmHost = {
   repoRoot: () => Promise<string>
   cwd: () => Promise<string>
   branch: () => Promise<string>
+  /** What a new-tab launch reads from the environment (each name a literal `$.env.get`). */
+  launchEnv: () => Promise<LaunchEnv>
+  /** A command by its argv, bounded to `timeoutMs`; null when it could not start. */
+  run: (argv: readonly string[], timeoutMs: number) => Promise<{ readonly exitCode: number; readonly stdout: string } | null>
 }

@@ -23,6 +23,12 @@ export type World = {
   mcp: (tool: string, args: Record<string, unknown>) => McpAnswer
   /** When set, the server answers one call at a time, each taking this long: calls sent together queue (the real tm server). */
   serialMs: number | null
+  /** Every `$.process.run` argv, in order (git's branch read included). */
+  runs: string[][]
+  /** The exit code a command gets (default 0); git's branch read answers `branch` either way. */
+  runExit: (argv: readonly string[]) => number
+  /** What `$.env.get` answers, by name. */
+  env: Record<string, string>
 }
 
 export function worldOf(on: On, clock: MockClock, store: Record<string, unknown> = {}): World {
@@ -43,6 +49,9 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     calls: [],
     mcp: () => 'offline',
     serialMs: null,
+    runs: [],
+    runExit: () => 0,
+    env: {},
   }
   let queue: Promise<void> = Promise.resolve()
   on('session.start', ($, e) => ({ cwd: e.cwd }))

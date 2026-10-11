@@ -16,13 +16,17 @@ import type {
 } from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
+import { launchAll, type LaunchResult, type LaunchSpec, launchSummary } from './launch'
 import {
   afterDone,
   afterSendBack,
   FRESH_CURSOR,
   handoverCopyText,
   HANDOVERS,
+  PAGE_SIZE,
+  RESTORE,
   REVIEW,
+  SESSION,
   TICKS_PREFIX,
   ticksOf,
   toggleTick,
@@ -72,7 +76,12 @@ export type TmFlowDeps = {
   phaseChosen?: (pane: TmPhasePane, phaseId: string) => void
   /** Resolves the session's handover again (D5) after something it depends on changed. */
   resolve?: () => Promise<void>
+  /** Reads one handover by id (tm: backlog_handover_get), for a copy the open list and the notice cannot answer. */
+  readHandover?: (handoverId: string) => Promise<TmHandover | null>
 }
+
+/** The surfaces a key can open: band and Session `1` `2` `3` `4`. */
+export type TmPane = 'review' | 'handovers' | 'session' | 'restore'
 
 export type TmFlows = ReturnType<typeof createFlows>
 
@@ -82,6 +91,8 @@ const notBound = (id: string, what: string): string => `${id} is not this sessio
 type Hold = { readonly pending: Promise<unknown> } | undefined
 const holdOf = (out: { readonly pending?: Promise<unknown> }): Hold => (out.pending === undefined ? undefined : { pending: out.pending })
 const UNAVAILABLE: TmHandoverSummary = { decisions: [], blockers: [], unavailable: true }
+/** A launch's commands may take a moment to hand the tab over (wt.exe returns at once; osascript waits for the app). */
+const LAUNCH_TIMEOUT_MS = 15_000
 
 export function createFlows(d: TmFlowDeps) {
   const busy = new Set<string>()
@@ -180,6 +191,28 @@ export function createFlows(d: TmFlowDeps) {
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
   }
+  // A handover's Telegram-ready block by id: this session's notice (its block is the receipt's own), else the open list,
+  // else (tm) one read by id. Read through the writers, which hand back the current state unchanged.
+  const handoverText = async (id: string): Promise<{ readonly text: string; readonly path: string } | null> => {
+    const seen: { notice: TmHandoverNotice | null; listed: TmHandover | undefined } = { notice: null, listed: undefined }
+    await d.write.notice(n => {
+      seen.notice = n
+      return n
+    })
+    if (seen.notice !== null && seen.notice.id === id) return { text: seen.notice.text, path: seen.notice.path }
+    await d.write.snapshot(s => {
+      seen.listed = s?.handovers.find(h => h.id === id)
+      return s
+    })
+    const found = seen.listed ?? (await d.readHandover?.(id)) ?? null
+    return found === null ? null : { text: handoverCopyText(found), path: found.path }
+  }
+  const openHandovers = async (): Promise<void> => {
+    await d.write.pick('')
+    await d.write.summaryOpen(() => '')
+    await d.write.handoverPage(0)
+    await open(HANDOVERS, 'Handovers')
+  }
   const keepChoice = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
     if (d.source !== 'demo') await saveChoice(phaseStoreOf(d.host), pane, await d.host.repoRoot(), phaseId)
   }
@@ -231,11 +264,44 @@ export function createFlows(d: TmFlowDeps) {
 
   return {
     openReview,
-    openHandovers: async (): Promise<void> => {
-      await d.write.pick('')
+    openHandovers,
+    /** Band and Session `1`–`4`: the pane, opened as its own command opens it. */
+    openPane: async (pane: TmPane): Promise<void> => {
+      if (pane === 'review') return openReview()
+      if (pane === 'handovers') return openHandovers()
+      return pane === 'session' ? open(SESSION, 'Session') : open(RESTORE, 'Restore')
+    },
+    /** Session `h`: the handovers pane on the page that holds this handover, picked and focused (Stage 4 adds its phase). */
+    openHandover: async (handoverId: string): Promise<void> => {
+      const at = { index: -1 }
+      await d.write.snapshot(s => {
+        at.index = s?.handovers.findIndex(h => h.id === handoverId) ?? -1
+        return s
+      })
       await d.write.summaryOpen(() => '')
-      await d.write.handoverPage(0)
+      await d.write.handoverPage(at.index < 0 ? 0 : Math.floor(at.index / PAGE_SIZE))
+      await d.write.pick(at.index < 0 ? '' : handoverId)
       await open(HANDOVERS, 'Handovers')
+      if (at.index < 0) d.host.toast(`taskmaster-mods: handover ${handoverId} is not in the open list`)
+      else await d.host.focus(HANDOVERS, `ho:${handoverId}`)
+    },
+    /** New terminal tabs, 700 ms apart (launch.ts), then one toast; demo opens nothing and says what it would open. */
+    launch: async (specs: readonly LaunchSpec[], surface?: RenderSurface): Promise<LaunchResult> => {
+      if (d.source === 'demo') {
+        d.host.toast(`Demo: would open ${specs.map(s => s.title).join(', ')}`)
+        return { opened: 0, copied: null, failed: [] }
+      }
+      const r = await launchAll(
+        {
+          env: () => d.host.launchEnv(),
+          run: argv => d.host.run(argv, LAUNCH_TIMEOUT_MS),
+          copy: async text => (await d.host.copy(text, surface)).isCopied,
+          sleep: ms => d.host.sleep(ms),
+        },
+        specs,
+      )
+      d.host.toast(launchSummary(r))
+      return r
     },
     loadPhases,
     choosePhase,
@@ -346,9 +412,15 @@ export function createFlows(d: TmFlowDeps) {
       await d.write.handoverPage(page)
       await pick(firstId)
     },
-    copyHandover: async (h: TmHandover, surface: RenderSurface | undefined): Promise<void> => {
-      const r = await d.host.copy(handoverCopyText(h), surface)
-      d.host.toast(r.isCopied ? `Copied handover ${h.id}` : `Clipboard unavailable (${r.reason}): copy by hand from ${h.path}`)
+    /** Band, Session and handovers `c`: the handover's full Telegram-ready block on the clipboard, and a toast. */
+    copyHandover: async (handoverId: string, surface?: RenderSurface): Promise<void> => {
+      const found = await handoverText(handoverId)
+      if (found === null) {
+        d.host.toast(`taskmaster-mods: handover ${handoverId} not found`)
+        return
+      }
+      const r = await d.host.copy(found.text, surface)
+      d.host.toast(r.isCopied ? `Copied handover ${handoverId}` : `Clipboard unavailable (${r.reason}): copy by hand from ${found.path}`)
     },
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
