@@ -21,6 +21,8 @@ export type TmTaskDetail = {
   readonly gateState: string
   readonly branch: string
   readonly humanAction: string
+  /** The task's phase id (backlog_get_task's `phase`); absent when it has none. */
+  readonly phase?: string
   /** The card's `i: details` (from backlog_get_task); absent until a reader fills them. */
   readonly notes?: readonly string[]
   readonly links?: readonly string[]
@@ -132,6 +134,10 @@ export type TmSessionHandover = {
   readonly created: string
   readonly next?: string
 }
+/** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the band's `4 N restore`. */
+export type TmRestorePending = { readonly epoch: number; readonly unfinished: number }
+/** This session's place in the last restore scan's burst (Stage 5 writes it): the Session tab's "part of <at> burst". */
+export type TmSessionBurst = { readonly at: string; readonly others: number }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -162,6 +168,12 @@ declare module 'claude-code' {
       sessionHandover: TmSessionHandover | null
       /** The handover this session was resumed from ('' none): mirrors `$.store` `resumed-from:<session id>` (spec §10.5). */
       resumedFrom: string
+      /** Written by the restore scan (Stage 5); the band shows `4` while it is set and not hidden. Default null. */
+      restorePending: TmRestorePending | null
+      /** The burst epoch the band's `x` hid (also kept at `$.store` `restore-hidden:<epoch>`); null: none hidden here. */
+      restoreHidden: number | null
+      /** Written by the restore scan (Stage 5); the Session tab's SESSION section reads it. Default null. */
+      sessionBurst: TmSessionBurst | null
     }
   }
 }

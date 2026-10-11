@@ -232,6 +232,7 @@ const LEGACY_EXPECT: StoreExpect = {
     gateState: '',
     branch: '',
     humanAction: '',
+    phase: 'xxxx-x3',
   },
   pipelineReview: { laneless: true, lane: '', gateState: '', outstanding: [] },
   getActive: {
@@ -243,6 +244,7 @@ const LEGACY_EXPECT: StoreExpect = {
     gateState: 'review-gate:pass',
     branch: 'xxx/xxxxx-xxxx-xxxx',
     humanAction: '',
+    phase: 'xxxx-x3',
   },
   pipelineActive: { laneless: false, lane: 'full', gateState: 'review-gate:pass', outstanding: [] },
 }
@@ -288,6 +290,7 @@ const NATIVE_EXPECT: StoreExpect = {
     // The stored branch value carries a free-text note; the parser passes data through as it is.
     branch: 'xxxxxxx/epic-b-067 (xxxxxx, xxx xxxxxxx)',
     humanAction: '',
+    phase: 'xxxxx-1-3-5',
   },
   pipelineReview: { laneless: false, lane: 'full', gateState: 'spec-review:pending', outstanding: ['spec-review', 'plan-review', 'review-gate'] },
   getActive: {
@@ -299,6 +302,7 @@ const NATIVE_EXPECT: StoreExpect = {
     gateState: 'plan-review:pending',
     branch: 'xxxxxxx/xx-xxxxx-xxxxx',
     humanAction: '',
+    phase: '1-4-4',
   },
   pipelineActive: { laneless: false, lane: 'full', gateState: 'plan-review:pending', outstanding: ['review-gate'] },
 }
@@ -385,6 +389,7 @@ describe('captured scratch store (write paths)', () => {
         gateState: 'spec-review:pending',
         branch: '',
         humanAction: HUMAN,
+        phase: 'fx-phase',
       },
     })
   })

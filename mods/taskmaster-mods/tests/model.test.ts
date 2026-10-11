@@ -5,7 +5,6 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   ageLabel,
   bandModel,
-  bandRows,
   cardMode,
   cardPosition,
   FRESH_CURSOR,
@@ -17,12 +16,15 @@ import {
   PAGE_SIZE,
   phaseName,
   handoverPage,
+  isReady,
   isStaleTicks,
   orderQueue,
   queueDots,
   reviewQueue,
   splitCheck,
   stageLine,
+  statusTone,
+  statusWord,
   ticksOf,
   toggleTick,
   truncate,
@@ -115,54 +117,56 @@ describe('queue', () => {
 })
 
 describe('band', () => {
-  test('hidden entirely with no bound task and nothing waiting', () => {
-    expect(bandModel(null)).toBeNull()
-    expect(bandModel(snap({}))).toBeNull()
+  const NONE = { handover: null, restore: null, connecting: false }
+  const HO = { id: 'h1', tag: 'task' as const, tldr: 'Wired live data', path: '/p/h1.md', created: '' }
+  const bound = (detail: TmTaskDetail | null, pipeline = PIPELINE, inferred = false) => ({ taskId: 'tm-audit-030', inferred, detail, pipeline })
+
+  test('hidden entirely with no task, no handover, no restore burst and nothing counted', () => {
+    expect(bandModel(null, NONE)).toBeNull()
+    expect(bandModel(snap({}), NONE)).toBeNull()
+    expect(bandModel(snap({ reachable: false, reason: 'down' }), NONE)).toBeNull()
   })
 
-  test('a bound in-progress task shows lane, gate state and the next outstanding gate', () => {
-    const m = bandModel(snap({ bound: { taskId: 'tm-audit-030', inferred: false, detail: DETAIL, pipeline: PIPELINE } }))
-    expect(m?.task).toMatchObject({ id: 'tm-audit-030', review: false, meta: 'FULL · review-gate:pass', stage: 'IN PROGRESS → next: merge' })
-    expect(m?.needsYou).toBe(0)
+  test('a bound task carries its title and status; d is offered only when it is ready and bound here', () => {
+    const m = bandModel(snap({ bound: bound(DETAIL) }), NONE)
+    expect(m?.task).toEqual({ id: 'tm-audit-030', title: 'Audit fixes', status: 'in-progress', inferred: false, ready: false })
+    expect(bandModel(snap({ bound: bound(DETAIL, { ...PIPELINE, outstanding: [] }) }), NONE)?.task?.ready).toBe(true)
+    expect(bandModel(snap({ bound: bound({ ...DETAIL, status: 'in-review' }) }), NONE)?.task?.ready).toBe(true)
+    expect(bandModel(snap({ bound: bound({ ...DETAIL, status: 'in-review' }, PIPELINE, true) }), NONE)?.task?.ready).toBe(false)
   })
 
-  test('an in-review bound task switches to the review form carrying its human action', () => {
-    const detail = { ...DETAIL, status: 'in-review', humanAction: 'Check dev' }
-    const m = bandModel(snap({ bound: { taskId: 'tm-audit-030', inferred: false, detail, pipeline: PIPELINE } }))
-    expect(m?.task).toMatchObject({ review: true, humanAction: 'Check dev' })
-  })
-
-  test('offline keeps the locally bound id but drops stage and needs-you', () => {
-    const m = bandModel(
-      snap({ reachable: false, reason: 'down', queue: [task('a-001', 'high')], bound: { taskId: 'tm-audit-030', inferred: false, detail: null, pipeline: null } }),
-    )
+  test('offline keeps the locally bound id with no status, counts nothing and says offline', () => {
+    const m = bandModel(snap({ reachable: false, reason: 'down', queueTotal: 9, bound: bound(null, PIPELINE) }), NONE)
     expect(m).toEqual({
-      task: { id: 'tm-audit-030', title: '', inferred: false, review: false, humanAction: '', meta: '', stage: '' },
-      needsYou: 0,
+      task: { id: 'tm-audit-030', title: '', status: '', inferred: false, ready: false },
+      handover: null,
+      restore: null,
+      fault: 'offline',
+      waiting: 0,
+      waitingCapped: false,
+      handovers: 0,
     })
   })
 
-  test('rows give way to maxRows: the task first, then needs-you, then the stage line', () => {
-    const m = { task: { id: 'x-001', title: 't', inferred: false, review: false, humanAction: '', meta: '', stage: 'IN PROGRESS' }, needsYou: 3 }
-    expect(bandRows(m, 3)).toEqual(['task', 'stage', 'needs'])
-    expect(bandRows(m, 2)).toEqual(['task', 'needs'])
-    expect(bandRows(m, 1)).toEqual(['task'])
-    expect(bandRows({ task: null, needsYou: 3 }, 1)).toEqual(['needs'])
+  test('a handover or a restore burst shows the band on its own; connecting with no good snapshot says so', () => {
+    expect(bandModel(null, { ...NONE, handover: HO })).toMatchObject({ task: null, handover: HO, fault: 'none' })
+    expect(bandModel(snap({}), { ...NONE, restore: 3 })).toMatchObject({ task: null, restore: 3 })
+    expect(bandModel(null, { ...NONE, connecting: true })).toMatchObject({ task: null, fault: 'connecting' })
+    expect(bandModel(snap({ queueTotal: 2 }), { ...NONE, connecting: true })?.fault).toBe('none')
   })
 
-  test('a handover-written notice shows the band on its own, and gives way after the task row', () => {
-    expect(bandModel(null, { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
-    expect(bandModel(snap({}), { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
-    const m = { task: { id: 'x-001', title: 't', inferred: false, review: false, humanAction: '', meta: '', stage: 'IN PROGRESS' }, needsYou: 3, notice: 'h' }
-    expect(bandRows(m, 4)).toEqual(['task', 'stage', 'handover', 'needs'])
-    expect(bandRows(m, 3)).toEqual(['task', 'handover', 'needs'])
-    expect(bandRows(m, 2)).toEqual(['task', 'handover'])
-    expect(bandRows({ task: null, needsYou: 0, notice: 'h' }, 1)).toEqual(['handover'])
+  test("the counts are the server's totals; a waiting count cut at the window is marked capped", () => {
+    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 355, handoversTotal: 7 }), NONE)).toMatchObject({ waiting: 355, waitingCapped: false, handovers: 7 })
+    expect(bandModel(snap({ queueTotal: 50, queueCapped: true }), NONE)).toMatchObject({ waiting: 50, waitingCapped: true })
+    expect(bandModel(snap({ handoversTotal: 2 }), NONE)).toMatchObject({ task: null, waiting: 0, handovers: 2 })
   })
 
-  test("needs-you is the server's count; a count cut at the window is marked capped", () => {
-    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 355 }))).toEqual({ task: null, needsYou: 355 })
-    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 50, queueCapped: true }))).toEqual({ task: null, needsYou: 50, needsCapped: true })
+  test('status words and tones; ready for done', () => {
+    expect(statusWord('in-review')).toBe('IN REVIEW')
+    expect([statusTone('in-review'), statusTone('blocked'), statusTone('done'), statusTone('in-progress')]).toEqual(['info', 'critical', 'success', 'signature'])
+    expect(isReady({ ...DETAIL, status: 'done' }, { ...PIPELINE, outstanding: [] })).toBe(false)
+    expect(isReady(DETAIL, { laneless: true, lane: '', gateState: '', outstanding: [] })).toBe(false)
+    expect(isReady(DETAIL, null)).toBe(false)
   })
 
   test('stage line wording', () => {

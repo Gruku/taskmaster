@@ -14,14 +14,17 @@ import type {
   TmHandoverSummary,
   TmPhasePane,
   TmPhaseView,
+  TmRestorePending,
+  TmSessionBurst,
   TmSessionHandover,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
 import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
-import { bandTree, handoversPaneTree, reviewPaneTree } from './draw'
+import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { bandTree } from './band'
+import { handoversPaneTree, reviewPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
@@ -35,11 +38,13 @@ import {
   handoverPage,
   HANDOVERS,
   isStaleTicks,
+  restoreHiddenKey,
   REVIEW,
   reviewQueue,
   sessionHandoverOf,
   TICKS_PREFIX,
   ticksOf,
+  withNotice,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
 import { FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
@@ -64,6 +69,9 @@ const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as con
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
 const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover' } as const, null as TmSessionHandover | null)
 const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
+const RESTORE_PENDING = atom({ plugin: 'taskmaster-mods', key: 'restorePending' } as const, null as TmRestorePending | null)
+const RESTORE_HIDDEN = atom({ plugin: 'taskmaster-mods', key: 'restoreHidden' } as const, null as number | null)
+const SESSION_BURST = atom({ plugin: 'taskmaster-mods', key: 'sessionBurst' } as const, null as TmSessionBurst | null)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
@@ -188,6 +196,9 @@ function writerOf($: EngineInterface): TmWriter {
     resumedFrom: async id => {
       await update($, RESUMED_FROM, () => id)
     },
+    restoreHidden: async epoch => {
+      await update($, RESTORE_HIDDEN, () => epoch)
+    },
   }
 }
 
@@ -290,6 +301,7 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
     handovers: { ...all.handovers, phases: demoPhases('handovers'), loaded: true },
     restore: { ...all.restore, phases: demoPhases('restore'), loaded: true },
   }))
+  await update($, RESUMED_FROM, () => DEMO_RESUMED_FROM)
   await resolveHandover($)
 }
 
@@ -347,6 +359,13 @@ async function dataOf($: EngineInterface): Promise<{
       : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
   }
   return isDemoSnapshot(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
+}
+
+/** The restore burst the band offers (`4`): pending (the scan wrote it) and hidden neither here nor, for that burst, anywhere. */
+async function restoreShown($: EngineInterface): Promise<TmRestorePending | null> {
+  const pending = await read($, RESTORE_PENDING)
+  if (pending === null || (await read($, RESTORE_HIDDEN)) === pending.epoch) return null
+  return (await $.store.get(restoreHiddenKey(pending.epoch))) === true ? null : pending
 }
 
 /** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */
@@ -652,19 +671,21 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     if (e.surface === 'mobile') return below
     await $.state.get(RR_POLARITY)
-    const notice = await read($, NOTICE)
+    const { snapshot } = await dataOf($)
+    const pending = await restoreShown($)
+    const handover = withNotice(await read($, SESSION_HANDOVER), await read($, NOTICE), snapshot)
     const connecting = mod.source === 'tm' && (await read($, FAULT)) === 'connecting'
-    const model = bandModel((await dataOf($)).snapshot, notice, connecting)
+    const model = bandModel(snapshot, { handover, restore: pending?.unfinished ?? null, connecting })
     if (model === null) return below
     const ui = $.ui.resolve(e) as unknown as Ui
-    const ours = await bandTree(ui, rrOf($), model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
-      openReview: () => act(f => f.openReview()),
-      openHandovers: () => act(f => f.openHandovers()),
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    const ours = bandTree(k, model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
+      open: pane => act(f => f.openPane(pane)),
       askDone: id => act(f => f.bandAskDone(id)),
       confirmDone: id => act(f => f.bandConfirmDone(id)),
       cancel: () => act(f => f.bandCancel()),
-      sendBack: id => act(f => f.bandSendBack(id)),
-      copyNotice: surface => act(f => (notice === null ? Promise.resolve() : f.copyNotice(notice, surface))),
+      copy: (id, surface) => act(f => f.copyHandover(id, surface)),
+      hideRestore: () => act(f => (pending === null ? Promise.resolve() : f.hideRestore(pending.epoch))),
     })
     const { Box } = ui
     return (

@@ -1,14 +1,12 @@
-// User intent: how taskmaster-mods looks — the band, the review card and the handovers list drawn from plain view data with
+// User intent: how taskmaster-mods looks — the review card and the handovers list drawn from plain view data with
 // Reality Reprojection pieces from $.rr; Buttons are drawn here because their press handlers must stay in this plugin.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderChildren, RenderElement, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmCursor, TmHandover, TmHandoverSummary, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 import {
   ageLabel,
-  type BandModel,
   CONNECTING,
-  bandRows,
   cardMode,
   cardPosition,
   dateOf,
@@ -145,175 +143,8 @@ function cardBadge(t: RrTokens, item: TmQueueItem): { glyph: string; word: strin
   return { glyph: 'ⓘ', word: 'Decision', color: t.tone.info }
 }
 
-export type BandHandlers = {
-  openReview: () => void
-  openHandovers: () => void
-  askDone: (id: string) => void
-  confirmDone: (id: string) => void
-  cancel: () => void
-  sendBack: (id: string) => void
-  /** `3` on the handover-written notice: copy its block. */
-  copyNotice: (surface: RenderSurface) => void
-}
-
 const MIN_TEXT = 12
 const MIN_ID = 8
-
-export async function bandTree(
-  ui: Ui,
-  rr: Rr,
-  m: BandModel,
-  mode: TmBandMode,
-  width: number,
-  maxRows: number,
-  on: BandHandlers,
-): Promise<RenderElement> {
-  const { Box, Text } = ui
-  const t = await rr.tokens()
-  const keep = bandRows(m, maxRows)
-  const rows: RenderNode[] = []
-  const task = m.task
-  if (keep.includes('connecting')) {
-    rows.push(
-      <Text color={t.fg.subtle} wrap="truncate-end">
-        {truncate(CONNECTING, width)}
-      </Text>,
-    )
-  }
-  if (task !== null && keep.includes('task')) {
-    // Gives way left to right: the label, then (review form) the id, so the check to do keeps at least MIN_TEXT cells of
-    // its own after "waiting on you: ".
-    const word = task.review ? 'review' : 'task'
-    const ask = 'waiting on you: '
-    const tail = task.inferred ? 2 + 'inferred'.length : 0
-    const need = (task.review ? ask.length : 0) + MIN_TEXT
-    let showLabel = true
-    let showId = true
-    const used = () => (showLabel ? word.length + 2 : 0) + (showId ? task.id.length + 2 : 0) + tail
-    if (used() + need > width) showLabel = false
-    if (task.review && used() + need > width) showId = false
-    const room = Math.max(0, width - used())
-    let body: RenderChildren = null
-    if (task.review) {
-      body = (
-        <Text color={t.fg.default} wrap="truncate-end">
-          {truncate(`${ask}${oneLine(task.humanAction)}`, room)}
-        </Text>
-      )
-    } else {
-      const showMeta = task.meta !== '' && room >= MIN_TEXT + 2 + task.meta.length
-      const title = truncate(oneLine(task.title), showMeta ? room - 2 - task.meta.length : room)
-      body =
-        title === '' && !showMeta ? null : (
-          <Box flexDirection="row" columnGap={2}>
-            {title !== '' ? (
-              <Text color={task.inferred ? t.fg.subtle : t.fg.default} wrap="truncate-end">
-                {title}
-              </Text>
-            ) : null}
-            {showMeta ? <Text color={t.fg.subtle}>{task.meta}</Text> : null}
-          </Box>
-        )
-    }
-    rows.push(
-      <Box flexDirection="row" columnGap={2}>
-        {showLabel ? node(await rr.label({ text: word })) : null}
-        {showId ? (
-          <Text color={task.inferred ? t.fg.subtle : t.fg.bold} bold={!task.inferred}>
-            {truncate(task.id, width - tail)}
-          </Text>
-        ) : null}
-        {body}
-        {task.inferred ? <Text color={t.fg.subtle}>inferred</Text> : null}
-      </Box>,
-    )
-  }
-  if (task !== null && keep.includes('stage')) {
-    if (task.review && mode.confirmingId === task.id) {
-      const pair = await confirmPair(ui, rr, 'band', () => on.confirmDone(mode.confirmingId), on.cancel)
-      // The question always names the task it signs off: `done <id>?`, then `<id>?`; the id shortens to MIN_ID, never away.
-      const room = width - pair.width - 1 - stateChipWidth('', 'warning')
-      const least = Math.min(MIN_ID, task.id.length)
-      const prefix = room - 'done '.length - 1 >= least ? 'done ' : ''
-      const ask = `${prefix}${truncate(task.id, Math.max(least, room - prefix.length - 1))}?`
-      const question = node(await rr.chip({ text: ask, tone: 'warning', strength: 24 }))
-      // Too narrow for both: the pair goes first, so what the edge clips is the question, never `n`.
-      const fits = stateChipWidth(ask, 'warning') + 1 + pair.width <= width
-      rows.push(chipRow(ui, fits ? [question, pair.el] : [pair.el, question]))
-    } else if (task.review) {
-      const [done, back] = await Promise.all([
-        chip(ui, rr, { id: 'band-done', hotkey: 'd', label: 'done', treatment: 'chip', tone: 'success', strength: 24, onPress: () => on.askDone(task.id) }),
-        chip(ui, rr, { id: 'band-back', hotkey: 'a', label: 'back to agent', treatment: 'chip', tone: 'warning', onPress: () => on.sendBack(task.id) }),
-      ])
-      let refused: Piece | null = null
-      let reason: Piece | null = null
-      if (mode.refusal !== '' && mode.refusalId === task.id) {
-        refused = { el: node(await rr.chip({ text: 'refused', tone: 'critical', strength: 24 })), width: stateChipWidth('refused', 'critical') }
-        const room = width - (done.width + back.width + refused.width + 3)
-        if (room >= MIN_TEXT) {
-          const text = truncate(oneLine(mode.refusal), room)
-          reason = {
-            el: (
-              <Text color={t.fg.default} wrap="truncate-end">
-                {text}
-              </Text>
-            ),
-            width: text.length,
-          }
-        }
-      }
-      rows.push(chipRow(ui, fit([done, back, refused, reason], width, 1)))
-    } else {
-      const pad = width >= 6 + MIN_TEXT ? 6 : 0
-      rows.push(
-        <Box flexDirection="row" paddingLeft={pad}>
-          <Text color={t.fg.subtle} wrap="truncate-end">
-            {truncate(task.stage, width - pad)}
-          </Text>
-        </Box>,
-      )
-    }
-  }
-  if (m.notice !== undefined && keep.includes('handover')) {
-    // `HANDOVER  <tldr>  3: copy  2: handovers`: `2` only while the needs-you row (which has its own) is not drawn. Gives
-    // way left to right after the tldr shrinks to MIN_TEXT: the handovers chip, then the label; `3: copy` always stays.
-    const copy = await chip(ui, rr, { id: 'band-copy', hotkey: '3', label: 'copy', treatment: 'chip', tone: 'signature', onPress: press => on.copyNotice(press.surface) })
-    const toPane = keep.includes('needs')
-      ? null
-      : await chip(ui, rr, { id: 'notice-handovers', hotkey: '2', label: 'handovers', treatment: 'chip', tone: 'signature', onPress: on.openHandovers })
-    const label = 'handover'
-    let showPane = toPane !== null
-    let showLabel = true
-    const used = () => (showLabel ? label.length + 2 : 0) + copy.width + (showPane && toPane !== null ? 1 + toPane.width : 0)
-    if (showPane && width - used() - 2 < MIN_TEXT) showPane = false
-    if (width - used() - 2 < MIN_TEXT) showLabel = false
-    const tldr = truncate(oneLine(m.notice), width - used() - 2)
-    rows.push(
-      <Box flexDirection="row" columnGap={2}>
-        {showLabel ? node(await rr.label({ text: label })) : null}
-        {tldr !== '' ? (
-          <Text color={t.fg.default} wrap="truncate-end">
-            {tldr}
-          </Text>
-        ) : null}
-        {chipRow(ui, showPane && toPane !== null ? [copy.el, toPane.el] : [copy.el])}
-      </Box>,
-    )
-  }
-  if (m.needsYou > 0 && keep.includes('needs')) {
-    const [review, handovers] = await Promise.all([
-      chip(ui, rr, { id: 'band-review', hotkey: '1', label: 'review', treatment: 'chip', tone: 'signature', onPress: on.openReview }),
-      chip(ui, rr, { id: 'band-handovers', hotkey: '2', label: 'handovers', treatment: 'chip', tone: 'signature', onPress: on.openHandovers }),
-    ])
-    // The count says the most in the least room: its words shorten before the review chip goes.
-    const count = m.needsCapped === true ? `${m.needsYou}+` : `${m.needsYou}`
-    const words = [`${count} waiting on you`, `${count} waiting`, count]
-    const word = words.find(w => signalWidth(w) + 1 + review.width <= width) ?? truncate(words[0] ?? '', Math.max(1, width - 2))
-    const signal = { el: node(await rr.signal({ kind: 'warning', word })), width: signalWidth(word) }
-    rows.push(chipRow(ui, fit([signal, review, handovers], width, 1)))
-  }
-  return <Box flexDirection="column">{rows}</Box>
-}
 
 /** A pane's root: RR's page ground painted by the pane itself (the host's pane background is not RR's page). */
 async function paneRoot(ui: Ui, rr: Rr, children: readonly RenderChildren[]): Promise<RenderElement> {

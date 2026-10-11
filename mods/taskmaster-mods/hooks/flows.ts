@@ -25,6 +25,7 @@ import {
   HANDOVERS,
   PAGE_SIZE,
   RESTORE,
+  restoreHiddenKey,
   REVIEW,
   SESSION,
   TICKS_PREFIX,
@@ -50,6 +51,7 @@ export type TmWriter = {
   phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
   handoverPage: (page: number) => Promise<void>
   resumedFrom: (handoverId: string) => Promise<void>
+  restoreHidden: (epoch: number) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -285,6 +287,11 @@ export function createFlows(d: TmFlowDeps) {
       if (at.index < 0) d.host.toast(`taskmaster-mods: handover ${handoverId} is not in the open list`)
       else await d.host.focus(HANDOVERS, `ho:${handoverId}`)
     },
+    /** Band `x`: the restore burst's `4` goes for good (kept per burst, not in demo). */
+    hideRestore: async (epoch: number): Promise<void> => {
+      if (d.source !== 'demo') await d.host.storeSet(restoreHiddenKey(epoch), true)
+      await d.write.restoreHidden(epoch)
+    },
     /** New terminal tabs, 700 ms apart (launch.ts), then one toast; demo opens nothing and says what it would open. */
     launch: async (specs: readonly LaunchSpec[], surface?: RenderSurface): Promise<LaunchResult> => {
       if (d.source === 'demo') {
@@ -457,16 +464,6 @@ export function createFlows(d: TmFlowDeps) {
         if (kept.length === Object.keys(all).length && kept.every(([, s]) => s.stale === true)) return all
         return Object.fromEntries(kept.map(([id, s]) => [id, s.stale === true ? s : { ...s, stale: true as const }]))
       })
-    },
-    // The band's handover-written notice: `3` copies its block; the row goes once the copy landed.
-    copyNotice: async (n: TmHandoverNotice, surface: RenderSurface | undefined): Promise<void> => {
-      const r = await d.host.copy(n.text, surface)
-      if (!r.isCopied) {
-        d.host.toast(`Clipboard unavailable (${r.reason}): copy by hand from ${n.path}`)
-        return
-      }
-      d.host.toast(`Copied handover ${n.id}`)
-      await d.write.notice(current => (current?.id === n.id ? null : current))
     },
     // Ticks are local UI state: read the stored set first (another session may have ticked), toggle, write it back, then
     // mirror it into $.state so the card redraws. Never sent to Taskmaster.

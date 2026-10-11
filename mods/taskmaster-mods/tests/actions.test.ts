@@ -183,21 +183,14 @@ describe('sign off', () => {
     expect(world.store.has('binding:sess-A')).toBe(false)
   })
 
-  test('the band never signs off a task this session is not bound to (an inferred one): it refuses on that task, writes nothing', TM, async ($, on) => {
+  test('the band never offers d on a task this session is not bound to (an inferred one), and writes nothing', TM, async ($, on) => {
     const { clock, world } = await boundBand($, on, { backlog_complete_task: () => R.COMPLETED }, {})
     world.branch = `feat/${ID}`
     await $.session.start(SESSION)
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: 'inferred' })).toBeDefined()
-    await ui.press({ key: 'band-done' })
-    await clock.settle()
-    expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: / ◆ refused / })).toBeDefined()
-    expect(await shown(ui)).toMatch(/not this session's task/)
-    await ui.press({ key: 'band-back' })
-    await clock.settle()
-    expect(world.opened).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /inferred/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeUndefined()
     expect(writes(world)).toEqual([])
   })
 })
@@ -288,20 +281,6 @@ describe('back to agent', () => {
     expect(writes(world)).toEqual([STATUS])
     expect(await ui.find({ type: 'Text', text: ID })).toBeUndefined()
     expect(world.toasts.join('\n')).toMatch(/status: Taskmaster unreachable: backlog_update_task: no reply within 15 s — it may still have been saved/)
-  })
-
-  test('band a opens the note on the bound task, and the note goes back on that task', TM, async ($, on) => {
-    const { clock, world } = await boundBand($, on, { backlog_update_task: backOk })
-    await $.session.start(SESSION)
-    await clock.settle()
-    const band = await $.ui.mount({ plugin: PLUGIN, ...BAND, surface: 'terminal' })
-    await band.press({ key: 'band-back' })
-    await clock.settle()
-    expect(world.opened).toEqual(['tm-review'])
-    const review = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review'), surface: 'terminal' })
-    await review.input({ key: 'note', text: 'tighten the copy' })
-    await clock.settle()
-    expect(writes(world)).toEqual([STATUS, NOTE('tighten the copy'), CLEAR])
   })
 })
 

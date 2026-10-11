@@ -24,7 +24,7 @@ const call = (tool: string, input: Record<string, unknown>) => ({ tool: T + tool
 const band = async ($: Engine): Promise<string> => JSON.stringify(await $.ui.render(BAND))
 
 describe('session binding', () => {
-  test('its own pick binds the session: the band shows the task and its stage, the store mirrors it', TM, async ($, on) => {
+  test('its own pick binds the session: the band shows the task and its status, the store mirrors it', TM, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const world = worldOf(on, clock)
     world.mcp = backlog
@@ -36,8 +36,8 @@ describe('session binding', () => {
     expect(world.store.get('binding:sess-A')).toEqual({ taskId: 'tm-audit-030', at: NOW })
     const tree = await band($)
     expect(tree).toContain('tm-audit-030')
-    expect(tree).toContain('IN PROGRESS → next: merge')
-    expect(tree).toContain('FULL · review-gate:pass')
+    expect(tree).toContain(' IN PROGRESS ')
+    expect(tree).toContain('Agent tool-use audit fixes')
   })
 
   test('in review keeps the binding; done clears it and its store key', TM, async ($, on) => {
@@ -101,7 +101,7 @@ describe('session binding', () => {
     await clock.settle()
     const tree = await band($)
     expect(tree).toContain('unified-chat-022')
-    expect(tree).toContain('waiting on you:')
+    expect(tree).toContain(' IN REVIEW ')
   })
 
   test('/resume of a session with no stored binding shows no task: the binding is set to none, not kept', TM, async ($, on) => {

@@ -184,6 +184,7 @@ export function parseGetTask(raw: string): Parsed<TmTaskDetail | null> {
     gateState: get('gate_state'),
     branch: get('branch'),
     humanAction: get('human_action'),
+    ...(get('phase') === '' ? {} : { phase: get('phase') }),
   })
 }
 
