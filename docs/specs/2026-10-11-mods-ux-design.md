@@ -261,6 +261,7 @@ Work in a worktree off `feat/database-native-foundation`; rebase onto the parall
 2. Overlay mechanics for the `+N ▾` phase list: a second Pane render vs an in-pane absolute Box — probe before building.
    - Resolved 2026-10-11 (plan Task 0.2): the absolute overlay and the Select list both passed the probe (clean paint, Tab and press work; Select is a ↑↓ list) → defaults kept, OVERLAY_PLACEMENT = 'swap' and OVERLAY_LIST = 'buttons', because later stages' verified pane tests assume them and the buttons list keeps the 0–9 picks; flipping either is a follow-up once Stage 5 is green.
 3. Whether band hotkeys `c`/`d` collide with typing in the prompt (today's band keys behave; confirm for `c`).
+   - Resolved 2026-10-11 (plan Task 2.7): the user checked the Stage 2 band live and signed it off; band keys do not fire while typing in the prompt.
 4. Desktop surface: confirm the panel's title-in-border renders; fall back to a title row if not.
    - Resolved 2026-10-11 (plan Task 0.2): terminal border title sits in the top border correctly; desktop not probed → PANEL_TITLE = { terminal: 'border', desktop: 'row' }.
 5. Keycap face: an RR filled keycap laid over the engine's `k: ` prefix (`overlay`), the engine's accent `k:` (`accent`), or a label-less glyph Button.
