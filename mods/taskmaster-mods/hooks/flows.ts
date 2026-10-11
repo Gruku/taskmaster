@@ -440,7 +440,7 @@ export function createFlows(d: TmFlowDeps) {
     },
     // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once (an
     // unavailable one is asked again, "loading summary…" meanwhile).
-    toggleSummary: async (h: TmHandover, open: boolean): Promise<void> => {
+    toggleSummary: async (h: { readonly id: string }, open: boolean): Promise<void> => {
       await d.write.summaryOpen(() => (open ? h.id : ''))
       if (!open || d.summary === undefined || summaryAsked.has(h.id)) return
       await d.write.summaries(all => {

@@ -1,5 +1,5 @@
 // User intent: taskmaster-mods's front door — bind Claude Code's events to the Taskmaster surfaces: the band above the prompt
-// (this session's task, what waits on the user, a just-written handover to copy), the review queue and handovers panes and the
+// (this session's task, its handover, keys to every pane), the Session tab, the review queue and handovers panes and the
 // faults-only status line, reading live tm data and keeping this session's task binding across /clear, /resume and /branch.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -30,6 +30,7 @@ import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
 import { KIT, kitGalleryTree } from './kit-gallery'
+import { resumePrompt } from './launch'
 import {
   bandModel,
   cardPosition,
@@ -41,6 +42,7 @@ import {
   restoreHiddenKey,
   REVIEW,
   reviewQueue,
+  SESSION,
   sessionHandoverOf,
   TICKS_PREFIX,
   ticksOf,
@@ -50,6 +52,7 @@ import { parseHandoverWritten, replyText } from './parse'
 import { FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
+import { sessionTree } from './session'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readHandover, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
@@ -544,6 +547,7 @@ export const register: Register = (on, options) => {
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
       { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },
+      { name: SESSION, description: "This session in Taskmaster: its task, its handover and where it came from" },
       ...(mod.source === 'demo' ? [{ name: KIT, description: 'The taskmaster-mods kit gallery: every primitive with sample data (demo source)' }] : []),
     ]) {
       try {
@@ -646,6 +650,11 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'tm-handovers' }, async $ => {
     await (await ready($)).openHandovers()
     return { text: 'Handovers opened.' }
+  })
+
+  on('command.run', { command: SESSION }, async $ => {
+    await (await ready($)).openPane('session')
+    return { text: 'Session opened.' }
   })
 
   on('command.run', { command: KIT }, async $ => {
@@ -780,6 +789,60 @@ export const register: Register = (on, options) => {
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
       },
       e.props.bodyColumns,
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SESSION }, async ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    if (e.surface === 'mobile') return <Text>Open the Session tab in the terminal or the desktop app.</Text>
+    await $.state.get(RR_POLARITY)
+    const { snapshot, summaries } = await dataOf($)
+    const handover = withNotice(await read($, SESSION_HANDOVER), await read($, NOTICE), snapshot)
+    const open = handover !== null && (await read($, SUMMARY_OPEN)) === handover.id
+    const held = handover === null ? undefined : summaries[handover.id]
+    // Read when open and missing, or stale after a refresh (the stale one stays drawn meanwhile), as the handovers pane does.
+    if (mod.source === 'tm' && handover !== null && open && (held === undefined || held.stale === true)) askSummary(handover.id)
+    const pending = await restoreShown($)
+    const cwd = await $.session.cwd()
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    const tree = sessionTree(
+      k,
+      {
+        snapshot,
+        handover,
+        resumedFrom: await read($, RESUMED_FROM),
+        burst: await read($, SESSION_BURST),
+        restore: pending?.unfinished ?? null,
+        band: await read($, BAND),
+        summary: held,
+        summaryOpen: open,
+        connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
+        demo: mod.source === 'demo',
+        now: await $.clock.now(),
+      },
+      {
+        open: pane => act(f => f.openPane(pane)),
+        askDone: id => act(f => f.bandAskDone(id)),
+        confirmDone: id => act(f => f.bandConfirmDone(id)),
+        cancel: () => act(f => f.bandCancel()),
+        sendBack: id => act(f => f.bandSendBack(id)),
+        copy: (id, surface) => act(f => f.copyHandover(id, surface)),
+        openHandover: id => act(f => f.openHandover(id)),
+        launch: (h, surface) =>
+          act(async f => {
+            await f.launch([{ cwd, title: `handover ${h.id}`, mode: 'fresh', prompt: resumePrompt(h.id, h.path) }], surface)
+          }),
+        toggleSummary: (id, show) => act(f => f.toggleSummary({ id }, show)),
+      },
+      e.props.bodyColumns,
+    )
+    const ground = await $.rr.surfaceProps({ level: 'page' })
+    const { Box } = ui
+    return (
+      <Box {...ground} flexGrow={1}>
+        {tree}
+      </Box>
     )
   })
 
