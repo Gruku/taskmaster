@@ -8,13 +8,18 @@ import type {
   TmPipeline,
   TmPriority,
   TmQueueItem,
+  TmSessionHandover,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
 
 export const REVIEW = 'tm-review'
 export const HANDOVERS = 'tm-handovers'
-export const FRESH_CURSOR: TmCursor = { currentId: '', done: [], skipped: [], mode: 'card', refusal: '' }
+export const SESSION = 'tm-session'
+export const RESTORE = 'tm-restore'
+/** `$.store` key of a restore burst the band's `x` hid (spec §10.4): hidden for that burst in every session. */
+export const restoreHiddenKey = (epoch: number): string => `restore-hidden:${epoch}`
+export const FRESH_CURSOR: TmCursor = { currentId: '', done: [], mode: 'card', refusal: '' }
 
 export const PRIORITY_RANK: Readonly<Record<TmPriority, number>> = { critical: 0, high: 1, medium: 2, low: 3 }
 export const PRIORITY_GLYPH: Readonly<Record<TmPriority, string>> = { critical: '◆', high: '▲', medium: 'ⓘ', low: '·' }
@@ -46,21 +51,11 @@ export function orderQueue(items: readonly TmQueueItem[]): TmQueueItem[] {
     .map(entry => entry.item)
 }
 
-export type CardPosition = { readonly item: TmQueueItem | null; readonly n: number; readonly total: number }
-
-// queueTotal is the server's count of everything waiting; the queue is a window of its first rows (priority order).
-export function cardPosition(queue: readonly TmQueueItem[], c: TmCursor, queueTotal: number): CardPosition {
-  const visible = queue.filter(i => !c.done.includes(i.id))
-  const remaining = visible.filter(i => !c.skipped.includes(i.id))
-  const item = remaining.find(i => i.id === c.currentId) ?? remaining[0] ?? null
-  return { item, n: c.done.length + c.skipped.length + 1, total: c.done.length + Math.max(visible.length, queueTotal) }
-}
-
 // The queue the review pane walks: the loaded window, plus the pinned task (band `a`, a card a confirm or note was asked
 // on) when the window does not hold it, built from that task's own detail by id — never a stand-in from the window.
 export function reviewQueue(s: TmSnapshot, c: TmCursor, details: Readonly<Record<string, TmTaskDetail>>): readonly TmQueueItem[] {
   const id = c.currentId
-  if (id === '' || s.queue.some(i => i.id === id) || c.done.includes(id) || c.skipped.includes(id)) return s.queue
+  if (id === '' || s.queue.some(i => i.id === id) || c.done.includes(id)) return s.queue
   const detail = details[id] ?? (s.bound?.taskId === id ? s.bound.detail : null)
   if (detail === null) return s.queue
   const pinned: TmQueueItem = {
@@ -110,65 +105,77 @@ export function stageLine(d: TmTaskDetail, p: TmPipeline | null): string {
   return p.outstanding.length === 0 ? `${status} → ready for done` : `${status} → next: ${p.outstanding[0]}`
 }
 
+/** Status words as the surfaces show them: `in-review` → `IN REVIEW`. */
+export const statusWord = (status: string): string => status.toUpperCase().replace(/-/g, ' ')
+
+/** A status badge's tone: in review is information, blocked is critical, done is success, anything else the signature. */
+export function statusTone(status: string): 'success' | 'critical' | 'info' | 'signature' {
+  if (status === 'in-review') return 'info'
+  if (status === 'blocked') return 'critical'
+  if (status === 'done' || status === 'archived') return 'success'
+  return 'signature'
+}
+
+/** Ready for done: not done yet, and in review, or with a pipeline that has no gate outstanding. */
+export function isReady(d: TmTaskDetail, p: TmPipeline | null): boolean {
+  if (d.status === 'done' || d.status === 'archived') return false
+  return d.status === 'in-review' || (p !== null && !p.laneless && p.outstanding.length === 0)
+}
+
 export type BandTask = {
   readonly id: string
   readonly title: string
+  /** '' while Taskmaster's detail is not known (offline, or not read yet): no status badge. */
+  readonly status: string
   readonly inferred: boolean
-  readonly review: boolean
-  readonly humanAction: string
-  readonly meta: string
-  readonly stage: string
+  /** `d done` shows: bound by this session (never inferred), live, and ready for done. */
+  readonly ready: boolean
 }
 /** The neutral note while a transient failure is retried and there is no good snapshot to show. */
 export const CONNECTING = 'Connecting to Taskmaster…'
 
 /**
- * `needsCapped`: the count was cut at the window with no server total (drawn `N+`); `notice`: a just-written handover's tldr;
- * `connecting`: tm is being retried and there is no good snapshot (the band says so, neutrally).
+ * What the band draws (spec §6). `waitingCapped`: the count was cut at the window with no server total (drawn `N+`);
+ * `restore`: the pending burst's unfinished sessions (null: no `4`); `fault`: offline fades the counts, connecting says so.
  */
 export type BandModel = {
   readonly task: BandTask | null
-  readonly needsYou: number
-  readonly needsCapped?: boolean
-  readonly notice?: string
-  readonly connecting?: boolean
+  readonly handover: TmSessionHandover | null
+  readonly waiting: number
+  readonly waitingCapped: boolean
+  readonly handovers: number
+  readonly restore: number | null
+  readonly fault: 'none' | 'offline' | 'connecting'
 }
-export type BandRow = 'connecting' | 'task' | 'stage' | 'handover' | 'needs'
 
-export function bandModel(s: TmSnapshot | null, notice: TmHandoverNotice | null = null, connecting = false): BandModel | null {
-  const shown = notice === null ? {} : { notice: notice.tldr }
-  // While retrying, the last good snapshot stays; with none (or only an offline one) the band says it is connecting.
-  if (connecting && (s === null || !s.reachable)) return { task: null, needsYou: 0, connecting: true, ...shown }
-  if (s === null) return notice === null ? null : { task: null, needsYou: 0, ...shown }
+/**
+ * The band's model; null (no band) when there is nothing to show: no task, no handover, no restore burst and, offline or
+ * not, nothing counted. While a transient failure is retried with no good snapshot, the band says it is connecting.
+ */
+export function bandModel(
+  s: TmSnapshot | null,
+  a: { readonly handover: TmSessionHandover | null; readonly restore: number | null; readonly connecting: boolean },
+): BandModel | null {
+  const quiet = { waiting: 0, waitingCapped: false, handovers: 0, handover: a.handover, restore: a.restore }
+  if (a.connecting && (s === null || !s.reachable)) return { task: null, fault: 'connecting', ...quiet }
+  if (s === null) return a.handover === null && a.restore === null ? null : { task: null, fault: 'none', ...quiet }
   const b = s.bound
   const detail = b?.detail ?? null
-  const live = s.reachable && detail !== null
   const task: BandTask | null =
     b === null
       ? null
       : {
           id: b.taskId,
           title: detail?.title ?? '',
+          status: s.reachable ? (detail?.status ?? '') : '',
           inferred: b.inferred,
-          review: detail?.status === 'in-review',
-          humanAction: detail?.humanAction ?? '',
-          meta: live ? metaLine(detail, false) : '',
-          stage: live ? stageLine(detail, b.pipeline) : '',
+          ready: s.reachable && !b.inferred && detail !== null && isReady(detail, b.pipeline),
         }
-  const needsYou = s.reachable ? s.queueTotal : 0
-  if (task === null && needsYou === 0 && notice === null) return null
-  return { task, needsYou, ...(needsYou > 0 && s.queueCapped === true ? { needsCapped: true } : {}), ...shown }
-}
-
-export function bandRows(m: BandModel, maxRows: number): BandRow[] {
-  const wanted: BandRow[] = []
-  if (m.connecting === true) wanted.push('connecting')
-  if (m.task !== null) wanted.push('task')
-  if (m.notice !== undefined) wanted.push('handover')
-  if (m.needsYou > 0) wanted.push('needs')
-  if (m.task !== null && (m.task.review || m.task.stage !== '')) wanted.push('stage')
-  const kept = new Set(wanted.slice(0, Math.max(0, maxRows)))
-  return (['connecting', 'task', 'stage', 'handover', 'needs'] as const).filter(row => kept.has(row))
+  const m: BandModel = s.reachable
+    ? { ...quiet, task, fault: 'none', waiting: s.queueTotal, waitingCapped: s.queueTotal > 0 && s.queueCapped === true, handovers: s.handoversTotal }
+    : { ...quiet, task, fault: 'offline' }
+  if (task === null && a.handover === null && a.restore === null && m.waiting === 0 && m.handovers === 0) return null
+  return m
 }
 
 export function ageLabel(stamp: string, now: number): string {
@@ -244,6 +251,45 @@ export function handoverRefs(h: TmHandover): string {
   const branch = typeof h.branch === 'string' ? h.branch : ''
   const tasks = Array.isArray(h.taskIds) ? h.taskIds.filter(id => typeof id === 'string' && id !== '') : []
   return [branch, tasks.join(', ')].filter(Boolean).join(' · ')
+}
+
+const fromHandover = (h: TmHandover, tag: TmSessionHandover['tag']): TmSessionHandover => ({
+  id: h.id,
+  tag,
+  tldr: h.tldr,
+  path: h.path,
+  created: h.created,
+  ...(h.nextAction === '' ? {} : { next: h.nextAction }),
+})
+
+/**
+ * D5: the handover this session shows — the one it wrote (the notice), else the one it was resumed from (from the open list,
+ * or `resumed` read by id), else the newest open handover linked to its bound task; null when none applies.
+ */
+export function sessionHandoverOf(a: {
+  readonly notice: TmHandoverNotice | null
+  readonly resumedId: string
+  readonly resumed: TmHandover | null
+  readonly snapshot: TmSnapshot | null
+}): TmSessionHandover | null {
+  const listed = (id: string): TmHandover | undefined => a.snapshot?.handovers.find(h => h.id === id)
+  if (a.notice !== null) {
+    const h = listed(a.notice.id)
+    return { id: a.notice.id, tag: 'written here', tldr: a.notice.tldr, path: a.notice.path, created: h?.created ?? '', ...(h && h.nextAction !== '' ? { next: h.nextAction } : {}) }
+  }
+  if (a.resumedId !== '') {
+    const h = listed(a.resumedId) ?? (a.resumed?.id === a.resumedId ? a.resumed : undefined)
+    if (h !== undefined) return fromHandover(h, 'resumed from')
+  }
+  const taskId = a.snapshot?.bound?.taskId
+  const linked = taskId === undefined ? undefined : a.snapshot?.handovers.find(h => h.taskIds.includes(taskId))
+  return linked === undefined ? null : fromHandover(linked, 'task')
+}
+
+/** What a surface draws: the resolved handover, unless a handover notice arrived since (the guard writes one directly). */
+export function withNotice(resolved: TmSessionHandover | null, notice: TmHandoverNotice | null, snapshot: TmSnapshot | null): TmSessionHandover | null {
+  if (notice === null || (resolved?.id === notice.id && resolved.tag === 'written here')) return resolved
+  return sessionHandoverOf({ notice, resumedId: '', resumed: null, snapshot })
 }
 
 // ── The review card (redesigned 2026-10-06, spec §6.1) ─────────────────────────────────────────────────────────────
@@ -363,15 +409,7 @@ export function isStaleTicks(stored: unknown, now: number): boolean {
   return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
 }
 
-/** The phase filter's `$.store` key is this plus the repo root: one choice per project, machine-wide. */
-export const PHASE_PREFIX = 'phase:'
 export const PAGE_SIZE = 5
-
-/** A stored phase choice: its id ('' every phase, kept as an explicit choice), or null for none / unreadable. */
-export function storedPhase(value: unknown): string | null {
-  const phase = typeof value === 'object' && value !== null ? (value as { phase?: unknown }).phase : undefined
-  return typeof phase === 'string' ? phase : null
-}
 
 const decodeAmp = (text: string): string => text.replace(/&amp;/g, '&')
 
@@ -380,25 +418,6 @@ export function phaseName(p: TmPhase): string {
   return decodeAmp(p.name.split(' — ')[0] ?? '').trim() || p.id
 }
 
-/** The review pane's filter line: `phase: all`, or `phase: <name> (<count>)`; the bare id while the phase list is not known. */
-export function phaseLabel(choice: string, phases: readonly TmPhase[]): string {
-  if (choice === '') return 'phase: all'
-  const known = phases.find(p => p.id === choice)
-  return known === undefined ? `phase: ${choice}` : `phase: ${phaseName(known)} (${known.count})`
-}
-
-/**
- * The phase `f` moves to: all, the active phase (offered even with nothing waiting: the board's marker can lag, but it is
- * the usual start), then every other phase with waiting tasks, newest (highest order) first, then all again. A current
- * phase the cycle does not offer goes to all.
- */
-export function nextPhase(current: string, phases: readonly TmPhase[]): string {
-  const active = phases.find(p => p.status === 'active')
-  const others = phases.filter(p => p.id !== active?.id && p.count > 0).sort((a, b) => b.order - a.order)
-  const cycle = ['', ...(active === undefined ? [] : [active.id]), ...others.map(p => p.id)]
-  const at = cycle.indexOf(current)
-  return at < 0 ? '' : (cycle[(at + 1) % cycle.length] ?? '')
-}
 
 export type HandoverPage = {
   readonly entries: readonly TmHandover[]

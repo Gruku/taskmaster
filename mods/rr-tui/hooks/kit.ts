@@ -2,7 +2,7 @@
 // way: surfaces step instead of shadowing, and colour never travels without its shape and word.
 import type { RenderNode } from 'claude-code'
 
-import type { RrBoxProps, RrButtonProps, RrGround, RrLevel, RrSignalKind, RrStrength, RrTokens, RrTone, RrTreatment } from '../types'
+import type { RrBoxProps, RrButtonProps, RrGround, RrLevel, RrSignalKind, RrStrength, RrTextProps, RrTokens, RrTone, RrTreatment } from '../types'
 
 export const SIGNAL_GLYPH: Readonly<Record<RrSignalKind, string>> = { success: '●', warning: '▲', critical: '◆', info: 'ⓘ' }
 
@@ -81,4 +81,21 @@ export function chip(t: RrTokens, a: { text: string; tone: RrTone; strength: RrS
   }
   const tint = (a.strength === 24 ? t.tint24 : t.tint12)[a.on ?? 'page'][a.tone]
   return el('Text', { backgroundColor: tint, color: t.fg.bold, bold: a.strength === 24 }, ` ${glyph}${a.text} `)
+}
+
+export function badgeProps(t: RrTokens, a: { tone: RrTone; strength?: RrStrength; on?: RrGround }): RrTextProps {
+  const on = a.on ?? 'page'
+  const strong = (a.strength ?? 24) === 24
+  if (t.polarity === 'survivalist') return { backgroundColor: strong ? t.border.strong : t.surface[NEXT_STEP[on]], color: t.fg.bold, bold: true }
+  return { backgroundColor: (strong ? t.tint24 : t.tint12)[on][a.tone], color: t.fg.bold, bold: true }
+}
+
+const HEX = /^#[0-9a-fA-F]{6}$/
+
+export function tint(a: { fg: string; bg: string; alpha: number }): string {
+  if (!HEX.test(a.fg) || !HEX.test(a.bg)) throw new Error(`rr-tui: tint takes two #rrggbb colours, got ${a.fg} and ${a.bg}`)
+  const alpha = Math.min(1, Math.max(0, a.alpha))
+  const channel = (hex: string, i: number): number => Number.parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16)
+  const mixed = [0, 1, 2].map(i => Math.round(channel(a.fg, i) * alpha + channel(a.bg, i) * (1 - alpha)))
+  return `#${mixed.map(v => v.toString(16).padStart(2, '0')).join('')}`
 }

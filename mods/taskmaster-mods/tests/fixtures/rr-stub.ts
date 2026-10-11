@@ -1,5 +1,6 @@
 // User intent: a stand-in $.rr for taskmaster-mods tests — `claude plugin test` does not load dependencies — with plain,
-// predictable trees so tests assert words and keys, not colours; button props follow rr-tui's real recipe.
+// predictable trees so tests assert words and keys, not colours; button props follow rr-tui's real recipe. A test plugin's
+// register runs in its own environment: everything it uses is defined inside it, never imported.
 import type { Plugin } from 'claude-code/testing'
 
 export const RR_STUB: Plugin = {
@@ -42,6 +43,13 @@ export const RR_STUB: Plugin = {
           buttonProps: async a => ({ plain: true as const, ...(a.key === undefined ? {} : { hotkey: a.key }), hover: { bold: true as const, color: '#f5f3ed' } }),
           keycap: async a => text(` ${a.key} `),
           chip: async a => text(` ${glyph[a.tone]} ${a.text} `),
+          badgeProps: async a => ({ backgroundColor: ((a.strength ?? 24) === 24 ? strong : tone)[a.tone], color: '#f5f3ed', bold: true }),
+          tint: async a => {
+            const channel = (hex: string, i: number): number => Number.parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16)
+            const alpha = Math.min(1, Math.max(0, a.alpha))
+            const mixed = [0, 1, 2].map(i => Math.round(channel(a.fg, i) * alpha + channel(a.bg, i) * (1 - alpha)))
+            return `#${mixed.map(v => v.toString(16).padStart(2, '0')).join('')}`
+          },
         },
       }
     })
