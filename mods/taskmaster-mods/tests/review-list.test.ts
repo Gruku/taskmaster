@@ -114,5 +114,8 @@ describe('review list', () => {
       '1 done · 1 refused: b (Cannot complete `b` — outstanding gates)',
     )
     expect(bulkSummary('back to agent', [{ id: 'a', refusal: 'x' }, { id: 'b', refusal: 'y' }])).toBe('0 back to agent · 2 refused: a (x); b (y)')
+    expect(bulkSummary('done', [{ id: 'a', refusal: null }, { id: 'b', refusal: 'boom' }, { id: 'c', refusal: 'stopped', notRun: true }])).toBe(
+      '1 done · 1 refused: b (boom) · not run: c',
+    )
   })
 })

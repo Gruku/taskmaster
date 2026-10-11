@@ -478,15 +478,23 @@ export function createFlows(d: TmFlowDeps) {
               pending = out.pending
               results.push({ id, refusal: out.refusal })
             }
+          } catch (error) {
+            // Stop at the first throw: what state it left is unknown, so no further write goes out beside it.
+            results.push({ id, refusal: error instanceof Error ? error.message : String(error) })
+            break
           } finally {
             release(id, pending)
           }
         }
       } finally {
-        const went = results.filter(r => r.refusal === null).map(r => r.id)
-        await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !went.includes(id)) }))
+        for (const id of ids) if (!results.some(r => r.id === id)) results.push({ id, refusal: 'the run stopped before it', notRun: true })
+        try {
+          const went = results.filter(r => r.refusal === null).map(r => r.id)
+          await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !went.includes(id)) }))
+        } finally {
+          d.host.toast(bulkSummary('done', results))
+        }
       }
-      d.host.toast(bulkSummary('done', results))
     },
     /**
      * The note on `To agent N`: each task goes back in turn with the one note, as a card's `a` does (`actions`: the check each
@@ -524,14 +532,22 @@ export function createFlows(d: TmFlowDeps) {
               if (pending === undefined) d.afterWrite(id, 'failed')
             }
             results.push({ id, refusal: out.ok ? null : out.refusal })
+          } catch (error) {
+            // Stop at the first throw (see bulkDone); the note below is still handed back.
+            results.push({ id, refusal: error instanceof Error ? error.message : String(error) })
+            break
           } finally {
             release(id, pending)
           }
         }
       } finally {
-        await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !moved.includes(id)) }))
+        for (const id of ids) if (!results.some(r => r.id === id)) results.push({ id, refusal: 'the run stopped before it', notRun: true })
+        try {
+          await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !moved.includes(id)) }))
+        } finally {
+          d.host.toast(bulkSummary('back to agent', results))
+        }
       }
-      d.host.toast(bulkSummary('back to agent', results))
       const text = note.trim()
       const named = moved.length > 0 ? moved : text === '' ? [] : [...ids]
       if (named.length > 0) await fill(text === '' ? `Back to ${named.join(', ')}` : `Back to ${named.join(', ')}: ${text}`)

@@ -550,6 +550,8 @@ export const register: Register = (on, options) => {
     mod.sessionId = await $.session.id()
     await ready($)
     await pruneTicks($)
+    // A bulk run does not outlive its session: a row left `busy` by one that was cut off would show "working" for good.
+    await update($, REVIEW_LIST, l => (l.bulk === 'busy' ? { ...l, bulk: 'none' as const, bulkIds: [] } : l))
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
       { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },

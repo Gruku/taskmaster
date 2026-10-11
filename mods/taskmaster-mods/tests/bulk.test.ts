@@ -6,6 +6,10 @@ import type { Engine } from 'claude-code/testing'
 
 import { SIGN_OFF } from '../hooks/actions'
 import { DEMO_REFUSAL } from '../hooks/demo'
+import { createFlows, type TmWriter } from '../hooks/flows'
+import type { TmHost } from '../hooks/host'
+import { FRESH_REVIEW_LIST } from '../hooks/review-list'
+import type { TmReviewList } from '../types'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import * as R from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -168,5 +172,86 @@ describe('bulk done and to agent', () => {
     expect(await ui.find({ type: 'Text', text: /1-9 ticks a check/ })).toBeDefined()
     await ui.press({ key: 'bulk-done' })
     expect(await ui.find({ type: 'Text', text: /1-9 ticks a check/ })).toBeUndefined()
+  })
+
+  // A write that throws is not a refusal the server worded: flows driven directly, with an action that throws.
+  const direct = (done: (id: string) => Promise<{ ok: true } | { ok: false; refusal: string }>) => {
+    let list: TmReviewList = { ...FRESH_REVIEW_LIST, selected: ['a', 'b', 'c'] }
+    const toasts: string[] = []
+    const fills: string[] = []
+    const closed: string[] = []
+    const host = new Proxy(
+      {
+        toast: (text: string) => toasts.push(text),
+        fill: async (text: string) => (fills.push(text), true),
+        closePane: async (id: string) => closed.push(id),
+        focus: async () => true,
+      },
+      { get: (target, key) => (key in target ? target[key as keyof typeof target] : async () => true) },
+    ) as unknown as TmHost
+    const write = new Proxy(
+      {
+        reviewList: async (change: (l: TmReviewList) => TmReviewList) => {
+          list = change(list)
+        },
+      },
+      { get: (target, key) => (key in target ? target[key as keyof typeof target] : async () => undefined) },
+    ) as unknown as TmWriter
+    const flows = createFlows({
+      host,
+      write,
+      actions: { done, backToAgent: async id => (await done(id), { ok: true }) },
+      boundId: async () => '',
+      afterWrite: () => undefined,
+    })
+    return { flows, toasts, fills, closed, list: () => list }
+  }
+  const boom = async (): Promise<{ ok: true }> => {
+    throw new Error('boom')
+  }
+
+  test('a throw stops the run: the toast names done, the error and the tasks not run; the unfinished stay selected', async () => {
+    const tried: string[] = []
+    const run = direct(async id => {
+      tried.push(id)
+      return id === 'b' ? boom() : { ok: true }
+    })
+    await run.flows.bulkAsk('done', ['a', 'b', 'c'])
+    await run.flows.bulkDone(['a', 'b', 'c'])
+    expect(tried).toEqual(['a', 'b'])
+    expect(run.toasts).toEqual(['1 done · 1 refused: b (boom) · not run: c'])
+    expect(run.list()).toMatchObject({ bulk: 'none', bulkIds: [], selected: ['b', 'c'] })
+  })
+
+  test('a throw while sending back still tells the toast and fills the note into the prompt; the pane stays', async () => {
+    const run = direct(boom)
+    await run.flows.bulkAsk('agent', ['a', 'b'])
+    await run.flows.bulkSendBack(['a', 'b'], 'keep this', { a: '', b: '' })
+    expect(run.toasts).toEqual(['0 back to agent · 1 refused: a (boom) · not run: b'])
+    expect(run.fills).toEqual(['Back to a, b: keep this'])
+    expect(run.closed).toEqual([])
+    expect(run.list()).toMatchObject({ bulk: 'none', selected: ['a', 'b', 'c'] })
+  })
+
+  test('a second y on the same asked ids sends nothing', async () => {
+    let calls = 0
+    const run = direct(async () => (calls += 1, { ok: true }))
+    await run.flows.bulkAsk('done', ['a'])
+    await Promise.all([run.flows.bulkDone(['a']), run.flows.bulkDone(['a'])])
+    expect(calls).toBe(1)
+    expect(run.toasts).toEqual(['1 done'])
+  })
+
+  test('a second y writes nothing', TM, async ($, on) => {
+    const { clock, world, ui } = await tmQueue($, on, { backlog_complete_task: () => ({ hangMs: 1000, text: R.COMPLETED }) })
+    await ui.press({ key: `sel:${UC}` })
+    await ui.press({ key: 'bulk-done' })
+    void ui.press({ key: 'bulk-yes' })
+    await clock.advance(100)
+    await ui.press({ key: 'bulk-yes' }).catch(() => undefined)
+    await clock.advance(2000)
+    await clock.settle()
+    expect(writes(world)).toEqual([signed(UC)])
+    expect(world.toasts).toEqual(['1 done'])
   })
 })

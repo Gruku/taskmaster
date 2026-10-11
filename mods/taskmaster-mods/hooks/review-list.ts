@@ -97,13 +97,18 @@ export function doneQuestion(open: number, total: number, id: string, room: numb
   return asks.find(ask => ask.length <= room) ?? truncate(asks[asks.length - 1] ?? '', room)
 }
 
-/** One task's outcome in a bulk run: null when it went through, else the server's refusal as it worded it. */
-export type BulkResult = { readonly id: string; readonly refusal: string | null }
+/**
+ * One task's outcome in a bulk run: null when it went through, else the server's refusal as it worded it (or the error that
+ * stopped the run). `notRun`: the run stopped before this task was tried.
+ */
+export type BulkResult = { readonly id: string; readonly refusal: string | null; readonly notRun?: true }
 
 /** One toast for a bulk run (spec §11): `3 done · 1 refused: tm-audit-031 (<server wording>)`. */
 export function bulkSummary(verb: string, results: readonly BulkResult[]): string {
   const went = results.filter(r => r.refusal === null).length
-  const refused = results.filter(r => r.refusal !== null)
+  const refused = results.filter(r => r.refusal !== null && r.notRun !== true)
+  const skipped = results.filter(r => r.notRun === true)
   const head = `${went} ${verb}`
-  return refused.length === 0 ? head : `${head} · ${refused.length} refused: ${refused.map(r => `${r.id} (${r.refusal})`).join('; ')}`
+  const refusals = refused.length === 0 ? '' : ` · ${refused.length} refused: ${refused.map(r => `${r.id} (${r.refusal})`).join('; ')}`
+  return skipped.length === 0 ? `${head}${refusals}` : `${head}${refusals} · not run: ${skipped.map(r => r.id).join(', ')}`
 }
