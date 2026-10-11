@@ -30,7 +30,7 @@ const FRESH: LaunchSpec = {
 const MAC: LaunchSpec = { ...RESUME, cwd: "/Users/me/O'Brien \"x\"" }
 
 /** A LaunchIo that answers from `exits` (argv[0] → exit code; absent: could not start) and records what it ran and copied. */
-function ioOf(env: LaunchEnv, exits: Record<string, number>, copies = true) {
+function ioOf(env: LaunchEnv, exits: Record<string, number>, copies = true, uname = 'Darwin\n') {
   const runs: string[][] = []
   const copied: string[] = []
   const slept: number[] = []
@@ -39,7 +39,7 @@ function ioOf(env: LaunchEnv, exits: Record<string, number>, copies = true) {
     run: async argv => {
       runs.push([...argv])
       const code = exits[argv[0] ?? '']
-      return code === undefined ? null : { exitCode: code, stdout: argv[0] === 'uname' ? 'Darwin\n' : '' }
+      return code === undefined ? null : { exitCode: code, stdout: argv[0] === 'uname' ? uname : '' }
     },
     copy: async text => {
       copied.push(text)
@@ -81,6 +81,19 @@ describe('commands', () => {
     expect(psScript({ ...FRESH, prompt: '' }, undefined)).toBe("Set-Location -LiteralPath 'C:\\work\\proj'; claude")
   })
 
+  test('typographic single quotes are doubled in PowerShell, so a payload stays inside the literal', () => {
+    const evil = { ...FRESH, cwd: 'C:/x\u2019; Write-Output INJECTED; \u2019', prompt: 'a\u2018b\u201A\u201B\u2019; calc; \u2019' }
+    const script = psScript(evil, undefined)
+    expect(script).toBe("Set-Location -LiteralPath 'C:/x\u2019\u2019; Write-Output INJECTED; \u2019\u2019'; claude 'a\u2018\u2018b\u201A\u201A\u201B\u201B\u2019\u2019; calc; \u2019\u2019'")
+    // with every doubled pair removed, no quote is left to end a literal early
+    expect(/['\u2018\u2019\u201A\u201B]/.test(script.replace(/(['\u2018\u2019\u201A\u201B])\1/g, '').replace(/^Set-Location -LiteralPath '|'; claude '|'$/g, ''))).toBe(false)
+  })
+
+  test('a builder never embeds a session id that is not a plain id', () => {
+    expect(() => launchCommand('windows', { ...RESUME, sessionId: 'x; rm -rf' }, undefined)).toThrow()
+    expect(() => launchCommand('mac', { ...RESUME, sessionId: '' }, undefined)).toThrow()
+  })
+
   test('posix commands quote for zsh/bash and only set a config dir that was chosen', () => {
     expect(posixScript(MAC, undefined)).toBe(String.raw`cd '/Users/me/O'\''Brien "x"' && claude --resume b1c2-d3`)
     expect(posixScript({ ...MAC, compact: true }, '/Users/me/.claude-work')).toBe(
@@ -103,7 +116,7 @@ describe('commands', () => {
     const iterm = macArgv('iterm', MAC, undefined)
     expect(iterm).toContain('tell current window to create tab with default profile')
     expect(iterm.filter(a => a === '-e').length).toBe((iterm.length - 1) / 2)
-    expect(macArgv('wezterm', MAC, undefined, '/bin/bash')).toEqual(['wezterm', 'cli', 'spawn', '--cwd', MAC.cwd, '--', '/bin/bash', '-lc', posixScript(MAC, undefined)])
+    expect(macArgv('wezterm', MAC, undefined)).toEqual(['wezterm', 'cli', 'spawn', '--cwd', MAC.cwd, '--', '/bin/sh', '-lc', posixScript(MAC, undefined)])
   })
 })
 
@@ -137,8 +150,9 @@ describe('launchAll', () => {
   })
 
   test('linux has no launcher: the command is copied; with no clipboard either, the titles are named', async () => {
-    const { io } = ioOf({}, { uname: 0 }, false)
+    const { io, runs } = ioOf({ termProgram: 'iTerm.app' }, { uname: 0, osascript: 0 }, false, 'Linux\n')
     const r = await launchAll(io, [{ ...MAC, title: 'Pricing' }])
+    expect(runs.map(a => a[0])).toEqual(['uname'])
     expect(r).toEqual({ opened: 0, copied: null, failed: ['Pricing'] })
     expect(launchSummary(r)).toBe('Could not open: Pricing')
   })
@@ -154,5 +168,18 @@ describe('launchAll', () => {
     expect(runs).toHaveLength(1)
     expect(launchSummary(r)).toBe('Opened 1 tab · Could not open: A (no session id), B (no folder)')
     expect(await launchAll(io, [])).toEqual({ opened: 0, copied: null, failed: [] })
+  })
+
+  test('control characters in the folder, prompt or config dir refuse the launch and run nothing', async () => {
+    const { io, runs } = ioOf({ os: 'Windows_NT' }, { 'wt.exe': 0 })
+    const r = await launchAll(io, [
+      { ...FRESH, title: 'P', prompt: 'hi\x03there' },
+      { ...FRESH, title: 'C', cwd: 'C:\a\x1bb' },
+    ])
+    expect(r).toEqual({ opened: 0, copied: null, failed: ['P (control characters)', 'C (control characters)'] })
+    const withDir = ioOf({ os: 'Windows_NT', configDir: 'C:\cfg\x15' }, { 'wt.exe': 0 })
+    expect((await launchAll(withDir.io, [FRESH])).failed).toEqual(['handover 2026-10-05-shipped (control characters)'])
+    expect(runs).toHaveLength(0)
+    expect(withDir.runs).toHaveLength(0)
   })
 })
