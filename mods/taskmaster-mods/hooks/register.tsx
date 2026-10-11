@@ -23,7 +23,8 @@ import { bandTree, handoversPaneTree, reviewPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
-import type { Ui } from './kit'
+import { kitOf, type Ui } from './kit'
+import { KIT, kitGalleryTree } from './kit-gallery'
 import {
   bandModel,
   cardPosition,
@@ -450,6 +451,7 @@ export const register: Register = (on, options) => {
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
       { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },
+      ...(mod.source === 'demo' ? [{ name: KIT, description: 'The taskmaster-mods kit gallery: every primitive with sample data (demo source)' }] : []),
     ]) {
       try {
         await $.command.register(command)
@@ -535,6 +537,14 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'tm-handovers' }, async $ => {
     await (await ready($)).openHandovers()
     return { text: 'Handovers opened.' }
+  })
+
+  on('command.run', { command: KIT }, async $ => {
+    if (mod.source !== 'demo') return { text: 'The kit gallery shows in demo mode (taskmaster-mods Data source = demo in /config).' }
+    await ready($)
+    const opened = await $.ui.open({ id: KIT, title: 'Kit', focus: true, closeOnEscape: true })
+    if (!opened.isPlaced) $.ui.toast('taskmaster-mods: widen the terminal to see the pane')
+    return { text: 'Kit gallery opened.' }
   })
 
   on('ui.press', { plugin: 'taskmaster-mods' }, async ($, e, next) => {
@@ -659,6 +669,36 @@ export const register: Register = (on, options) => {
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
       },
       e.props.bodyColumns,
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: KIT }, async ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    if (e.surface === 'mobile') return <Text>Open the kit gallery in the terminal or the desktop app.</Text>
+    await $.state.get(RR_POLARITY)
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const say = (text: string) => mod.host?.toast(text)
+    const k = await kitOf(ui, rrOf($), e.surface, say)
+    const views = await read($, PHASE_VIEWS)
+    const view = views.review.loaded ? views.review : { ...views.review, phases: demoPhases('review'), loaded: true }
+    const strip = { pane: 'review' as const, view, allCount: 5, focused: e.props.isFocused, digits: true, empty: 'Nothing waiting' }
+    const tree = kitGalleryTree(
+      k,
+      strip,
+      {
+        choose: id => act(f => f.choosePhase('review', id)),
+        toggleDone: () => act(f => f.toggleDone('review')),
+        overlay: open => act(f => f.setOverlay('review', open)),
+      },
+      id => say(`pressed ${id}`),
+      e.props.bodyColumns,
+    )
+    const ground = await $.rr.surfaceProps({ level: 'page' })
+    const { Box } = ui
+    return (
+      <Box {...ground} flexGrow={1}>
+        {tree}
+      </Box>
     )
   })
 
