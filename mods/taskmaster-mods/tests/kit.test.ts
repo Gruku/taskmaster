@@ -3,12 +3,31 @@
 // on hover, no shadows.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { badge, checkbox, confirmRow, fit, helpFooter, KEYCAP_FACE, keycap, label, rule, signal } from '../hooks/kit'
-import { byKey, testKit, textsOf, walk } from './fixtures/kit-ui'
+import {
+  badge,
+  card,
+  checkbox,
+  confirmRow,
+  fit,
+  helpFooter,
+  KEYCAP_FACE,
+  keycap,
+  label,
+  pager,
+  panel,
+  PANEL_TITLE,
+  panelTitle,
+  rule,
+  selectionBar,
+  signal,
+  toolbar,
+} from '../hooks/kit'
+import { byKey, hoversOf, testKit, textsOf, walk } from './fixtures/kit-ui'
 import { widthOf } from './fixtures/measure'
 import { STRONG, STUB_TOKENS as T, TONE } from './fixtures/tokens'
 
 const noop = (): void => undefined
+const STYLE_ONLY = new Set(['backgroundColor', 'borderColor', 'borderStyle', 'borderDimColor', 'bold', 'color', 'dimColor', 'italic', 'underline'])
 
 describe('keycap', () => {
   test('one plain Button keyed by id with its hotkey and label, in a keyed Box; the RR glyph sits over the engine prefix', () => {
@@ -125,5 +144,106 @@ describe('confirm row', () => {
     const narrow = confirmRow(k, { id: 'confirm', question: 'done tm-audit-031?', onYes: noop, onNo: noop, width: 24 })
     expect(narrow).toHaveLength(2)
     expect(byKey(narrow[1], 'confirm-no')).toBeDefined()
+  })
+})
+
+describe('panel, card, toolbar, pager, selection bar', () => {
+  test('a terminal panel: round full border, raised fill, the title in signature text set into the top border, health top right', () => {
+    const k = testKit()
+    const p = panel(k, { title: panelTitle('session'), health: { kind: 'success', word: 'tm ok' }, width: 60 }, [label(k, 'body').el])
+    const root = walk(p)[0]
+    expect(root?.props).toMatchObject({ borderStyle: 'round', borderColor: T.border.strong, backgroundColor: T.surface.raised, width: 60 })
+    const placed = walk(p).filter(e => e.props?.position === 'absolute')
+    if (PANEL_TITLE.terminal === 'border') {
+      expect(placed.map(e => e.props?.top)).toEqual([-1, -1])
+      expect(textsOf(placed[0])).toEqual([' ◆ TASKMASTER · SESSION '])
+      expect(walk(placed[0]).find(e => e.type === 'Text')?.props?.color).toBe(T.signatureText)
+    }
+    expect(textsOf(p)).toContain(' tm ok')
+    expect(textsOf(p)).toContain('BODY')
+  })
+
+  test('the desktop panel puts its title on a first row; collapse drops the body; a long title is cut', () => {
+    const desk = panel(testKit('desktop'), { title: panelTitle('restore'), width: 40 }, [])
+    if (PANEL_TITLE.desktop === 'row') {
+      expect(walk(desk).some(e => e.props?.position === 'absolute')).toBe(false)
+      expect(textsOf(desk)[0]).toBe('◆ TASKMASTER · RESTORE')
+    }
+    const k = testKit()
+    expect(textsOf(panel(k, { title: 'T', collapse: true, width: 30 }, [label(k, 'hidden').el]))).not.toContain('HIDDEN')
+    expect(textsOf(panel(k, { title: panelTitle('a very long section name indeed'), width: 20 }, []))[0]?.length).toBeLessThanOrEqual(16)
+  })
+
+  test('a card steps one surface above its ground, selected one more, hover one more; focus is a full border and the body', () => {
+    const k = testKit()
+    const head = label(k, 'head').el
+    const body = [label(k, 'body').el]
+    const rest = walk(card(k, { id: 'a', selected: false, focused: false }, head, body))[0]
+    expect(rest).toMatchObject({ props: { key: 'card:a', backgroundColor: T.surface.raised, paddingX: 2 }, hover: { backgroundColor: T.surface.overlay } })
+    expect(rest?.props?.borderStyle).toBeUndefined()
+    expect(textsOf(rest)).toEqual(['HEAD'])
+    const chosen = walk(card(k, { id: 'b', selected: true, focused: true }, head, body))[0]
+    expect(chosen).toMatchObject({ props: { backgroundColor: T.surface.overlay, borderStyle: 'round', borderColor: T.border.focus, paddingX: 1 } })
+    expect(textsOf(chosen)).toEqual(['HEAD', 'BODY'])
+    const onRaised = walk(card(k, { id: 'c', selected: true, focused: false, on: 'raised' }, head, body))[0]
+    expect(onRaised?.props?.backgroundColor).toBe(TONE.signature)
+  })
+
+  test('toolbar: title at the left, slots at the right after a spacer; the title gives way first', () => {
+    const k = testKit()
+    const slot = keycap(k, { id: 'refresh', key: 'u', label: 'refresh', onPress: noop })
+    const bar = toolbar(k, { title: 'handovers', slots: [slot], width: 60 })
+    expect(textsOf(bar)[0]).toBe('HANDOVERS')
+    expect(walk(bar).some(e => e.props?.flexGrow === 1)).toBe(true)
+    expect(textsOf(toolbar(k, { title: 'handovers', slots: [slot], width: 16 }))[0]).toBe('HAN…')
+  })
+
+  test('pager: p ‹ and n › always drawn, dim at the ends, and the n / total count', () => {
+    const k = testKit()
+    const first = pager(k, { page: 0, pages: 4, onTurn: noop })
+    expect(byKey(first.el, 'page-prev')?.props).toMatchObject({ hotkey: 'p', label: '‹', dimColor: true })
+    expect(byKey(first.el, 'page-next')?.props?.dimColor).toBeUndefined()
+    expect(textsOf(first.el)).toContain('1 / 4')
+    const last = pager(k, { page: 9, pages: 4, onTurn: noop })
+    expect(byKey(last.el, 'page-next')?.props?.dimColor).toBe(true)
+    expect(textsOf(last.el)).toContain('4 / 4')
+    expect(textsOf(pager(k, { page: 0, pages: 0, onTurn: noop }).el)).toContain('1 / 1')
+  })
+
+  test('selection bar: `<verb> <count>` keycaps (dim at 0), quiet ghost buttons with no hotkey at the right', () => {
+    const k = testKit()
+    const bar = selectionBar(k, {
+      actions: [
+        { id: 'bulk-done', key: 'b', verb: 'Done', count: 2, tone: 'success', onPress: noop },
+        { id: 'bulk-agent', verb: 'To agent', count: 0, onPress: noop },
+      ],
+      ghosts: [
+        { id: 'sel-all', label: 'all', onPress: noop },
+        { id: 'sel-none', label: 'none', onPress: noop },
+      ],
+      width: 70,
+    })
+    expect(byKey(bar, 'bulk-done')?.props).toMatchObject({ label: 'Done 2', hotkey: 'b' })
+    expect(byKey(bar, 'bulk-agent')?.props).toMatchObject({ label: 'To agent 0', dimColor: true })
+    expect(byKey(bar, 'sel-all')?.props).toMatchObject({ label: 'all', dimColor: true, plain: true })
+    expect(byKey(bar, 'sel-all')?.props?.hotkey).toBeUndefined()
+    expect(textsOf(bar)).toContain('·')
+  })
+
+  test('hard rules: every hover only restyles (no offsets), and nothing draws a one-sided border or a shadow', () => {
+    const k = testKit()
+    const trees = [
+      keycap(k, { id: 'a', key: 'a', label: 'a', onPress: noop }).el,
+      card(k, { id: 'c', selected: true, focused: true }, label(k, 'x').el, []),
+      panel(k, { title: 'p', width: 30 }, []),
+      pager(k, { page: 1, pages: 3, onTurn: noop }).el,
+      selectionBar(k, { actions: [{ id: 'x', verb: 'Go', count: 1, onPress: noop }], ghosts: [{ id: 'g', label: 'all', onPress: noop }], width: 40 }),
+    ]
+    for (const tree of trees) {
+      for (const hover of hoversOf(tree)) for (const key of Object.keys(hover)) expect(STYLE_ONLY.has(key), key).toBe(true)
+      for (const e of walk(tree)) {
+        for (const key of Object.keys(e.props ?? {})) expect(/^border(Left|Right|Top|Bottom)|shadow/i.test(key), key).toBe(false)
+      }
+    }
   })
 })

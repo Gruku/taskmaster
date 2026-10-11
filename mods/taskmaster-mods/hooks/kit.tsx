@@ -266,3 +266,181 @@ export function confirmRow(
     </Box>,
   ]
 }
+
+export type PanelSpec = {
+  /** The whole title (panelTitle builds `◆ TASKMASTER · SESSION`). */
+  readonly title: string
+  /** The signal at the top right: `● tm ok`, `◆ offline`. */
+  readonly health?: { readonly kind: RrSignalKind; readonly word: string }
+  /** True: the body is not drawn; the panel is its frame and title alone. */
+  readonly collapse?: boolean
+  /** Cells across, the border included. */
+  readonly width: number
+}
+
+export const panelTitle = (section: string): string => `${TM_TAG} · ${section.toUpperCase()}`
+
+/**
+ * A panel: full-perimeter round border, the raised fill across the whole box, the title in signature text set into the top
+ * border (or on a first row: PANEL_TITLE), the health signal at the top right.
+ */
+export function panel(k: Kit, a: PanelSpec, children: readonly RenderNode[]): RenderNode {
+  const { Box, Text } = k.ui
+  const { t } = k
+  const health = a.health === undefined ? null : signal(k, a.health.kind, a.health.word)
+  const title = truncate(a.title, Math.max(1, a.width - 6 - (health === null ? 0 : health.width + 3)))
+  const body = a.collapse === true ? [] : [...children]
+  const frame = {
+    flexDirection: 'column' as const,
+    borderStyle: 'round',
+    borderColor: t.border.strong,
+    backgroundColor: t.surface.raised,
+    paddingX: 1,
+    width: a.width,
+  }
+  if (PANEL_TITLE[k.surface === 'desktop' ? 'desktop' : 'terminal'] === 'row') {
+    return (
+      <Box {...frame}>
+        <Box flexDirection="row">
+          <Text color={t.signatureText} bold>
+            {title}
+          </Text>
+          <Box flexGrow={1} />
+          {health === null ? null : health.el}
+        </Box>
+        {body}
+      </Box>
+    )
+  }
+  return (
+    <Box {...frame}>
+      <Box position="absolute" top={-1} left={1}>
+        <Text color={t.signatureText} backgroundColor={t.surface.raised} bold>
+          {` ${title} `}
+        </Text>
+      </Box>
+      {health === null ? null : (
+        <Box position="absolute" top={-1} right={1} backgroundColor={t.surface.raised} paddingX={1}>
+          {health.el}
+        </Box>
+      )}
+      {body}
+    </Box>
+  )
+}
+
+export type CardSpec = {
+  /** The card's hover scope: its Box is keyed `card:<id>`. */
+  readonly id: string
+  readonly selected: boolean
+  /** The focused card draws its full-perimeter focus border and its expanded body. */
+  readonly focused: boolean
+  /** The ground beneath the card; default page (a card sits one step up, a selected one two). */
+  readonly on?: RrGround
+}
+
+/** A card: a surface step above its ground (selected one more), one step up again on hover, colour only; never a rail. */
+export function card(k: Kit, a: CardSpec, collapsedRow: RenderNode, expandedBody: readonly RenderNode[]): RenderNode {
+  const { Box } = k.ui
+  const { t } = k
+  const at = RUNG[a.on ?? 'page'] + 1 + (a.selected ? 1 : 0)
+  // The unfocused card pads one more cell, so its text sits where the bordered (focused) card's does.
+  const edge = a.focused ? { borderStyle: 'round', borderColor: t.border.focus, paddingX: 1 } : { paddingX: 2 }
+  return (
+    <Box key={`card:${a.id}`} flexDirection="column" backgroundColor={rung(t, at)} hover={{ backgroundColor: rung(t, at + 1) }} {...edge}>
+      {collapsedRow}
+      {a.focused ? [...expandedBody] : null}
+    </Box>
+  )
+}
+
+/** A pane's top row: its title, a spacer, then fixed slots (pager, toggles, refresh); inert slots dim, never vanish. */
+export function toolbar(k: Kit, a: { readonly title: string; readonly slots: readonly Piece[]; readonly width: number }): RenderNode {
+  const { Box } = k.ui
+  const used = a.slots.reduce((sum, p) => sum + p.width + 2, 0)
+  const title = label(k, truncate(a.title, Math.max(1, a.width - used)))
+  return (
+    <Box flexDirection="row" alignItems="flex-start">
+      {title.el}
+      <Box flexGrow={1} />
+      <Box flexDirection="row" columnGap={2} alignItems="flex-start">
+        {a.slots.map(p => p.el)}
+      </Box>
+    </Box>
+  )
+}
+
+/** `p ‹`  `n ›`  `1 / 4`: both keycaps always drawn, dim at the ends (a press there says why); `onTurn` gets the 0-based page. */
+export function pager(
+  k: Kit,
+  a: { readonly page: number; readonly pages: number; readonly onTurn: (page: number) => void; readonly on?: RrGround },
+): Piece {
+  const { Box, Text } = k.ui
+  const pages = Math.max(1, a.pages)
+  const at = Math.min(Math.max(0, a.page), pages - 1)
+  const on = a.on ?? 'page'
+  const prev = keycap(k, { id: 'page-prev', key: 'p', label: '‹', on, onPress: () => a.onTurn(at - 1), ...(at === 0 ? { dim: 'Already on the first page' } : {}) })
+  const next = keycap(k, { id: 'page-next', key: 'n', label: '›', on, onPress: () => a.onTurn(at + 1), ...(at === pages - 1 ? { dim: 'Already on the last page' } : {}) })
+  const count = `${at + 1} / ${pages}`
+  return {
+    el: (
+      <Box flexDirection="row" columnGap={1} alignItems="flex-start">
+        {prev.el}
+        {next.el}
+        <Text color={k.t.fg.subtle}>{count}</Text>
+      </Box>
+    ),
+    width: prev.width + next.width + count.length + 2,
+  }
+}
+
+/** A bulk action: `<verb> <count>` as a keycap; dim (with why) while nothing is selected. */
+export type BulkAction = {
+  readonly id: string
+  readonly key?: string
+  readonly verb: string
+  readonly count: number
+  readonly tone?: RrTone
+  readonly onPress: () => void
+}
+/** A ghost: a quiet text button (all · none · unfinished). */
+export type Ghost = { readonly id: string; readonly label: string; readonly onPress: () => void }
+
+/** The selection bar: primary bulk actions with counts at the left, ghost selectors at the right. */
+export function selectionBar(
+  k: Kit,
+  a: { readonly actions: readonly BulkAction[]; readonly ghosts: readonly Ghost[]; readonly width: number; readonly on?: RrGround },
+): RenderNode {
+  const { Box, Button, Text } = k.ui
+  const { t } = k
+  const on = a.on ?? 'page'
+  const actions = a.actions.map(x =>
+    keycap(k, {
+      id: x.id,
+      ...(x.key === undefined ? {} : { key: x.key }),
+      label: `${x.verb} ${x.count}`,
+      tone: x.tone ?? 'signature',
+      on,
+      onPress: x.onPress,
+      ...(x.count === 0 ? { dim: `Nothing selected to ${x.verb.toLowerCase()}` } : {}),
+    }),
+  )
+  const ghostWidth = a.ghosts.reduce((sum, g) => sum + g.label.length, 0) + 3 * Math.max(0, a.ghosts.length - 1)
+  const ghosts = a.ghosts.flatMap((g, i) => [
+    ...(i === 0 ? [] : [<Text color={t.fg.subtle}>·</Text>]),
+    <Box key={`${g.id}-box`} flexDirection="row">
+      <Button key={g.id} plain dimColor label={g.label} hover={{ bold: true, color: t.fg.bold }} onPress={g.onPress} />
+    </Box>,
+  ])
+  return (
+    <Box flexDirection="row" alignItems="flex-start">
+      <Box flexDirection="row" columnGap={1} alignItems="flex-start">
+        {fit(actions, Math.max(1, a.width - ghostWidth - 2), 1)}
+      </Box>
+      <Box flexGrow={1} />
+      <Box flexDirection="row" columnGap={1}>
+        {ghosts}
+      </Box>
+    </Box>
+  )
+}
