@@ -1,7 +1,7 @@
 // User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
 // 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
 // reply degrades to a fault instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmPhase, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -19,6 +19,7 @@ import {
   parsePhases,
   parsePipeline,
 } from './parse'
+import { NO_TASK } from './phases'
 
 export const TM_TIMEOUT_MS = 3000
 /** A write may queue behind the store's writer (ruling F14); it is never retried, so it gets longer than a read. */
@@ -280,27 +281,57 @@ export async function readSummary(host: TmHost, handoverId: string): Promise<TmH
   }
 }
 
-/** The phase list query, newest phase first, each with its in-review tasks the scope lists (naming a human action when `waitingOnly`). */
-export function phaseSql(waitingOnly: boolean): string {
+const PHASE_DATE =
+  "CASE WHEN p.status IN ('done','archived') THEN substr(coalesce(json_extract(p.doc,'$.completed'),''),1,10) ELSE substr(coalesce(json_extract(p.doc,'$.start_date'),''),1,10) END"
+const linkedHandovers = (status: 'open' | 'closed'): string =>
+  `(SELECT count(DISTINCT ht.handover_id) FROM handover_tasks ht JOIN entities t ON t.kind='task' AND t.id=ht.task_id AND t.deleted=0 JOIN entities ho ON ho.kind='handover' AND ho.id=ht.handover_id AND ho.deleted=0 AND ho.status='${status}' WHERE json_extract(t.doc,'$.phase')=p.id)`
+const unlinkedHandovers = (status: 'open' | 'closed'): string =>
+  `(SELECT count(*) FROM entities ho WHERE ho.kind='handover' AND ho.deleted=0 AND ho.status='${status}' AND NOT EXISTS (SELECT 1 FROM handover_tasks ht WHERE ht.handover_id=ho.id))`
+
+/**
+ * One pane's phase list query (spec §5): a row a phase, `json_array(id, status, order, count, closed, date)` and the name,
+ * newest first (each cell well under the server's 80-character cut). Review counts the in-review tasks its scope lists
+ * (naming a human action when `waitingOnly`); handovers the open and closed handovers linked through each phase's tasks;
+ * restore counts nothing here (its counts come from the scan, withCounts).
+ */
+export function phaseSql(pane: TmPhasePane, waitingOnly: boolean): string {
+  const row = (count: string, closed: string): string =>
+    `SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), ${count}, ${closed}, ${PHASE_DATE}) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC`
+  if (pane === 'handovers') return row(linkedHandovers('open'), linkedHandovers('closed'))
+  if (pane === 'restore') return row('0', '0')
   const waiting = waitingOnly ? " AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''" : ''
-  return (
-    "SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), (SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id" +
-    waiting +
-    ")) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC"
+  return row(
+    `(SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id${waiting})`,
+    '0',
   )
 }
 
+/** The handovers strip's `no task` row, read on its own: open and closed handovers that link no task. */
+export const NO_TASK_SQL = `SELECT json_array('${NO_TASK}', 'none', 0, ${unlinkedHandovers('open')}, ${unlinkedHandovers('closed')}, '') AS phase, 'no task' AS name`
+
 /**
- * The phase list for the review pane's filter, from one backlog_query. Null when the server refuses, is unreachable or
- * answers unreadably (the reason goes to the debug log), so the filter stays where it was.
+ * One pane's phase list, from one backlog_query (handovers: a second for its no task row). Null when the server refuses, is
+ * unreachable or answers unreadably (the reason goes to the debug log), so the strip stays where it was; a handovers list
+ * whose no task read fails keeps its phases without that tab.
  */
-export async function readPhases(host: TmHost, waitingOnly: boolean): Promise<readonly TmPhase[] | null> {
-  try {
-    const text = (await callTm(host, 'backlog_query', { sql: phaseSql(waitingOnly), limit: 200 })).text
+export async function readPhases(host: TmHost, pane: TmPhasePane, waitingOnly: boolean): Promise<readonly TmPhase[] | null> {
+  const read = async (sql: string): Promise<TmPhase[] | null> => {
+    const text = (await callTm(host, 'backlog_query', { sql, limit: 200 })).text
     const parsed = parsePhases(text)
     if (parsed.ok) return parsed.value
     host.log(`taskmaster-mods: unreadable backlog_query reply: ${text.slice(0, 2000)}`)
     return null
+  }
+  try {
+    const phases = await read(phaseSql(pane, waitingOnly))
+    if (phases === null || pane !== 'handovers') return phases
+    try {
+      const none = await read(NO_TASK_SQL)
+      return none === null ? phases : [...phases, ...none.filter(p => p.id === NO_TASK)]
+    } catch (error) {
+      host.log(`taskmaster-mods: no task phase row not read: ${error instanceof Error ? error.message : String(error)}`)
+      return phases
+    }
   } catch (error) {
     host.log(`taskmaster-mods: phases not read: ${error instanceof Error ? error.message : String(error)}`)
     return null

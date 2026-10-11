@@ -235,7 +235,7 @@ function ensureFlows($: EngineInterface): TmFlows {
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id) } : {}),
-    readPhases: mod.source === 'demo' ? () => Promise.resolve(DEMO_PHASES) : () => readPhases(host, mod.scope.waitingOnly),
+    readPhases: mod.source === 'demo' ? () => Promise.resolve(DEMO_PHASES) : () => readPhases(host, 'review', mod.scope.waitingOnly),
     phaseChosen: phase => {
       mod.scope = { ...mod.scope, phase }
       mod.refresher?.request()

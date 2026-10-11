@@ -10,7 +10,7 @@ import { type World, worldOf } from './fixtures/world'
 const TM = { plugins: [RR_STUB] }
 const REVIEW_PANE = pane('tm-review')
 const PHASE_SQL =
-  "SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), (SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id AND coalesce(json_extract(t.doc,'$.human_action'),'')<>'')) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC"
+  "SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), (SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''), 0, CASE WHEN p.status IN ('done','archived') THEN substr(coalesce(json_extract(p.doc,'$.completed'),''),1,10) ELSE substr(coalesce(json_extract(p.doc,'$.start_date'),''),1,10) END) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC"
 const listArgs = (world: World) => world.calls.filter(c => c.tool === 'backlog_list_tasks').map(c => c.args)
 const queries = (world: World) => world.calls.filter(c => c.tool === 'backlog_query')
 

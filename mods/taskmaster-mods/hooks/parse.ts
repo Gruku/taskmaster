@@ -228,9 +228,14 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
 const PHASE_ROW = /^(\[\S*\])(?:\s+(.*))?$/
 const ROWS_FOOTER = /^\d+ rows?(?: \(capped\))?$/
 
+/** The entities a name cell can hold (the server escapes `&`, `<`, `>`, quotes); `&amp;` last so `&amp;lt;` stays `&lt;`. */
+const decodeEntities = (text: string): string =>
+  text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+
 /**
- * backlog_query's phase table: a header line, one `["id","status",order,count]  name` line a phase (cells padded; a name cut
- * at 80 chars stays as cut), then `N rows`. A line whose JSON cell does not read is left out; a reply with no footer is
+ * backlog_query's phase table: a header line, one `["id","status",order,count,closed,"date"]  name` line a phase (cells
+ * padded; a name cut at 80 chars stays as cut; HTML entities in the name decoded; the older 4-cell rows read too, without
+ * closed and date), then `N row` or `N rows`. A line whose JSON cell does not read is left out; a reply with no footer is
  * not a table the server finished.
  */
 export function parsePhases(raw: string): Parsed<TmPhase[]> {
@@ -253,7 +258,9 @@ export function parsePhases(raw: string): Parsed<TmPhase[]> {
       status: typeof cells[1] === 'string' ? cells[1] : '',
       order: typeof cells[2] === 'number' ? cells[2] : 0,
       count: typeof cells[3] === 'number' ? cells[3] : 0,
-      name: (row[2] ?? '').trim(),
+      name: decodeEntities((row[2] ?? '').trim()),
+      ...(typeof cells[4] === 'number' ? { closed: cells[4] } : {}),
+      ...(typeof cells[5] === 'string' ? { date: cells[5] } : {}),
     })
   }
   return ok(phases)
