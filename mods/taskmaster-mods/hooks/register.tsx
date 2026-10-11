@@ -18,10 +18,11 @@ import type {
 import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
 import { DEMO_DETAILS, DEMO_PHASES, DEMO_SUMMARIES, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
-import { bandTree, handoversPaneTree, reviewPaneTree, type Ui } from './draw'
+import { bandTree, handoversPaneTree, reviewPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
+import type { Ui } from './kit'
 import {
   bandModel,
   cardPosition,

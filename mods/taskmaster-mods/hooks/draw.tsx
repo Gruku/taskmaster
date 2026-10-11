@@ -1,7 +1,7 @@
 // User intent: how taskmaster-mods looks — the band, the review card and the handovers list drawn from plain view data with
 // Reality Reprojection pieces from $.rr; Buttons are drawn here because their press handlers must stay in this plugin.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
-import type { Elements, RenderChildren, RenderElement, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'
+import type { RenderChildren, RenderElement, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'
 
 import type { TmBandMode, TmCursor, TmHandover, TmHandoverSummary, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 import {
@@ -26,33 +26,15 @@ import {
   truncate,
   wrapText,
 } from './model'
+import { fit, type Piece, type Ui } from './kit'
 import type { Rr, RrButtonProps, RrNode, RrTokens, RrTone, RrTreatment } from './rr'
 
-export type Ui = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Input'>
-
 const node = (n: RrNode): RenderNode => n as unknown as RenderNode
-
-/** A drawn piece and the cells it takes across, so a row can be fitted to the room before it is laid out. */
-type Piece = { readonly el: RenderNode; readonly width: number }
 
 // Widths of $.rr pieces, from what they draw: a signal is `glyph word`, a state chip ` glyph text ` (signature: no glyph),
 // a keycap ` key `.
 const signalWidth = (word: string): number => 2 + word.length
 const stateChipWidth = (text: string, tone: RrTone): number => text.length + (tone === 'signature' ? 2 : 4)
-
-/** Keeps the pieces in order while they fit `width` with `gap` between them; the first piece always stays. */
-function fit(pieces: readonly (Piece | null)[], width: number, gap: number): RenderNode[] {
-  const kept: RenderNode[] = []
-  let used = 0
-  for (const piece of pieces) {
-    if (piece === null) continue
-    const need = kept.length === 0 ? piece.width : used + gap + piece.width
-    if (kept.length > 0 && need > width) continue
-    kept.push(piece.el)
-    used = need
-  }
-  return kept
-}
 
 type ChipSpec = {
   readonly id: string
