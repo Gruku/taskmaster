@@ -101,7 +101,12 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('session.root', () => ({ value: world.root }))
   on('session.cwd', () => ({ value: world.cwd }))
   on('session.repo', () => ({ value: { root: world.root, remote: null, internal: false, name: null } }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: `${world.branch}\n`, stderr: '' } }) as never)
+  on('process.run', ($, e) => {
+    world.runs.push([...e.argv])
+    const exitCode = e.argv[0] === 'git' ? 0 : world.runExit(e.argv)
+    return { value: { exitCode, stdout: e.argv[0] === 'git' ? `${world.branch}\n` : '', stderr: '' } } as never
+  })
+  on('env.get', ($, e) => ({ value: world.env[e.name] }) as never)
   on('mcp.call', async ($, e) => {
     world.calls.push({ tool: e.tool, args: e.args })
     if (world.serialMs !== null) {

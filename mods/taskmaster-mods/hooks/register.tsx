@@ -66,7 +66,8 @@ const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover
 const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
-function hostOf($: EngineInterface): TmHost {
+/** Exported so a test can drive the real bindings. */
+export function hostOf($: EngineInterface): TmHost {
   return {
     now: () => $.clock.now(),
     sleep: (ms, signal) => $.clock.sleep(ms, signal ? { signal } : undefined),
@@ -119,7 +120,8 @@ function hostOf($: EngineInterface): TmHost {
       try {
         const r = await $.process.run(argv, { timeoutMs })
         return { exitCode: r.exitCode, stdout: r.stdout }
-      } catch {
+      } catch (error) {
+        $.ui.log(`taskmaster-mods: ${argv[0] ?? 'command'} did not run: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
         return null
       }
     },

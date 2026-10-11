@@ -30,6 +30,6 @@ export type TmHost = {
   branch: () => Promise<string>
   /** What a new-tab launch reads from the environment (each name a literal `$.env.get`). */
   launchEnv: () => Promise<LaunchEnv>
-  /** A command by its argv, bounded to `timeoutMs`; null when it could not start. */
+  /** A command by its argv, bounded to `timeoutMs`; null when it could not start or timed out (both read as not opened). */
   run: (argv: readonly string[], timeoutMs: number) => Promise<{ readonly exitCode: number; readonly stdout: string } | null>
 }

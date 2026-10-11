@@ -5,6 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { createFlows, type TmWriter } from '../hooks/flows'
 import type { TmHost } from '../hooks/host'
 import { psScript, resumePrompt } from '../hooks/launch'
+import { hostOf } from '../hooks/register'
 import type { TmHandover, TmHandoverNotice, TmSnapshot } from '../types'
 
 const ho = (n: number): TmHandover => ({
@@ -148,5 +149,60 @@ describe('launch', () => {
     expect(await flows.launch([spec])).toEqual({ opened: 0, copied: null, failed: [] })
     expect(seen.runs).toEqual([])
     expect(seen.toasts).toEqual(['Demo: would open handover h-2'])
+  })
+})
+
+describe('launch through the real host bindings', () => {
+  const spec = { cwd: 'C:\work\proj', title: 'handover h-2', mode: 'fresh' as const, prompt: resumePrompt('h-2', 'C:\p\h-2.md') }
+  /** The engine's `$` reduced to what the launch path touches: hostOf maps it, the flows run over it. */
+  function over(run: (argv: readonly string[], o: { timeoutMs: number }) => Promise<{ exitCode: number; stdout: string }>) {
+    const seen = { runs: [] as { argv: readonly string[]; timeoutMs: number }[], logs: [] as string[], toasts: [] as string[], copies: [] as string[] }
+    const engine = {
+      env: { get: async (name: string) => (name === 'OS' ? 'Windows_NT' : undefined) },
+      process: {
+        run: async (argv: readonly string[], o: { timeoutMs: number }) => {
+          seen.runs.push({ argv, timeoutMs: o.timeoutMs })
+          return run(argv, o)
+        },
+      },
+      clock: { sleep: async () => undefined },
+      ui: {
+        log: (text: string) => void seen.logs.push(text),
+        toast: (text: string) => void seen.toasts.push(text),
+        copy: async (c: { text: string }) => {
+          seen.copies.push(c.text)
+          return { isCopied: true, reason: '' }
+        },
+      },
+    } as unknown as Parameters<typeof hostOf>[0]
+    const quiet = new Proxy({}, { get: () => async () => undefined }) as unknown as TmWriter
+    const flows = createFlows({
+      host: hostOf(engine),
+      write: quiet,
+      actions: { done: async () => ({ ok: true }), backToAgent: async () => ({ ok: true }) },
+      afterWrite: () => undefined,
+      boundId: async () => null,
+      source: 'tm',
+    })
+    return { flows, seen }
+  }
+
+  test('the argv reaches process.run as separate arguments, unjoined, with the launch timeout', async () => {
+    const { flows, seen } = over(async () => ({ exitCode: 0, stdout: '' }))
+    expect(await flows.launch([spec])).toEqual({ opened: 1, copied: null, failed: [] })
+    const wt = seen.runs.find(r => r.argv[0] === 'wt.exe')
+    expect(wt?.argv.slice(0, 4)).toEqual(['wt.exe', '-w', '0', 'nt'])
+    expect(wt?.argv.length).toBeGreaterThan(4)
+    expect(wt?.timeoutMs).toBe(15_000)
+  })
+
+  test('a run that throws or times out reads as not opened: the command is copied and the reason is logged', async () => {
+    const { flows, seen } = over(async () => {
+      throw new Error('timed out')
+    })
+    const r = await flows.launch([spec])
+    expect(r.opened).toBe(0)
+    expect(seen.copies).toEqual([psScript(spec, undefined)])
+    expect(seen.logs.some(l => l.includes('timed out'))).toBe(true)
   })
 })
