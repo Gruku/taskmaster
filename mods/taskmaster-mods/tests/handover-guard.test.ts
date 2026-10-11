@@ -21,6 +21,9 @@ import { stateOf, type World, worldOf } from './fixtures/world'
 const MIN = 60_000
 const ON = { options: { handoverGuard: true }, plugins: [RR_STUB] }
 const OFF = { plugins: [RR_STUB] }
+const FORK_ONLY = { options: { handoverGuard: true, handoverGuardCompact: false }, plugins: [RR_STUB] }
+const PROMPT_ONLY = { options: { handoverGuard: true, handoverGuardFork: false, handoverGuardCompact: false }, plugins: [RR_STUB] }
+const PROMPT_COMPACT = { options: { handoverGuard: true, handoverGuardFork: false }, plugins: [RR_STUB] }
 const TURN_END = { answer: 'ok', reason: 'answer', durationMs: 1, isAborted: false, turnId: 't1' } as never
 const CREATE = 'mcp__plugin_taskmaster_tm__backlog_handover_create'
 const WRITTEN = 'Handover written: H-0042\n- File: .taskmaster/handovers/H-0042.md'
@@ -109,12 +112,16 @@ describe('handover guard: decisions', () => {
 
   test('config: off by default, 55 min and 200k; bad values fall back; idle stays under the late mark', () => {
     expect(guardConfigOf({})).toEqual(GUARD_DEFAULTS)
-    expect(GUARD_DEFAULTS).toEqual({ enabled: false, idleMs: 55 * MIN, minTokens: 200_000 })
+    expect(GUARD_DEFAULTS).toEqual({ enabled: false, idleMs: 55 * MIN, minTokens: 200_000, fork: true, compact: true })
     expect(guardConfigOf({ handoverGuard: true, handoverGuardIdleMinutes: 40, handoverGuardMinTokens: 150_000 })).toEqual({
       enabled: true,
       idleMs: 40 * MIN,
       minTokens: 150_000,
+      fork: true,
+      compact: true,
     })
+    expect(guardConfigOf({ handoverGuardFork: false, handoverGuardCompact: false })).toMatchObject({ fork: false, compact: false })
+    expect(guardConfigOf({ handoverGuardFork: 'no', handoverGuardCompact: 0 })).toMatchObject({ fork: true, compact: true })
     expect(guardConfigOf({ handoverGuardIdleMinutes: -3, handoverGuardMinTokens: Number.NaN })).toEqual(GUARD_DEFAULTS)
     expect(guardConfigOf({ handoverGuardIdleMinutes: 90 }).idleMs).toBe(57 * MIN)
   })
@@ -368,5 +375,100 @@ describe('handover guard: in a session', () => {
     await $.turn.complete(TURN_END)
     await clock.advance(56 * MIN)
     expect(g.forks).toEqual([])
+  })
+})
+
+describe('handover guard: modes', () => {
+  test('fork without compaction: the fork writes the handover, nothing is compacted', FORK_ONLY, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.forks).toHaveLength(1)
+    expect(created(world)).toHaveLength(1)
+    expect(g.compacts).toEqual([])
+    expect(g.submits).toEqual([])
+  })
+
+  test('no fork, no compaction: the conversation is asked once, as the guard first did', PROMPT_ONLY, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 250_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.forks).toEqual([])
+    expect(g.submits).toHaveLength(1)
+    expect(g.submits[0]).toContain('taskmaster:handover')
+    expect(g.submits[0]).toContain('250k')
+    expect(g.submits[0]).not.toContain('compacted')
+    await $.tool.call({ tool: CREATE, tldr: 'wrap up' } as never)
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+  })
+
+  test('no fork, with compaction: the guard turn that writes a handover is compacted once it ends', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.submits).toHaveLength(1)
+    expect(g.submits[0]).toContain('compacted')
+    await $.turn.start({ text: '', turnId: 't2' })
+    await $.tool.call({ tool: CREATE, tldr: 'wrap  up', next_action: 'run tests' } as never)
+    expect(g.compacts).toEqual([])
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toHaveLength(1)
+    expect(g.compacts[0]).toContain('H-0042')
+    expect(g.compacts[0]).toContain('wrap up')
+    expect(g.compacts[0]).toContain('run tests')
+    await $.turn.complete(TURN_END)
+    await clock.advance(120 * MIN)
+    expect(g.compacts).toHaveLength(1)
+    expect(g.submits).toHaveLength(1)
+  })
+
+  test('no fork, with compaction: a guard turn that writes no handover is not compacted', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    g.reply = { text: 'Error: tldr is required' }
+    await $.tool.call({ tool: CREATE, tldr: '' } as never)
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+    expect(world.logs.some(l => l.text.includes('wrote no handover'))).toBe(true)
+  })
+
+  test('no fork, with compaction: a prompt of yours before the guard turn ends cancels the compaction', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    await $.tool.call({ tool: CREATE, tldr: 'wrap up' } as never)
+    await $.prompt.submit({ text: 'actually, one more thing' } as never)
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+  })
+
+  test('no fork, with compaction: a turn starting before the delayed compaction runs cancels it', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    await $.tool.call({ tool: CREATE, tldr: 'wrap up' } as never)
+    await $.turn.complete(TURN_END)
+    await $.turn.start({ text: '', turnId: 't3' })
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+    expect(world.logs.some(l => l.text.includes('did not compact'))).toBe(true)
   })
 })

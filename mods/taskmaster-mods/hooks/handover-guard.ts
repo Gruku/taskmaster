@@ -1,6 +1,6 @@
 // User intent: an opt-in guard for long sessions left idle — before the 1-hour prompt cache goes cold over a big context,
-// write a handover from a fork of the conversation and then compact it, so the main transcript never carries a handover
-// turn and the session resumes small; at most one per session, never a loop, never a compaction without its handover.
+// get a handover written (by a fork of the conversation, or by the conversation itself) and optionally compact, as the
+// person configures; at most one per session, never a loop, never a compaction without its handover.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, PluginOptions, Timer, ToolCallResult } from 'claude-code'
 
@@ -13,10 +13,18 @@ const MIN = 60_000
 const LATE_MS = 58 * MIN
 const MAX_IDLE_MINUTES = 57
 
-export type GuardConfig = { readonly enabled: boolean; readonly idleMs: number; readonly minTokens: number }
+export type GuardConfig = {
+  readonly enabled: boolean
+  readonly idleMs: number
+  readonly minTokens: number
+  /** A fork writes the handover (true) or the main conversation is asked to (false). */
+  readonly fork: boolean
+  /** Compact once the handover is written. */
+  readonly compact: boolean
+}
 export type GuardVerdict = { readonly fire: true; readonly tokens: number } | { readonly fire: false; readonly reason: string }
 
-export const GUARD_DEFAULTS: GuardConfig = { enabled: false, idleMs: 55 * MIN, minTokens: 200_000 }
+export const GUARD_DEFAULTS: GuardConfig = { enabled: false, idleMs: 55 * MIN, minTokens: 200_000, fork: true, compact: true }
 const FRESH_GUARD: TmHandoverGuard = { lastTurnEnd: null, latch: 'none' }
 
 const GUARD = atom({ plugin: 'taskmaster-mods', key: 'handoverGuard' } as const, FRESH_GUARD)
@@ -32,6 +40,8 @@ export function guardConfigOf(options: PluginOptions): GuardConfig {
     enabled: options.handoverGuard === true,
     idleMs: minutes === null ? GUARD_DEFAULTS.idleMs : Math.min(minutes, MAX_IDLE_MINUTES) * MIN,
     minTokens: positive(options.handoverGuardMinTokens) ?? GUARD_DEFAULTS.minTokens,
+    fork: options.handoverGuardFork !== false,
+    compact: options.handoverGuardCompact !== false,
   }
 }
 
@@ -51,6 +61,12 @@ export function isHandoverWritten(ran: { readonly deny?: string; readonly text?:
   if (ran.deny !== undefined || ran.isError === true) return false
   return typeof ran.text === 'string' && /\bHandover written: \S/.test(ran.text)
 }
+
+/** Without a fork: the prompt the main conversation answers with the handover skill. */
+export const guardPrompt = (idleMinutes: number, tokens: number, compact: boolean): string =>
+  `Cache-cold guard: this session has been idle ${idleMinutes} min at ${Math.round(tokens / 1000)}k tokens of context and the ` +
+  'prompt cache expires at 60 min. Write a handover now with the taskmaster:handover skill, then stop.' +
+  (compact ? ' The session is compacted once this turn ends.' : '')
 
 /** The one message the fork answers: it has no tools, so it hands the handover back as text for the guard to file. */
 export const forkPrompt = (idleMinutes: number, tokens: number): string =>
@@ -93,14 +109,26 @@ export function handoverArgs(h: ForkHandover, tokens: number): Record<string, un
   }
 }
 
-export const compactInstructions = (id: string, h: ForkHandover): string =>
+export const compactInstructions = (id: string, h: Pick<ForkHandover, 'tldr' | 'nextAction'>): string =>
   `Handover ${id} was just written for this work: ${h.tldr}` +
   (h.nextAction === '' ? '' : ` Next: ${h.nextAction}`) +
   ` Keep what resuming from it needs, and name ${id} in the summary.`
 
+/** After the guard's own prompt turn ends, the compaction waits this long: a compaction never runs inside a turn. */
+const COMPACT_AFTER_TURN_MS = 1_000
+
+type Owed = { id: string | null; tldr: string; nextAction: string }
+
 // The pending check of this module instance; a hot reload cancels it with the old environment, the latch stays in $.state.
 // `epoch` moves on at every turn start, prompt and session end: an arm or a check begun before one of them is stale.
-const guard: { cfg: GuardConfig; pending: Timer | null; epoch: number } = { cfg: GUARD_DEFAULTS, pending: null, epoch: 0 }
+// `owed`: the guard prompted the main conversation with compaction on; the handover its turn writes fills it in, and the
+// turn's end compacts. A user prompt or a session end lets it go.
+const guard: { cfg: GuardConfig; pending: Timer | null; epoch: number; owed: Owed | null } = {
+  cfg: GUARD_DEFAULTS,
+  pending: null,
+  epoch: 0,
+  owed: null,
+}
 
 function disarm(): void {
   guard.pending?.cancel()
@@ -136,20 +164,33 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   if (!won) return
   const minutes = Math.round(cfg.idleMs / MIN)
   $.ui.log(`taskmaster-mods: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
-  $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: writing a handover from a fork, then compacting`)
+  const how = `${cfg.fork ? 'writing a handover from a fork' : 'asking for a handover'}${cfg.compact ? ', then compacting' : ''}`
+  $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: ${how}`)
   if (epoch !== guard.epoch) {
     $.ui.log('taskmaster-mods: handover guard latched but not run: the session moved on meanwhile', { to: 'debug' })
     return
   }
   try {
-    await forkAndCompact($, epoch, minutes, verdict.tokens)
+    if (cfg.fork) await forkAndCompact($, epoch, minutes, verdict.tokens, cfg.compact)
+    else await promptForHandover($, minutes, verdict.tokens, cfg.compact)
   } catch (error) {
     $.ui.log(`taskmaster-mods: handover guard stopped: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
   }
 }
 
-/** Fork → file the handover → compact; any step that fails stops the rest, so a compaction always has its handover. */
-async function forkAndCompact($: EngineInterface, epoch: number, minutes: number, tokens: number): Promise<void> {
+/** The main conversation writes it; with compaction on, its turn's end compacts once a handover was written in it. */
+async function promptForHandover($: EngineInterface, minutes: number, tokens: number, compact: boolean): Promise<void> {
+  guard.owed = compact ? { id: null, tldr: '', nextAction: '' } : null
+  try {
+    await $.prompt.submit({ text: guardPrompt(minutes, tokens, compact) })
+  } catch (error) {
+    guard.owed = null
+    throw error
+  }
+}
+
+/** Fork → file the handover → compact (when on); a step that fails stops the rest, so a compaction always has its handover. */
+async function forkAndCompact($: EngineInterface, epoch: number, minutes: number, tokens: number, compact: boolean): Promise<void> {
   const fail = (why: string): void => {
     $.ui.log(`taskmaster-mods: handover guard: ${why}`, { to: 'debug' })
     $.ui.toast(`Handover guard: ${why}`)
@@ -172,12 +213,39 @@ async function forkAndCompact($: EngineInterface, epoch: number, minutes: number
   await update($, NOTICE, () => handoverNotice(args, receipt, root))
   $.ui.log(`taskmaster-mods: handover guard wrote ${receipt.id} from a fork`, { to: 'debug' })
 
+  if (!compact) return
   if (epoch !== guard.epoch) {
     $.ui.log(`taskmaster-mods: handover guard wrote ${receipt.id} but did not compact: the session moved on meanwhile`, { to: 'debug' })
     return
   }
-  const compacted = await $.session.compact({ instructions: compactInstructions(receipt.id, handover) })
+  await compactFor($, receipt.id, handover)
+}
+
+async function compactFor($: EngineInterface, id: string, h: Pick<ForkHandover, 'tldr' | 'nextAction'>): Promise<void> {
+  const compacted = await $.session.compact({ instructions: compactInstructions(id, h) })
   if (compacted.skip !== undefined) $.ui.log(`taskmaster-mods: handover guard did not compact: ${compacted.skip}`, { to: 'debug' })
+}
+
+/** The guard's own prompt turn ended: compact a moment later if it wrote a handover, else say why not. */
+function settleOwed($: EngineInterface): void {
+  const owed = guard.owed
+  guard.owed = null
+  if (owed === null) return
+  const id = owed.id
+  if (id === null) {
+    $.ui.log('taskmaster-mods: handover guard did not compact: its turn wrote no handover', { to: 'debug' })
+    return
+  }
+  const epoch = guard.epoch
+  $.clock.after(COMPACT_AFTER_TURN_MS, () => {
+    if (epoch !== guard.epoch) {
+      $.ui.log(`taskmaster-mods: handover guard wrote ${id} but did not compact: the session moved on meanwhile`, { to: 'debug' })
+      return
+    }
+    void compactFor($, id, owed).catch(error => {
+      $.ui.log(`taskmaster-mods: handover guard did not compact: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    })
+  })
 }
 
 async function arm($: EngineInterface, epoch: number): Promise<void> {
@@ -191,6 +259,17 @@ async function arm($: EngineInterface, epoch: number): Promise<void> {
   guard.pending = $.clock.after(guard.cfg.idleMs, () => {
     void check($, epoch).catch(() => undefined) // a check that cannot read the state now just does not ask
   })
+}
+
+/** The handover the guard's prompt turn wrote: what its owed compaction names. */
+function owe(input: Readonly<Record<string, unknown>>, text: string): void {
+  const id = parseHandoverWritten(text)?.id
+  if (id === undefined || guard.owed === null) return
+  const field = (key: string): string => {
+    const v = input[key]
+    return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''
+  }
+  guard.owed = { id, tldr: field('tldr'), nextAction: field('next_action') }
 }
 
 async function noteHandover($: EngineInterface): Promise<void> {
@@ -207,6 +286,7 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
     const result = await next(e)
     if (e.agentId !== undefined) return result
     try {
+      settleOwed($)
       await arm($, epoch)
     } catch (error) {
       $.ui.log(`taskmaster-mods: handover guard not armed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
@@ -219,14 +299,17 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
     return next(e)
   })
 
+  // The person's own prompt (the guard's skips its own hooks): a compaction owed to the guard's turn is let go.
   on('prompt.submit', async ($, e, next) => {
     interrupt()
+    guard.owed = null
     return next(e)
   })
 
-  // /clear and a resume end this session: a timer armed in it must never check (or fork) the next one.
+  // /clear and a resume end this session: a timer armed in it must never check (or fork, or compact) the next one.
   on('session.end', async ($, e, next) => {
     interrupt()
+    guard.owed = null
     return next(e)
   })
 
@@ -234,7 +317,10 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
   on('tool.call', { tool: /backlog_handover_create$/ }, async ($, e, next) => {
     const ran: ToolCallResult = await next(e)
     try {
-      if (isHandoverWritten(ran)) await noteHandover($)
+      if (isHandoverWritten(ran)) {
+        if (e.agentId === undefined) owe(e as unknown as Readonly<Record<string, unknown>>, (ran as { text?: string }).text ?? '')
+        await noteHandover($)
+      }
     } catch {
       // a latch that cannot be written now only lets the guard ask once more; the tool's result is never held up
     }
