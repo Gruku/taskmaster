@@ -21,7 +21,7 @@ const wide = (columns: number) => ({ ...pane('tm-review'), props: { ...pane('tm-
 const REAL: TmSnapshot = { ...demoSnapshot(0), reason: '' }
 
 describe('review card', () => {
-  test('the focused card: box, kind, id, title and age; then lane and gate; then the labelled check with digit keys', DEMO, async ($, on) => {
+  test('the focused card: box, kind, id, title and age; then lane and gate; then the labelled check', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
@@ -29,8 +29,9 @@ describe('review card', () => {
       expect(await ui.find({ type: 'Text', text }), text).toBeDefined()
     }
     expect(await ui.find({ type: 'Text', text: /^Unified chat pre-build gets the full supervisor toolset/ })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props).toMatchObject({ hotkey: '1', label: `☐ ${FIRST}` })
-    expect((await ui.find({ type: 'Button', key: 'tick-1' }))?.props).toMatchObject({ hotkey: '2', label: `☐ ${SECOND}` })
+    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props).toMatchObject({ label: `☐ ${FIRST}` })
+    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'tick-1' }))?.props).toMatchObject({ label: `☐ ${SECOND}` })
     expect((await ui.find({ type: 'Button', key: 'details' }))?.props).toMatchObject({ hotkey: 'i', label: '▸ more' })
   })
 
@@ -112,7 +113,7 @@ describe('review card', () => {
     expect(await ui.find({ type: 'Text', text: `☐ ${FIRST}` })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: `☑ ${SECOND}` })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
-    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBe('1')
+    expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.label).toBe(`☐ ${FIRST}`)
   })
 
   test('i shows notes, links and branch/PR under the check, and hides them again', DEMO, async ($, on) => {
@@ -168,6 +169,8 @@ describe('review card', () => {
     })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
+    await ui.press({ key: 'tick' })
+    await ui.redraw()
     expect((await ui.find({ type: 'Button', key: 'tick-8' }))?.props.hotkey).toBe('9')
     expect((await ui.find({ type: 'Button', key: 'tick-9' }))?.props.hotkey).toBeUndefined()
     expect((await ui.find({ type: 'Button', key: 'tick-10' }))?.props.label).toBe('☐ step 11')

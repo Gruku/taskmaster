@@ -328,10 +328,13 @@ export function createFlows(d: TmFlowDeps) {
     /** `+N ▾` / `f`: opens the overlay list (reading the phases fresh) or closes it. */
     setOverlay: async (pane: TmPhasePane, open: boolean): Promise<void> => {
       await d.write.phaseView(pane, v => ({ ...v, overlay: open }))
+      // `f` takes the digits for the overlay's picks: review's tick mode lets go of them.
+      if (pane === 'review') await d.write.reviewList(l => ({ ...l, ticking: false }))
       if (open) await loadPhases(pane)
     },
     askDone: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'confirm', refusal: '', currentId: id }))
+      await d.write.reviewList(l => ({ ...l, ticking: false }))
       await d.host.focus(REVIEW, 'confirm-no')
     },
     cancel: async (): Promise<void> => {
@@ -352,6 +355,7 @@ export function createFlows(d: TmFlowDeps) {
       }),
     askNote: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'note', refusal: '', currentId: id }))
+      await d.write.reviewList(l => ({ ...l, ticking: false }))
       await d.host.focus(REVIEW, 'note')
     },
     /** `humanAction`: the check the card shows ('' when known empty), so the clear knows what "(not persisted)" means. */
@@ -390,13 +394,20 @@ export function createFlows(d: TmFlowDeps) {
      */
     focusCard: async (id: string, page: number): Promise<void> => {
       await d.write.cursor(c => (c.currentId === id ? c : { ...c, currentId: id, mode: 'card', refusal: '' }))
-      await d.write.reviewList(l => ({ ...l, page }))
+      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
       await d.host.focus(REVIEW, `sel:${id}`)
     },
     /** p / n: that page, its first card focused. */
     turnReviewPage: async (page: number): Promise<void> => {
       await d.write.cursor(c => ({ ...c, currentId: '', mode: 'card', refusal: '' }))
-      await d.write.reviewList(l => ({ ...l, page }))
+      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
+    },
+    /**
+     * `t`: the focused card's checks take the digits 1–9 (the strip lets go of them) until one is ticked, `t` again, `f`, a
+     * move or a page turn: ticking is two keystrokes, and a stray digit never ticks.
+     */
+    armTick: async (): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, ticking: !l.ticking }))
     },
     /** s, or a press on a card's box. */
     toggleSelect: async (id: string): Promise<void> => {
@@ -509,6 +520,7 @@ export function createFlows(d: TmFlowDeps) {
       const items = toggleTick(ticksOf(await d.host.storeGet(key)), item)
       await d.host.storeSet(key, { at: await d.host.now(), items })
       await d.write.ticks(all => ({ ...all, [taskId]: items }))
+      await d.write.reviewList(l => (l.ticking ? { ...l, ticking: false } : l))
     },
     toggleDetails: async (): Promise<void> => {
       await d.write.detailsOpen(open => !open)

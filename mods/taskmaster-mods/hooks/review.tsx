@@ -86,6 +86,8 @@ export type ReviewHandlers = {
   selectNone: () => void
   /** u: read the queue and the phases again (Retry while offline). */
   refresh: () => void
+  /** t: arm (or disarm) the focused card's checks for one digit. */
+  armTick: () => void
 }
 
 /** The id keeps at least this many cells before the title and age give way. */
@@ -245,10 +247,11 @@ async function expandedBody(k: Kit, c: CardContext, ground: RrGround): Promise<R
     } else if (check.detail !== '') {
       body.push(...lines(k, t.fg.subtle, check.detail, room))
     }
-    // Ticks press only in card mode; under the y/n the items are plain text (marks still shown, same indent).
+    // Ticks press only in card mode; under the y/n the items are plain text (marks still shown, same indent). A check carries
+    // its digit only while `t` has armed the card, so the digits are the strip's the rest of the time.
     const armed = mode === 'card'
     check.items.forEach((entry, i) => {
-      const key = armed && i < 9 ? String(i + 1) : undefined
+      const key = armed && v.list.ticking && i < 9 ? String(i + 1) : undefined
       const lead = (key === undefined ? 0 : 3) + 2
       const wrapped = wrapText(entry, room - lead)
       const first = `${ticked.includes(entry) ? '☑' : '☐'} ${wrapped[0] ?? ''}`
@@ -297,6 +300,7 @@ async function expandedBody(k: Kit, c: CardContext, ground: RrGround): Promise<R
   const actions = [
     keycap(k, { id: 'done', key: 'd', label: 'done', tone: 'success', on: ground, onPress: () => on.askDone(item.id) }),
     keycap(k, { id: 'back', key: 'a', label: 'agent', tone: 'warning', on: ground, onPress: () => on.askNote(item.id) }),
+    ...(check.items.length === 0 ? [] : [keycap(k, { id: 'tick', key: 't', label: 'tick', selected: v.list.ticking, on: ground, onPress: on.armTick })]),
     keycap(k, { id: 'open', key: 'o', label: 'open', on: ground, onPress: () => on.fill(`Look at ${item.id}`) }),
     keycap(k, { id: 'viewer', key: 'v', label: 'viewer', on: ground, onPress: () => on.openViewer(item.id) }),
     keycap(k, { id: 'copy', key: 'c', label: 'copy check', on: ground, onPress: press => on.copyCheck(item.id, action, press.surface) }),
@@ -407,7 +411,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
     onPress: () => (next === null ? undefined : on.focus(next.id, next.page)),
     ...(next === null ? { dim: 'Already on the last card' } : {}),
   })
-  const hints = ['s select', 'h/l phase', 'f phases', 'p/n page', '1-9 tick', 'u refresh']
+  const hints = v.list.ticking ? ['1-9 ticks a check', 't or f cancels'] : ['s select', 'h/l phase', 'f phases', '0-9 phase', 'p/n page', 't+1-9 tick', 'u refresh']
 
   return root(k, rr, [
     bar,

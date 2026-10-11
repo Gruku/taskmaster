@@ -737,8 +737,8 @@ export const register: Register = (on, options) => {
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
       surface: e.surface,
       say: (text: string) => mod.host?.toast(text),
-      // Digits stay with the check items' ticks until Stage 3 moves ticks to `t` + digit.
-      strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: false, empty: 'Nothing waiting' },
+      // The digits are the strip's, save while `t` has armed the focused card's checks.
+      strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: !list.ticking, empty: 'Nothing waiting' },
     }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
@@ -766,6 +766,7 @@ export const register: Register = (on, options) => {
         selectAll: ids => act(f => f.selectAll(ids)),
         selectNone: () => act(f => f.selectNone()),
         refresh: () => act(f => f.refresh('review')),
+        armTick: () => act(f => f.armTick()),
       },
       e.props.bodyColumns,
     )
@@ -898,6 +899,7 @@ export const register: Register = (on, options) => {
       const id = element.slice(4)
       if ((await read($, CURSOR)).currentId !== id) {
         await update($, CURSOR, c => ({ ...c, currentId: id, mode: 'card' as const, refusal: '' }))
+        await update($, REVIEW_LIST, l => (l.ticking ? { ...l, ticking: false } : l))
       }
     }
     return moved
