@@ -223,3 +223,57 @@ describe('elements', () => {
     expect(textOf(kit.chip(surv, { text: 'refused', tone: 'critical', strength: 24 }))).toBe('[◆ refused]')
   })
 })
+
+describe('badges and tints', () => {
+  const ON: readonly RrGround[] = ['page', 'raised', 'overlay']
+
+  test('a badge is the tone tint on its ground (24 by default, 12 quiet) with bold foreground-bold ink; survivalist steps a surface', () => {
+    for (const p of POLARITIES) {
+      const t = tokensFor(p)
+      for (const tone of TONES) {
+        for (const on of ON) {
+          const strong = kit.badgeProps(t, { tone, on })
+          const quiet = kit.badgeProps(t, { tone, on, strength: 12 })
+          expect(strong.color).toBe(t.fg.bold)
+          expect(strong.bold).toBe(true)
+          if (p === 'survivalist') {
+            expect(strong.backgroundColor).toBe(t.border.strong)
+            expect(quiet.backgroundColor).not.toBe(t.border.strong)
+          } else {
+            expect(strong.backgroundColor).toBe(t.tint24[on][tone])
+            expect(quiet.backgroundColor).toBe(t.tint12[on][tone])
+          }
+        }
+      }
+    }
+    expect(kit.badgeProps(tokensFor('dark'), { tone: 'info' })).toEqual(kit.badgeProps(tokensFor('dark'), { tone: 'info', on: 'page', strength: 24 }))
+  })
+
+  test('badge ink reads at 4.5:1 or better on its fill in every polarity, tone, ground and strength', () => {
+    for (const p of POLARITIES) {
+      const t = tokensFor(p)
+      for (const tone of TONES) {
+        for (const on of ON) {
+          for (const strength of [12, 24] as const) {
+            const b = kit.badgeProps(t, { tone, on, strength })
+            expect(contrast(b.color, b.backgroundColor) >= 4.5, `${p} ${tone} on ${on} at ${strength}`).toBe(true)
+          }
+        }
+      }
+    }
+  })
+
+  test('tint lays fg over bg at alpha, clamps alpha to 0..1, and refuses anything but #rrggbb', () => {
+    expect(kit.tint({ fg: '#ffffff', bg: '#000000', alpha: 0.5 })).toBe('#808080')
+    expect(kit.tint({ fg: '#ff0000', bg: '#0000ff', alpha: 0.25 })).toBe('#4000bf')
+    expect(kit.tint({ fg: '#ffffff', bg: '#000000', alpha: 2 })).toBe('#ffffff')
+    expect(kit.tint({ fg: '#ffffff', bg: '#000000', alpha: -1 })).toBe('#000000')
+    let refused = ''
+    try {
+      kit.tint({ fg: 'red', bg: '#000000', alpha: 0.5 })
+    } catch (error) {
+      refused = String(error)
+    }
+    expect(refused.includes('#rrggbb')).toBe(true)
+  })
+})

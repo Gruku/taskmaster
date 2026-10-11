@@ -120,6 +120,8 @@ function rrOf($: EngineInterface): Rr {
     buttonProps: a => $.rr.buttonProps(a),
     keycap: a => $.rr.keycap(a),
     chip: a => $.rr.chip(a),
+    badgeProps: a => $.rr.badgeProps(a),
+    tint: a => $.rr.tint(a),
   }
 }
 
