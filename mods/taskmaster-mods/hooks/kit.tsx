@@ -3,7 +3,9 @@
 // one fetch per render. JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { Elements, RenderNode, RenderSurface, UiPressArgument } from 'claude-code'
 
+import type { TmPhasePane, TmPhaseView } from '../types'
 import { truncate } from './model'
+import { ALL, atEnd, emptyLine, isDoneShown, orderPhases, overlayLine, shownTabs, step, tabCells, tabLabel, visibleTabs } from './phases'
 import type { Rr, RrGround, RrSignalKind, RrStrength, RrTextProps, RrTokens, RrTone } from './rr'
 
 export type Ui = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Input' | 'Select'>
@@ -443,4 +445,190 @@ export function selectionBar(
       </Box>
     </Box>
   )
+}
+
+// ── The phase strip (spec §5): shared by review, handovers and restore ──────────────────────────────────────────────
+
+/** One pane's strip as it draws: its phase view, the All count, and whether the digits are its own right now. */
+export type StripView = {
+  readonly pane: TmPhasePane
+  readonly view: TmPhaseView
+  /** The All tab's count: the pane's own total (review waiting, handovers open, restore sessions in scope). */
+  readonly allCount: number
+  /** The pane holds the keyboard: tabs carry 0–9 and show them. */
+  readonly focused: boolean
+  /** False while another row owns the digits (review's `t` + digit): tabs carry no digit. */
+  readonly digits: boolean
+  /** The pane's words for an empty selection: `Nothing waiting`, `No open handovers`, `No sessions`. */
+  readonly empty: string
+  /** The ground the strip sits on; default page. */
+  readonly on?: RrGround
+}
+
+export type StripHandlers = {
+  /** A tab, ‹ ›, a digit, an overlay pick or `0 All` chose this phase id. */
+  readonly choose: (phaseId: string) => void
+  readonly toggleDone: () => void
+  readonly overlay: (open: boolean) => void
+}
+
+/**
+ * Where the overlay list draws (spec §14 item 2, Task 0.2): `swap` replaces the pane body below the strip while open (nothing
+ * hides behind it); `absolute` lays it over the body.
+ */
+export const OVERLAY_PLACEMENT: 'swap' | 'absolute' = 'swap'
+/** The overlay's list: keycap rows (0–9, Tab + Enter) or one Select (↑↓ + Enter), per Task 0.2. */
+export const OVERLAY_LIST: 'buttons' | 'select' = 'buttons'
+const SELECT_ALL = '*'
+const moreLabel = (hidden: number): string => (hidden > 0 ? `+${hidden} ▾` : '▾')
+
+/**
+ * The strip: `‹ h` · tabs (digits while focused: 0 All, then 1–9 in order) · `+N ▾ f` · `› l`, then `◐ done` at the right.
+ * Tabs are real buttons; ‹ › dim at the ends (no wrap); empty and done tabs draw dim but choose all the same; the chosen tab
+ * carries the signature fill.
+ */
+export function phaseStrip(k: Kit, s: StripView, on: StripHandlers, width: number): RenderNode {
+  const { Box, Text } = k.ui
+  const ground = s.on ?? 'page'
+  const choice = s.view.choice
+  const tabs = orderPhases(s.view.phases, s.allCount, choice)
+  const showDone = isDoneShown(tabs, s.view.showDone)
+  const shown = shownTabs(tabs, choice, showDone)
+  const digits = s.focused && s.digits && !s.view.overlay
+  const prev = keycap(k, {
+    id: 'phase-prev',
+    key: 'h',
+    label: '‹',
+    on: ground,
+    onPress: () => on.choose(step(shown, choice, -1)),
+    ...(atEnd(shown, choice, -1) ? { dim: 'Already on the first phase' } : {}),
+  })
+  const next = keycap(k, {
+    id: 'phase-next',
+    key: 'l',
+    label: '›',
+    on: ground,
+    onPress: () => on.choose(step(shown, choice, 1)),
+    ...(atEnd(shown, choice, 1) ? { dim: 'Already on the last phase' } : {}),
+  })
+  const done = keycap(k, { id: 'phase-done', label: `${showDone ? '◐' : '○'} done`, selected: showDone, on: ground, onPress: on.toggleDone })
+  // ‹ › and `+N ▾` always stay; `◐ done` gives way when the chosen tab and All would not fit beside it; then All gives way;
+  // a tab longer than the room left is cut, so the strip never runs past its width.
+  const all = tabs[0]
+  const chosen = shown.find(tab => tab.id === choice)
+  const base = prev.width + next.width + 3 + moreLabel(tabs.length).length + 3
+  const want = (chosen === undefined ? 0 : tabCells(chosen, digits)) + (choice === ALL || all === undefined ? 0 : tabCells(all, digits))
+  const withDone = width - base - done.width - 1 >= want
+  const room = Math.max(0, width - base - (withDone ? done.width + 1 : 0))
+  const fitted = visibleTabs(shown, choice, room, digits)
+  const keptAll = choice !== ALL && all !== undefined && fitted.tabs.some(tab => tab.id === ALL)
+  const labelRoom = Math.max(3, room - (keptAll && all !== undefined ? tabCells(all, digits) : 0) - (digits ? 3 : 0) - 3)
+  const others = fitted.tabs.filter(tab => tab.id !== ALL)
+  const more = keycap(k, {
+    id: 'phase-more',
+    key: 'f',
+    label: moreLabel(tabs.length - fitted.tabs.length),
+    selected: s.view.overlay,
+    on: ground,
+    onPress: () => on.overlay(!s.view.overlay),
+  })
+  const cells = fitted.tabs.map(tab =>
+    keycap(k, {
+      id: `phase-tab:${tab.id}`,
+      ...(digits ? { key: tab.id === ALL ? '0' : String(others.indexOf(tab) + 1) } : {}),
+      label: truncate(tabLabel(tab), labelRoom),
+      selected: tab.id === choice,
+      faded: tab.dim,
+      on: ground,
+      onPress: () => on.choose(tab.id),
+    }),
+  )
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="flex-start">
+      {prev.el}
+      {cells.flatMap((cell, i) => (i === 0 ? [cell.el] : [<Text color={k.t.border.default}>│</Text>, cell.el]))}
+      {more.el}
+      {next.el}
+      <Box flexGrow={1} />
+      {withDone ? done.el : null}
+    </Box>
+  )
+}
+
+/** The `+N ▾` / `f` overlay: every phase (done ones included) with status, count and date; a pick chooses and closes it. */
+export function phaseOverlay(k: Kit, s: StripView, on: StripHandlers, width: number): RenderNode {
+  const { Box, Select } = k.ui
+  const { t } = k
+  const tabs = orderPhases(s.view.phases, s.allCount, s.view.choice)
+  const room = Math.max(10, width - 4)
+  const close = keycap(k, { id: 'phase-close', key: 'f', label: 'close', on: 'overlay', onPress: () => on.overlay(false) })
+  const list =
+    OVERLAY_LIST === 'select'
+      ? [
+          <Select
+            key="phase-select"
+            label="phase"
+            options={tabs.map(tab => ({ value: tab.id === ALL ? SELECT_ALL : tab.id, label: overlayLine(tab, room) }))}
+            value={s.view.choice === ALL ? SELECT_ALL : s.view.choice}
+            autoFocus
+            onSelect={value => on.choose(value === SELECT_ALL ? ALL : value)}
+          />,
+        ]
+      : tabs.map(
+          (tab, i) =>
+            keycap(k, {
+              id: `phase-pick:${tab.id}`,
+              ...(i <= 9 ? { key: String(i) } : {}),
+              label: overlayLine(tab, room - 3),
+              selected: tab.id === s.view.choice,
+              faded: tab.dim,
+              on: 'overlay',
+              ...(tab.id === s.view.choice ? { autoFocus: true } : {}),
+              onPress: () => on.choose(tab.id),
+            }).el,
+        )
+  return (
+    <Box flexDirection="column" backgroundColor={t.surface.overlay} borderStyle="round" borderColor={t.border.strong} paddingX={1}>
+      <Box flexDirection="row">
+        {label(k, 'phases').el}
+        <Box flexGrow={1} />
+        {close.el}
+      </Box>
+      {list}
+      {helpFooter(k, ['Tab moves', 'Enter picks', '0-9 pick', 'f closes'], room)}
+    </Box>
+  )
+}
+
+/** An empty selection: `Nothing waiting in <phase> · done <date>` and, under a phase, the `0 All` keycap back. */
+export function phaseEmpty(k: Kit, s: StripView, on: StripHandlers): RenderNode {
+  const { Box, Text } = k.ui
+  const tab = orderPhases(s.view.phases, s.allCount, s.view.choice).find(x => x.id === s.view.choice)
+  const all = keycap(k, { id: 'phase-all', key: '0', label: 'All', on: s.on ?? 'page', onPress: () => on.choose(ALL) })
+  return (
+    <Box flexDirection="row" columnGap={2} alignItems="flex-start">
+      <Text color={k.t.fg.subtle}>{emptyLine(s.empty, tab)}</Text>
+      {s.view.choice === ALL ? null : all.el}
+    </Box>
+  )
+}
+
+/** A pane's strip and body: the strip, then the body — or, while the overlay is open, the overlay per OVERLAY_PLACEMENT. */
+export function phaseSection(k: Kit, s: StripView, on: StripHandlers, width: number, body: readonly RenderNode[]): RenderNode[] {
+  const { Box } = k.ui
+  const strip = phaseStrip(k, s, on, width)
+  if (!s.view.overlay) return [strip, ...body]
+  const overlay = phaseOverlay(k, s, on, width)
+  if (OVERLAY_PLACEMENT === 'swap') return [strip, overlay]
+  return [
+    <Box flexDirection="column">
+      {strip}
+      <Box flexDirection="column">
+        {[...body]}
+        <Box position="absolute" top={0} left={2}>
+          {overlay}
+        </Box>
+      </Box>
+    </Box>,
+  ]
 }
