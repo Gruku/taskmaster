@@ -1,9 +1,12 @@
 // User intent: an opt-in guard for long sessions left idle — before the 1-hour prompt cache goes cold over a big context,
-// ask the model once to write a handover, so the session can be resumed cheaply; at most one per session, never a loop.
+// write a handover from a fork of the conversation and then compact it, so the main transcript never carries a handover
+// turn and the session resumes small; at most one per session, never a loop, never a compaction without its handover.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, PluginOptions, Timer, ToolCallResult } from 'claude-code'
 
-import type { TmHandoverGuard } from '../types'
+import type { TmHandoverGuard, TmHandoverNotice } from '../types'
+import { handoverNotice } from './model'
+import { parseHandoverWritten, replyText } from './parse'
 
 const MIN = 60_000
 /** The prompt cache lives 60 minutes; a check this late (a laptop asleep, a stalled host) finds it cold already. */
@@ -17,6 +20,9 @@ export const GUARD_DEFAULTS: GuardConfig = { enabled: false, idleMs: 55 * MIN, m
 const FRESH_GUARD: TmHandoverGuard = { lastTurnEnd: null, latch: 'none' }
 
 const GUARD = atom({ plugin: 'taskmaster-mods', key: 'handoverGuard' } as const, FRESH_GUARD)
+// The band's just-written notice, the same state key register.tsx raises it under for a handover the model wrote.
+const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
+const TM_SERVER = 'plugin:taskmaster:tm'
 
 const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null)
 
@@ -46,9 +52,51 @@ export function isHandoverWritten(ran: { readonly deny?: string; readonly text?:
   return typeof ran.text === 'string' && /\bHandover written: \S/.test(ran.text)
 }
 
-export const guardPrompt = (idleMinutes: number, tokens: number): string =>
-  `Cache-cold guard: this session has been idle ${idleMinutes} min at ${Math.round(tokens / 1000)}k tokens of context and the ` +
-  'prompt cache expires at 60 min. Write a handover now with the taskmaster:handover skill, then stop.'
+/** The one message the fork answers: it has no tools, so it hands the handover back as text for the guard to file. */
+export const forkPrompt = (idleMinutes: number, tokens: number): string =>
+  [
+    `<situation>This session has been idle ${idleMinutes} min at ${Math.round(tokens / 1000)}k tokens of context and the prompt`,
+    'cache expires at 60 min. A plugin is filing a Taskmaster handover from this transcript, then compacting the conversation.',
+    'You have no tools in this reply: answer in text only.</situation>',
+    '<task>Write the handover a cold session needs to resume this work: what was decided and why, what blocks, where to start',
+    'next, and the open threads. Name files, commits, task ids and commands exactly as the transcript has them; never invent',
+    'one.</task>',
+    '<format>Reply with exactly one handover element and nothing else:',
+    '<handover>',
+    '<tldr>one line: what this session was about and where it stands</tldr>',
+    '<next_action>one line: the first thing the next session should do</next_action>',
+    '<task_ids>comma-separated Taskmaster task ids this work relates to, or empty</task_ids>',
+    "<body>markdown with the sections ## Decisions, ## Blockers, ## Where I'd start, ## Open threads</body>",
+    '</handover></format>',
+  ].join('\n')
+
+export type ForkHandover = { readonly tldr: string; readonly nextAction: string; readonly taskIds: readonly string[]; readonly body: string }
+
+/** The fork's reply as a handover; null without a one-line tldr and a body (prose around the element is ignored). */
+export function parseForkHandover(text: string): ForkHandover | null {
+  const tag = (name: string): string => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim() ?? ''
+  const line = (name: string): string => tag(name).replace(/\s+/g, ' ')
+  const tldr = line('tldr')
+  const body = tag('body')
+  if (tldr === '' || body === '') return null
+  return { tldr, nextAction: line('next_action'), taskIds: tag('task_ids').split(/[\s,]+/).filter(Boolean), body }
+}
+
+export function handoverArgs(h: ForkHandover, tokens: number): Record<string, unknown> {
+  return {
+    tldr: h.tldr,
+    body: h.body,
+    next_action: h.nextAction,
+    session_kind: 'continuity',
+    ...(h.taskIds.length > 0 ? { task_ids: [...h.taskIds] } : {}),
+    options: { context_size_at_write: tokens },
+  }
+}
+
+export const compactInstructions = (id: string, h: ForkHandover): string =>
+  `Handover ${id} was just written for this work: ${h.tldr}` +
+  (h.nextAction === '' ? '' : ` Next: ${h.nextAction}`) +
+  ` Keep what resuming from it needs, and name ${id} in the summary.`
 
 // The pending check of this module instance; a hot reload cancels it with the old environment, the latch stays in $.state.
 // `epoch` moves on at every turn start, prompt and session end: an arm or a check begun before one of them is stale.
@@ -79,7 +127,7 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
     if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-mods: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
     return
   }
-  // Latch before submitting: the prompt's own turn ends and re-arms, and only an unlatched session may fire.
+  // Latch before forking: only an unlatched session may fire, and a failed run never asks again.
   let won = false
   await update($, GUARD, (g): TmHandoverGuard => {
     won = g.latch === 'none'
@@ -88,16 +136,48 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   if (!won) return
   const minutes = Math.round(cfg.idleMs / MIN)
   $.ui.log(`taskmaster-mods: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
-  $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: asking for a handover before the cache goes cold`)
+  $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: writing a handover from a fork, then compacting`)
   if (epoch !== guard.epoch) {
-    $.ui.log('taskmaster-mods: handover guard latched but not sent: the session moved on meanwhile', { to: 'debug' })
+    $.ui.log('taskmaster-mods: handover guard latched but not run: the session moved on meanwhile', { to: 'debug' })
     return
   }
   try {
-    await $.prompt.submit({ text: guardPrompt(minutes, verdict.tokens) })
+    await forkAndCompact($, epoch, minutes, verdict.tokens)
   } catch (error) {
-    $.ui.log(`taskmaster-mods: handover guard prompt not submitted: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    $.ui.log(`taskmaster-mods: handover guard stopped: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
   }
+}
+
+/** Fork → file the handover → compact; any step that fails stops the rest, so a compaction always has its handover. */
+async function forkAndCompact($: EngineInterface, epoch: number, minutes: number, tokens: number): Promise<void> {
+  const fail = (why: string): void => {
+    $.ui.log(`taskmaster-mods: handover guard: ${why}`, { to: 'debug' })
+    $.ui.toast(`Handover guard: ${why}`)
+  }
+  const reply = await $.model.fork({ prompt: forkPrompt(minutes, tokens) })
+  if (!reply.isAnswered) return fail(`no handover, the fork did not answer (${reply.reason})`)
+  const handover = parseForkHandover(reply.text)
+  if (handover === null) return fail('no handover, the fork reply had no tldr and body')
+
+  const args = handoverArgs(handover, tokens)
+  const ran = await $.mcp.call(TM_SERVER, 'backlog_handover_create', args)
+  const text = replyText(
+    ran.content.map(block => (block.type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n'),
+    ran.structuredContent,
+  )
+  const receipt = ran.isError ? null : parseHandoverWritten(text)
+  if (receipt === null) return fail(`no handover, tm refused it: ${text.split('\n')[0] ?? ''}`)
+  await noteHandover($)
+  const root = (await $.session.repo())?.root ?? (await $.session.root())
+  await update($, NOTICE, () => handoverNotice(args, receipt, root))
+  $.ui.log(`taskmaster-mods: handover guard wrote ${receipt.id} from a fork`, { to: 'debug' })
+
+  if (epoch !== guard.epoch) {
+    $.ui.log(`taskmaster-mods: handover guard wrote ${receipt.id} but did not compact: the session moved on meanwhile`, { to: 'debug' })
+    return
+  }
+  const compacted = await $.session.compact({ instructions: compactInstructions(receipt.id, handover) })
+  if (compacted.skip !== undefined) $.ui.log(`taskmaster-mods: handover guard did not compact: ${compacted.skip}`, { to: 'debug' })
 }
 
 async function arm($: EngineInterface, epoch: number): Promise<void> {
@@ -144,7 +224,7 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
     return next(e)
   })
 
-  // /clear and a resume end this session: a timer armed in it must never check (or prompt) the next one.
+  // /clear and a resume end this session: a timer armed in it must never check (or fork) the next one.
   on('session.end', async ($, e, next) => {
     interrupt()
     return next(e)

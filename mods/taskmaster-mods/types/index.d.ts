@@ -128,7 +128,7 @@ declare module 'claude-code' {
       handoverPage: number
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
       handoverNotice: TmHandoverNotice | null
-      /** One handover prompt per session at most: `$.state` is per session, so /clear or a resume can earn another. */
+      /** One guard run (fork, handover, compaction) per session at most: `$.state` is per session, so /clear or a resume can earn another. */
       handoverGuard: TmHandoverGuard
     }
   }

@@ -29,7 +29,7 @@
     "handoverGuard": {
       "type": "boolean",
       "title": "Cache-cold handover guard",
-      "description": "After the idle minutes below with a big context and no handover yet this session, ask the model once to write a handover before the 1-hour prompt cache expires. Arms from the next turn end after enabling or a reload.",
+      "description": "After the idle minutes below with a big context and no handover yet this session, once, before the 1-hour prompt cache expires: a fork of the conversation writes a handover, then the session is compacted. The conversation itself is never prompted, and nothing is compacted without its handover. Arms from the next turn end after enabling or a reload.",
       "default": false
     },
     "handoverGuardIdleMinutes": {
