@@ -11,6 +11,7 @@ import type {
   TmPhase,
   TmPhasePane,
   TmPhaseView,
+  TmReviewList,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
@@ -33,6 +34,7 @@ import {
   toggleTick,
 } from './model'
 import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
+import { FRESH_REVIEW_LIST, toggled } from './review-list'
 import { recordResumedFrom } from './resumed'
 
 export type TmWriter = {
@@ -50,6 +52,7 @@ export type TmWriter = {
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
   phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
   handoverPage: (page: number) => Promise<void>
+  reviewList: (change: (l: TmReviewList) => TmReviewList) => Promise<void>
   resumedFrom: (handoverId: string) => Promise<void>
   restoreHidden: (epoch: number) => Promise<void>
 }
@@ -80,6 +83,8 @@ export type TmFlowDeps = {
   resolve?: () => Promise<void>
   /** Reads one handover by id (tm: backlog_handover_get), for a copy the open list and the notice cannot answer. */
   readHandover?: (handoverId: string) => Promise<TmHandover | null>
+  /** Asks tm for a fresh snapshot (u, Retry); absent in demo, whose data does not change underneath. */
+  refresh?: () => void
 }
 
 /** The surfaces a key can open: band and Session `1` `2` `3` `4`. */
@@ -236,7 +241,7 @@ export function createFlows(d: TmFlowDeps) {
     return phases
   }
   // A tab, ‹ ›, a digit, an overlay pick or 0 All: kept per pane and project (not in demo), the overlay closes, and the pane
-  // starts over at its top (review's cursor: skips forgotten, or a skipped task of the new phase would hide).
+  // starts over at its top (review: page 1, its first card focused, nothing selected that the new phase does not show).
   const choosePhase = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
     let changed = false
     await d.write.phaseView(pane, v => {
@@ -245,7 +250,10 @@ export function createFlows(d: TmFlowDeps) {
     })
     if (!changed) return
     await keepChoice(pane, phaseId)
-    if (pane === 'review') await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [] }))
+    if (pane === 'review') {
+      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '' }))
+      await d.write.reviewList(() => FRESH_REVIEW_LIST)
+    }
     if (pane === 'handovers') {
       await d.write.handoverPage(0)
       await pick('')
@@ -254,6 +262,7 @@ export function createFlows(d: TmFlowDeps) {
   }
   const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
     await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
+    await d.write.reviewList(() => FRESH_REVIEW_LIST)
     await open(REVIEW, 'Review')
     // The phase list is read when the pane opens, off the open: the pane draws at once, the filter label follows.
     if (pin === '') {
@@ -375,8 +384,36 @@ export function createFlows(d: TmFlowDeps) {
         d.afterWrite(id, 'sent-back')
         return undefined
       }),
-    skip: async (id: string): Promise<void> => {
-      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [...c.skipped, id] }))
+    /**
+     * j / k, or the Tab ring landing on a card's box: that card takes the focus and expands; a confirm or refusal on the card
+     * left behind goes with it (a y can never land on a card the person moved off). The ring follows to the card's box.
+     */
+    focusCard: async (id: string, page: number): Promise<void> => {
+      await d.write.cursor(c => (c.currentId === id ? c : { ...c, currentId: id, mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => ({ ...l, page }))
+      await d.host.focus(REVIEW, `sel:${id}`)
+    },
+    /** p / n: that page, its first card focused. */
+    turnReviewPage: async (page: number): Promise<void> => {
+      await d.write.cursor(c => ({ ...c, currentId: '', mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => ({ ...l, page }))
+    },
+    /** s, or a press on a card's box. */
+    toggleSelect: async (id: string): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: toggled(l.selected, id) }))
+    },
+    /** `all`: these tasks join the selection (the page's); `none` clears it. */
+    selectAll: async (ids: readonly string[]): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: [...l.selected, ...ids.filter(id => !l.selected.includes(id))] }))
+    },
+    selectNone: async (): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: [] }))
+    },
+    /** u (and Retry): a fresh snapshot from tm, and the pane's phases read again. Demo says it has nothing newer. */
+    refresh: async (pane: TmPhasePane): Promise<void> => {
+      if (d.refresh === undefined) d.host.toast('taskmaster-mods: demo data has nothing newer to read')
+      else d.refresh()
+      await loadPhases(pane)
     },
     fill,
     bandAskDone: async (id: string): Promise<void> => {

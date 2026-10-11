@@ -111,10 +111,10 @@ export type TmFault = 'none' | 'offline' | 'unreadable' | 'connecting'
 /** The band's handover-written notice: the handover this session's main agent just wrote, and its Telegram-ready block. */
 export type TmHandoverNotice = { readonly id: string; readonly tldr: string; readonly path: string; readonly text: string }
 export type TmBinding = { readonly taskId: string; readonly at: number }
+/** The review pane's focused card (`currentId`, '' the page's first), what this pass signed off, and its confirm or note. */
 export type TmCursor = {
   readonly currentId: string
   readonly done: readonly string[]
-  readonly skipped: readonly string[]
   readonly mode: 'card' | 'confirm' | 'note'
   readonly refusal: string
 }

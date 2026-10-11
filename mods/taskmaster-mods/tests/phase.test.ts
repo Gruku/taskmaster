@@ -76,15 +76,16 @@ describe('review phase strip', () => {
     await $.command.run(command('tm-review'))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE_PANE })
-    await ui.press({ key: 'skip' })
+    const focused = async (id: string) => (await ui.find({ type: 'Box', key: `card:${id}` }))?.props.borderStyle
+    await ui.press({ key: 'focus-next' })
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: 'tm-audit-031' })).toBeDefined()
+    expect(await focused('tm-audit-031')).toBe('round')
     await ui.press({ key: 'phase-tab:p2' })
     await clock.settle()
     await ui.redraw()
     expect(world.store.get(reviewKey(world))).toEqual({ phase: 'p2' })
     expect((await ui.find({ type: 'Box', key: 'phase-tab:p2-box' }))?.props.backgroundColor).toBe(STRONG_SIGNATURE)
-    expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
+    expect(await focused('unified-chat-022')).toBe('round')
   })
 
   test('done phases stay hidden over four until ◐ done; a chosen done phase stays drawn when they hide again', TM, async ($, on) => {

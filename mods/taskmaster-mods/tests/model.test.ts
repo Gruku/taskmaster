@@ -6,7 +6,6 @@ import {
   ageLabel,
   bandModel,
   cardMode,
-  cardPosition,
   FRESH_CURSOR,
   gateSignal,
   handoverCopyText,
@@ -81,29 +80,13 @@ describe('queue', () => {
     expect(orderQueue(items).map(i => i.id)).toEqual(['crit-001', 'crit-002', 'high-001', 'low-001', 'ISS-0', 'ISS-1', 'DEC-1', 'DEC-2'])
   })
 
-  test('the card skips done and skipped items, honours a pinned id and counts the pass', () => {
-    const queue = [task('a-001', 'high'), task('b-001', 'high'), task('c-001', 'low')]
-    expect(cardPosition(queue, FRESH_CURSOR, 3)).toMatchObject({ n: 1, total: 3 })
-    expect(cardPosition(queue, FRESH_CURSOR, 3).item?.id).toBe('a-001')
-    const later = { ...FRESH_CURSOR, done: ['a-001'], skipped: ['b-001'] }
-    expect(cardPosition(queue, later, 2).item?.id).toBe('c-001')
-    expect(cardPosition(queue, later, 2)).toMatchObject({ n: 3, total: 3 })
-    expect(cardPosition(queue, { ...FRESH_CURSOR, currentId: 'c-001' }, 3).item?.id).toBe('c-001')
-    expect(cardPosition(queue, { ...FRESH_CURSOR, skipped: ['a-001', 'b-001', 'c-001'] }, 3).item).toBeNull()
-  })
-
-  test('a window of the first rows still counts everything the server says is waiting', () => {
-    const queue = [task('a-001', 'high'), task('b-001', 'high')]
-    expect(cardPosition(queue, FRESH_CURSOR, 355)).toMatchObject({ n: 1, total: 355 })
-  })
-
   test('a pinned task outside the loaded window gets its card from its own detail, never another card', () => {
     const queue = [task('a-001', 'high'), task('b-001', 'high')]
     const pinned = { ...FRESH_CURSOR, currentId: 'tm-audit-030', mode: 'note' as const }
     const known = reviewQueue(snap({ queue, queueTotal: 355 }), pinned, { 'tm-audit-030': { ...DETAIL, status: 'in-review', humanAction: 'Check dev' } })
-    expect(cardPosition(known, pinned, 355).item).toMatchObject({ kind: 'task', id: 'tm-audit-030', priority: 'high', humanAction: 'Check dev' })
+    expect(known[0]).toMatchObject({ kind: 'task', id: 'tm-audit-030', priority: 'high', humanAction: 'Check dev' })
     const bound = snap({ queue, queueTotal: 355, bound: { taskId: 'tm-audit-030', inferred: false, detail: DETAIL, pipeline: null } })
-    expect(cardPosition(reviewQueue(bound, pinned, {}), pinned, 355).item?.id).toBe('tm-audit-030')
+    expect(reviewQueue(bound, pinned, {})[0]?.id).toBe('tm-audit-030')
     expect(reviewQueue(snap({ queue }), FRESH_CURSOR, {})).toEqual(queue)
   })
 

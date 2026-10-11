@@ -19,7 +19,7 @@ export const SESSION = 'tm-session'
 export const RESTORE = 'tm-restore'
 /** `$.store` key of a restore burst the band's `x` hid (spec §10.4): hidden for that burst in every session. */
 export const restoreHiddenKey = (epoch: number): string => `restore-hidden:${epoch}`
-export const FRESH_CURSOR: TmCursor = { currentId: '', done: [], skipped: [], mode: 'card', refusal: '' }
+export const FRESH_CURSOR: TmCursor = { currentId: '', done: [], mode: 'card', refusal: '' }
 
 export const PRIORITY_RANK: Readonly<Record<TmPriority, number>> = { critical: 0, high: 1, medium: 2, low: 3 }
 export const PRIORITY_GLYPH: Readonly<Record<TmPriority, string>> = { critical: '◆', high: '▲', medium: 'ⓘ', low: '·' }
@@ -51,21 +51,11 @@ export function orderQueue(items: readonly TmQueueItem[]): TmQueueItem[] {
     .map(entry => entry.item)
 }
 
-export type CardPosition = { readonly item: TmQueueItem | null; readonly n: number; readonly total: number }
-
-// queueTotal is the server's count of everything waiting; the queue is a window of its first rows (priority order).
-export function cardPosition(queue: readonly TmQueueItem[], c: TmCursor, queueTotal: number): CardPosition {
-  const visible = queue.filter(i => !c.done.includes(i.id))
-  const remaining = visible.filter(i => !c.skipped.includes(i.id))
-  const item = remaining.find(i => i.id === c.currentId) ?? remaining[0] ?? null
-  return { item, n: c.done.length + c.skipped.length + 1, total: c.done.length + Math.max(visible.length, queueTotal) }
-}
-
 // The queue the review pane walks: the loaded window, plus the pinned task (band `a`, a card a confirm or note was asked
 // on) when the window does not hold it, built from that task's own detail by id — never a stand-in from the window.
 export function reviewQueue(s: TmSnapshot, c: TmCursor, details: Readonly<Record<string, TmTaskDetail>>): readonly TmQueueItem[] {
   const id = c.currentId
-  if (id === '' || s.queue.some(i => i.id === id) || c.done.includes(id) || c.skipped.includes(id)) return s.queue
+  if (id === '' || s.queue.some(i => i.id === id) || c.done.includes(id)) return s.queue
   const detail = details[id] ?? (s.bound?.taskId === id ? s.bound.detail : null)
   if (detail === null) return s.queue
   const pinned: TmQueueItem = {

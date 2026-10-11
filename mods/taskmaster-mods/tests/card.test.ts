@@ -1,12 +1,12 @@
-// User intent: the lean review card the user approved live (2026-10-06) — a raised round card under a header strip, the check
-// as a tickable checklist kept only locally, details on demand, viewer and copy, one action row that wraps rather than drops.
+// User intent: the focused review card (spec §8) — its one line, then lane and gate, the check as a tickable checklist kept
+// only locally, details on demand, viewer and copy, and an action row that wraps rather than drops — every row in its room.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { DEMO_DETAILS, demoSnapshot } from '../hooks/demo'
 import { splitCheck } from '../hooks/model'
 import type { TmSnapshot } from '../types'
 import { pane, PLUGIN, SESSION } from './fixtures/inputs'
-import { childKeys, type Drawn, elementsOf, widthOf } from './fixtures/measure'
+import { type Drawn, elementsOf, widthOf } from './fixtures/measure'
 import { RR_STUB } from './fixtures/rr-stub'
 import { stateOf, worldOf } from './fixtures/world'
 
@@ -15,52 +15,61 @@ const TM = { plugins: [RR_STUB] }
 const ID = 'unified-chat-022'
 const CHECK = DEMO_DETAILS[ID]!.humanAction
 const [FIRST, SECOND] = splitCheck(CHECK).items as [string, string]
-const ACTIONS = ['done-box', 'back-box', 'skip-box', 'open-box', 'viewer-box', 'copy-box']
+const ACTIONS = ['done', 'back', 'open', 'viewer', 'copy', 'details']
 const wide = (columns: number) => ({ ...pane('tm-review'), props: { ...pane('tm-review').props, bodyColumns: columns } })
 /** A tm-mode snapshot that is real data (not the demo marker), so tm-mode tests start from a state with a card. */
 const REAL: TmSnapshot = { ...demoSnapshot(0), reason: '' }
 
 describe('review card', () => {
-  test('header strip, raised round card, header line, title, labelled checklist with digit keys', DEMO, async ($, on) => {
+  test('the focused card: box, kind, id, title and age; then lane and gate; then the labelled check with digit keys', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
-    expect(await ui.find({ type: 'Text', text: 'REVIEW' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '●○○○○' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '1 of 5 · 0 done this pass' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^esc close$/ })).toBeDefined()
-    const cards = (await ui.findAll({ type: 'Box' })).filter(b => b.props.borderStyle === 'round')
-    expect(cards).toHaveLength(1)
-    for (const text of ['◆ CRITICAL', ID, '· 1h', '· FULL', '● review-gate pass', 'LIVE CHECK ON DEV', 'needs unifiedChatGenerate + unifiedChatBuild granted']) {
+    for (const text of [' BLOCKED   ', ID, '1h', 'FULL', ' review-gate pass', 'LIVE CHECK ON DEV', 'needs unifiedChatGenerate + unifiedChatBuild granted']) {
       expect(await ui.find({ type: 'Text', text }), text).toBeDefined()
     }
     expect(await ui.find({ type: 'Text', text: /^Unified chat pre-build gets the full supervisor toolset/ })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props).toMatchObject({ hotkey: '1', label: `☐ ${FIRST}` })
     expect((await ui.find({ type: 'Button', key: 'tick-1' }))?.props).toMatchObject({ hotkey: '2', label: `☐ ${SECOND}` })
-    expect((await ui.find({ type: 'Button', key: 'details' }))?.props).toMatchObject({ hotkey: 'i', label: '▸ details' })
+    expect((await ui.find({ type: 'Button', key: 'details' }))?.props).toMatchObject({ hotkey: 'i', label: '▸ more' })
   })
 
-  test('the action bar is one row when it fits, wraps to a second row before it drops anything, and drops only v and c', DEMO, async ($, on) => {
+  test('the action row: d done, a agent, o open, v viewer, c copy check, i more; it wraps rather than drops', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
-    for (const [columns, rows] of [
-      [100, 1],
-      [72, 2],
-    ] as const) {
-      const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(columns) })
-      const holding = elementsOf(await ui.drawn()).filter(b => childKeys(b).some(k => ACTIONS.includes(k)))
-      expect(holding, `${columns}`).toHaveLength(rows)
-      expect(holding.flatMap(childKeys), `${columns}`).toEqual(ACTIONS)
-      await ui.unmount()
-    }
     for (const columns of [100, 72, 48, 36, 28]) {
       const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(columns) })
+      for (const [key, hotkey, label] of [
+        ['done', 'd', 'done'],
+        ['back', 'a', 'agent'],
+        ['open', 'o', 'open'],
+        ['viewer', 'v', 'viewer'],
+        ['copy', 'c', 'copy check'],
+      ] as const) {
+        expect((await ui.find({ type: 'Button', key }))?.props, `${columns} ${key}`).toMatchObject({ hotkey, label, plain: true })
+      }
       const tree = (await ui.drawn()) as unknown as Drawn
       expect(widthOf(tree), `${columns}`).toBeLessThanOrEqual(columns)
-      const keys = elementsOf(tree).flatMap(childKeys)
-      for (const kept of ['done-box', 'back-box', 'skip-box', 'open-box']) expect(keys, `${columns}`).toContain(kept)
+      const keys = elementsOf(tree).flatMap(e => (e.type === 'Button' && ACTIONS.includes(String(e.props?.key)) ? [String(e.props?.key)] : []))
+      expect(keys, `${columns}`).toEqual(ACTIONS)
       await ui.unmount()
     }
+  })
+
+  test('a narrow card gives way: the title, then the kind word to its initial; the id shortens last', TM, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const long = { kind: 'task' as const, id: 'a-very-long-task-id-001', title: 'A title that fits a wide pane', priority: 'high' as const, humanAction: 'x', timestamp: '' }
+    stateOf(on, { [`${PLUGIN}.snapshot`]: { ...REAL, queue: [long], queueTotal: 1 } })
+    await $.session.start(SESSION)
+    const roomy = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
+    expect(await roomy.find({ type: 'Text', text: 'A title that fits a wide pane' })).toBeDefined()
+    expect(await roomy.find({ type: 'Text', text: ' ACTION    ' })).toBeDefined()
+    await roomy.unmount()
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(30) })
+    expect(await ui.find({ type: 'Text', text: /^A title/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: ' A ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'a-very-long-ta…' })).toBeDefined()
+    expect(widthOf(await ui.drawn())).toBeLessThanOrEqual(30)
   })
 
   test('a tick toggles ☐/☑, lives in $.store ticks:<id> (read before write), never in Taskmaster', DEMO, async ($, on) => {
@@ -82,39 +91,28 @@ describe('review card', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: /2 of 2 unchecked — done anyway\?/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: / 2 of 2 unchecked — done anyway\? / })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
     await ui.press({ key: 'tick-0' })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: /1 of 2 unchecked — done anyway\?/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: / 1 of 2 unchecked — done anyway\? / })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
     await ui.press({ key: 'tick-1' })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: /done unified-chat-022\?/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ` done ${ID}? ` })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus).toBe(true)
   })
 
-  test('outside card mode the ticks and details are plain text: no keys to catch a digit typed in the note or pressed mid-confirm', DEMO, async ($, on) => {
+  test('under the y/n the ticks are plain text: no key to catch a digit pressed mid-confirm', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on), { [`ticks:${ID}`]: { at: 0, items: [SECOND] } })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100), surface: 'terminal' })
-    const disarmed = async (when: string) => {
-      for (const key of ['tick-0', 'tick-1', 'details']) expect(await ui.find({ type: 'Button', key }), `${when} ${key}`).toBeUndefined()
-      expect(await ui.find({ type: 'Text', text: `☐ ${FIRST}` }), when).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: `☑ ${SECOND}` }), when).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: '▸ details' }), when).toBeDefined()
-    }
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: /1 of 2 unchecked — done anyway\?/ })).toBeDefined()
-    await disarmed('confirm')
-    expect(await ui.find({ type: 'Text', text: /1 of 2 unchecked — done anyway\?/ })).toBeDefined()
+    for (const key of ['tick-0', 'tick-1', 'details', 'done']) expect(await ui.find({ type: 'Button', key }), key).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: `☐ ${FIRST}` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `☑ ${SECOND}` })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBe('1')
-    await ui.press({ key: 'back' })
-    expect(await ui.find({ type: 'Input', key: 'note' })).toBeDefined()
-    await disarmed('note')
-    await ui.press({ key: 'note-cancel' })
-    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.hotkey).toBe('i')
   })
 
   test('i shows notes, links and branch/PR under the check, and hides them again', DEMO, async ($, on) => {
@@ -123,7 +121,7 @@ describe('review card', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
     expect(await ui.find({ type: 'Text', text: /pull\/412/ })).toBeUndefined()
     await ui.press({ key: 'details' })
-    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.label).toBe('▾ details')
+    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.label).toBe('▾ more')
     for (const text of [/no branch/, /pull\/412/, /cookbook owns the step order/, /docs\/specs\/unified-chat\.md/]) {
       expect(await ui.find({ type: 'Text', text }), String(text)).toBeDefined()
     }

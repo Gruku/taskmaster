@@ -89,15 +89,15 @@ describe('sign off', () => {
     expect(await ui.find({ type: 'Text', text: /1 done this pass/ })).toBeDefined()
   })
 
-  test('a gate refusal stays on the card as a ◆ signal with the server text, and nothing is counted done', TM, async ($, on) => {
+  test('a gate refusal stays on the card as a REFUSED badge with the server text, and nothing is counted done', TM, async ($, on) => {
     const { ui, clock } = await openQueue($, on, { backlog_complete_task: () => R.GATE_REFUSAL })
     await ui.press({ key: 'done' })
     await ui.press({ key: 'confirm-yes' })
     await clock.settle()
-    expect(await ui.find({ type: 'Text', text: / ◆ refused / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: / REFUSED / })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /outstanding gates for lane/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ID })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /0 done this pass/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /done this pass/ })).toBeUndefined()
   })
 
   test('"(not persisted)" is a refusal, not a sign-off', TM, async ($, on) => {
@@ -106,7 +106,7 @@ describe('sign off', () => {
     await ui.press({ key: 'confirm-yes' })
     await clock.settle()
     expect(await shown(ui)).toMatch(/Taskmaster did not save it: Completed `unified-chat-022` — \(not persisted\)/)
-    expect(await ui.find({ type: 'Text', text: /0 done this pass/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /done this pass/ })).toBeUndefined()
   })
 
   test('an isError reply is shown verbatim as the refusal', TM, async ($, on) => {
@@ -115,7 +115,7 @@ describe('sign off', () => {
     await ui.press({ key: 'confirm-yes' })
     await clock.settle()
     expect(await shown(ui)).toMatch(/store is locked by another writer/)
-    expect(await ui.find({ type: 'Text', text: /0 done this pass/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /done this pass/ })).toBeUndefined()
   })
 
   test('a refresh that reorders the queue between d and y cannot retarget y', TM, async ($, on) => {
@@ -233,7 +233,7 @@ describe('back to agent', () => {
     await ui.input({ key: 'note', text: 'tighten the copy' })
     await clock.settle()
     expect(writes(world)).toEqual([STATUS])
-    expect(await ui.find({ type: 'Text', text: / ◆ refused / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: / REFUSED / })).toBeDefined()
     expect(await shown(ui)).toMatch(/status: Error: `unified-chat-022`: illegal transition/)
     expect(world.closed).toEqual([])
     expect(world.fills).toEqual([`Back to ${ID}: tighten the copy`])

@@ -15,6 +15,7 @@ import type {
   TmPhasePane,
   TmPhaseView,
   TmRestorePending,
+  TmReviewList,
   TmSessionBurst,
   TmSessionHandover,
   TmSnapshot,
@@ -24,7 +25,7 @@ import { demoActions, tmActions } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
 import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree } from './band'
-import { handoversPaneTree, reviewPaneTree } from './draw'
+import { handoversPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import type { TmHost } from './host'
@@ -33,7 +34,6 @@ import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
 import {
   bandModel,
-  cardPosition,
   FRESH_CURSOR,
   handoverNotice,
   handoverPage,
@@ -41,7 +41,6 @@ import {
   isStaleTicks,
   restoreHiddenKey,
   REVIEW,
-  reviewQueue,
   SESSION,
   sessionHandoverOf,
   TICKS_PREFIX,
@@ -49,8 +48,10 @@ import {
   withNotice,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
-import { FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
+import { ALL, FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
+import { reviewPaneTree } from './review'
+import { FRESH_REVIEW_LIST, listView, reviewItems } from './review-list'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import { sessionTree } from './session'
 import type { Rr } from './rr'
@@ -70,6 +71,7 @@ const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, nul
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
+const REVIEW_LIST = atom({ plugin: 'taskmaster-mods', key: 'reviewList' } as const, FRESH_REVIEW_LIST as TmReviewList)
 const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover' } as const, null as TmSessionHandover | null)
 const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
 const RESTORE_PENDING = atom({ plugin: 'taskmaster-mods', key: 'restorePending' } as const, null as TmRestorePending | null)
@@ -196,6 +198,9 @@ function writerOf($: EngineInterface): TmWriter {
     handoverPage: async page => {
       await update($, HANDOVER_PAGE, () => page)
     },
+    reviewList: async change => {
+      await update($, REVIEW_LIST, change)
+    },
     resumedFrom: async id => {
       await update($, RESUMED_FROM, () => id)
     },
@@ -286,6 +291,7 @@ function ensureFlows($: EngineInterface): TmFlows {
       mod.scope = { ...mod.scope, phase }
       mod.refresher?.request()
     },
+    ...(mod.source === 'tm' ? { refresh: () => mod.refresher?.request() } : {}),
     resolve: () => resolveHandover($),
   })
   return mod.flows
@@ -711,8 +717,10 @@ export const register: Register = (on, options) => {
     await $.state.get(RR_POLARITY)
     const { snapshot, details } = await dataOf($)
     const cursor = await read($, CURSOR)
+    const list = await read($, REVIEW_LIST)
+    // The focused card's task detail is read on demand (lane, gate, notes); the collapsed cards need none.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable) {
-      const item = cardPosition(reviewQueue(snapshot, cursor, details), cursor, snapshot.queueTotal).item
+      const item = listView(reviewItems(snapshot, cursor, details), cursor.currentId, list.page).focused
       if (item !== null && item.kind === 'task' && details[item.id] === undefined) askDetail(item.id)
     }
     const views = await read($, PHASE_VIEWS)
@@ -722,6 +730,7 @@ export const register: Register = (on, options) => {
       snapshot,
       details,
       cursor,
+      list,
       now: await $.clock.now(),
       ticks: (taskId: string) => ticksFor($, taskId),
       detailsOpen: await read($, DETAILS_OPEN),
@@ -729,7 +738,7 @@ export const register: Register = (on, options) => {
       surface: e.surface,
       say: (text: string) => mod.host?.toast(text),
       // Digits stay with the check items' ticks until Stage 3 moves ticks to `t` + digit.
-      strip: { pane: 'review' as const, view: phaseView, allCount: snapshot?.queueTotal ?? 0, focused: e.props.isFocused, digits: false, empty: 'Nothing waiting' },
+      strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: false, empty: 'Nothing waiting' },
     }
     return reviewPaneTree(
       $.ui.resolve(e) as unknown as Ui,
@@ -741,7 +750,6 @@ export const register: Register = (on, options) => {
         cancel: () => act(f => f.cancel()),
         askNote: id => act(f => f.askNote(id)),
         sendBack: (id, note, humanAction) => act(f => f.sendBack(id, note, humanAction)),
-        skip: id => act(f => f.skip(id)),
         fill: text => act(f => f.fill(text)),
         toggleTick: (id, item) => act(f => f.toggleTick(id, item)),
         toggleDetails: () => act(f => f.toggleDetails()),
@@ -752,6 +760,12 @@ export const register: Register = (on, options) => {
           toggleDone: () => act(f => f.toggleDone('review')),
           overlay: open => act(f => f.setOverlay('review', open)),
         },
+        focus: (id, page) => act(f => f.focusCard(id, page)),
+        turnPage: page => act(f => f.turnReviewPage(page)),
+        select: id => act(f => f.toggleSelect(id)),
+        selectAll: ids => act(f => f.selectAll(ids)),
+        selectNone: () => act(f => f.selectNone()),
+        refresh: () => act(f => f.refresh('review')),
       },
       e.props.bodyColumns,
     )
@@ -875,6 +889,19 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+
+  // The Tab ring landing on a card's box focuses that card (it expands); a confirm or refusal on the card left behind goes.
+  on('ui.focus', { requestId: 'tm-review' }, async ($, e, next) => {
+    const moved = await next(e)
+    const element = e.element
+    if (element !== undefined && element.startsWith('sel:')) {
+      const id = element.slice(4)
+      if ((await read($, CURSOR)).currentId !== id) {
+        await update($, CURSOR, c => ({ ...c, currentId: id, mode: 'card' as const, refusal: '' }))
+      }
+    }
+    return moved
+  }).catch(($, e, next) => next(e)) // a failed focus write never holds the move up: replay what the chain beneath settled
 
   on('ui.focus', { requestId: 'tm-handovers' }, async ($, e, next) => {
     const moved = await next(e)

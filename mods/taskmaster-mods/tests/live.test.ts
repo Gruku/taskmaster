@@ -320,14 +320,13 @@ describe('P0/P1 issues, read on their own', () => {
     // 2 tasks + (1 P0 + 1 P1 shown + 6 hidden) + 1 decision
     expect(await band($)).toContain('11 waiting on you')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    await ui.press({ key: 'skip' })
-    await ui.press({ key: 'skip' })
+    // BLOCKED first (the critical task, then the P0 issue), then ACTION: the dated decision, then the undated task and P1 issue.
+    await ui.press({ key: 'focus-next' })
     expect(await ui.find({ type: 'Text', text: 'ISS-1' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /P0 ISSUE/ })).toBeDefined()
-    await ui.press({ key: 'skip' })
-    expect(await ui.find({ type: 'Text', text: 'ISS-7' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /An open P0 issue/ })).toBeDefined()
+    for (let i = 0; i < 3; i += 1) await ui.press({ key: 'focus-next' })
     // ISS-7's age comes from the review continuity item when the window holds it; here it does not: no age, no crash.
-    expect(await ui.find({ type: 'Text', text: /^· \d+[mhd]$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /An open P1 issue/ })).toBeDefined()
   })
 })
 
