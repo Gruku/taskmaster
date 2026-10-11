@@ -86,14 +86,14 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 ## 5. Phase strip (shared by review, handovers, restore)
 
 ```
-[‹ []  All 31 │▐ patch-1-9 · active 12 ▌│ release-2 4 │ patch-1-8 ✓ 0 │ +3 ▾  [] ›]   [◐ done]
+[‹ h]  All 31 │▐ patch-1-9 · active 12 ▌│ release-2 4 │ patch-1-8 ✓ 0 │ +3 ▾  [l ›]   [◐ done]
 ```
 
-- **Tabs are real buttons** (click / Enter). `‹` `›` keycaps at both ends and `[` / `]` step both ways; they dim at the ends, no wrap. `0` = All; `1`–`9` = visible tabs in order, numbers shown on focused tabs.
+- **Tabs are real buttons** (click / Enter). `‹` `›` keycaps at both ends and `h` / `l` step both ways; they dim at the ends, no wrap. `0` = All; `1`–`9` = visible tabs in order, numbers shown on focused tabs.
 - **Order:** All, active phase, planned phases by `order`, done phases newest first. Restore and handovers add a trailing **no task** tab.
 - **Counts** are per pane: review = waiting on you; handovers = open (or open + closed when `◐ closed` is on); restore = sessions in scope.
 - **Empty and done phases** are dimmed but selectable. An empty selection shows "Nothing waiting in <phase> · done <date>" with a `[0 All]` keycap.
-- **Overflow:** tabs that don't fit collapse into `+N ▾`; pressing it (or `/`) opens an overlay list (name, status, counts, dates), ↑↓ move, Enter pick, Esc close.
+- **Overflow:** tabs that don't fit collapse into `+N ▾`; pressing it (or `f`) opens an overlay list (name, status, counts, dates), ↑↓ move, Enter pick, Esc close.
 - **`◐ done`** shows/hides done phases; default hidden when more than 4 done phases exist; the selected phase always stays visible.
 - **Memory:** `$.store` key `phase:<pane>:<repoRoot>`. Migration: existing `phase:<repoRoot>` becomes `phase:review:<repoRoot>` on first read. A remembered phase that no longer exists falls back to All with a toast.
 - **Model:** `phases.ts` is pure — `orderPhases`, `visibleTabs(width)`, `step(dir)`, `jump(n)`, `fallback` — and unit-tested without UI.
@@ -140,7 +140,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 ## 8. Review pane (`1`, `/tm-review`)
 
 ```
- REVIEW                                         [‹ p]  [n ›]  1 / 4   [R]
+ REVIEW                                         [‹ p]  [n ›]  1 / 4   [u]
  <phase strip>
  12 waiting on you · newest 1d ago
  2 BLOCKED  1 ACTION  9 IN REVIEW
@@ -151,7 +151,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
  │   [d done] [a agent] [o open] [v viewer] [c copy check] [i more]   │
  └────────────────────────────────────────────────────────────────────┘
    □ ACTION   tm-audit-044  Pick cache size                         5d
- ↑↓ move · space select · [ ] phase · 0 all · 1-9 jump · p/n page · R refresh
+ j/k move · s select · h/l phase · 0 all · 1-9 jump · p/n page · u refresh
 ```
 
 - Sort: BLOCKED (critical) > ACTION (has `human_action`, warning) > IN REVIEW (info), then newest. 5 per page; phase change resets to page 1 and focuses the first card.
@@ -163,7 +163,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 ## 9. Handovers pane (`2`, `/tm-handovers`)
 
 ```
- HANDOVERS                                  [‹ p]  [n ›]  1 / 3   [◐ closed]  [R]
+ HANDOVERS                                  [‹ p]  [n ›]  1 / 3   [◐ closed]  [u]
  <phase strip, + "no task" tab>
  9 open · newest 3h ago
  [Close 2]                                                        all · none
@@ -183,7 +183,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 ## 10. Restore pane (`4`, `/tm-restore [days]`)
 
 ```
-╭─ ◆ TASKMASTER · RESTORE ─────────── [‹ p] [n ›] 1 / 3  [◐ compact] [R] ─╮
+╭─ ◆ TASKMASTER · RESTORE ─────────── [‹ p] [n ›] 1 / 3  [◐ compact] [u] ─╮
 │ <phase strip, + "no task" tab>                                          │
 │ 4 closed together · today 16:14–16:31 · 12m ago · 1 closed since       │
 │ 1 INTERRUPTED  2 WIP  1 HANDED OFF                                      │
@@ -231,7 +231,7 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 | Case | Behaviour |
 |------|-----------|
 | tm unreachable | Band: `offline` signal, counts dim. Panes: critical signal + `[Retry]`; restore still lists transcript facts with status `?` and resume works. |
-| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[R]`; band shows no `[4]`. |
+| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[u]`; band shows no `[4]`. |
 | Bulk action partly refused | One toast: "3 done · 1 refused: tm-audit-031 (<server wording>)"; refused stay selected. |
 | Remembered phase gone | Fall back to All + toast. |
 | Launcher unavailable | Copy the command, toast "Copied — paste into a new terminal". |
@@ -257,6 +257,13 @@ Work in a worktree off `feat/database-native-foundation`; rebase onto the parall
 ## 14. Open items (resolve during build)
 
 1. Whether `backlog_handover_list` JSON already carries `task_ids`, or the phase join must go through `backlog_query` alone.
+   - Resolved 2026-10-11 (plan Task 0.2): `task_ids` present on every entry in claude-tools and CodeMaestro; phase and no-task queries ran in both → Stage 4 reads `TmHandover.taskIds`.
 2. Overlay mechanics for the `+N ▾` phase list: a second Pane render vs an in-pane absolute Box — probe before building.
+   - Resolved 2026-10-11 (plan Task 0.2): the absolute overlay and the Select list both passed the probe (clean paint, Tab and press work; Select is a ↑↓ list) → defaults kept, OVERLAY_PLACEMENT = 'swap' and OVERLAY_LIST = 'buttons', because later stages' verified pane tests assume them and the buttons list keeps the 0–9 picks; flipping either is a follow-up once Stage 5 is green.
 3. Whether band hotkeys `c`/`d` collide with typing in the prompt (today's band keys behave; confirm for `c`).
 4. Desktop surface: confirm the panel's title-in-border renders; fall back to a title row if not.
+   - Resolved 2026-10-11 (plan Task 0.2): terminal border title sits in the top border correctly; desktop not probed → PANEL_TITLE = { terminal: 'border', desktop: 'row' }.
+5. Keycap face: an RR filled keycap laid over the engine's `k: ` prefix (`overlay`), the engine's accent `k:` (`accent`), or a label-less glyph Button.
+   - Resolved 2026-10-11 (plan Task 0.2): variant A (overlay) reads as a filled key cap followed by a word and presses → KEYCAP_FACE = 'overlay'.
+6. Hotkeys: the engine accepts one digit or one lowercase letter only (probed 2026-10-11: `[`, `/`, `R` and space fail the render), and arrows scroll a focused pane.
+   - Resolved 2026-10-11: keys remapped: `[`/`]` → `h`/`l`, `/` → `f`, `R` → `u`, space → `s`, ↑↓ → `j`/`k` plus the Tab ring (plan Stage 0 key map).
