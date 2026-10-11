@@ -120,6 +120,18 @@ export type TmCursor = {
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 /** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
 export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly latch: 'none' | 'fired' | 'handover' }
+/**
+ * The band's and the Session tab's handover (spec D5): the one this session wrote, else the one it was resumed from, else the
+ * newest open handover linked to its bound task. `created` is '' when the open list does not hold it.
+ */
+export type TmSessionHandover = {
+  readonly id: string
+  readonly tag: 'written here' | 'resumed from' | 'task'
+  readonly tldr: string
+  readonly path: string
+  readonly created: string
+  readonly next?: string
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -146,6 +158,10 @@ declare module 'claude-code' {
       handoverNotice: TmHandoverNotice | null
       /** One guard run (fork, handover, compaction) per session at most: `$.state` is per session, so /clear or a resume can earn another. */
       handoverGuard: TmHandoverGuard
+      /** D5, resolved after each refresh, a written or recorded handover, and at start; a newer handover notice wins when drawn. */
+      sessionHandover: TmSessionHandover | null
+      /** The handover this session was resumed from ('' none): mirrors `$.store` `resumed-from:<session id>` (spec §10.5). */
+      resumedFrom: string
     }
   }
 }

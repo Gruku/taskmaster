@@ -323,6 +323,37 @@ export function parseHandoverSummary(raw: string): Parsed<TmHandoverSummary> {
   return ok({ decisions: itemsOf(blocks.decisions), blockers: itemsOf(blocks.blockers) })
 }
 
+/**
+ * backlog_handover_get's slim view (no sections): `## Handover: <id>`, then `**field:** value` lines — tldr, next_action,
+ * task_ids (a list), status, created. "Handover not found" reads as null; anything else without the header is unreadable.
+ */
+export function parseHandoverSlim(raw: string, root: string): Parsed<TmHandover | null> {
+  const text = raw.replace(/\r\n/g, '\n').trim()
+  if (/^Handover not found/.test(text)) return ok(null)
+  const head = /^## Handover: (\S+)/.exec(text)
+  if (head === null) return fail(`handover_get: ${firstParagraph(text) || 'empty reply'}`)
+  const fields = new Map<string, string>()
+  for (const line of text.split('\n').slice(1)) {
+    const m = /^\*\*([a-z_]+):\*\* ?(.*)$/.exec(line)
+    if (m !== null) fields.set(m[1] ?? '', (m[2] ?? '').trim())
+  }
+  const get = (key: string): string => {
+    const v = fields.get(key) ?? ''
+    return v === 'None' ? '' : v
+  }
+  const id = head[1] ?? ''
+  return ok({
+    id,
+    created: get('created'),
+    tldr: get('tldr'),
+    nextAction: get('next_action'),
+    path: handoverPath(root, id),
+    branch: '',
+    taskIds: [...get('task_ids').matchAll(/'([^']+)'|"([^"]+)"/g)].map(m => m[1] ?? m[2] ?? ''),
+    thread: '',
+  })
+}
+
 export type HandoverReceipt = { readonly id: string; readonly path: string; readonly resume: string }
 
 /** backlog_handover_create's receipt: `Handover written: <id>`, its `- Path:` line and its `Resume:` line; else null. */

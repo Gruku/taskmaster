@@ -1,7 +1,7 @@
 // User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
 // 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
 // reply degrades to a fault instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBinding, TmBound, TmFault, TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -13,6 +13,7 @@ import {
   parseContinuity,
   parseGetTask,
   parseHandovers,
+  parseHandoverSlim,
   parseHandoverSummary,
   parseIssueList,
   parseListTasks,
@@ -277,6 +278,23 @@ export async function readSummary(host: TmHost, handoverId: string): Promise<TmH
     return null
   } catch (error) {
     host.log(`taskmaster-mods: handover summary not read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+/**
+ * One handover by id (backlog_handover_get, slim): the band's "resumed from" when the open list does not hold it. Null when
+ * the server does not know it, refuses, is unreachable or answers unreadably (that text goes to the debug log).
+ */
+export async function readHandover(host: TmHost, handoverId: string): Promise<TmHandover | null> {
+  try {
+    const text = (await callTm(host, 'backlog_handover_get', { handover_id: handoverId })).text
+    const parsed = parseHandoverSlim(text, await host.repoRoot())
+    if (parsed.ok) return parsed.value
+    host.log(`taskmaster-mods: unreadable backlog_handover_get reply: ${text.slice(0, 2000)}`)
+    return null
+  } catch (error) {
+    host.log(`taskmaster-mods: handover ${handoverId} not read: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
 }

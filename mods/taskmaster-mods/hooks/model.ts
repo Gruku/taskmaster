@@ -8,6 +8,7 @@ import type {
   TmPipeline,
   TmPriority,
   TmQueueItem,
+  TmSessionHandover,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
@@ -244,6 +245,45 @@ export function handoverRefs(h: TmHandover): string {
   const branch = typeof h.branch === 'string' ? h.branch : ''
   const tasks = Array.isArray(h.taskIds) ? h.taskIds.filter(id => typeof id === 'string' && id !== '') : []
   return [branch, tasks.join(', ')].filter(Boolean).join(' · ')
+}
+
+const fromHandover = (h: TmHandover, tag: TmSessionHandover['tag']): TmSessionHandover => ({
+  id: h.id,
+  tag,
+  tldr: h.tldr,
+  path: h.path,
+  created: h.created,
+  ...(h.nextAction === '' ? {} : { next: h.nextAction }),
+})
+
+/**
+ * D5: the handover this session shows — the one it wrote (the notice), else the one it was resumed from (from the open list,
+ * or `resumed` read by id), else the newest open handover linked to its bound task; null when none applies.
+ */
+export function sessionHandoverOf(a: {
+  readonly notice: TmHandoverNotice | null
+  readonly resumedId: string
+  readonly resumed: TmHandover | null
+  readonly snapshot: TmSnapshot | null
+}): TmSessionHandover | null {
+  const listed = (id: string): TmHandover | undefined => a.snapshot?.handovers.find(h => h.id === id)
+  if (a.notice !== null) {
+    const h = listed(a.notice.id)
+    return { id: a.notice.id, tag: 'written here', tldr: a.notice.tldr, path: a.notice.path, created: h?.created ?? '', ...(h && h.nextAction !== '' ? { next: h.nextAction } : {}) }
+  }
+  if (a.resumedId !== '') {
+    const h = listed(a.resumedId) ?? (a.resumed?.id === a.resumedId ? a.resumed : undefined)
+    if (h !== undefined) return fromHandover(h, 'resumed from')
+  }
+  const taskId = a.snapshot?.bound?.taskId
+  const linked = taskId === undefined ? undefined : a.snapshot?.handovers.find(h => h.taskIds.includes(taskId))
+  return linked === undefined ? null : fromHandover(linked, 'task')
+}
+
+/** What a surface draws: the resolved handover, unless a handover notice arrived since (the guard writes one directly). */
+export function withNotice(resolved: TmSessionHandover | null, notice: TmHandoverNotice | null, snapshot: TmSnapshot | null): TmSessionHandover | null {
+  if (notice === null || (resolved?.id === notice.id && resolved.tag === 'written here')) return resolved
+  return sessionHandoverOf({ notice, resumedId: '', resumed: null, snapshot })
 }
 
 // ── The review card (redesigned 2026-10-06, spec §6.1) ─────────────────────────────────────────────────────────────

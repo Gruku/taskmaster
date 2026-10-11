@@ -28,6 +28,7 @@ import {
   toggleTick,
 } from './model'
 import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
+import { recordResumedFrom } from './resumed'
 
 export type TmWriter = {
   snapshot: (change: (s: TmSnapshot | null) => TmSnapshot | null) => Promise<void>
@@ -44,6 +45,7 @@ export type TmWriter = {
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
   phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
   handoverPage: (page: number) => Promise<void>
+  resumedFrom: (handoverId: string) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -68,6 +70,8 @@ export type TmFlowDeps = {
   readPhases?: (pane: TmPhasePane) => Promise<readonly TmPhase[] | null>
   /** A pane's strip moved to this phase id ('' All): review's scope follows and a refresh is asked. */
   phaseChosen?: (pane: TmPhasePane, phaseId: string) => void
+  /** Resolves the session's handover again (D5) after something it depends on changed. */
+  resolve?: () => Promise<void>
 }
 
 export type TmFlows = ReturnType<typeof createFlows>
@@ -348,6 +352,12 @@ export function createFlows(d: TmFlowDeps) {
     },
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
+    },
+    /** This session continues the work of `handoverId` (spec §10.5): kept per session id (not in demo), then D5 again. */
+    recordResumed: async (handoverId: string): Promise<void> => {
+      if (d.source !== 'demo') await recordResumedFrom(phaseStoreOf(d.host), await d.host.sessionId(), handoverId)
+      await d.write.resumedFrom(handoverId)
+      await d.resolve?.()
     },
     // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once (an
     // unavailable one is asked again, "loading summary…" meanwhile).

@@ -9,10 +9,12 @@ import type {
   TmBinding,
   TmCursor,
   TmFault,
+  TmHandover,
   TmHandoverNotice,
   TmHandoverSummary,
   TmPhasePane,
   TmPhaseView,
+  TmSessionHandover,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
@@ -35,14 +37,16 @@ import {
   isStaleTicks,
   REVIEW,
   reviewQueue,
+  sessionHandoverOf,
   TICKS_PREFIX,
   ticksOf,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
 import { FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from './phases'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
+import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import type { Rr } from './rr'
-import { FAULT_LINE, loadDetail, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
+import { FAULT_LINE, loadDetail, readHandover, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
@@ -58,6 +62,8 @@ const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, nul
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
+const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover' } as const, null as TmSessionHandover | null)
+const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 function hostOf($: EngineInterface): TmHost {
@@ -164,6 +170,9 @@ function writerOf($: EngineInterface): TmWriter {
     handoverPage: async page => {
       await update($, HANDOVER_PAGE, () => page)
     },
+    resumedFrom: async id => {
+      await update($, RESUMED_FROM, () => id)
+    },
   }
 }
 
@@ -187,7 +196,8 @@ function ioOf($: EngineInterface): TmIo {
 // by the first hook that acts (session.start, classic.SessionStart, turn.complete, tool.call, command.run, ui.press,
 // ui.input) from its own `$`, and that first act asks for one refresh in tm mode (a changed reviewScope applies at once).
 // A draw never builds them and never writes: it only reads $.state, and asks for missing data only through what an acting
-// hook built. `lastFault` null: no status line written by this instance yet.
+// hook built. `lastFault` null: no status line written by this instance yet. `resumedCache`: resumed-from handovers the open
+// list does not hold, read once by id (null: not found); `resolve` re-runs D5 with an acting hook's `$`.
 const mod: {
   source: 'tm' | 'demo'
   scope: TmScope
@@ -201,6 +211,9 @@ const mod: {
   detailAsked: Set<string>
   refreshAsked: boolean
   phaseRestore: Promise<void> | null
+  resumedAsked: Set<string>
+  resumedCache: Map<string, TmHandover | null>
+  resolve: (() => Promise<void>) | null
 } = {
   source: 'tm',
   scope: { waitingOnly: true, phase: '' },
@@ -214,12 +227,16 @@ const mod: {
   detailAsked: new Set(),
   refreshAsked: false,
   phaseRestore: null,
+  resumedAsked: new Set(),
+  resumedCache: new Map(),
+  resolve: null,
 }
 
 function ensureFlows($: EngineInterface): TmFlows {
   const host = (mod.host ??= hostOf($))
   const write = (mod.write ??= writerOf($))
   mod.io ??= ioOf($)
+  mod.resolve ??= () => resolveHandover($)
   // One refresh at a time, scheduled off the calling hook: a turn never waits on tm.
   if (mod.source === 'tm') mod.refresher ??= singleFlight(refreshRun, (fn, delayMs) => host.after(delayMs, fn))
   mod.flows ??= createFlows({
@@ -240,6 +257,7 @@ function ensureFlows($: EngineInterface): TmFlows {
       mod.scope = { ...mod.scope, phase }
       mod.refresher?.request()
     },
+    resolve: () => resolveHandover($),
   })
   return mod.flows
 }
@@ -257,6 +275,7 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
     handovers: { ...all.handovers, phases: demoPhases('handovers'), loaded: true },
     restore: { ...all.restore, phases: demoPhases('restore'), loaded: true },
   }))
+  await resolveHandover($)
 }
 
 /**
@@ -343,12 +362,48 @@ async function restoreBinding($: EngineInterface, host: TmHost): Promise<void> {
   if (stored !== null) await update($, BINDING, () => stored)
 }
 
+/**
+ * D5 (spec §3): the handover this session shows — written here (the notice) > resumed from (`resumedFrom`) > the newest open
+ * one linked to the bound task. A resumed-from handover the open list does not hold is read by id once (tm), off the caller;
+ * D5 runs again when it lands.
+ */
+async function resolveHandover($: EngineInterface): Promise<void> {
+  const { snapshot } = await dataOf($)
+  const resumedId = await read($, RESUMED_FROM)
+  const host = mod.host
+  // Read by id only once a reachable snapshot's open list has been looked at and does not hold it.
+  const unlisted = snapshot !== null && snapshot.reachable && !snapshot.handovers.some(h => h.id === resumedId)
+  if (resumedId !== '' && unlisted && mod.source === 'tm' && host !== null && !mod.resumedAsked.has(resumedId)) {
+    mod.resumedAsked.add(resumedId)
+    host.after(0, () => {
+      void readHandover(host, resumedId).then(async found => {
+        mod.resumedCache.set(resumedId, found)
+        await mod.resolve?.()
+      })
+    })
+  }
+  const next = sessionHandoverOf({ notice: await read($, NOTICE), resumedId, resumed: mod.resumedCache.get(resumedId) ?? null, snapshot })
+  await update($, SESSION_HANDOVER, prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+}
+
+/** This session's resumed-from record (`$.store` `resumed-from:<session id>`) into `resumedFrom`; unreadable reads as none. */
+async function loadResumed($: EngineInterface, host: TmHost, sessionId: string): Promise<void> {
+  let id = ''
+  try {
+    id = (await readResumedFrom(phaseStoreOf(host), sessionId)) ?? ''
+  } catch {
+    // a store that cannot be read now: no resumed-from line this time
+  }
+  await update($, RESUMED_FROM, () => id)
+}
+
 /** The handover this session's main agent just wrote, from the call's input and the server's receipt: the band's notice. */
 async function noteHandover($: EngineInterface, host: TmHost, input: Readonly<Record<string, unknown>>, ran: TmRan): Promise<void> {
   const receipt = parseHandoverWritten(ranText(ran))
   if (receipt === null) return
   const notice = handoverNotice(input, receipt, await host.repoRoot())
   await update($, NOTICE, () => notice)
+  await resolveHandover($)
 }
 
 async function bind(taskId: string): Promise<void> {
@@ -394,6 +449,7 @@ async function refreshRun(final: boolean): Promise<RunOutcome> {
     if (transient) return 'transient'
     // A refreshed snapshot may carry edited handovers: their summaries are read again when next shown.
     await mod.flows?.forgetSummaries()
+    await mod.resolve?.()
   } catch (error) {
     host.log(`taskmaster-mods: refresh failed: ${String(error)}`)
   }
@@ -442,6 +498,9 @@ export const register: Register = (on, options) => {
   mod.detailAsked = new Set()
   mod.refreshAsked = false
   mod.phaseRestore = null
+  mod.resumedAsked = new Set()
+  mod.resumedCache = new Map()
+  mod.resolve = null
   onHandoverGuard(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -461,8 +520,10 @@ export const register: Register = (on, options) => {
     }
     if (mod.source === 'tm' && mod.host !== null) {
       await restoreBinding($, mod.host)
+      await loadResumed($, mod.host, mod.sessionId)
       mod.refresher?.request()
     }
+    await resolveHandover($)
     return next(e)
   })
 
@@ -481,6 +542,8 @@ export const register: Register = (on, options) => {
         // No stored binding is no binding: a resumed session never keeps the task the one before it was on.
         await update($, BINDING, () => stored)
         if (stored !== null && from !== e.session_id) await $.store.set(`binding:${e.session_id}`, stored)
+        if (mod.host !== null) await loadResumed($, mod.host, e.session_id)
+        await resolveHandover($)
         mod.refresher?.request()
       }
     } catch (error) {
@@ -527,6 +590,18 @@ export const register: Register = (on, options) => {
       $.ui.log(`taskmaster-mods: tool.call bookkeeping failed: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
     }
     return ran
+  })
+
+  // A fresh session launched from a handover starts with resumePrompt's text: it records where it came from (spec §10.5).
+  on('prompt.submit', { text: RESUME_PROMPT_RE }, async ($, e, next) => {
+    const entered = await next(e)
+    try {
+      const id = resumedIdOf(e.text)
+      if (id !== null) await (await ready($)).recordResumed(id)
+    } catch (error) {
+      $.ui.log(`taskmaster-mods: resumed-from not recorded: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
+    }
+    return entered
   })
 
   on('command.run', { command: 'tm-review' }, async $ => {
