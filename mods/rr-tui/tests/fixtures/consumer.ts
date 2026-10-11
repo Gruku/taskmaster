@@ -21,6 +21,8 @@ export const CONSUMER: Plugin = {
         buttonProps: await $.rr.buttonProps({ key: 'a' }),
         keycap: await $.rr.keycap({ key: 'd', tone: 'success' }),
         chip: await $.rr.chip({ text: 'refused', tone: 'critical', strength: 24 }),
+        badgeProps: await $.rr.badgeProps({ tone: 'success' }),
+        tint: await $.rr.tint({ fg: '#ffffff', bg: '#000000', alpha: 0.5 }),
       }
       return { text: JSON.stringify(answers) }
     })

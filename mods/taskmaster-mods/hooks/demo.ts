@@ -1,22 +1,41 @@
 // User intent: built-in sample data so taskmaster-mods can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
-import type { TmHandover, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
+import { NO_TASK } from './phases'
 
 /**
  * The demo snapshot's `reason`: how register.tsx tells demo data from real data when the source setting changes. It carries
  * the seed's version: bump DEMO_SEED whenever the demo data's shape changes, so a seed an older module left in $.state across
  * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added; 3: handovers gained
- * thread, for the copy block's Resume line).
+ * thread, for the copy block's Resume line; 4: phases gained dates and per-pane counts, seeded with the snapshot; 5: the
+ * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab).
  */
-export const DEMO_SEED = 3
+export const DEMO_SEED = 5
 export const DEMO_REASON = `demo:${DEMO_SEED}`
 
 /** Any demo seed, of any version (tm mode never draws one). */
 export const isDemoSnapshot = (s: TmSnapshot | null): boolean => s !== null && (s.reason === 'demo' || s.reason.startsWith('demo:'))
 /** A demo seed of this module's version: demo mode keeps it (the flows may have changed it); any other is rebuilt. */
 export const isCurrentDemo = (s: TmSnapshot | null): boolean => s !== null && s.reason === DEMO_REASON
+/** Demo's phases (review counts); the demo queue itself is not filtered by them. */
+export const DEMO_PHASES: readonly TmPhase[] = [
+  { id: 'release-2', status: 'planned', order: 3, count: 2, name: 'Release 2.0 — Demo scope', date: '' },
+  { id: 'patch-1-9', status: 'active', order: 2, count: 3, name: 'Patch 1.9 — Demo scope', date: '2026-10-06' },
+  { id: 'patch-1-8', status: 'done', order: 1, count: 0, name: 'Patch 1.8 — Demo scope', date: '2026-10-05' },
+]
+/** Open demo handovers per phase, through their tasks; three link no task. */
+const DEMO_HANDOVER_COUNTS: Readonly<Record<string, number>> = { 'patch-1-9': 2 }
+
+/** Each pane's demo phases: review's counts; handovers' open handovers plus a no task tab; restore's are counted later (0). */
+export function demoPhases(pane: TmPhasePane): readonly TmPhase[] {
+  if (pane === 'review') return DEMO_PHASES
+  const counted = DEMO_PHASES.map(p => ({ ...p, count: pane === 'handovers' ? (DEMO_HANDOVER_COUNTS[p.id] ?? 0) : 0, closed: 0 }))
+  return [...counted, { id: NO_TASK, status: 'none', order: 0, count: pane === 'handovers' ? 3 : 0, closed: 0, name: 'no task', date: '' }]
+}
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
+/** The demo session was resumed from this handover (seeded into `resumedFrom`): the band and Session tab show it. */
+export const DEMO_RESUMED_FROM = '2026-10-04-audit-fixes-landed'
 export const DEMO_REFUSING_ID = 'tm-audit-031'
 export const DEMO_REFUSAL =
   'Cannot complete `tm-audit-031` — outstanding gates for lane `full`: review-gate. Record each (backlog_record_gate) or skip it (backlog_skip_gate).'
@@ -32,6 +51,7 @@ export const DEMO_DETAILS: Readonly<Record<string, TmTaskDetail>> = {
     lane: 'full',
     gateState: 'review-gate:pass',
     branch: '',
+    phase: 'patch-1-9',
     humanAction:
       'Live check on dev (needs unifiedChatGenerate + unifiedChatBuild granted):\nfirst unified message stays on intent/brief and does not build; second message builds with the full toolset.',
     notes: ['Pre-build now hands the supervisor its full toolset; the cookbook owns the step order.'],
@@ -46,6 +66,7 @@ export const DEMO_DETAILS: Readonly<Record<string, TmTaskDetail>> = {
     lane: 'full',
     gateState: 'spec-review:pass',
     branch: 'feat/tm-audit-031',
+    phase: 'patch-1-9',
     humanAction: 'Open the viewer and confirm one open handover per thread.',
   },
   'docs-012': {
@@ -56,6 +77,7 @@ export const DEMO_DETAILS: Readonly<Record<string, TmTaskDetail>> = {
     lane: '',
     gateState: '',
     branch: '',
+    phase: 'release-2',
     humanAction: 'Read the README section and say if it reads right.',
   },
 }

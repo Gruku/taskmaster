@@ -78,7 +78,23 @@ describe('$.rr', () => {
     rrWorldOf(on, 'dark')
     stateWorldOf(on, { 'rr-tui.override': 'survivalist' })
     const answers = JSON.parse((await $.command.run(command('rr-probe-all'))).text ?? '{}') as Record<string, unknown>
-    expect(Object.keys(answers).sort()).toEqual(['button', 'buttonProps', 'chip', 'keycap', 'label', 'row', 'rule', 'signal', 'surface', 'surfaceProps'])
+    expect(Object.keys(answers).sort()).toEqual([
+      'badgeProps',
+      'button',
+      'buttonProps',
+      'chip',
+      'keycap',
+      'label',
+      'row',
+      'rule',
+      'signal',
+      'surface',
+      'surfaceProps',
+      'tint',
+    ])
+    const t = tokensFor('survivalist')
+    expect(answers.badgeProps).toEqual({ backgroundColor: t.border.strong, color: t.fg.bold, bold: true })
+    expect(answers.tint).toBe('#808080')
     expect(answers.button).toMatchObject({ borderStyle: 'bold' })
     expect(answers.buttonProps).toEqual({ plain: true, hotkey: 'a', hover: { bold: true, color: tokensFor('survivalist').fg.bold } })
     expect(JSON.stringify(answers.chip)).toContain('[◆ refused]')

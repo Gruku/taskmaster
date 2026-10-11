@@ -21,7 +21,7 @@ describe('reload without session.start', () => {
     await ui.press({ key: 'done' })
     expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus).toBe(true)
     await ui.press({ key: 'confirm-yes' })
-    expect(await ui.find({ type: 'Text', text: /2 of 5 · 1 done this pass/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /1 done this pass/ })).toBeDefined()
   })
 
   test('demo: the open handovers pane lists, copies and resumes', DEMO, async ($, on) => {
@@ -42,7 +42,7 @@ describe('reload without session.start', () => {
     await ui.press({ key: 'band-done' })
     expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeDefined()
     await ui.press({ key: 'band-yes' })
-    expect(await ui.find({ type: 'Text', text: /4 waiting on you/ })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'band-review' }))?.props.label).toBe('4 waiting on you')
   })
 
   test('demo: the commands open their panes', DEMO, async ($, on) => {

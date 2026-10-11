@@ -59,6 +59,8 @@ export const register: Register = (on, options) => {
       buttonProps: refuse,
       keycap: refuse,
       chip: refuse,
+      badgeProps: refuse,
+      tint: refuse,
     }
     return { ...built, rr }
   })
@@ -75,6 +77,8 @@ export const register: Register = (on, options) => {
   on('rr.buttonProps', async ($, a) => ({ value: kit.buttonProps(await tokensOf($), a) }))
   on('rr.keycap', async ($, a) => ({ value: out(kit.keycap(await tokensOf($), a)) }))
   on('rr.chip', async ($, a) => ({ value: out(kit.chip(await tokensOf($), a)) }))
+  on('rr.badgeProps', async ($, a) => ({ value: kit.badgeProps(await tokensOf($), a) }))
+  on('rr.tint', async ($, a) => ({ value: kit.tint(a) }))
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: GALLERY, description: 'Open the Reality Reprojection gallery: every $.rr element in every state' })

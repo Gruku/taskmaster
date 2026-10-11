@@ -21,6 +21,14 @@ export type World = {
   cwd: string
   calls: { tool: string; args: Record<string, unknown> }[]
   mcp: (tool: string, args: Record<string, unknown>) => McpAnswer
+  /** When set, the server answers one call at a time, each taking this long: calls sent together queue (the real tm server). */
+  serialMs: number | null
+  /** Every `$.process.run` argv, in order (git's branch read included). */
+  runs: string[][]
+  /** The exit code a command gets (default 0); git's branch read answers `branch` either way. */
+  runExit: (argv: readonly string[]) => number
+  /** What `$.env.get` answers, by name. */
+  env: Record<string, string>
 }
 
 export function worldOf(on: On, clock: MockClock, store: Record<string, unknown> = {}): World {
@@ -40,7 +48,12 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     cwd: 'C:\\work\\proj',
     calls: [],
     mcp: () => 'offline',
+    serialMs: null,
+    runs: [],
+    runExit: () => 0,
+    env: {},
   }
+  let queue: Promise<void> = Promise.resolve()
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}) as never)
@@ -88,9 +101,20 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('session.root', () => ({ value: world.root }))
   on('session.cwd', () => ({ value: world.cwd }))
   on('session.repo', () => ({ value: { root: world.root, remote: null, internal: false, name: null } }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: `${world.branch}\n`, stderr: '' } }) as never)
+  on('process.run', ($, e) => {
+    world.runs.push([...e.argv])
+    const exitCode = e.argv[0] === 'git' ? 0 : world.runExit(e.argv)
+    return { value: { exitCode, stdout: e.argv[0] === 'git' ? `${world.branch}\n` : '', stderr: '' } } as never
+  })
+  on('env.get', ($, e) => ({ value: world.env[e.name] }) as never)
   on('mcp.call', async ($, e) => {
     world.calls.push({ tool: e.tool, args: e.args })
+    if (world.serialMs !== null) {
+      const ms = world.serialMs
+      const turn = queue.then(() => clock.sleep(ms))
+      queue = turn
+      await turn
+    }
     const answer = world.mcp(e.tool, e.args)
     if (answer === 'offline') return { deny: 'tm: Connection closed' }
     if ('deny' in answer) return { deny: answer.deny }

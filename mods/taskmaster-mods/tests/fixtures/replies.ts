@@ -1,5 +1,7 @@
 // User intent: a small coherent backlog as the Taskmaster server words it (format strings from taskmaster/backlog_server.py
 // and native/domain.py), so parsers and tm-mode surfaces are tested against every quirk without a server.
+import { PHASES_ALL, PHASES_WAITING } from './phases'
+
 export const LIST_IN_REVIEW = [
   '**2 tasks:**',
   '- `unified-chat-022` — Unified chat pre-build gets the full supervisor toolset; cookbook owns the order (critical, unified-chat, in-review) — Pre-build uses the full toolset',
@@ -44,6 +46,19 @@ export const HANDOVERS_OPEN = JSON.stringify({
   truncated: true,
   archived_omitted: 0,
 })
+
+/** `n` open handovers as backlog_handover_list words them, newest first, `total` as the server's count. */
+export const handoversOpen = (n: number, total = n): string =>
+  JSON.stringify({
+    handovers: Array.from({ length: n }, (_, i) => {
+      const day = String(28 - i).padStart(2, '0')
+      return { id: `2026-09-${day}-note-${i + 1}`, date: `2026-09-${day}`, created: `2026-09-${day}T10:00`, thread: `thread-${i + 1}`, session_kind: 'build', status: 'open', tldr: `Handover number ${i + 1}`, next_action: `Next for ${i + 1}`, task_ids: [], tip_commit: '', branch: '', links: [], superseded_by: null }
+    }),
+    returned: n,
+    total,
+    truncated: total > n,
+    archived_omitted: 0,
+  })
 
 export const GET_TASK_BOUND = [
   '## `tm-audit-030` — Agent tool-use audit fixes',
@@ -151,6 +166,7 @@ export function backlog(tool: string, args: Record<string, unknown>): { text: st
   if (tool === 'backlog_list_tasks') return { text: LIST_IN_REVIEW }
   if (tool === 'backlog_continuity_items') return { text: args.action_class === 'decide' ? CONTINUITY_DECIDE : CONTINUITY_REVIEW }
   if (tool === 'backlog_handover_list') return { text: HANDOVERS_OPEN }
+  if (tool === 'backlog_query') return { text: String(args.sql).includes("<>''") ? PHASES_WAITING : PHASES_ALL }
   if (tool === 'backlog_get_task') {
     const id = String(args.task_id)
     return { text: id === 'tm-audit-030' ? GET_TASK_BOUND : id === 'unified-chat-022' ? GET_TASK_REVIEW : id === 'tm-audit-031' ? GET_TASK_031 : GET_TASK_MISSING }

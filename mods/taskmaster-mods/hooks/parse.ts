@@ -1,6 +1,6 @@
 // User intent: read Taskmaster's MCP replies — markdown and JSON text — into plain data, purely, so every format quirk is
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
-import type { TmHandover, TmHandoverSummary, TmPipeline, TmPriority, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
@@ -50,6 +50,23 @@ export function isRefusal(text: string): boolean {
 
 export function firstParagraph(text: string): string {
   return text.trim().split(/\n\s*\n/)[0]?.trim() ?? ''
+}
+
+/**
+ * A reply's own text. Every tm tool declares an output schema `{"result": <text>}`, and since Claude Code 2.1.295 the
+ * engine hands that structured result over as the text block (`{"result":"…"}`) in place of the text itself; it is
+ * unwrapped here, from `structuredContent` when given, else from the block. Any other reply comes back unchanged.
+ */
+export function replyText(text: string, structured?: unknown): string {
+  if (isObject(structured) && typeof structured.result === 'string') return structured.result
+  const trimmed = text.trim()
+  if (!/^\{\s*"result"\s*:/.test(trimmed)) return text
+  try {
+    const value: unknown = JSON.parse(trimmed)
+    return isObject(value) && Object.keys(value).length === 1 && typeof value.result === 'string' ? value.result : text
+  } catch {
+    return text
+  }
 }
 
 function clean(raw: string): string {
@@ -167,6 +184,7 @@ export function parseGetTask(raw: string): Parsed<TmTaskDetail | null> {
     gateState: get('gate_state'),
     branch: get('branch'),
     humanAction: get('human_action'),
+    ...(get('phase') === '' ? {} : { phase: get('phase') }),
   })
 }
 
@@ -206,6 +224,47 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
     .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
   const total = typeof doc.value.total === 'number' ? doc.value.total : handovers.length
   return ok({ handovers, total })
+}
+
+const PHASE_ROW = /^(\[\S*\])(?:\s+(.*))?$/
+const ROWS_FOOTER = /^\d+ rows?(?: \(capped\))?$/
+
+/** The entities a name cell can hold (the server escapes `&`, `<`, `>`, quotes); `&amp;` last so `&amp;lt;` stays `&lt;`. */
+const decodeEntities = (text: string): string =>
+  text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+
+/**
+ * backlog_query's phase table: a header line, one `["id","status",order,count,closed,"date"]  name` line a phase (cells
+ * padded; a name cut at 80 chars stays as cut; HTML entities in the name decoded; the older 4-cell rows read too, without
+ * closed and date), then `N row` or `N rows`. A line whose JSON cell does not read is left out; a reply with no footer is
+ * not a table the server finished.
+ */
+export function parsePhases(raw: string): Parsed<TmPhase[]> {
+  const lines = raw.trim().split('\n')
+  if (isRefusal(raw)) return fail(`backlog_query: ${firstParagraph(raw)}`)
+  if (!ROWS_FOOTER.test((lines[lines.length - 1] ?? '').trim())) return fail('backlog_query: no "N rows" footer')
+  const phases: TmPhase[] = []
+  for (const line of lines.slice(1, -1)) {
+    const row = PHASE_ROW.exec(line.trim())
+    if (row === null) continue
+    let cells: unknown
+    try {
+      cells = JSON.parse(row[1] ?? '')
+    } catch {
+      continue
+    }
+    if (!Array.isArray(cells) || typeof cells[0] !== 'string' || cells[0] === '') continue
+    phases.push({
+      id: cells[0],
+      status: typeof cells[1] === 'string' ? cells[1] : '',
+      order: typeof cells[2] === 'number' ? cells[2] : 0,
+      count: typeof cells[3] === 'number' ? cells[3] : 0,
+      name: decodeEntities((row[2] ?? '').trim()),
+      ...(typeof cells[4] === 'number' ? { closed: cells[4] } : {}),
+      ...(typeof cells[5] === 'string' ? { date: cells[5] } : {}),
+    })
+  }
+  return ok(phases)
 }
 
 const SUMMARY_SECTION = /^### (decisions|blockers)\s*$/
@@ -263,6 +322,37 @@ export function parseHandoverSummary(raw: string): Parsed<TmHandoverSummary> {
     if (current !== null) current.push(line)
   }
   return ok({ decisions: itemsOf(blocks.decisions), blockers: itemsOf(blocks.blockers) })
+}
+
+/**
+ * backlog_handover_get's slim view (no sections): `## Handover: <id>`, then `**field:** value` lines — tldr, next_action,
+ * task_ids (a list), status, created. "Handover not found" reads as null; anything else without the header is unreadable.
+ */
+export function parseHandoverSlim(raw: string, root: string): Parsed<TmHandover | null> {
+  const text = raw.replace(/\r\n/g, '\n').trim()
+  if (/^Handover not found/.test(text)) return ok(null)
+  const head = /^## Handover: (\S+)/.exec(text)
+  if (head === null) return fail(`handover_get: ${firstParagraph(text) || 'empty reply'}`)
+  const fields = new Map<string, string>()
+  for (const line of text.split('\n').slice(1)) {
+    const m = /^\*\*([a-z_]+):\*\* ?(.*)$/.exec(line)
+    if (m !== null) fields.set(m[1] ?? '', (m[2] ?? '').trim())
+  }
+  const get = (key: string): string => {
+    const v = fields.get(key) ?? ''
+    return v === 'None' ? '' : v
+  }
+  const id = head[1] ?? ''
+  return ok({
+    id,
+    created: get('created'),
+    tldr: get('tldr'),
+    nextAction: get('next_action'),
+    path: handoverPath(root, id),
+    branch: '',
+    taskIds: [...get('task_ids').matchAll(/'([^']+)'|"([^"]+)"/g)].map(m => m[1] ?? m[2] ?? ''),
+    thread: '',
+  })
 }
 
 export type HandoverReceipt = { readonly id: string; readonly path: string; readonly resume: string }

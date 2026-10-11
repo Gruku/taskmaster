@@ -29,8 +29,26 @@
     "handoverGuard": {
       "type": "boolean",
       "title": "Cache-cold handover guard",
-      "description": "After the idle minutes below with a big context and no handover yet this session, ask the model once to write a handover before the 1-hour prompt cache expires. Arms from the next turn end after enabling or a reload.",
+      "description": "After the idle minutes below with a big context and no handover yet this session, once, before the 1-hour prompt cache expires: get a handover written, then (optionally) compact. How is set by the two options below; nothing is compacted without its handover. Arms from the next turn end after enabling or a reload.",
       "default": false
+    },
+    "handoverGuardFork": {
+      "type": "boolean",
+      "title": "Handover guard: write from a fork",
+      "description": "On: a fork of the conversation drafts the handover and the mod files it, so the conversation itself is never prompted. Off: the conversation is asked to write it with the taskmaster:handover skill.",
+      "default": true
+    },
+    "handoverGuardCompact": {
+      "type": "boolean",
+      "title": "Handover guard: compact afterwards",
+      "description": "On: once the handover is written, the session is compacted with instructions naming it (without a fork, right after the guard's own turn ends; a prompt of yours before then cancels it). Off: the handover only.",
+      "default": true
+    },
+    "handoverGuardMaxRefreshes": {
+      "type": "number",
+      "title": "Handover guard: cache refreshes while agents work",
+      "description": "While subagents or a workflow still work, the guard never hands over or compacts; it re-reads the cached context instead (a cheap tool-less fork) so the cache stays warm. At most this many refreshes in a row (6 ≈ 5.5 hours at 55 min); then the cache is left to go cold. 0 never refreshes.",
+      "default": 6
     },
     "handoverGuardIdleMinutes": {
       "type": "number",

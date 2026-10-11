@@ -161,7 +161,7 @@ README.md                           one link line (Task 5)
   ```
 - **Engine types.** `tsc` needs the engine-laid `.claude-plugin/types/`. Lay or refresh them with:
   ```bash
-  claude -p --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/taskmaster-mods "Reply with the single word ok."
+  env -u ANTHROPIC_API_KEY claude -p --model haiku --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/taskmaster-mods "Reply with the single word ok."
   ```
   The engine writes a `.gitignore` inside that folder. Never commit it.
 - **Test runner output.** `claude plugin test` prints `(pass)`/`(fail)` per test, then `N pass / M fail`. A failing `toEqual` prints the received value: that is how the golden fingerprints are read in Tasks 2a and 3.
@@ -345,7 +345,7 @@ export const register: Register = on => {
 Run:
 ```bash
 claude plugin validate --strict C:/Users/gruku/.claude/dev-mods/desktop-s0/probe-desktop
-claude -p --plugin-dir C:/Users/gruku/.claude/dev-mods/desktop-s0/probe-desktop "Reply with the single word ok."
+env -u ANTHROPIC_API_KEY claude -p --model haiku --plugin-dir C:/Users/gruku/.claude/dev-mods/desktop-s0/probe-desktop "Reply with the single word ok."
 npx -y -p typescript@5.6.3 tsc -p C:/Users/gruku/.claude/dev-mods/desktop-s0/probe-desktop
 ```
 Expected:
@@ -517,7 +517,7 @@ Run:
 ```bash
 python C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods/scripts/gen_tokens.py
 python C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods/scripts/gen_tokens.py --check
-claude -p --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/taskmaster-mods "Reply with the single word ok."
+env -u ANTHROPIC_API_KEY claude -p --model haiku --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/rr-mods --plugin-dir C:/Users/gruku/Files/Claude/taskmaster/mods/taskmaster-mods "Reply with the single word ok."
 ls C:/Users/gruku/Files/Claude/taskmaster/mods/taskmaster-mods/.claude-plugin/types
 ```
 Expected:

@@ -26,6 +26,7 @@ const TONE_SAMPLES: Readonly<Record<RrTone, { key: string; label: string }>> = {
 }
 
 const box = (props: Record<string, unknown>, ...children: unknown[]): RenderNode => h('Box', props, ...children) as RenderNode
+const text = (props: Record<string, unknown>, value: string): RenderNode => h('Text', props, value) as RenderNode
 
 /** The consumer's Button in the recipe, drawn by register.tsx, which owns the press handlers. */
 export type Demo = (id: string, label: string, press: RrButtonProps) => RenderNode
@@ -90,6 +91,16 @@ export function galleryTree(t: RrTokens, width: number, demo: Demo): RenderNode 
         kit.chip(t, { text: 'signed off', tone: 'success', strength: 24 }),
       ),
       box({ flexDirection: 'row', columnGap: 1 }, ...TONES.map(tone => kit.chip(t, { text: tone, tone, strength: 12 }))),
+    ),
+    section(
+      'badges',
+      ...([24, 12] as const).map(strength =>
+        box({ flexDirection: 'row', columnGap: 1 }, ...TONES.map(tone => text({ ...kit.badgeProps(t, { tone, strength }) }, ` ${tone.toUpperCase()} `))),
+      ),
+      kit.surface(t, {
+        level: 'raised',
+        children: [box({ flexDirection: 'row', columnGap: 1 }, ...TONES.map(tone => text({ ...kit.badgeProps(t, { tone, on: 'raised' }) }, ` ${tone.toUpperCase()} `)))],
+      }),
     ),
     section(
       'keys',

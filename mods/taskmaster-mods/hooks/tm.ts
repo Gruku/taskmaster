@@ -1,7 +1,7 @@
-// User intent: the one door to the Taskmaster MCP server — every read bounded to 3 s, every write to 15 s, and every reply
-// read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable reply degrades to a fault
-// instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+// User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
+// 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
+// reply degrades to a fault instead of a crash.
+import type { TmBinding, TmBound, TmFault, TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -13,17 +13,22 @@ import {
   parseContinuity,
   parseGetTask,
   parseHandovers,
+  parseHandoverSlim,
   parseHandoverSummary,
   parseIssueList,
   parseListTasks,
+  parsePhases,
   parsePipeline,
 } from './parse'
+import { NO_TASK } from './phases'
 
 export const TM_TIMEOUT_MS = 3000
 /** A write may queue behind the store's writer (ruling F14); it is never retried, so it gets longer than a read. */
 export const TM_WRITE_TIMEOUT_MS = 15_000
 /** Every refresh reads a window of the first 50 rows (ruling F2); counts come from the server's totals, not the rows. */
 export const QUEUE_WINDOW = 50
+/** Handovers fetched at each refresh (the server's own search window); the pane shows them five to a page. */
+export const HANDOVER_WINDOW = 30
 export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
   none: undefined,
   connecting: undefined,
@@ -144,20 +149,22 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   if (input.scope.waitingOnly) listArgs.waiting_on_human = true
   if (input.scope.phase !== '') listArgs.phase = input.scope.phase
   let replies: [TmReply, TmReply, TmReply, TmReply, TmReply, TmReply, TmReply | null, TmReply | null]
+  // One call after another, never together: the server answers one call at a time, so calls sent together queue and each
+  // one's 3 s bound counts the others' time (on CodeMaestro: ~0.7 s each alone, 3.5–4 s each when sent together).
   try {
-    replies = await Promise.all([
-      callTm(host, 'backlog_list_tasks', listArgs),
+    replies = [
+      await callTm(host, 'backlog_list_tasks', listArgs),
       // P0/P1 issues on their own: continuity ranks every in-review task before any issue, so its 50-row review window
       // holds no issue on a big backlog. Status `open` is continuity's own rule for an issue that asks for review.
-      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
       // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
-      callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
-      callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: 5 }),
-      taskId === null ? Promise.resolve(null) : callTm(host, 'backlog_get_task', { task_id: taskId }),
-      taskId === null ? Promise.resolve(null) : callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
-    ])
+      await callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
+      await callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: HANDOVER_WINDOW }),
+      taskId === null ? null : await callTm(host, 'backlog_get_task', { task_id: taskId }),
+      taskId === null ? null : await callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
+    ]
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     const transient = error instanceof TmUnreachable && error.transient
@@ -271,6 +278,80 @@ export async function readSummary(host: TmHost, handoverId: string): Promise<TmH
     return null
   } catch (error) {
     host.log(`taskmaster-mods: handover summary not read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+/**
+ * One handover by id (backlog_handover_get, slim): the band's "resumed from" when the open list does not hold it. Null when
+ * the server does not know it, refuses, is unreachable or answers unreadably (that text goes to the debug log).
+ */
+export async function readHandover(host: TmHost, handoverId: string): Promise<TmHandover | null> {
+  try {
+    const text = (await callTm(host, 'backlog_handover_get', { handover_id: handoverId })).text
+    const parsed = parseHandoverSlim(text, await host.repoRoot())
+    if (parsed.ok) return parsed.value
+    host.log(`taskmaster-mods: unreadable backlog_handover_get reply: ${text.slice(0, 2000)}`)
+    return null
+  } catch (error) {
+    host.log(`taskmaster-mods: handover ${handoverId} not read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+const PHASE_DATE =
+  "CASE WHEN p.status IN ('done','archived') THEN substr(coalesce(json_extract(p.doc,'$.completed'),''),1,10) ELSE substr(coalesce(json_extract(p.doc,'$.start_date'),''),1,10) END"
+const linkedHandovers = (status: 'open' | 'closed'): string =>
+  `(SELECT count(DISTINCT ht.handover_id) FROM handover_tasks ht JOIN entities t ON t.kind='task' AND t.id=ht.task_id AND t.deleted=0 JOIN entities ho ON ho.kind='handover' AND ho.id=ht.handover_id AND ho.deleted=0 AND ho.status='${status}' WHERE json_extract(t.doc,'$.phase')=p.id)`
+const unlinkedHandovers = (status: 'open' | 'closed'): string =>
+  `(SELECT count(*) FROM entities ho WHERE ho.kind='handover' AND ho.deleted=0 AND ho.status='${status}' AND NOT EXISTS (SELECT 1 FROM handover_tasks ht WHERE ht.handover_id=ho.id))`
+
+/**
+ * One pane's phase list query (spec §5): a row a phase, `json_array(id, status, order, count, closed, date)` and the name,
+ * newest first (each cell well under the server's 80-character cut). Review counts the in-review tasks its scope lists
+ * (naming a human action when `waitingOnly`); handovers the open and closed handovers linked through each phase's tasks;
+ * restore counts nothing here (its counts come from the scan, withCounts).
+ */
+export function phaseSql(pane: TmPhasePane, waitingOnly: boolean): string {
+  const row = (count: string, closed: string): string =>
+    `SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), ${count}, ${closed}, ${PHASE_DATE}) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC`
+  if (pane === 'handovers') return row(linkedHandovers('open'), linkedHandovers('closed'))
+  if (pane === 'restore') return row('0', '0')
+  const waiting = waitingOnly ? " AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''" : ''
+  return row(
+    `(SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id${waiting})`,
+    '0',
+  )
+}
+
+/** The handovers strip's `no task` row, read on its own: open and closed handovers that link no task. */
+export const NO_TASK_SQL = `SELECT json_array('${NO_TASK}', 'none', 0, ${unlinkedHandovers('open')}, ${unlinkedHandovers('closed')}, '') AS phase, 'no task' AS name`
+
+/**
+ * One pane's phase list, from one backlog_query (handovers: a second for its no task row). Null when the server refuses, is
+ * unreachable or answers unreadably (the reason goes to the debug log), so the strip stays where it was; a handovers list
+ * whose no task read fails keeps its phases without that tab.
+ */
+export async function readPhases(host: TmHost, pane: TmPhasePane, waitingOnly: boolean): Promise<readonly TmPhase[] | null> {
+  const read = async (sql: string): Promise<TmPhase[] | null> => {
+    const text = (await callTm(host, 'backlog_query', { sql, limit: 200 })).text
+    const parsed = parsePhases(text)
+    if (parsed.ok) return parsed.value
+    host.log(`taskmaster-mods: unreadable backlog_query reply: ${text.slice(0, 2000)}`)
+    return null
+  }
+  try {
+    const phases = await read(phaseSql(pane, waitingOnly))
+    if (phases === null || pane !== 'handovers') return phases
+    try {
+      const none = await read(NO_TASK_SQL)
+      return none === null ? phases : [...phases, ...none.filter(p => p.id === NO_TASK)]
+    } catch (error) {
+      host.log(`taskmaster-mods: no task phase row not read: ${error instanceof Error ? error.message : String(error)}`)
+      return phases
+    }
+  } catch (error) {
+    host.log(`taskmaster-mods: phases not read: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
 }

@@ -1,6 +1,6 @@
 // User intent: the live tm surfaces the user approved on top of binding and refresh — a waiting count that is the server's
 // total over a 50-row window, handover summaries read on expand (and said unavailable, never loading forever), and the band's
-// handover-written notice that copies one Telegram-ready block on `3`.
+// handover-written notice that copies one Telegram-ready block on `c`.
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -213,7 +213,7 @@ describe('handover-written notice', () => {
   const CREATE = { tldr: 'Live data wired into the band', next_action: 'Run the Step 9 live check', thread: 'tui-mods' }
   const BLOCK = `Live data wired into the band\nC:\\work\\proj\\.taskmaster\\handovers\\2026-10-06-live-data-wired.md\nResume: tui-mods — Run the Step 9 live check`
 
-  test('the main agent writing a handover puts HANDOVER and its tldr on the band; 3 copies the block, toasts and clears the row', TM, async ($, on) => {
+  test('the main agent writing a handover puts it on the band as written here; c copies its block and the row stays', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -223,14 +223,17 @@ describe('handover-written notice', () => {
     await $.tool.call(call('backlog_handover_create', CREATE))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
-    expect(await ui.find({ type: 'Text', text: 'HANDOVER' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '↳ HANDOVER' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Live data wired into the band' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'band-copy' }))?.props).toMatchObject({ hotkey: '3', label: 'copy' })
+    expect((await ui.find({ type: 'Button', key: 'band-copy' }))?.props).toMatchObject({ hotkey: 'c', label: 'copy' })
     await ui.press({ key: 'band-copy' })
+    await clock.settle()
     expect(world.copies).toEqual([BLOCK])
     expect(world.toasts).toEqual(['Copied handover 2026-10-06-live-data-wired'])
-    expect(await ui.find({ type: 'Text', text: 'HANDOVER' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /4 waiting on you/ })).toBeDefined()
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'band-review' }))?.props.label).toBe('4 waiting on you')
   })
 
   test('with no clipboard the toast carries the path and the row stays', TM, async ($, on) => {
@@ -243,13 +246,14 @@ describe('handover-written notice', () => {
     await $.tool.call(call('backlog_handover_create', CREATE))
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
     await ui.press({ key: 'band-copy' })
+    await clock.settle()
     expect(world.toasts).toEqual([
       'Clipboard unavailable (no-clipboard): copy by hand from C:\\work\\proj\\.taskmaster\\handovers\\2026-10-06-live-data-wired.md',
     ])
-    expect(await ui.find({ type: 'Text', text: 'HANDOVER' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '↳ HANDOVER' })).toBeDefined()
   })
 
-  test('the row offers 2: handovers only while the needs-you row does not, and fits a 30-column band', TM, async ($, on) => {
+  test('offline, the handover written here still shows with c, beside the offline signal, and a 30-column band fits', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     toolAnswers(on, { backlog_handover_create: R.HANDOVER_WRITTEN })
@@ -257,13 +261,16 @@ describe('handover-written notice', () => {
     await clock.settle()
     await $.tool.call(call('backlog_handover_create', CREATE))
     expect(world.statuses).toEqual(['◆ tm offline'])
-    const wide = await $.ui.mount({ plugin: PLUGIN, ...BAND })
-    expect((await wide.find({ type: 'Button', key: 'notice-handovers' }))?.props).toMatchObject({ hotkey: '2', label: 'handovers' })
-    await wide.unmount()
     const narrow = await $.ui.mount({ plugin: PLUGIN, ...BAND, props: { ...BAND.props, bodyColumns: 30 } })
     const tree = await narrow.drawn()
-    for (const row of elementsOf(tree).filter(e => e.type === 'Box' && e.props?.flexDirection === 'row')) expect(widthOf(row)).toBeLessThanOrEqual(30)
-    expect(await narrow.find({ type: 'Button', key: 'band-copy' })).toBeDefined()
+    for (const row of elementsOf(tree).filter(e => e.type === 'Box' && e.props?.flexDirection === 'row' && e.props?.columnGap === 2)) {
+      expect(widthOf(row)).toBeLessThanOrEqual(28)
+    }
+    for (const key of ['band-copy', 'band-review', 'band-handovers', 'band-session']) expect(await narrow.find({ type: 'Button', key }), key).toBeDefined()
+    await narrow.unmount()
+    const wide = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    expect(await wide.find({ type: 'Text', text: ' offline' })).toBeDefined()
+    expect(await wide.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
   })
 
   test('a refused create, or a subagent writing one, puts nothing on the band; /clear clears the row', TM, async ($, on) => {
@@ -313,14 +320,13 @@ describe('P0/P1 issues, read on their own', () => {
     // 2 tasks + (1 P0 + 1 P1 shown + 6 hidden) + 1 decision
     expect(await band($)).toContain('11 waiting on you')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    await ui.press({ key: 'skip' })
-    await ui.press({ key: 'skip' })
+    // BLOCKED first (the critical task, then the P0 issue), then ACTION: the dated decision, then the undated task and P1 issue.
+    await ui.press({ key: 'focus-next' })
     expect(await ui.find({ type: 'Text', text: 'ISS-1' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /P0 ISSUE/ })).toBeDefined()
-    await ui.press({ key: 'skip' })
-    expect(await ui.find({ type: 'Text', text: 'ISS-7' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /An open P0 issue/ })).toBeDefined()
+    for (let i = 0; i < 3; i += 1) await ui.press({ key: 'focus-next' })
     // ISS-7's age comes from the review continuity item when the window holds it; here it does not: no age, no crash.
-    expect(await ui.find({ type: 'Text', text: /^· \d+[mhd]$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /An open P1 issue/ })).toBeDefined()
   })
 })
 

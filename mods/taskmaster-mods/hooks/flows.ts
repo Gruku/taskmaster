@@ -2,10 +2,40 @@
 // pane can never disagree and every write goes through one explicit confirmation and at most one write per task at a time.
 import type { RenderSurface } from 'claude-code'
 
-import type { TmBandMode, TmCursor, TmHandover, TmHandoverNotice, TmHandoverSummary, TmSnapshot, TmTaskDetail } from '../types'
+import type {
+  TmBandMode,
+  TmCursor,
+  TmHandover,
+  TmHandoverNotice,
+  TmHandoverSummary,
+  TmPhase,
+  TmPhasePane,
+  TmPhaseView,
+  TmReviewList,
+  TmSnapshot,
+  TmTaskDetail,
+} from '../types'
 import type { TmActions } from './actions'
 import type { TmHost } from './host'
-import { afterDone, afterSendBack, FRESH_CURSOR, handoverCopyText, HANDOVERS, REVIEW, TICKS_PREFIX, ticksOf, toggleTick } from './model'
+import { launchAll, type LaunchResult, type LaunchSpec, launchSummary } from './launch'
+import {
+  afterDone,
+  afterSendBack,
+  FRESH_CURSOR,
+  handoverCopyText,
+  HANDOVERS,
+  PAGE_SIZE,
+  RESTORE,
+  restoreHiddenKey,
+  REVIEW,
+  SESSION,
+  TICKS_PREFIX,
+  ticksOf,
+  toggleTick,
+} from './model'
+import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
+import { type BulkResult, bulkSummary, FRESH_REVIEW_LIST, toggled } from './review-list'
+import { recordResumedFrom } from './resumed'
 
 export type TmWriter = {
   snapshot: (change: (s: TmSnapshot | null) => TmSnapshot | null) => Promise<void>
@@ -20,6 +50,11 @@ export type TmWriter = {
   ) => Promise<void>
   summaryOpen: (change: (id: string) => string) => Promise<void>
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
+  phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
+  handoverPage: (page: number) => Promise<void>
+  reviewList: (change: (l: TmReviewList) => TmReviewList) => Promise<void>
+  resumedFrom: (handoverId: string) => Promise<void>
+  restoreHidden: (epoch: number) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -40,7 +75,20 @@ export type TmFlowDeps = {
    * cannot. Absent in demo, whose summaries are seeded like the task details.
    */
   summary?: (handoverId: string) => Promise<TmHandoverSummary | null>
+  /** Reads one pane's phases for its strip (null: could not; the strip stays as it was). Demo answers its own lists. */
+  readPhases?: (pane: TmPhasePane) => Promise<readonly TmPhase[] | null>
+  /** A pane's strip moved to this phase id ('' All): review's scope follows and a refresh is asked. */
+  phaseChosen?: (pane: TmPhasePane, phaseId: string) => void
+  /** Resolves the session's handover again (D5) after something it depends on changed. */
+  resolve?: () => Promise<void>
+  /** Reads one handover by id (tm: backlog_handover_get), for a copy the open list and the notice cannot answer. */
+  readHandover?: (handoverId: string) => Promise<TmHandover | null>
+  /** Asks tm for a fresh snapshot (u, Retry); absent in demo, whose data does not change underneath. */
+  refresh?: () => void
 }
+
+/** The surfaces a key can open: band and Session `1` `2` `3` `4`. */
+export type TmPane = 'review' | 'handovers' | 'session' | 'restore'
 
 export type TmFlows = ReturnType<typeof createFlows>
 
@@ -50,6 +98,8 @@ const notBound = (id: string, what: string): string => `${id} is not this sessio
 type Hold = { readonly pending: Promise<unknown> } | undefined
 const holdOf = (out: { readonly pending?: Promise<unknown> }): Hold => (out.pending === undefined ? undefined : { pending: out.pending })
 const UNAVAILABLE: TmHandoverSummary = { decisions: [], blockers: [], unavailable: true }
+/** A launch's commands may take a moment to hand the tab over (wt.exe returns at once; osascript waits for the app). */
+const LAUNCH_TIMEOUT_MS = 15_000
 
 export function createFlows(d: TmFlowDeps) {
   const busy = new Set<string>()
@@ -80,8 +130,26 @@ export function createFlows(d: TmFlowDeps) {
   // One write per task at a time. A write that timed out is still running (`work` hands back its pending call): the task
   // stays busy until that call answers, so a re-confirm never sends a second write beside it; then a refresh shows what it did.
   const held = new Set<string>()
+  const claim = (id: string): boolean => {
+    if (busy.has(id)) return false
+    busy.add(id)
+    return true
+  }
+  const release = (id: string, pending: Promise<unknown> | undefined): void => {
+    if (pending === undefined) {
+      busy.delete(id)
+      return
+    }
+    held.add(id)
+    const free = () => {
+      held.delete(id)
+      busy.delete(id)
+      d.afterWrite(id, 'failed')
+    }
+    void pending.then(free, free)
+  }
   const once = async (id: string, work: () => Promise<Hold>): Promise<void> => {
-    if (busy.has(id)) {
+    if (!claim(id)) {
       if (held.has(id)) {
         // Not left armed either: once the earlier call answers, a y must not fire off this press.
         await disarm(id)
@@ -89,23 +157,25 @@ export function createFlows(d: TmFlowDeps) {
       }
       return
     }
-    busy.add(id)
     let pending: Promise<unknown> | undefined
     try {
       pending = (await work())?.pending
     } finally {
-      if (pending === undefined) busy.delete(id)
-      else {
-        held.add(id)
-        const release = () => {
-          held.delete(id)
-          busy.delete(id)
-          d.afterWrite(id, 'failed')
-        }
-        void pending.then(release, release)
-      }
+      release(id, pending)
     }
   }
+  // The bulk row acts once, on exactly the ids it was asked for: the check and the move to `busy` are one write, so a second
+  // y, or a y on a row drawn before a cancel, finds nothing armed and sends nothing.
+  const bulkArmed = async (kind: 'done' | 'agent', ids: readonly string[]): Promise<boolean> => {
+    let armed = false
+    await d.write.reviewList(l => {
+      armed = l.bulk === kind && l.bulkIds.length === ids.length && l.bulkIds.every((id, i) => id === ids[i])
+      return armed ? { ...l, bulk: 'busy' } : l
+    })
+    return armed
+  }
+  // A single card's y/n or note and the bulk row never stand together; a running bulk is left to finish.
+  const quietList = (l: TmReviewList): TmReviewList => ({ ...l, ticking: false, ...(l.bulk === 'busy' ? {} : { bulk: 'none' as const, bulkIds: [] }) })
   // Any write's outcome on a task, from either surface, takes down every confirm or note still up for it on both: an arm
   // left behind (on a row hidden for now) would sign off a round the person never pressed d on.
   const disarm = async (id: string): Promise<void> => {
@@ -137,6 +207,10 @@ export function createFlows(d: TmFlowDeps) {
     await d.write.band(b => (b.confirmingId === id || b.refusalId === id ? { confirmingId: '', refusal: '' } : b))
     d.afterWrite(id, 'done')
   }
+  const pick = async (id: string): Promise<void> => {
+    await d.write.pick(id)
+    await d.write.summaryOpen(open => (open === id ? open : ''))
+  }
   const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
   const open = async (id: string, title: string): Promise<void> => {
     if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
@@ -144,21 +218,143 @@ export function createFlows(d: TmFlowDeps) {
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
   }
+  // A handover's Telegram-ready block by id: this session's notice (its block is the receipt's own), else the open list,
+  // else (tm) one read by id. Read through the writers, which hand back the current state unchanged.
+  const handoverText = async (id: string): Promise<{ readonly text: string; readonly path: string } | null> => {
+    const seen: { notice: TmHandoverNotice | null; listed: TmHandover | undefined } = { notice: null, listed: undefined }
+    await d.write.notice(n => {
+      seen.notice = n
+      return n
+    })
+    if (seen.notice !== null && seen.notice.id === id) return { text: seen.notice.text, path: seen.notice.path }
+    await d.write.snapshot(s => {
+      seen.listed = s?.handovers.find(h => h.id === id)
+      return s
+    })
+    const found = seen.listed ?? (await d.readHandover?.(id)) ?? null
+    return found === null ? null : { text: handoverCopyText(found), path: found.path }
+  }
+  const openHandovers = async (): Promise<void> => {
+    await d.write.pick('')
+    await d.write.summaryOpen(() => '')
+    await d.write.handoverPage(0)
+    await open(HANDOVERS, 'Handovers')
+  }
+  const keepChoice = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
+    if (d.source !== 'demo') await saveChoice(phaseStoreOf(d.host), pane, await d.host.repoRoot(), phaseId)
+  }
+  // A pane's phases, read fresh: a remembered choice the list no longer holds falls back to All, with a toast (spec §5).
+  const loadPhases = async (pane: TmPhasePane): Promise<readonly TmPhase[] | null> => {
+    const phases = (await d.readPhases?.(pane)) ?? null
+    if (phases === null) return null
+    let lost = ''
+    await d.write.phaseView(pane, v => {
+      const kept = fallback({ ...v, phases, loaded: true })
+      lost = kept.lost
+      return { ...v, phases, loaded: true, choice: kept.choice }
+    })
+    if (lost !== '') {
+      await keepChoice(pane, ALL)
+      d.host.toast(`taskmaster-mods: phase ${lost} no longer exists; showing All`)
+      d.phaseChosen?.(pane, ALL)
+    }
+    return phases
+  }
+  // A tab, ‹ ›, a digit, an overlay pick or 0 All: kept per pane and project (not in demo), the overlay closes, and the pane
+  // starts over at its top (review: page 1, its first card focused, nothing selected that the new phase does not show).
+  const choosePhase = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
+    let changed = false
+    await d.write.phaseView(pane, v => {
+      changed = v.choice !== phaseId
+      return { ...v, choice: phaseId, overlay: false }
+    })
+    if (!changed) return
+    await keepChoice(pane, phaseId)
+    if (pane === 'review') {
+      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '' }))
+      await d.write.reviewList(() => FRESH_REVIEW_LIST)
+    }
+    if (pane === 'handovers') {
+      await d.write.handoverPage(0)
+      await pick('')
+    }
+    d.phaseChosen?.(pane, phaseId)
+  }
   const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
     await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
+    await d.write.reviewList(() => FRESH_REVIEW_LIST)
     await open(REVIEW, 'Review')
+    // The phase list is read when the pane opens, off the open: the pane draws at once, the filter label follows.
+    if (pin === '') {
+      d.host.after(0, () => {
+        void loadPhases('review').catch(() => undefined)
+      })
+    }
     if (mode === 'note') await d.host.focus(REVIEW, 'note')
   }
 
   return {
     openReview,
-    openHandovers: async (): Promise<void> => {
-      await d.write.pick('')
+    openHandovers,
+    /** Band and Session `1`–`4`: the pane, opened as its own command opens it. */
+    openPane: async (pane: TmPane): Promise<void> => {
+      if (pane === 'review') return openReview()
+      if (pane === 'handovers') return openHandovers()
+      return pane === 'session' ? open(SESSION, 'Session') : open(RESTORE, 'Restore')
+    },
+    /** Session `h`: the handovers pane on the page that holds this handover, picked and focused (Stage 4 adds its phase). */
+    openHandover: async (handoverId: string): Promise<void> => {
+      const at = { index: -1 }
+      await d.write.snapshot(s => {
+        at.index = s?.handovers.findIndex(h => h.id === handoverId) ?? -1
+        return s
+      })
       await d.write.summaryOpen(() => '')
+      await d.write.handoverPage(at.index < 0 ? 0 : Math.floor(at.index / PAGE_SIZE))
+      await d.write.pick(at.index < 0 ? '' : handoverId)
       await open(HANDOVERS, 'Handovers')
+      if (at.index < 0) d.host.toast(`taskmaster-mods: handover ${handoverId} is not in the open list`)
+      else await d.host.focus(HANDOVERS, `ho:${handoverId}`)
+    },
+    /** Band `x`: the restore burst's `4` goes for good (kept per burst, not in demo). */
+    hideRestore: async (epoch: number): Promise<void> => {
+      if (d.source !== 'demo') await d.host.storeSet(restoreHiddenKey(epoch), true)
+      await d.write.restoreHidden(epoch)
+    },
+    /** New terminal tabs, 700 ms apart (launch.ts), then one toast; demo opens nothing and says what it would open. */
+    launch: async (specs: readonly LaunchSpec[], surface?: RenderSurface): Promise<LaunchResult> => {
+      if (d.source === 'demo') {
+        d.host.toast(`Demo: would open ${specs.map(s => s.title).join(', ')}`)
+        return { opened: 0, copied: null, failed: [] }
+      }
+      const r = await launchAll(
+        {
+          env: () => d.host.launchEnv(),
+          run: argv => d.host.run(argv, LAUNCH_TIMEOUT_MS),
+          copy: async text => (await d.host.copy(text, surface)).isCopied,
+          sleep: ms => d.host.sleep(ms),
+        },
+        specs,
+      )
+      d.host.toast(launchSummary(r))
+      return r
+    },
+    loadPhases,
+    choosePhase,
+    /** `◐ done`: flips from what the strip shows now (the default rule until the person first presses it). */
+    toggleDone: async (pane: TmPhasePane): Promise<void> => {
+      await d.write.phaseView(pane, v => ({ ...v, showDone: !isDoneShown(orderPhases(v.phases, 0), v.showDone) }))
+    },
+    /** `+N ▾` / `f`: opens the overlay list (reading the phases fresh) or closes it. */
+    setOverlay: async (pane: TmPhasePane, open: boolean): Promise<void> => {
+      await d.write.phaseView(pane, v => ({ ...v, overlay: open }))
+      // `f` takes the digits for the overlay's picks: review's tick mode lets go of them.
+      if (pane === 'review') await d.write.reviewList(l => ({ ...l, ticking: false }))
+      if (open) await loadPhases(pane)
     },
     askDone: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'confirm', refusal: '', currentId: id }))
+      await d.write.reviewList(quietList)
       await d.host.focus(REVIEW, 'confirm-no')
     },
     cancel: async (): Promise<void> => {
@@ -179,6 +375,7 @@ export function createFlows(d: TmFlowDeps) {
       }),
     askNote: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'note', refusal: '', currentId: id }))
+      await d.write.reviewList(quietList)
       await d.host.focus(REVIEW, 'note')
     },
     /** `humanAction`: the check the card shows ('' when known empty), so the clear knows what "(not persisted)" means. */
@@ -211,8 +408,156 @@ export function createFlows(d: TmFlowDeps) {
         d.afterWrite(id, 'sent-back')
         return undefined
       }),
-    skip: async (id: string): Promise<void> => {
-      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '', currentId: '', skipped: [...c.skipped, id] }))
+    /**
+     * j / k, or the Tab ring landing on a card's box: that card takes the focus and expands; a confirm or refusal on the card
+     * left behind goes with it (a y can never land on a card the person moved off). The ring follows to the card's box.
+     */
+    focusCard: async (id: string, page: number): Promise<void> => {
+      await d.write.cursor(c => (c.currentId === id ? c : { ...c, currentId: id, mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
+      await d.host.focus(REVIEW, `sel:${id}`)
+    },
+    /** p / n: that page, its first card focused. */
+    turnReviewPage: async (page: number): Promise<void> => {
+      await d.write.cursor(c => ({ ...c, currentId: '', mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
+    },
+    /**
+     * `t`: the focused card's checks take the digits 1–9 (the strip lets go of them) until one is ticked, `t` again, `f`, a
+     * move or a page turn: ticking is two keystrokes, and a stray digit never ticks.
+     */
+    armTick: async (): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, ticking: !l.ticking }))
+    },
+    /** s, or a press on a card's box. */
+    toggleSelect: async (id: string): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: toggled(l.selected, id) }))
+    },
+    /** `all`: these tasks join the selection (the page's); `none` clears it. */
+    selectAll: async (ids: readonly string[]): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: [...l.selected, ...ids.filter(id => !l.selected.includes(id))] }))
+    },
+    selectNone: async (): Promise<void> => {
+      await d.write.reviewList(l => ({ ...l, selected: [] }))
+    },
+    /**
+     * `Done N` / `To agent N`: the y/n (n focused) or the shared note, for exactly these tasks; a refresh before y changes
+     * nothing. A card's own y/n goes down.
+     */
+    bulkAsk: async (kind: 'done' | 'agent', ids: readonly string[]): Promise<void> => {
+      if (ids.length === 0) return
+      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => (l.bulk === 'busy' ? l : { ...l, bulk: kind, bulkIds: [...ids], ticking: false }))
+      await d.host.focus(REVIEW, kind === 'done' ? 'bulk-no' : 'bulk-note')
+    },
+    bulkCancel: async (): Promise<void> => {
+      await d.write.reviewList(l => (l.bulk === 'busy' ? l : { ...l, bulk: 'none', bulkIds: [] }))
+    },
+    /**
+     * y on `Done N`: each task signed off in turn with the card's own call (one write per task at a time, a timed-out one
+     * held), then one toast naming every refusal in the server's words; refused tasks stay selected.
+     */
+    bulkDone: async (ids: readonly string[]): Promise<void> => {
+      if (!(await bulkArmed('done', ids))) return
+      const results: BulkResult[] = []
+      try {
+        for (const id of ids) {
+          if (!claim(id)) {
+            results.push({ id, refusal: 'an earlier write on it has not answered yet' })
+            continue
+          }
+          let pending: Promise<unknown> | undefined
+          try {
+            const out = await d.actions.done(id)
+            if (out.ok) {
+              await d.write.cursor(c => ({ ...c, done: c.done.includes(id) ? c.done : [...c.done, id] }))
+              await signedOff(id)
+              results.push({ id, refusal: null })
+            } else {
+              await disarm(id)
+              pending = out.pending
+              results.push({ id, refusal: out.refusal })
+            }
+          } catch (error) {
+            // Stop at the first throw: what state it left is unknown, so no further write goes out beside it.
+            results.push({ id, refusal: error instanceof Error ? error.message : String(error) })
+            break
+          } finally {
+            release(id, pending)
+          }
+        }
+      } finally {
+        for (const id of ids) if (!results.some(r => r.id === id)) results.push({ id, refusal: 'the run stopped before it', notRun: true })
+        try {
+          const went = results.filter(r => r.refusal === null).map(r => r.id)
+          await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !went.includes(id)) }))
+        } finally {
+          d.host.toast(bulkSummary('done', results))
+        }
+      }
+    },
+    /**
+     * The note on `To agent N`: each task goes back in turn with the one note, as a card's `a` does (`actions`: the check each
+     * card showed; a task no longer listed is not sent). One toast; the prompt names the tasks that went and holds the note
+     * (with none gone, it still keeps the note); the pane closes only when every one went.
+     */
+    bulkSendBack: async (ids: readonly string[], note: string, actions: Readonly<Record<string, string>>): Promise<void> => {
+      if (!(await bulkArmed('agent', ids))) return
+      const results: BulkResult[] = []
+      const moved: string[] = []
+      try {
+        for (const id of ids) {
+          const humanAction = actions[id]
+          if (humanAction === undefined) {
+            results.push({ id, refusal: 'no longer listed: not sent back' })
+            continue
+          }
+          if (!claim(id)) {
+            results.push({ id, refusal: 'an earlier write on it has not answered yet' })
+            continue
+          }
+          let pending: Promise<unknown> | undefined
+          try {
+            const out = await d.actions.backToAgent(id, note, humanAction)
+            await disarm(id)
+            if (out.ok || out.mayHaveMoved === true) {
+              await d.write.snapshot(s => (s === null ? s : afterSendBack(s, id)))
+              moved.push(id)
+            }
+            if (out.ok) {
+              await d.write.band(b => (b.refusalId === id ? { confirmingId: b.confirmingId, refusal: '' } : b))
+              d.afterWrite(id, 'sent-back')
+            } else {
+              pending = out.pending
+              if (pending === undefined) d.afterWrite(id, 'failed')
+            }
+            results.push({ id, refusal: out.ok ? null : out.refusal })
+          } catch (error) {
+            // Stop at the first throw (see bulkDone); the note below is still handed back.
+            results.push({ id, refusal: error instanceof Error ? error.message : String(error) })
+            break
+          } finally {
+            release(id, pending)
+          }
+        }
+      } finally {
+        for (const id of ids) if (!results.some(r => r.id === id)) results.push({ id, refusal: 'the run stopped before it', notRun: true })
+        try {
+          await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !moved.includes(id)) }))
+        } finally {
+          d.host.toast(bulkSummary('back to agent', results))
+        }
+      }
+      const text = note.trim()
+      const named = moved.length > 0 ? moved : text === '' ? [] : [...ids]
+      if (named.length > 0) await fill(text === '' ? `Back to ${named.join(', ')}` : `Back to ${named.join(', ')}: ${text}`)
+      if (moved.length === ids.length) await d.host.closePane(REVIEW)
+    },
+    /** u (and Retry): a fresh snapshot from tm, and the pane's phases read again. Demo says it has nothing newer. */
+    refresh: async (pane: TmPhasePane): Promise<void> => {
+      if (d.refresh === undefined) d.host.toast('taskmaster-mods: demo data has nothing newer to read')
+      else d.refresh()
+      await loadPhases(pane)
     },
     fill,
     bandAskDone: async (id: string): Promise<void> => {
@@ -249,20 +594,34 @@ export function createFlows(d: TmFlowDeps) {
         await d.write.band(() => ({ confirmingId: '', refusal: out.refusal, refusalId: id }))
         return holdOf(out)
       }),
-    pick: async (id: string): Promise<void> => {
-      await d.write.pick(id)
-      await d.write.summaryOpen(open => (open === id ? open : ''))
+    pick,
+    /** n / p: turn to a page and pick its first handover. */
+    turnPage: async (page: number, firstId: string): Promise<void> => {
+      await d.write.handoverPage(page)
+      await pick(firstId)
     },
-    copyHandover: async (h: TmHandover, surface: RenderSurface | undefined): Promise<void> => {
-      const r = await d.host.copy(handoverCopyText(h), surface)
-      d.host.toast(r.isCopied ? `Copied handover ${h.id}` : `Clipboard unavailable (${r.reason}): copy by hand from ${h.path}`)
+    /** Band, Session and handovers `c`: the handover's full Telegram-ready block on the clipboard, and a toast. */
+    copyHandover: async (handoverId: string, surface?: RenderSurface): Promise<void> => {
+      const found = await handoverText(handoverId)
+      if (found === null) {
+        d.host.toast(`taskmaster-mods: handover ${handoverId} not found`)
+        return
+      }
+      const r = await d.host.copy(found.text, surface)
+      d.host.toast(r.isCopied ? `Copied handover ${handoverId}` : `Clipboard unavailable (${r.reason}): copy by hand from ${found.path}`)
     },
     resumeHandover: async (h: TmHandover): Promise<void> => {
       await fill(`Resume from handover ${h.id} (${h.path})`)
     },
+    /** This session continues the work of `handoverId` (spec §10.5): kept per session id (not in demo), then D5 again. */
+    recordResumed: async (handoverId: string): Promise<void> => {
+      if (d.source !== 'demo') await recordResumedFrom(phaseStoreOf(d.host), await d.host.sessionId(), handoverId)
+      await d.write.resumedFrom(handoverId)
+      await d.resolve?.()
+    },
     // The summary is shown only while its handover is the picked one; opening asks for its decisions and blockers once (an
     // unavailable one is asked again, "loading summary…" meanwhile).
-    toggleSummary: async (h: TmHandover, open: boolean): Promise<void> => {
+    toggleSummary: async (h: { readonly id: string }, open: boolean): Promise<void> => {
       await d.write.summaryOpen(() => (open ? h.id : ''))
       if (!open || d.summary === undefined || summaryAsked.has(h.id)) return
       await d.write.summaries(all => {
@@ -287,16 +646,6 @@ export function createFlows(d: TmFlowDeps) {
         return Object.fromEntries(kept.map(([id, s]) => [id, s.stale === true ? s : { ...s, stale: true as const }]))
       })
     },
-    // The band's handover-written notice: `3` copies its block; the row goes once the copy landed.
-    copyNotice: async (n: TmHandoverNotice, surface: RenderSurface | undefined): Promise<void> => {
-      const r = await d.host.copy(n.text, surface)
-      if (!r.isCopied) {
-        d.host.toast(`Clipboard unavailable (${r.reason}): copy by hand from ${n.path}`)
-        return
-      }
-      d.host.toast(`Copied handover ${n.id}`)
-      await d.write.notice(current => (current?.id === n.id ? null : current))
-    },
     // Ticks are local UI state: read the stored set first (another session may have ticked), toggle, write it back, then
     // mirror it into $.state so the card redraws. Never sent to Taskmaster.
     toggleTick: async (taskId: string, item: string): Promise<void> => {
@@ -304,6 +653,7 @@ export function createFlows(d: TmFlowDeps) {
       const items = toggleTick(ticksOf(await d.host.storeGet(key)), item)
       await d.host.storeSet(key, { at: await d.host.now(), items })
       await d.write.ticks(all => ({ ...all, [taskId]: items }))
+      await d.write.reviewList(l => (l.ticking ? { ...l, ticking: false } : l))
     },
     toggleDetails: async (): Promise<void> => {
       await d.write.detailsOpen(open => !open)

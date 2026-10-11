@@ -44,6 +44,8 @@ export type RrButtonProps = {
   readonly hotkey?: string
   readonly hover: { readonly bold: true; readonly color: string }
 }
+/** A Text's colour recipe, spread on a Text: what `badgeProps()` hands out. */
+export type RrTextProps = { readonly color: string; readonly backgroundColor: string; readonly bold: boolean }
 export type RrTokens = {
   readonly polarity: RrPolarity
   readonly surface: Readonly<Record<RrLevel, string>>
@@ -72,6 +74,14 @@ export type Rr = {
   buttonProps: (args: { key?: string }) => Promise<RrButtonProps>
   keycap: (args: { key: string; tone: RrTone }) => Promise<RrNode>
   chip: (args: { text: string; tone: RrTone; strength: RrStrength; on?: RrGround }) => Promise<RrNode>
+  /**
+   * A status badge's Text props: the tone's tint on its ground (`strength` 24 by default, 12 for a quiet badge; `on` default
+   * page) with bold foreground-bold ink. The tone travels in the fill and the badge's word, never in a rail. Survivalist: a
+   * surface step (24: border-strong), bold ink.
+   */
+  badgeProps: (args: { tone: RrTone; strength?: RrStrength; on?: RrGround }) => Promise<RrTextProps>
+  /** `fg` laid over `bg` at `alpha` (clamped to 0..1), both `#rrggbb`: a tint derived from two tokens, never a new value. */
+  tint: (args: { fg: string; bg: string; alpha: number }) => Promise<string>
 }
 
 declare module 'claude-code' {

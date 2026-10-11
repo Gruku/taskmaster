@@ -5,28 +5,32 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   ageLabel,
   bandModel,
-  bandRows,
   cardMode,
-  cardPosition,
   FRESH_CURSOR,
   gateSignal,
   handoverCopyText,
   handoverPath,
   handoverRefs,
   oneLine,
+  PAGE_SIZE,
+  phaseName,
+  handoverPage,
+  isReady,
   isStaleTicks,
   orderQueue,
   queueDots,
   reviewQueue,
   splitCheck,
   stageLine,
+  statusTone,
+  statusWord,
   ticksOf,
   toggleTick,
   truncate,
   wrapText,
 } from '../hooks/model'
 import { DEMO_DETAILS } from '../hooks/demo'
-import type { TmHandover, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmPhase, TmQueueItem, TmSnapshot, TmTaskDetail } from '../types'
 
 const H1: TmHandover = { id: 'h1', created: '', tldr: 'Shipped it', nextAction: '', path: '/p/h1.md', branch: '', taskIds: [], thread: '' }
 
@@ -76,29 +80,13 @@ describe('queue', () => {
     expect(orderQueue(items).map(i => i.id)).toEqual(['crit-001', 'crit-002', 'high-001', 'low-001', 'ISS-0', 'ISS-1', 'DEC-1', 'DEC-2'])
   })
 
-  test('the card skips done and skipped items, honours a pinned id and counts the pass', () => {
-    const queue = [task('a-001', 'high'), task('b-001', 'high'), task('c-001', 'low')]
-    expect(cardPosition(queue, FRESH_CURSOR, 3)).toMatchObject({ n: 1, total: 3 })
-    expect(cardPosition(queue, FRESH_CURSOR, 3).item?.id).toBe('a-001')
-    const later = { ...FRESH_CURSOR, done: ['a-001'], skipped: ['b-001'] }
-    expect(cardPosition(queue, later, 2).item?.id).toBe('c-001')
-    expect(cardPosition(queue, later, 2)).toMatchObject({ n: 3, total: 3 })
-    expect(cardPosition(queue, { ...FRESH_CURSOR, currentId: 'c-001' }, 3).item?.id).toBe('c-001')
-    expect(cardPosition(queue, { ...FRESH_CURSOR, skipped: ['a-001', 'b-001', 'c-001'] }, 3).item).toBeNull()
-  })
-
-  test('a window of the first rows still counts everything the server says is waiting', () => {
-    const queue = [task('a-001', 'high'), task('b-001', 'high')]
-    expect(cardPosition(queue, FRESH_CURSOR, 355)).toMatchObject({ n: 1, total: 355 })
-  })
-
   test('a pinned task outside the loaded window gets its card from its own detail, never another card', () => {
     const queue = [task('a-001', 'high'), task('b-001', 'high')]
     const pinned = { ...FRESH_CURSOR, currentId: 'tm-audit-030', mode: 'note' as const }
     const known = reviewQueue(snap({ queue, queueTotal: 355 }), pinned, { 'tm-audit-030': { ...DETAIL, status: 'in-review', humanAction: 'Check dev' } })
-    expect(cardPosition(known, pinned, 355).item).toMatchObject({ kind: 'task', id: 'tm-audit-030', priority: 'high', humanAction: 'Check dev' })
+    expect(known[0]).toMatchObject({ kind: 'task', id: 'tm-audit-030', priority: 'high', humanAction: 'Check dev' })
     const bound = snap({ queue, queueTotal: 355, bound: { taskId: 'tm-audit-030', inferred: false, detail: DETAIL, pipeline: null } })
-    expect(cardPosition(reviewQueue(bound, pinned, {}), pinned, 355).item?.id).toBe('tm-audit-030')
+    expect(reviewQueue(bound, pinned, {})[0]?.id).toBe('tm-audit-030')
     expect(reviewQueue(snap({ queue }), FRESH_CURSOR, {})).toEqual(queue)
   })
 
@@ -112,54 +100,56 @@ describe('queue', () => {
 })
 
 describe('band', () => {
-  test('hidden entirely with no bound task and nothing waiting', () => {
-    expect(bandModel(null)).toBeNull()
-    expect(bandModel(snap({}))).toBeNull()
+  const NONE = { handover: null, restore: null, connecting: false }
+  const HO = { id: 'h1', tag: 'task' as const, tldr: 'Wired live data', path: '/p/h1.md', created: '' }
+  const bound = (detail: TmTaskDetail | null, pipeline = PIPELINE, inferred = false) => ({ taskId: 'tm-audit-030', inferred, detail, pipeline })
+
+  test('hidden entirely with no task, no handover, no restore burst and nothing counted', () => {
+    expect(bandModel(null, NONE)).toBeNull()
+    expect(bandModel(snap({}), NONE)).toBeNull()
+    expect(bandModel(snap({ reachable: false, reason: 'down' }), NONE)).toBeNull()
   })
 
-  test('a bound in-progress task shows lane, gate state and the next outstanding gate', () => {
-    const m = bandModel(snap({ bound: { taskId: 'tm-audit-030', inferred: false, detail: DETAIL, pipeline: PIPELINE } }))
-    expect(m?.task).toMatchObject({ id: 'tm-audit-030', review: false, meta: 'FULL · review-gate:pass', stage: 'IN PROGRESS → next: merge' })
-    expect(m?.needsYou).toBe(0)
+  test('a bound task carries its title and status; d is offered only when it is ready and bound here', () => {
+    const m = bandModel(snap({ bound: bound(DETAIL) }), NONE)
+    expect(m?.task).toEqual({ id: 'tm-audit-030', title: 'Audit fixes', status: 'in-progress', inferred: false, ready: false })
+    expect(bandModel(snap({ bound: bound(DETAIL, { ...PIPELINE, outstanding: [] }) }), NONE)?.task?.ready).toBe(true)
+    expect(bandModel(snap({ bound: bound({ ...DETAIL, status: 'in-review' }) }), NONE)?.task?.ready).toBe(true)
+    expect(bandModel(snap({ bound: bound({ ...DETAIL, status: 'in-review' }, PIPELINE, true) }), NONE)?.task?.ready).toBe(false)
   })
 
-  test('an in-review bound task switches to the review form carrying its human action', () => {
-    const detail = { ...DETAIL, status: 'in-review', humanAction: 'Check dev' }
-    const m = bandModel(snap({ bound: { taskId: 'tm-audit-030', inferred: false, detail, pipeline: PIPELINE } }))
-    expect(m?.task).toMatchObject({ review: true, humanAction: 'Check dev' })
-  })
-
-  test('offline keeps the locally bound id but drops stage and needs-you', () => {
-    const m = bandModel(
-      snap({ reachable: false, reason: 'down', queue: [task('a-001', 'high')], bound: { taskId: 'tm-audit-030', inferred: false, detail: null, pipeline: null } }),
-    )
+  test('offline keeps the locally bound id with no status, counts nothing and says offline', () => {
+    const m = bandModel(snap({ reachable: false, reason: 'down', queueTotal: 9, bound: bound(null, PIPELINE) }), NONE)
     expect(m).toEqual({
-      task: { id: 'tm-audit-030', title: '', inferred: false, review: false, humanAction: '', meta: '', stage: '' },
-      needsYou: 0,
+      task: { id: 'tm-audit-030', title: '', status: '', inferred: false, ready: false },
+      handover: null,
+      restore: null,
+      fault: 'offline',
+      waiting: 0,
+      waitingCapped: false,
+      handovers: 0,
     })
   })
 
-  test('rows give way to maxRows: the task first, then needs-you, then the stage line', () => {
-    const m = { task: { id: 'x-001', title: 't', inferred: false, review: false, humanAction: '', meta: '', stage: 'IN PROGRESS' }, needsYou: 3 }
-    expect(bandRows(m, 3)).toEqual(['task', 'stage', 'needs'])
-    expect(bandRows(m, 2)).toEqual(['task', 'needs'])
-    expect(bandRows(m, 1)).toEqual(['task'])
-    expect(bandRows({ task: null, needsYou: 3 }, 1)).toEqual(['needs'])
+  test('a handover or a restore burst shows the band on its own; connecting with no good snapshot says so', () => {
+    expect(bandModel(null, { ...NONE, handover: HO })).toMatchObject({ task: null, handover: HO, fault: 'none' })
+    expect(bandModel(snap({}), { ...NONE, restore: 3 })).toMatchObject({ task: null, restore: 3 })
+    expect(bandModel(null, { ...NONE, connecting: true })).toMatchObject({ task: null, fault: 'connecting' })
+    expect(bandModel(snap({ queueTotal: 2 }), { ...NONE, connecting: true })?.fault).toBe('none')
   })
 
-  test('a handover-written notice shows the band on its own, and gives way after the task row', () => {
-    expect(bandModel(null, { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
-    expect(bandModel(snap({}), { id: 'h1', tldr: 'Wired live data', path: '/p/h1.md', text: 'x' })).toEqual({ task: null, needsYou: 0, notice: 'Wired live data' })
-    const m = { task: { id: 'x-001', title: 't', inferred: false, review: false, humanAction: '', meta: '', stage: 'IN PROGRESS' }, needsYou: 3, notice: 'h' }
-    expect(bandRows(m, 4)).toEqual(['task', 'stage', 'handover', 'needs'])
-    expect(bandRows(m, 3)).toEqual(['task', 'handover', 'needs'])
-    expect(bandRows(m, 2)).toEqual(['task', 'handover'])
-    expect(bandRows({ task: null, needsYou: 0, notice: 'h' }, 1)).toEqual(['handover'])
+  test("the counts are the server's totals; a waiting count cut at the window is marked capped", () => {
+    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 355, handoversTotal: 7 }), NONE)).toMatchObject({ waiting: 355, waitingCapped: false, handovers: 7 })
+    expect(bandModel(snap({ queueTotal: 50, queueCapped: true }), NONE)).toMatchObject({ waiting: 50, waitingCapped: true })
+    expect(bandModel(snap({ handoversTotal: 2 }), NONE)).toMatchObject({ task: null, waiting: 0, handovers: 2 })
   })
 
-  test("needs-you is the server's count; a count cut at the window is marked capped", () => {
-    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 355 }))).toEqual({ task: null, needsYou: 355 })
-    expect(bandModel(snap({ queue: [task('a-001', 'high')], queueTotal: 50, queueCapped: true }))).toEqual({ task: null, needsYou: 50, needsCapped: true })
+  test('status words and tones; ready for done', () => {
+    expect(statusWord('in-review')).toBe('IN REVIEW')
+    expect([statusTone('in-review'), statusTone('blocked'), statusTone('done'), statusTone('in-progress')]).toEqual(['info', 'critical', 'success', 'signature'])
+    expect(isReady({ ...DETAIL, status: 'done' }, { ...PIPELINE, outstanding: [] })).toBe(false)
+    expect(isReady(DETAIL, { laneless: true, lane: '', gateState: '', outstanding: [] })).toBe(false)
+    expect(isReady(DETAIL, null)).toBe(false)
   })
 
   test('stage line wording', () => {
@@ -281,5 +271,43 @@ describe('review card', () => {
     expect(isStaleTicks({ at: now - 31 * 86_400_000, items: [] }, now)).toBe(true)
     expect(isStaleTicks({ at: now - 86_400_000, items: [] }, now)).toBe(false)
     expect(isStaleTicks('junk', now)).toBe(true)
+  })
+})
+
+const phase = (id: string, status: string, order: number, count: number, name = id): TmPhase => ({ id, status, order, count, name })
+// newest first, as the query returns them
+const PHASES: readonly TmPhase[] = [
+  phase('r15', 'planned', 17, 16, 'Release 1.5.0 — Alpha &amp; Beta'),
+  phase('p146', 'planned', 16, 33),
+  phase('p144', 'active', 14, 249),
+  phase('p143', 'done', 13, 0),
+  phase('p141', 'done', 11, 8),
+]
+
+describe('the phase filter', () => {
+  test('a phase shows as its name before the dash, with &amp; decoded; its id when it has no name', () => {
+    expect(phaseName(PHASES[0]!)).toBe('Release 1.5.0')
+    expect(phaseName(phase('x', 'planned', 1, 0, 'Research &amp; Model Evals'))).toBe('Research & Model Evals')
+    expect(phaseName(phase('x', 'planned', 1, 0, ''))).toBe('x')
+  })
+})
+
+describe('handover pages', () => {
+  const list = Array.from({ length: 13 }, (_, i) => ({ id: `h${i}` }) as TmHandover)
+
+  test('five to a page, the last one short; a page out of range is clamped', () => {
+    expect(PAGE_SIZE).toBe(5)
+    expect(handoverPage(list, 0, '').entries.map(h => h.id)).toEqual(['h0', 'h1', 'h2', 'h3', 'h4'])
+    const last = handoverPage(list, 2, '')
+    expect([last.page, last.pages, last.entries.map(h => h.id)]).toEqual([2, 3, ['h10', 'h11', 'h12']])
+    expect(handoverPage(list, 9, '').page).toBe(2)
+    expect(handoverPage(list, -1, '').page).toBe(0)
+    expect(handoverPage([], 0, '')).toMatchObject({ page: 0, pages: 1, entries: [], picked: undefined })
+  })
+
+  test('the picked handover is the pick when it is on the page, else the page first', () => {
+    expect(handoverPage(list, 1, 'h7').picked?.id).toBe('h7')
+    expect(handoverPage(list, 1, 'h2').picked?.id).toBe('h5')
+    expect(handoverPage(list, 1, '').picked?.id).toBe('h5')
   })
 })
