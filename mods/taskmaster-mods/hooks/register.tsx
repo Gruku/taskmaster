@@ -767,6 +767,10 @@ export const register: Register = (on, options) => {
         selectNone: () => act(f => f.selectNone()),
         refresh: () => act(f => f.refresh('review')),
         armTick: () => act(f => f.armTick()),
+        bulkAsk: (kind, ids) => act(f => f.bulkAsk(kind, ids)),
+        bulkCancel: () => act(f => f.bulkCancel()),
+        bulkDone: ids => act(f => f.bulkDone(ids)),
+        bulkSendBack: (ids, note, actions) => act(f => f.bulkSendBack(ids, note, actions)),
       },
       e.props.bodyColumns,
     )

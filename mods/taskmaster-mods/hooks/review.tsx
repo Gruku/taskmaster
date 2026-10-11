@@ -40,6 +40,7 @@ import {
   newestStamp,
   reviewItems,
   reviewKind,
+  selectedTasks,
 } from './review-list'
 import type { Rr, RrGround } from './rr'
 
@@ -88,6 +89,12 @@ export type ReviewHandlers = {
   refresh: () => void
   /** t: arm (or disarm) the focused card's checks for one digit. */
   armTick: () => void
+  /** `Done N` / `To agent N`: ask (y/n, or the shared note) for exactly these task ids. */
+  bulkAsk: (kind: 'done' | 'agent', ids: readonly string[]) => void
+  bulkCancel: () => void
+  bulkDone: (ids: readonly string[]) => void
+  /** `actions`: the check each card showed, by task id. */
+  bulkSendBack: (ids: readonly string[], note: string, actions: Readonly<Record<string, string>>) => void
 }
 
 /** The id keeps at least this many cells before the title and age give way. */
@@ -339,6 +346,41 @@ function composeNote(k: Kit, item: TmQueueItem, action: string, on: ReviewHandle
   ]
 }
 
+/**
+ * The shared note for `To agent N`, on its own like a card's note: the tasks it goes to and the Input; nothing else with a key.
+ */
+function composeBulkNote(k: Kit, items: readonly TmQueueItem[], v: ReviewView, on: ReviewHandlers, inner: number): RenderNode[] {
+  const { Box, Text, Input } = k.ui
+  const { t } = k
+  const ids = v.list.bulkIds
+  const actions: Record<string, string> = {}
+  for (const item of items) if (item.kind === 'task' && ids.includes(item.id)) actions[item.id] = item.humanAction || v.details[item.id]?.humanAction || ''
+  const cancel = keycap(k, { id: 'bulk-cancel', label: 'cancel', onPress: on.bulkCancel })
+  return [
+    label(k, `review · one note for ${ids.length} tasks`).el,
+    ...ids.map(id => {
+      const item = items.find(i => i.id === id)
+      return (
+        <Box flexDirection="row" columnGap={1}>
+          <Text color={t.fg.bold} bold>
+            {id}
+          </Text>
+          <Text color={t.fg.default}>{truncate(item === undefined ? '(no longer listed)' : oneLine(item.title), Math.max(4, inner - id.length - 1))}</Text>
+        </Box>
+      )
+    }),
+    <Input
+      key="bulk-note"
+      label={`note for the agent (${ids.length} tasks)`}
+      placeholder="what should change"
+      submitLabel="send back"
+      autoFocus
+      onSubmit={value => on.bulkSendBack(ids, value, actions)}
+    />,
+    cancel.el,
+  ]
+}
+
 export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderElement> {
   const k = await kitOf(ui, rr, v.surface, v.say)
   const { Box, Text } = ui
@@ -350,6 +392,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const view = listView(items, v.cursor.currentId, v.list.page)
   const focused = view.focused
 
+  if (v.list.bulk === 'agent') return root(k, rr, composeBulkNote(k, items, v, on, inner))
   if (focused !== null && focused.kind === 'task' && cardMode(v.cursor, focused) === 'note') {
     const action = focused.humanAction || v.details[focused.id]?.humanAction || ''
     return root(k, rr, composeNote(k, focused, action, on, inner))
@@ -380,14 +423,32 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const counts = kindCounts(items)
   const kinds = KINDS.map(kind => badge(k, `${counts[kind]} ${KIND_WORD[kind]}`, KIND_TONE[kind], { dim: counts[kind] === 0 }))
   const pageTasks = view.entries.filter(isSelectable).map(item => item.id)
-  const selection = selectionBar(k, {
-    actions: [],
-    ghosts: [
-      { id: 'sel-all', label: 'all', onPress: () => on.selectAll(pageTasks) },
-      { id: 'sel-none', label: 'none', onPress: on.selectNone },
-    ],
-    width: inner,
-  })
+  const chosen = selectedTasks(items, v.list.selected).map(item => item.id)
+  // The bulk row: the bar; its y/n (drawn after the pager, so its n is the one the key presses); or the run's progress.
+  const selection =
+    v.list.bulk === 'done'
+      ? confirmRow(k, {
+          id: 'bulk',
+          question: `Done ${v.list.bulkIds.length}: ${v.list.bulkIds.join(', ')}?`,
+          onYes: () => on.bulkDone(v.list.bulkIds),
+          onNo: on.bulkCancel,
+          width: inner,
+        })
+      : v.list.bulk === 'busy'
+        ? [signal(k, 'info', 'working', `one task at a time: ${v.list.bulkIds.length}`).el]
+        : [
+            selectionBar(k, {
+              actions: [
+                { id: 'bulk-done', key: 'b', verb: 'Done', count: chosen.length, tone: 'success', onPress: () => on.bulkAsk('done', chosen) },
+                { id: 'bulk-agent', key: 'g', verb: 'To agent', count: chosen.length, tone: 'warning', onPress: () => on.bulkAsk('agent', chosen) },
+              ],
+              ghosts: [
+                { id: 'sel-all', label: 'all', onPress: () => on.selectAll(pageTasks) },
+                { id: 'sel-none', label: 'none', onPress: on.selectNone },
+              ],
+              width: inner,
+            }),
+          ]
   const room = Math.max(8, inner - CARD_FRAME)
   const cards: RenderNode[] = []
   for (const item of view.entries) {
@@ -422,7 +483,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
       <Box flexDirection="row" columnGap={2}>
         {fit(kinds, inner, 2)}
       </Box>,
-      selection,
+      ...selection,
       ...cards,
       <Box flexDirection="row" columnGap={1}>
         {up.el}

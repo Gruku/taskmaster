@@ -34,7 +34,7 @@ import {
   toggleTick,
 } from './model'
 import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
-import { FRESH_REVIEW_LIST, toggled } from './review-list'
+import { type BulkResult, bulkSummary, FRESH_REVIEW_LIST, toggled } from './review-list'
 import { recordResumedFrom } from './resumed'
 
 export type TmWriter = {
@@ -130,8 +130,26 @@ export function createFlows(d: TmFlowDeps) {
   // One write per task at a time. A write that timed out is still running (`work` hands back its pending call): the task
   // stays busy until that call answers, so a re-confirm never sends a second write beside it; then a refresh shows what it did.
   const held = new Set<string>()
+  const claim = (id: string): boolean => {
+    if (busy.has(id)) return false
+    busy.add(id)
+    return true
+  }
+  const release = (id: string, pending: Promise<unknown> | undefined): void => {
+    if (pending === undefined) {
+      busy.delete(id)
+      return
+    }
+    held.add(id)
+    const free = () => {
+      held.delete(id)
+      busy.delete(id)
+      d.afterWrite(id, 'failed')
+    }
+    void pending.then(free, free)
+  }
   const once = async (id: string, work: () => Promise<Hold>): Promise<void> => {
-    if (busy.has(id)) {
+    if (!claim(id)) {
       if (held.has(id)) {
         // Not left armed either: once the earlier call answers, a y must not fire off this press.
         await disarm(id)
@@ -139,23 +157,25 @@ export function createFlows(d: TmFlowDeps) {
       }
       return
     }
-    busy.add(id)
     let pending: Promise<unknown> | undefined
     try {
       pending = (await work())?.pending
     } finally {
-      if (pending === undefined) busy.delete(id)
-      else {
-        held.add(id)
-        const release = () => {
-          held.delete(id)
-          busy.delete(id)
-          d.afterWrite(id, 'failed')
-        }
-        void pending.then(release, release)
-      }
+      release(id, pending)
     }
   }
+  // The bulk row acts once, on exactly the ids it was asked for: the check and the move to `busy` are one write, so a second
+  // y, or a y on a row drawn before a cancel, finds nothing armed and sends nothing.
+  const bulkArmed = async (kind: 'done' | 'agent', ids: readonly string[]): Promise<boolean> => {
+    let armed = false
+    await d.write.reviewList(l => {
+      armed = l.bulk === kind && l.bulkIds.length === ids.length && l.bulkIds.every((id, i) => id === ids[i])
+      return armed ? { ...l, bulk: 'busy' } : l
+    })
+    return armed
+  }
+  // A single card's y/n or note and the bulk row never stand together; a running bulk is left to finish.
+  const quietList = (l: TmReviewList): TmReviewList => ({ ...l, ticking: false, ...(l.bulk === 'busy' ? {} : { bulk: 'none' as const, bulkIds: [] }) })
   // Any write's outcome on a task, from either surface, takes down every confirm or note still up for it on both: an arm
   // left behind (on a row hidden for now) would sign off a round the person never pressed d on.
   const disarm = async (id: string): Promise<void> => {
@@ -334,7 +354,7 @@ export function createFlows(d: TmFlowDeps) {
     },
     askDone: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'confirm', refusal: '', currentId: id }))
-      await d.write.reviewList(l => ({ ...l, ticking: false }))
+      await d.write.reviewList(quietList)
       await d.host.focus(REVIEW, 'confirm-no')
     },
     cancel: async (): Promise<void> => {
@@ -355,7 +375,7 @@ export function createFlows(d: TmFlowDeps) {
       }),
     askNote: async (id: string): Promise<void> => {
       await d.write.cursor(c => ({ ...c, mode: 'note', refusal: '', currentId: id }))
-      await d.write.reviewList(l => ({ ...l, ticking: false }))
+      await d.write.reviewList(quietList)
       await d.host.focus(REVIEW, 'note')
     },
     /** `humanAction`: the check the card shows ('' when known empty), so the clear knows what "(not persisted)" means. */
@@ -419,6 +439,103 @@ export function createFlows(d: TmFlowDeps) {
     },
     selectNone: async (): Promise<void> => {
       await d.write.reviewList(l => ({ ...l, selected: [] }))
+    },
+    /**
+     * `Done N` / `To agent N`: the y/n (n focused) or the shared note, for exactly these tasks; a refresh before y changes
+     * nothing. A card's own y/n goes down.
+     */
+    bulkAsk: async (kind: 'done' | 'agent', ids: readonly string[]): Promise<void> => {
+      if (ids.length === 0) return
+      await d.write.cursor(c => ({ ...c, mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => (l.bulk === 'busy' ? l : { ...l, bulk: kind, bulkIds: [...ids], ticking: false }))
+      await d.host.focus(REVIEW, kind === 'done' ? 'bulk-no' : 'bulk-note')
+    },
+    bulkCancel: async (): Promise<void> => {
+      await d.write.reviewList(l => (l.bulk === 'busy' ? l : { ...l, bulk: 'none', bulkIds: [] }))
+    },
+    /**
+     * y on `Done N`: each task signed off in turn with the card's own call (one write per task at a time, a timed-out one
+     * held), then one toast naming every refusal in the server's words; refused tasks stay selected.
+     */
+    bulkDone: async (ids: readonly string[]): Promise<void> => {
+      if (!(await bulkArmed('done', ids))) return
+      const results: BulkResult[] = []
+      try {
+        for (const id of ids) {
+          if (!claim(id)) {
+            results.push({ id, refusal: 'an earlier write on it has not answered yet' })
+            continue
+          }
+          let pending: Promise<unknown> | undefined
+          try {
+            const out = await d.actions.done(id)
+            if (out.ok) {
+              await d.write.cursor(c => ({ ...c, done: c.done.includes(id) ? c.done : [...c.done, id] }))
+              await signedOff(id)
+              results.push({ id, refusal: null })
+            } else {
+              await disarm(id)
+              pending = out.pending
+              results.push({ id, refusal: out.refusal })
+            }
+          } finally {
+            release(id, pending)
+          }
+        }
+      } finally {
+        const went = results.filter(r => r.refusal === null).map(r => r.id)
+        await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !went.includes(id)) }))
+      }
+      d.host.toast(bulkSummary('done', results))
+    },
+    /**
+     * The note on `To agent N`: each task goes back in turn with the one note, as a card's `a` does (`actions`: the check each
+     * card showed; a task no longer listed is not sent). One toast; the prompt names the tasks that went and holds the note
+     * (with none gone, it still keeps the note); the pane closes only when every one went.
+     */
+    bulkSendBack: async (ids: readonly string[], note: string, actions: Readonly<Record<string, string>>): Promise<void> => {
+      if (!(await bulkArmed('agent', ids))) return
+      const results: BulkResult[] = []
+      const moved: string[] = []
+      try {
+        for (const id of ids) {
+          const humanAction = actions[id]
+          if (humanAction === undefined) {
+            results.push({ id, refusal: 'no longer listed: not sent back' })
+            continue
+          }
+          if (!claim(id)) {
+            results.push({ id, refusal: 'an earlier write on it has not answered yet' })
+            continue
+          }
+          let pending: Promise<unknown> | undefined
+          try {
+            const out = await d.actions.backToAgent(id, note, humanAction)
+            await disarm(id)
+            if (out.ok || out.mayHaveMoved === true) {
+              await d.write.snapshot(s => (s === null ? s : afterSendBack(s, id)))
+              moved.push(id)
+            }
+            if (out.ok) {
+              await d.write.band(b => (b.refusalId === id ? { confirmingId: b.confirmingId, refusal: '' } : b))
+              d.afterWrite(id, 'sent-back')
+            } else {
+              pending = out.pending
+              if (pending === undefined) d.afterWrite(id, 'failed')
+            }
+            results.push({ id, refusal: out.ok ? null : out.refusal })
+          } finally {
+            release(id, pending)
+          }
+        }
+      } finally {
+        await d.write.reviewList(l => ({ ...l, bulk: 'none', bulkIds: [], selected: l.selected.filter(id => !moved.includes(id)) }))
+      }
+      d.host.toast(bulkSummary('back to agent', results))
+      const text = note.trim()
+      const named = moved.length > 0 ? moved : text === '' ? [] : [...ids]
+      if (named.length > 0) await fill(text === '' ? `Back to ${named.join(', ')}` : `Back to ${named.join(', ')}: ${text}`)
+      if (moved.length === ids.length) await d.host.closePane(REVIEW)
     },
     /** u (and Retry): a fresh snapshot from tm, and the pane's phases read again. Demo says it has nothing newer. */
     refresh: async (pane: TmPhasePane): Promise<void> => {
