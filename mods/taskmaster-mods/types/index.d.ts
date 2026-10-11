@@ -55,17 +55,33 @@ export type TmHandoverSummary = {
   readonly unavailable?: true
   readonly stale?: true
 }
-/** One phase of the backlog (backlog_query): `count` is the in-review tasks the review scope would list for it. */
+/** One phase of the backlog (backlog_query) as one pane counts it. */
 export type TmPhase = {
   readonly id: string
   readonly status: string
   readonly order: number
+  /** What the pane counts: review its waiting in-review tasks, handovers its open handovers, restore its sessions. */
   readonly count: number
   /** The phase name as the server holds it (`Release 1.5.0 — CM 1.0 Patches`), entities not decoded. */
   readonly name: string
+  /** YYYY-MM-DD: when a done phase completed, else when it started; absent or '' when the backlog does not say. */
+  readonly date?: string
+  /** Handovers only: the closed handovers linked through the phase's tasks, added to `count` while `◐ closed` is on. */
+  readonly closed?: number
 }
-/** The review pane's phase filter: the chosen phase id ('' every phase) and the phases it can cycle through (empty until read). */
-export type TmPhaseView = { readonly choice: string; readonly phases: readonly TmPhase[] }
+/** The panes that carry a phase strip (spec §5); each keeps its own choice. */
+export type TmPhasePane = 'review' | 'handovers' | 'restore'
+/**
+ * One pane's phase strip: the chosen id ('' All, '~none' no task), the phases read for it, whether they were read (a
+ * remembered choice falls back to All only after), the `◐ done` toggle (null: the default rule) and the overlay list.
+ */
+export type TmPhaseView = {
+  readonly choice: string
+  readonly phases: readonly TmPhase[]
+  readonly loaded: boolean
+  readonly showDone: boolean | null
+  readonly overlay: boolean
+}
 export type TmBound = {
   readonly taskId: string
   readonly inferred: boolean

@@ -40,6 +40,7 @@ import {
   ticksOf,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
+import { FRESH_PHASE_VIEW } from './phases'
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
@@ -56,7 +57,7 @@ const BAND = atom({ plugin: 'taskmaster-mods', key: 'band' } as const, { confirm
 const FAULT = atom({ plugin: 'taskmaster-mods', key: 'fault' } as const, 'none' as TmFault)
 const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, null as TmBinding | null)
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
-const PHASE_VIEW = atom({ plugin: 'taskmaster-mods', key: 'phaseView' } as const, { choice: '', phases: [] } as TmPhaseView)
+const PHASE_VIEW = atom({ plugin: 'taskmaster-mods', key: 'phaseView' } as const, FRESH_PHASE_VIEW as TmPhaseView)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
