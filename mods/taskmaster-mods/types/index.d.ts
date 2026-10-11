@@ -118,6 +118,19 @@ export type TmCursor = {
   readonly mode: 'card' | 'confirm' | 'note'
   readonly refusal: string
 }
+/**
+ * The review list (spec §8): the page shown (0 first; the focused card's page wins), the selected task ids, `t`'s tick mode,
+ * and the bulk row with the ids it was asked for, so `y` acts on exactly those whatever a refresh draws in between.
+ */
+export type TmReviewList = {
+  readonly page: number
+  readonly selected: readonly string[]
+  /** `t` pressed: the focused card's checks own the digits 1–9 until one is ticked, or `t`, `f`, a move or a page turn. */
+  readonly ticking: boolean
+  /** The bulk row: `done` its y/n, `agent` its note, `busy` while the writes run one task at a time. */
+  readonly bulk: 'none' | 'done' | 'agent' | 'busy'
+  readonly bulkIds: readonly string[]
+}
 /** `refusalId` names the task `refusal` was given for; the band shows a refusal only on that task (absent: shown nowhere). */
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 /** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
@@ -158,6 +171,8 @@ declare module 'claude-code' {
       summaryOpen: string
       /** Each pane's phase strip, its choice mirrored from `$.store` `phase:<pane>:<repo root>` (spec §5). */
       phaseViews: Readonly<Record<TmPhasePane, TmPhaseView>>
+      /** The review pane's list: page, selection, tick mode and the bulk row (spec §8); reset when the pane opens. */
+      reviewList: TmReviewList
       /** The handovers pane's page (0 first); reset when the pane opens. */
       handoverPage: number
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
