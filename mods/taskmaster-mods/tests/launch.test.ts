@@ -116,7 +116,7 @@ describe('commands', () => {
     const iterm = macArgv('iterm', MAC, undefined)
     expect(iterm).toContain('tell current window to create tab with default profile')
     expect(iterm.filter(a => a === '-e').length).toBe((iterm.length - 1) / 2)
-    expect(macArgv('wezterm', MAC, undefined)).toEqual(['wezterm', 'cli', 'spawn', '--cwd', MAC.cwd, '--', '/bin/sh', '-lc', posixScript(MAC, undefined)])
+    expect(macArgv('wezterm', MAC, undefined)).toEqual(['wezterm', 'cli', 'spawn', '--cwd', MAC.cwd, '--', '/bin/zsh', '-lc', posixScript(MAC, undefined)])
   })
 })
 
@@ -181,5 +181,24 @@ describe('launchAll', () => {
     expect((await launchAll(withDir.io, [FRESH])).failed).toEqual(['handover 2026-10-05-shipped (control characters)'])
     expect(runs).toHaveLength(0)
     expect(withDir.runs).toHaveLength(0)
+  })
+
+  test('C1 controls and line separators are refused too', async () => {
+    const { io, runs } = ioOf({ os: 'Windows_NT' }, { 'wt.exe': 0 })
+    const r = await launchAll(io, [
+      { ...FRESH, title: 'A', prompt: 'x\u009by' },
+      { ...FRESH, title: 'B', cwd: 'C:\a\u2028b' },
+    ])
+    expect(r.failed).toEqual(['A (control characters)', 'B (control characters)'])
+    expect(runs).toHaveLength(0)
+  })
+
+  test('a backslash is refused on mac (fish would end the quote early) and fine on windows', async () => {
+    const evil = { ...FRESH, title: 'E', prompt: "a\'; echo PWNED; #" }
+    const mac = ioOf({ termProgram: 'iTerm.app' }, { uname: 0, osascript: 0 })
+    expect(await launchAll(mac.io, [evil])).toEqual({ opened: 0, copied: null, failed: ['E (backslash)'] })
+    expect(mac.runs.map(a => a[0])).toEqual(['uname'])
+    const win = ioOf({ os: 'Windows_NT' }, { 'wt.exe': 0 })
+    expect(await launchAll(win.io, [evil])).toEqual({ opened: 1, copied: null, failed: [] })
   })
 })
