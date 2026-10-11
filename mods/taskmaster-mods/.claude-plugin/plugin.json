@@ -44,6 +44,12 @@
       "description": "On: once the handover is written, the session is compacted with instructions naming it (without a fork, right after the guard's own turn ends; a prompt of yours before then cancels it). Off: the handover only.",
       "default": true
     },
+    "handoverGuardMaxRefreshes": {
+      "type": "number",
+      "title": "Handover guard: cache refreshes while agents work",
+      "description": "While subagents or a workflow still work, the guard never hands over or compacts; it re-reads the cached context instead (a cheap tool-less fork) so the cache stays warm. At most this many refreshes in a row (6 ≈ 5.5 hours at 55 min); then the cache is left to go cold. 0 never refreshes.",
+      "default": 6
+    },
     "handoverGuardIdleMinutes": {
       "type": "number",
       "title": "Handover guard: idle minutes",

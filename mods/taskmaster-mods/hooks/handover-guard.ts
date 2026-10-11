@@ -1,6 +1,7 @@
 // User intent: an opt-in guard for long sessions left idle — before the 1-hour prompt cache goes cold over a big context,
 // get a handover written (by a fork of the conversation, or by the conversation itself) and optionally compact, as the
-// person configures; at most one per session, never a loop, never a compaction without its handover.
+// person configures; at most one per session, never a loop, never a compaction without its handover. While subagents
+// still work, the session is not idle: keep the cache warm instead (capped), never hand over or compact under them.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, PluginOptions, Timer, ToolCallResult } from 'claude-code'
 
@@ -21,10 +22,19 @@ export type GuardConfig = {
   readonly fork: boolean
   /** Compact once the handover is written. */
   readonly compact: boolean
+  /** Cache refreshes in a row while subagents work, before the guard leaves the cache to go cold. */
+  readonly maxRefreshes: number
 }
 export type GuardVerdict = { readonly fire: true; readonly tokens: number } | { readonly fire: false; readonly reason: string }
 
-export const GUARD_DEFAULTS: GuardConfig = { enabled: false, idleMs: 55 * MIN, minTokens: 200_000, fork: true, compact: true }
+export const GUARD_DEFAULTS: GuardConfig = {
+  enabled: false,
+  idleMs: 55 * MIN,
+  minTokens: 200_000,
+  fork: true,
+  compact: true,
+  maxRefreshes: 6,
+}
 const FRESH_GUARD: TmHandoverGuard = { lastTurnEnd: null, latch: 'none' }
 
 const GUARD = atom({ plugin: 'taskmaster-mods', key: 'handoverGuard' } as const, FRESH_GUARD)
@@ -33,6 +43,7 @@ const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as cons
 const TM_SERVER = 'plugin:taskmaster:tm'
 
 const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null)
+const count = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null)
 
 export function guardConfigOf(options: PluginOptions): GuardConfig {
   const minutes = positive(options.handoverGuardIdleMinutes)
@@ -42,8 +53,33 @@ export function guardConfigOf(options: PluginOptions): GuardConfig {
     minTokens: positive(options.handoverGuardMinTokens) ?? GUARD_DEFAULTS.minTokens,
     fork: options.handoverGuardFork !== false,
     compact: options.handoverGuardCompact !== false,
+    maxRefreshes: count(options.handoverGuardMaxRefreshes) ?? GUARD_DEFAULTS.maxRefreshes,
   }
 }
+
+/** Agents still at work in this session; a teammate waiting for a message (`idle`) is not. */
+const BUSY_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'waiting'])
+
+/**
+ * Why the session is not really idle, or null. A listed subagent at work, or any sub-loop's tool call within the idle
+ * window: a workflow's agents are never listed, but their tool calls carry an `agentId` all the same.
+ */
+export function busyReason(
+  agents: readonly { readonly status: string }[],
+  lastSubLoopCall: number | null,
+  now: number,
+  windowMs: number,
+): string | null {
+  const working = agents.filter(a => BUSY_STATUSES.has(a.status)).length
+  if (working > 0) return `${working} agent${working === 1 ? '' : 's'} at work`
+  if (lastSubLoopCall !== null && now - lastSubLoopCall < windowMs) {
+    return `a subagent or workflow called a tool ${Math.round((now - lastSubLoopCall) / MIN)} min ago`
+  }
+  return null
+}
+
+/** The one message a refresh fork answers: a cache read of the whole prefix, which restarts the cache's hour. */
+export const REFRESH_PROMPT = '<cache_refresh>Reply with the single word OK.</cache_refresh>'
 
 export function guardVerdict(cfg: GuardConfig, guard: TmHandoverGuard, now: number, tokens: number | undefined): GuardVerdict {
   if (!cfg.enabled) return { fire: false, reason: 'disabled' }
@@ -123,11 +159,22 @@ type Owed = { id: string | null; tldr: string; nextAction: string }
 // `epoch` moves on at every turn start, prompt and session end: an arm or a check begun before one of them is stale.
 // `owed`: the guard prompted the main conversation with compaction on; the handover its turn writes fills it in, and the
 // turn's end compacts. A user prompt or a session end lets it go.
-const guard: { cfg: GuardConfig; pending: Timer | null; epoch: number; owed: Owed | null } = {
+// `refreshes`: cache refreshes since the main loop last ended a turn; `lastSubLoopCall`: when a subagent's or a workflow's
+// loop last called a tool. Both live with the module: a reload forgets them, which costs at most a few refreshes.
+const guard: {
+  cfg: GuardConfig
+  pending: Timer | null
+  epoch: number
+  owed: Owed | null
+  refreshes: number
+  lastSubLoopCall: number | null
+} = {
   cfg: GUARD_DEFAULTS,
   pending: null,
   epoch: 0,
   owed: null,
+  refreshes: 0,
+  lastSubLoopCall: null,
 }
 
 function disarm(): void {
@@ -149,12 +196,22 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   } catch {
     tokens = undefined
   }
-  const verdict = guardVerdict(cfg, await read($, GUARD), await $.clock.now(), tokens)
+  const now = await $.clock.now()
+  const verdict = guardVerdict(cfg, await read($, GUARD), now, tokens)
   if (epoch !== guard.epoch) return
   if (!verdict.fire) {
     if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-mods: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
     return
   }
+  let agents: readonly { readonly status: string }[] = []
+  try {
+    agents = await $.agent.list()
+  } catch {
+    // an unreadable list falls back to the sub-loop clock alone
+  }
+  const busy = busyReason(agents, guard.lastSubLoopCall, now, cfg.idleMs)
+  if (epoch !== guard.epoch) return
+  if (busy !== null) return refresh($, epoch, busy)
   // Latch before forking: only an unlatched session may fire, and a failed run never asks again.
   let won = false
   await update($, GUARD, (g): TmHandoverGuard => {
@@ -176,6 +233,30 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   } catch (error) {
     $.ui.log(`taskmaster-mods: handover guard stopped: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
   }
+}
+
+/** Subagents still work: no handover, no compaction; one cheap fork re-reads the cached prefix and the timer restarts. */
+async function refresh($: EngineInterface, epoch: number, busy: string): Promise<void> {
+  const max = guard.cfg.maxRefreshes
+  if (guard.refreshes >= max) {
+    $.ui.log(`taskmaster-mods: handover guard: ${busy}, and ${max} cache refreshes are spent: the cache is left to go cold`, { to: 'debug' })
+    return
+  }
+  guard.refreshes += 1
+  const n = guard.refreshes
+  const reply = await $.model.fork({ prompt: REFRESH_PROMPT })
+  if (epoch !== guard.epoch) return
+  $.ui.log(
+    reply.isAnswered
+      ? `taskmaster-mods: handover guard refreshed the cache (${n}/${max}): ${busy}`
+      : `taskmaster-mods: handover guard cache refresh ${n}/${max} failed (${reply.reason}): ${busy}`,
+    { to: 'debug' },
+  )
+  const now = await $.clock.now()
+  // The refresh is the cache's last touch: the next check, and its lateness, count from here.
+  const held = await update($, GUARD, (g): TmHandoverGuard => (g.latch === 'none' ? { ...g, lastTurnEnd: now } : g))
+  if (held.latch !== 'none' || epoch !== guard.epoch) return
+  schedule($, epoch)
 }
 
 /** The main conversation writes it; with compaction on, its turn's end compacts once a handover was written in it. */
@@ -255,6 +336,10 @@ async function arm($: EngineInterface, epoch: number): Promise<void> {
   const held = await update($, GUARD, (g): TmHandoverGuard => (g.latch === 'none' ? { ...g, lastTurnEnd: now } : g))
   // A turn that started while this one's end was being recorded must never have a timer running under it.
   if (held.latch !== 'none' || epoch !== guard.epoch) return
+  schedule($, epoch)
+}
+
+function schedule($: EngineInterface, epoch: number): void {
   disarm()
   guard.pending = $.clock.after(guard.cfg.idleMs, () => {
     void check($, epoch).catch(() => undefined) // a check that cannot read the state now just does not ask
@@ -285,6 +370,7 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
     const epoch = guard.epoch
     const result = await next(e)
     if (e.agentId !== undefined) return result
+    guard.refreshes = 0
     try {
       settleOwed($)
       await arm($, epoch)
@@ -310,6 +396,19 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
   on('session.end', async ($, e, next) => {
     interrupt()
     guard.owed = null
+    return next(e)
+  })
+
+  // Any loop but the main one at work (a subagent, a workflow's agent): the session is not idle while it lasts. The matcher
+  // every call meets keeps this beside the handover-create hook below.
+  on('tool.call', { tool: /^/ }, async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      try {
+        guard.lastSubLoopCall = await $.clock.now()
+      } catch {
+        // a clock that cannot be read leaves the last time standing
+      }
+    }
     return next(e)
   })
 

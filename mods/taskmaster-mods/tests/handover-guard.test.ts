@@ -6,6 +6,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { MockClock } from 'claude-code/testing'
 
 import {
+  busyReason,
   compactInstructions,
   GUARD_DEFAULTS,
   guardConfigOf,
@@ -13,6 +14,7 @@ import {
   handoverArgs,
   isHandoverWritten,
   parseForkHandover,
+  REFRESH_PROMPT,
 } from '../hooks/handover-guard'
 import { PLUGIN } from './fixtures/inputs'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -49,6 +51,7 @@ type GuardWorld = {
   compactSkip: string | undefined
   reply: { text: string; isError?: boolean }
   stallMs: number
+  agents: { id: string; description: string; type: string; status: string }[]
 }
 
 /** Beneath the plugins: the session's context fill (answered `stallMs` late on the clock given), the prompt box's
@@ -64,7 +67,9 @@ function guardWorld(on: On, world: World, tokens: number | undefined, clock?: Mo
     compactSkip: undefined,
     reply: { text: WRITTEN },
     stallMs: 0,
+    agents: [],
   }
+  on('agent.list', () => ({ value: g.agents }) as never)
   on('session.usage', async () => {
     if (clock !== undefined && g.stallMs > 0) await clock.sleep(g.stallMs)
     return { value: { startedAt: 0, context: { tokens: g.tokens, window: 1_000_000 }, rateLimits: [] } } as never
@@ -112,14 +117,18 @@ describe('handover guard: decisions', () => {
 
   test('config: off by default, 55 min and 200k; bad values fall back; idle stays under the late mark', () => {
     expect(guardConfigOf({})).toEqual(GUARD_DEFAULTS)
-    expect(GUARD_DEFAULTS).toEqual({ enabled: false, idleMs: 55 * MIN, minTokens: 200_000, fork: true, compact: true })
+    expect(GUARD_DEFAULTS).toEqual({ enabled: false, idleMs: 55 * MIN, minTokens: 200_000, fork: true, compact: true, maxRefreshes: 6 })
     expect(guardConfigOf({ handoverGuard: true, handoverGuardIdleMinutes: 40, handoverGuardMinTokens: 150_000 })).toEqual({
       enabled: true,
       idleMs: 40 * MIN,
       minTokens: 150_000,
       fork: true,
       compact: true,
+      maxRefreshes: 6,
     })
+    expect(guardConfigOf({ handoverGuardMaxRefreshes: 0 }).maxRefreshes).toBe(0)
+    expect(guardConfigOf({ handoverGuardMaxRefreshes: 2.7 }).maxRefreshes).toBe(2)
+    expect(guardConfigOf({ handoverGuardMaxRefreshes: -1 }).maxRefreshes).toBe(6)
     expect(guardConfigOf({ handoverGuardFork: false, handoverGuardCompact: false })).toMatchObject({ fork: false, compact: false })
     expect(guardConfigOf({ handoverGuardFork: 'no', handoverGuardCompact: 0 })).toMatchObject({ fork: true, compact: true })
     expect(guardConfigOf({ handoverGuardIdleMinutes: -3, handoverGuardMinTokens: Number.NaN })).toEqual(GUARD_DEFAULTS)
@@ -470,5 +479,95 @@ describe('handover guard: modes', () => {
     await clock.advance(2_000)
     expect(g.compacts).toEqual([])
     expect(world.logs.some(l => l.text.includes('did not compact'))).toBe(true)
+  })
+})
+
+const AGENT = { id: 'ag1', description: 'long build', type: 'general-purpose', status: 'running' }
+const refreshes = (g: GuardWorld) => g.forks.filter(f => f === REFRESH_PROMPT)
+
+describe('handover guard: busy, not idle', () => {
+  test('busy: a listed agent at work, or a sub-loop tool call within the window; an idle teammate is not', () => {
+    expect(busyReason([{ status: 'running' }], null, 0, 55 * MIN)).toContain('1 agent')
+    expect(busyReason([{ status: 'pending' }, { status: 'waiting' }], null, 0, 55 * MIN)).toContain('2 agents')
+    expect(busyReason([{ status: 'idle' }, { status: 'completed' }, { status: 'failed' }], null, 0, 55 * MIN)).toBeNull()
+    expect(busyReason([], 10 * MIN, 60 * MIN, 55 * MIN)).toContain('50 min ago')
+    expect(busyReason([], 1 * MIN, 60 * MIN, 55 * MIN)).toBeNull()
+  })
+
+  test('an agent at work gets cache refreshes, never a handover or compaction; once it is done the guard fires', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const state = stateOf(on)
+    const g = guardWorld(on, world, 300_000)
+    g.agents = [AGENT]
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.forks).toEqual([REFRESH_PROMPT])
+    expect(created(world)).toEqual([])
+    expect(g.compacts).toEqual([])
+    expect(g.submits).toEqual([])
+    expect(state.get(`${PLUGIN}.handoverGuard`)).toMatchObject({ latch: 'none' })
+    expect(world.logs.some(l => l.text.includes('refreshed the cache (1/6)'))).toBe(true)
+    await clock.advance(55 * MIN)
+    expect(refreshes(g)).toHaveLength(2)
+    g.agents = [{ ...AGENT, status: 'completed' }]
+    await clock.advance(55 * MIN)
+    expect(refreshes(g)).toHaveLength(2)
+    expect(g.forks).toHaveLength(3)
+    expect(created(world)).toHaveLength(1)
+    expect(g.compacts).toHaveLength(1)
+  })
+
+  test('an idle teammate does not hold the guard back', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    g.agents = [{ ...AGENT, type: 'teammate', status: 'idle' }]
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(refreshes(g)).toEqual([])
+    expect(created(world)).toHaveLength(1)
+  })
+
+  test('the refresh cap stops refreshing and leaves the conversation alone', { options: { handoverGuard: true, handoverGuardMaxRefreshes: 2 }, plugins: [RR_STUB] }, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    g.agents = [AGENT]
+    await $.turn.complete(TURN_END)
+    await clock.advance(3 * 55 * MIN)
+    expect(refreshes(g)).toHaveLength(2)
+    expect(world.logs.some(l => l.text.includes('2 cache refreshes are spent'))).toBe(true)
+    g.agents = []
+    await clock.advance(3 * 55 * MIN)
+    expect(g.forks).toHaveLength(2)
+    expect(created(world)).toEqual([])
+    expect(g.compacts).toEqual([])
+  })
+
+  test('a failed refresh is logged and the timer still restarts', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    g.agents = [AGENT]
+    g.fork = { isAnswered: false, reason: 'api-error' }
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(world.logs.some(l => l.text.includes('refresh 1/6 failed (api-error)'))).toBe(true)
+    await clock.advance(55 * MIN)
+    expect(refreshes(g)).toHaveLength(2)
+  })
+
+  test('a main-loop turn end gives the refreshes back', { options: { handoverGuard: true, handoverGuardMaxRefreshes: 1 }, plugins: [RR_STUB] }, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    g.agents = [AGENT]
+    await $.turn.complete(TURN_END)
+    await clock.advance(2 * 55 * MIN)
+    expect(refreshes(g)).toHaveLength(1)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(refreshes(g)).toHaveLength(2)
   })
 })
