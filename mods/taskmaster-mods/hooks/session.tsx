@@ -8,6 +8,7 @@ import type { TmBandMode, TmHandoverSummary, TmSessionBurst, TmSessionHandover, 
 import { HANDOVER_TAG } from './band'
 import type { TmPane } from './flows'
 import type { Kit } from './kit'
+import type { SidebarView } from './nav'
 import { ageLabel, gateSignal, isReady, oneLine, wrapText } from './model'
 import {
   actionKey,
@@ -26,6 +27,7 @@ import {
   refreshPiece,
   type Seg,
   statusBadgeWord,
+  tabRow,
   underLabel,
 } from './vocab'
 
@@ -44,6 +46,8 @@ export type SessionView = {
   readonly now: number
   /** This session's branch and start (null: not read yet): the toolbar's words. */
   readonly info: TmSessionInfo | null
+  /** The tab row's panes and counts (absent: no tab row). */
+  readonly tabs?: SidebarView
 }
 
 export type SessionHandlers = {
@@ -246,7 +250,9 @@ export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: 
     ],
     inner,
   )
+  const tabs = v.tabs === undefined ? [] : [tabRow(k, v.tabs, { go: on.goTo, toggleSidebar: on.toggleSidebar }, inner), blank(k)]
   return paneFrame(k, { name: 'session', health: healthOf(v), width }, [
+    ...tabs,
     top,
     blank(k),
     ...taskSection(k, v, on, inner),

@@ -16,6 +16,7 @@ import {
   phasePicker,
   refreshPiece,
   sidebar,
+  tabRow,
   item,
   togglePiece,
   actionRows,
@@ -221,6 +222,7 @@ describe('the hard UI rules, on the vocabulary', () => {
       bulkRow(k, { keys, scopes: [{ id: 'sel-all', label: 'all', onPress: noop }], width: 80 }),
       phaseMenu(k, strip, on),
       sidebar(k, view, noop),
+      tabRow(k, view, { go: noop, toggleSidebar: noop }, 100),
       footer(k, [{ keys: 'h l', word: 'phase', press: [{ key: 'h', onPress: noop }] }], 80),
     ]
     for (const tree of trees) {

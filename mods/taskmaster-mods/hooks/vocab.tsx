@@ -970,6 +970,75 @@ export function withSidebar(k: Kit, body: RenderElement, v: SidebarView | null, 
   )
 }
 
+// ── The tab row (spec §15.x, user request 2026-10-12): every pane's first row, a shortcut beside the sidebar ──────────
+
+const SHORT_NAMES: Readonly<Record<TmPane, string>> = { review: 'Rev', handovers: 'Hand', session: 'Sess', restore: 'Rest' }
+
+/**
+ * `☰ m  Review 5 │ Handovers 6 │ Session │ Restore`: ☰ opens or closes the sidebar, each tab opens its pane — no hotkeys (`m`
+ * is the footer's, digits the sidebar's). Narrow, counts go first, then the names shorten, then the `m` hint goes.
+ */
+export function tabRow(k: Kit, v: SidebarView, on: { readonly go: (pane: TmPane) => void; readonly toggleSidebar: () => void }, width: number): RenderNode {
+  const { Box, Text, Button } = k.ui
+  const { t } = k
+  const stages = [
+    { counts: true, short: false, hint: true, pad: true },
+    { counts: false, short: false, hint: true, pad: true },
+    { counts: false, short: true, hint: true, pad: true },
+    { counts: false, short: true, hint: false, pad: true },
+    { counts: false, short: true, hint: false, pad: false },
+  ]
+  const tabText = (entry: SidebarView['entries'][number], s: (typeof stages)[number]): { name: string; count: string } => ({
+    name: s.short ? SHORT_NAMES[entry.pane] : entry.name,
+    count: s.counts ? entry.count : '',
+  })
+  const widthAt = (s: (typeof stages)[number], entries: SidebarView['entries']): number =>
+    (s.hint ? 3 : 1) +
+    2 +
+    entries.reduce((n, entry) => {
+      const { name, count } = tabText(entry, s)
+      return n + name.length + (count === '' ? 0 : count.length + 1) + (s.pad ? 2 : 0)
+    }, 0) +
+    Math.max(0, entries.length - 1)
+  const stage = stages.find(s => widthAt(s, v.entries) <= width) ?? stages[stages.length - 1]!
+  const entries = [...v.entries]
+  while (entries.length > 1 && widthAt(stage, entries) > width) entries.pop()
+  const pad = stage.pad ? ' ' : ''
+  const tabs: RenderNode[] = []
+  entries.forEach((entry, i) => {
+    if (i > 0) tabs.push(<Text color={inkOf(k, 'faint')}>│</Text>)
+    const current = entry.pane === v.current
+    const why = entry.dim
+    const { name, count } = tabText(entry, stage)
+    const label = `${pad}${name}${count === '' ? '' : ` ${count}`}${pad}`
+    const id = `tab:${entry.pane}`
+    tabs.push(
+      <Box key={`${id}-box`} flexDirection="row" {...(current ? { backgroundColor: t.tint24.page.signature } : {})} hover={{ backgroundColor: current ? t.tint24.page.signature : stepUp(t, 'page') }}>
+        <Button key={id} plain label={label} {...(why !== undefined ? { dimColor: true } : {})} onPress={why === undefined ? () => on.go(entry.pane) : () => k.say(why)}>
+          <Text color={why !== undefined ? t.fg.disabled : current ? t.signatureText : t.fg.default} bold={current}>
+            {`${pad}${name}`}
+          </Text>
+          {count === '' ? null : <Text color={why !== undefined ? t.fg.disabled : t.fg.subtle}>{` ${count}${pad}`}</Text>}
+          {count === '' && pad !== '' ? <Text>{pad}</Text> : null}
+        </Button>
+      </Box>,
+    )
+  })
+  const menu = stage.hint ? '☰ m' : '☰'
+  return (
+    <Box flexDirection="row">
+      <Box key="tabs:sidebar-box" flexDirection="row" hover={{ backgroundColor: stepUp(t, 'page') }}>
+        <Button key="tabs:sidebar" plain label={menu} onPress={on.toggleSidebar}>
+          <Text color={t.fg.default}>☰</Text>
+          {stage.hint ? <Text color={t.signatureText}> m</Text> : null}
+        </Button>
+      </Box>
+      <Text>{'  '}</Text>
+      {tabs}
+    </Box>
+  )
+}
+
 /** A badge as a line segment (`● IN REVIEW` in its ink): for rows built from segments. Pass a task status through statusBadgeWord. */
 export function badgeSeg(k: Kit, word: string): Seg {
   const upper = word.toUpperCase()

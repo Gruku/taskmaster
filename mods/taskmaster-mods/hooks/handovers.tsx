@@ -8,6 +8,8 @@ import type { TmCloseAsk, TmHandover, TmHandoverList, TmHandoverMarks, TmHandove
 import { allCount, closableSelection, isClosed, listedHandovers, moveTarget, phaseHandovers, tallyLine } from './handover-list'
 import type { Kit, StripHandlers, StripView } from './kit'
 import { ageLabel, CONNECTING, dateOf, handoverPage, LIST_PAGE_SIZE, oneLine, phaseName } from './model'
+import type { TmPane } from './flows'
+import type { SidebarView } from './nav'
 import { ALL, emptyLine, orderPhases, withClosed } from './phases'
 import {
   actionKey,
@@ -31,6 +33,7 @@ import {
   pagerPiece,
   paneFrame,
   paneToolbar,
+  tabRow,
   phaseFooter,
   phasePicker,
   refreshPiece,
@@ -58,6 +61,8 @@ export type HandoversView = {
   readonly connecting?: boolean
   /** Demo data: the frame's health says demo. */
   readonly demo?: boolean
+  /** The tab row's panes and counts (absent: no tab row). */
+  readonly tabs?: SidebarView
 }
 
 export type HandoversHandlers = {
@@ -81,6 +86,8 @@ export type HandoversHandlers = {
   readonly strip: StripHandlers
   /** m: the sidebar over the pane. */
   readonly toggleSidebar: () => void
+  /** A tab in the tab row: that pane opens in place of this one. */
+  readonly goTo: (pane: TmPane) => void
 }
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -170,7 +177,8 @@ export function handoversPaneTree(k: Kit, v: HandoversView, on: HandoversHandler
   const { Text } = k.ui
   const { t } = k
   const inner = Math.max(10, width - 4)
-  const frame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'handovers', health: healthOf(v), width }, children)
+  const tabs = v.tabs === undefined ? [] : [tabRow(k, v.tabs, { go: on.goTo, toggleSidebar: on.toggleSidebar }, inner), <Text> </Text>]
+  const frame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'handovers', health: healthOf(v), width }, [...tabs, ...children])
   const tail: FooterItem[] = [
     { keys: 'm', word: 'sidebar', press: [{ key: 'm', onPress: on.toggleSidebar }] },
     { keys: 'esc', word: 'close' },

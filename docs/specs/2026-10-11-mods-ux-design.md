@@ -322,7 +322,7 @@ Review, Handovers and Restore use the Session tab's round-1 layout: a fixed labe
 
 ### 15.7 Per screen
 
-- **Frame:** `╭─ ◆ TASKMASTER · <PANE> ─ … ─ ● tm ok ─╮` on the page ground, no tab row. Every row fits `bodyColumns`; the Session clipping bug is fixed by fitting every row, pinned by a width test.
+- **Frame:** `╭─ ◆ TASKMASTER · <PANE> ─ … ─ ● tm ok ─╮` on the page ground; its first row is the Taskmaster tab row (§15.11), not the engine's. Every row fits `bodyColumns`; the Session clipping bug is fixed by fitting every row, pinned by a width test.
 - **Row order in a list pane:** toolbar (picker · toggles · pager · `u`), summary sentence and tallies, bulk row, blank, the list, blank, footer.
 - **Session:** toolbar `this session · <branch> · started <age> ago`; sections TASK / HANDOVER / SESSION in the label column; actions under what they act on (`d mark task done`, `a send task to agent`; `c copy handover`, `h show in handovers`, `w resume in new tab`, `i handover decisions·blockers ▸`; `4 show burst in restore` once a burst is known).
 - **Review / Handovers / Restore:** as their prototype artboards, with §15.9's labels and keys.
@@ -333,7 +333,7 @@ Review, Handovers and Restore use the Session tab's round-1 layout: a fixed labe
 
 **S1. The sidebar is an overlay inside the Taskmaster pane, not a region of its own.** It is a `position: "absolute"` box at the pane body's top-left (34 cells, `surface.overlay` ground, strong border) drawn over the pane's content, as the prototype draws it over the conversation. Absolute overlays passed the Stage 0 probe (Task 0.2: clean paint, Tab and press work). Reason: it is the closest faithful form the API can host; a separate `tm-nav` pane would be a tab or would replace the content, never a sidebar.
 
-**S2. One Taskmaster pane at a time.** Opening any Taskmaster pane first closes the plugin's other open Taskmaster panes (`$.ui.panes()`, then `$.ui.close`), so the engine never draws its tab row ("panes have no tab row"). The sidebar is the only navigation surface.
+**S2. One Taskmaster pane at a time.** Opening any Taskmaster pane first closes the plugin's other open Taskmaster panes (`$.ui.panes()`, then `$.ui.close`), so the engine never draws its tab row. The sidebar and the plugin's own tab row atop every pane (§15.11) are the navigation surfaces.
 
 **S3. `m` opens the sidebar.** In a pane, `m` toggles it. On the band, `m open sidebar` opens the last Taskmaster pane shown (Session at first) with the sidebar already open. The sidebar lists Review, Handovers, Session and Restore with counts (Review: the waiting total and a `▲ blocked ◆ action` note; Handovers: the open total and the newest age; Restore: the unfinished count of the pending burst and its time), the current pane marked; `1`–`4` jump, Tab + Enter pick, and picking the current pane only closes the sidebar. Restore is listed dim ("not built yet") until the restore pane ships.
 
@@ -366,3 +366,7 @@ While a y/n is up, the footer drops `p/n page`, so `n` can only answer no.
 ### 15.10 Constraints (unchanged)
 
 RR via `$.rr` only and no hex in taskmaster-mods; no coloured left rails, no hover motion, no shadows; hotkeys `/^[a-z0-9]$/`; `hooks/handover-guard.ts` untouched; every new file opens with a `// User intent:` header; the validator's rules (no variable `h` in .tsx, `$`-taking functions at file top, every `$.state` key in `types/index.d.ts`, atom sources consts in the same file, `$` never crosses an import).
+
+### 15.11 Tab row (2026-10-12, user request at Stage D check)
+
+Every Taskmaster pane (Session, Review, Handovers; Restore in Stage E) draws a tab row as the first row inside its frame, above the toolbar, followed by one blank row: `☰ m  Review 5 │ Handovers 6 │ Session │ Restore`. `☰` opens or closes the sidebar; the `m` beside it is a signature-coloured hint drawn as text, not a hotkey (the footer owns `m`). Then one tab per pane in sidebar order, separated by a faint `│`: a plain Button with no hotkey (digits stay the sidebar's, the ticks' and the phase list's), clickable, Enter- and Tab-reachable, that opens its pane in place of the current one (`goTo`: still one Taskmaster pane at a time). A tab reads its pane's name and, where the sidebar shows one, its count in subtle ink (Review waiting, Handovers open, Restore unfinished once built). The current tab is bold signature text on the tint24 signature ground; others default ink; Restore is dim and toasts the sidebar's reason while unbuilt. Hover steps the background only. Narrow, the row gives way in this order: counts, then short names (Rev, Hand, Sess, Rest), then the `m` hint, then the tabs' padding; it is never wider than its room. A note page (review's `a` / bulk `g`) keeps its single key and draws no tab row. The sidebar (`m`, band `m`) is unchanged; the tab row is an always-visible shortcut beside it.

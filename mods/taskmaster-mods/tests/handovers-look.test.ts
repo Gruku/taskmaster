@@ -34,6 +34,7 @@ const ON: HandoversHandlers = {
   refresh: noop,
   strip: { choose: noop, toggleDone: noop, overlay: noop },
   toggleSidebar: noop,
+  goTo: noop,
 }
 const view = (over: Partial<HandoversView> = {}): HandoversView => ({
   snapshot: SNAP,

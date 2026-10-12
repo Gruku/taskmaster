@@ -410,6 +410,11 @@ async function restoreShown($: EngineInterface): Promise<TmRestorePending | null
 /** The sidebar over a pane while `nav.sidebar` is on (null: off): its entries from the snapshot and the pending restore burst. */
 async function sidebarFor($: EngineInterface, current: TmPane): Promise<SidebarView | null> {
   if (!(await read($, NAV)).sidebar) return null
+  return tabsFor($, current)
+}
+
+/** The tab row atop every pane (always drawn): the sidebar's entries, counts and current pane. */
+async function tabsFor($: EngineInterface, current: TmPane): Promise<SidebarView> {
   const { snapshot } = await dataOf($)
   return sidebarView({ current, snapshot, restore: await restoreShown($), now: await $.clock.now() })
 }
@@ -785,6 +790,7 @@ export const register: Register = (on, options) => {
       surface: e.surface,
       say: (text: string) => mod.host?.toast(text),
       demo: mod.source === 'demo',
+      tabs: await tabsFor($, 'review'),
       // The digits are the strip's, save while `t` has armed the focused card's checks.
       strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: !list.ticking, empty: 'Nothing waiting' },
     }
@@ -821,6 +827,7 @@ export const register: Register = (on, options) => {
         bulkDone: ids => act(f => f.bulkDone(ids)),
         bulkSendBack: (ids, note, actions) => act(f => f.bulkSendBack(ids, note, actions)),
         toggleSidebar: () => act(f => f.toggleSidebar()),
+        goTo: pane => act(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
     )
@@ -860,6 +867,7 @@ export const register: Register = (on, options) => {
       focused: e.props.isFocused,
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
       demo,
+      tabs: await tabsFor($, 'handovers'),
     }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
@@ -907,6 +915,7 @@ export const register: Register = (on, options) => {
           overlay: open => act(f => f.setOverlay('handovers', open)),
         },
         toggleSidebar: () => act(f => f.toggleSidebar()),
+        goTo: pane => act(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
     )
@@ -948,6 +957,7 @@ export const register: Register = (on, options) => {
         demo: mod.source === 'demo',
         now: await $.clock.now(),
         info: await read($, SESSION_INFO),
+        tabs: await tabsFor($, 'session'),
       },
       {
         goTo: pane => act(f => f.goTo(pane)),

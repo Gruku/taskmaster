@@ -7,6 +7,8 @@ import type { RenderNode, RenderSurface } from 'claude-code'
 import type { TmCursor, TmQueueItem, TmReviewList, TmSnapshot, TmTaskDetail } from '../types'
 import { type Kit, kitOf, type StripHandlers, type StripView, type Ui } from './kit'
 import { ageLabel, cardMode, CONNECTING, gateSignal, oneLine, splitCheck, type TmCheck, truncate, wrapText } from './model'
+import type { TmPane } from './flows'
+import type { SidebarView } from './nav'
 import { ALL, emptyLine, orderPhases } from './phases'
 import {
   doneQuestion,
@@ -45,6 +47,7 @@ import {
   pagerPiece,
   paneFrame,
   paneToolbar,
+  tabRow,
   phaseFooter,
   phasePicker,
   refreshPiece,
@@ -71,6 +74,8 @@ export type ReviewView = {
   connecting?: boolean
   /** Demo data: the frame's health says demo. */
   demo?: boolean
+  /** The tab row's panes and counts (absent: no tab row). */
+  tabs?: SidebarView
 }
 
 export type ReviewHandlers = {
@@ -107,6 +112,8 @@ export type ReviewHandlers = {
   bulkSendBack: (ids: readonly string[], note: string, actions: Readonly<Record<string, string>>) => void
   /** m: the sidebar over the pane. */
   toggleSidebar: () => void
+  /** A tab in the tab row: that pane opens in place of this one. */
+  goTo: (pane: TmPane) => void
 }
 
 const NOT_SELECTABLE = 'Issues and decisions are not signed off from the list'
@@ -291,7 +298,8 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const { t } = k
   const s = v.snapshot
   const inner = Math.max(10, width - 4)
-  const frame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'review', health: healthOf(v), width }, children)
+  const tabs = v.tabs === undefined ? [] : [tabRow(k, v.tabs, { go: on.goTo, toggleSidebar: on.toggleSidebar }, inner), <Text> </Text>]
+  const frame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'review', health: healthOf(v), width }, [...tabs, ...children])
   const tail: FooterItem[] = [
     { keys: 'm', word: 'sidebar', press: [{ key: 'm', onPress: on.toggleSidebar }] },
     { keys: 'esc', word: 'close' },
@@ -306,8 +314,10 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const view = listView(items, v.cursor.currentId, v.list.page)
   const focused = view.focused
 
-  if (v.list.bulk === 'agent') return frame(composeBulkNote(k, items, v, on, inner))
-  if (focused !== null && focused.kind === 'task' && cardMode(v.cursor, focused) === 'note') return frame(composeNote(k, focused, actionOf(focused, v), on, inner))
+  // A note is a page of its own with one key (cancel): no tab row there, so nothing pulls the person off the half-written note.
+  const noteFrame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'review', health: healthOf(v), width }, children)
+  if (v.list.bulk === 'agent') return noteFrame(composeBulkNote(k, items, v, on, inner))
+  if (focused !== null && focused.kind === 'task' && cardMode(v.cursor, focused) === 'note') return noteFrame(composeNote(k, focused, actionOf(focused, v), on, inner))
 
   const top = paneToolbar(k, {
     left: phasePicker(k, v.strip, on.strip),
