@@ -30,7 +30,6 @@ import {
   FRESH_CURSOR,
   handoverCopyText,
   HANDOVERS,
-  PAGE_SIZE,
   RESTORE,
   restoreHiddenKey,
   REVIEW,

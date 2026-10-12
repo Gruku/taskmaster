@@ -409,7 +409,6 @@ export function isStaleTicks(stored: unknown, now: number): boolean {
   return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
 }
 
-export const PAGE_SIZE = 5
 /** The rework's lists (spec §15.6): three items a page, review, handovers and restore alike. */
 export const LIST_PAGE_SIZE = 3
 

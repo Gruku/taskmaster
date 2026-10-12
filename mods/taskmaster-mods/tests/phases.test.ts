@@ -10,22 +10,17 @@ import {
   FRESH_PHASE_VIEW,
   fallback,
   isDoneShown,
-  jump,
   legacyPhaseKey,
   loadChoice,
-  MAX_VISIBLE,
   NO_TASK,
   orderPhases,
-  overlayLine,
+  pickerName,
   type PhaseStore,
   phaseKey,
   saveChoice,
   shownTabs,
   step,
   storedPhase,
-  tabCells,
-  tabLabel,
-  visibleTabs,
   withClosed,
   withCounts,
 } from '../hooks/phases'
@@ -81,10 +76,12 @@ describe('order', () => {
     ])
     // done and archived phases, no dates in this table: highest order first; ties (patch-1-9-4 and engine-polish, both 2) fall back to id
     expect(ids(tabs).slice(12)).toEqual(['2-0-3', '2-0-2', '2-0-1', 'patch-1-9-3', 'patch-1-9-6', 'patch-1-9-7', 'engine-polish', 'patch-1-9-4', 'p1'])
-    expect(tabLabel(tabs[1]!)).toBe('Patch 2.0.4 · active 249')
-    expect(tabLabel(tabs[2]!)).toBe('Patch 1.9.5 47')
+    expect(pickerName(tabs[1]!)).toBe('Patch 2.0.4 · active')
+    expect(tabs[1]?.count).toBe(249)
+    expect(pickerName(tabs[2]!)).toBe('Patch 1.9.5')
+    expect(tabs[2]?.count).toBe(47)
     expect(tabs.find(t => t.id === 'alpha-followup')).toMatchObject({ name: 'Alpha Patches', dim: true })
-    expect(tabLabel(tabs.find(t => t.id === '2-0-3')!)).toBe('Patch 2.0.3 ✓ 1')
+    expect(pickerName(tabs.find(t => t.id === '2-0-3')!)).toBe('Patch 2.0.3 ✓')
   })
 
   test('done phases with dates sort newest first; no task comes last; a choice the list lacks shows as its bare id after All', () => {
@@ -100,7 +97,8 @@ describe('order', () => {
     )
     expect(ids(tabs)).toEqual([ALL, 'gone', 'a', 'new', 'old', NO_TASK])
     expect(tabs[1]).toMatchObject({ name: 'gone', dim: true, count: 0 })
-    expect(tabLabel(tabs[5]!)).toBe('no task 3')
+    expect(pickerName(tabs[5]!)).toBe('no task')
+    expect(tabs[5]?.count).toBe(3)
     expect(ids(orderPhases([], 0, NO_TASK))).toEqual([ALL, NO_TASK])
     expect(orderPhases([], 0, NO_TASK)[1]?.name).toBe('no task')
   })
@@ -126,26 +124,6 @@ describe('done toggle and visibility', () => {
     expect(ids(shownTabs(real, ALL, false))).not.toContain('2-0-3')
     expect(ids(shownTabs(real, '2-0-3', false))).toContain('2-0-3')
     expect(shownTabs(real, ALL, true)).toHaveLength(real.length)
-  })
-
-  test('the chosen tab always fits; then tabs in order, All first, until one does not fit, ten at most', () => {
-    const shown = shownTabs(orderPhases(REAL, 31), '2-0-6', false)
-    const tight = visibleTabs(shown, '2-0-6', 0, false)
-    expect(ids(tight.tabs)).toEqual(['2-0-6'])
-    expect(tight.hidden).toHaveLength(shown.length - 1)
-    const room = tabCells(shown[0]!, true) + tabCells(shown.find(t => t.id === '2-0-6')!, true) + tabCells(shown[1]!, true)
-    expect(ids(visibleTabs(shown, '2-0-6', room, true).tabs)).toEqual([ALL, '2-0-4', '2-0-6'])
-    expect(visibleTabs(shown, ALL, 10_000, true).tabs).toHaveLength(MAX_VISIBLE)
-    expect(tabCells(shown[1]!, true) - tabCells(shown[1]!, false)).toBe(3)
-  })
-
-  test('digit 0 is All; digit n is the n-th visible tab after All; a digit past the drawn tabs is nothing', () => {
-    const fitted = visibleTabs(shownTabs(orderPhases(REAL, 31), ALL, false), ALL, 10_000, true)
-    expect(jump(fitted, 0)).toBe(ALL)
-    expect(jump(fitted, 1)).toBe('2-0-4')
-    expect(jump(fitted, 2)).toBe('patch-1-9-5')
-    expect(jump(visibleTabs(orderPhases([], 0), ALL, 100, true), 3)).toBeNull()
-    expect(jump(visibleTabs(shownTabs(orderPhases(REAL, 31), '2-0-6', false), '2-0-6', 0, true), 0)).toBe(ALL)
   })
 })
 
@@ -174,14 +152,11 @@ describe('fallback and words', () => {
     expect(fallback({ ...FRESH_PHASE_VIEW, choice: 'gone' })).toEqual({ choice: 'gone', lost: '' })
   })
 
-  test('the empty line names the phase and, for a done one, its date; the overlay line lists name, status, count, date', () => {
+  test('the empty line names the phase and, for a done one, its date', () => {
     const [done] = orderPhases([phase('p18', 'done', 1, 0, { date: '2026-10-05', name: 'Patch 1.8 — Demo scope' })], 0).slice(1)
     expect(emptyLine('Nothing waiting', done)).toBe('Nothing waiting in Patch 1.8 · done 2026-10-05')
     expect(emptyLine('Nothing waiting', orderPhases([], 4)[0])).toBe('Nothing waiting')
     expect(emptyLine('No sessions', undefined)).toBe('No sessions')
-    expect(overlayLine(done!, 80)).toBe('Patch 1.8 · done · 0 · 2026-10-05')
-    expect(overlayLine(orderPhases([], 9)[0]!, 80)).toBe('All · every phase · 9')
-    expect(overlayLine(done!, 10)).toBe('Patch 1.8…')
   })
 
   test('restore recounts the phases from its own counts and adds no task; handovers add closed when ◐ closed is on', () => {
