@@ -1,5 +1,5 @@
 // User intent: the Taskmaster sidebar as the person meets it (spec §15.8) — m on the band opens the pane with the sidebar over
-// it, 1–4 jump (the current one marked, Restore dim until built), a jump closes the sidebar and the pane before opening the next.
+// it, 1–4 jump (the current one marked, Restore live), a jump closes the sidebar and the pane before opening the next.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
@@ -21,7 +21,7 @@ describe('the sidebar', () => {
       expect((await ui.find({ type: 'Button', key }))?.props?.hotkey, key).toBe(hotkey)
     }
     expect((await ui.find({ type: 'Button', key: 'nav:session' }))?.props?.autoFocus).toBe(true)
-    expect((await ui.find({ type: 'Button', key: 'nav:restore' }))?.props?.dimColor).toBe(true)
+    expect((await ui.find({ type: 'Button', key: 'nav:restore' }))?.props?.dimColor).toBeUndefined()
   })
 
   test('2 jumps to Handovers: the sidebar closes, Session closes, Handovers opens without it', DEMO, async ($, on) => {

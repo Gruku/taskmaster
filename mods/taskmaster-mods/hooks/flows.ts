@@ -99,6 +99,8 @@ export type TmFlowDeps = {
   readHandover?: (handoverId: string) => Promise<TmHandover | null>
   /** Asks tm for a fresh snapshot (u, Retry); absent in demo, whose data does not change underneath. */
   refresh?: () => void
+  /** Restore's rescan (restore/hooks.tsx refreshRestore): what refresh('restore') hands to. */
+  refreshRestore?: () => Promise<void>
 }
 
 /** The surfaces a key can open: band and Session `1` `2` `3` `4`. */
@@ -741,6 +743,12 @@ export function createFlows(d: TmFlowDeps) {
     },
     /** u (and Retry): a fresh snapshot from tm, and the pane's phases read again. Demo says it has nothing newer. */
     refresh: async (pane: TmPhasePane): Promise<void> => {
+      // Restore rescans its own sessions (restore/hooks.tsx), then reads its phases again: the snapshot is not its data.
+      if (pane === 'restore') {
+        await d.refreshRestore?.()
+        await loadPhases(pane)
+        return
+      }
       if (d.refresh === undefined) d.host.toast('taskmaster-mods: demo data has nothing newer to read')
       else d.refresh()
       await loadPhases(pane)

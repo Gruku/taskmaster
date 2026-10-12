@@ -34,7 +34,7 @@ const ON: RestoreHandlers = {
 }
 const TABS = sidebarView({ current: 'restore', snapshot: demoSnapshot(NOW_MS), restore: null, now: NOW_MS })
 
-function draw(view: Partial<TmRestoreView> = {}, data: Partial<TmRestoreData> = {}, width = 116) {
+function draw(view: Partial<TmRestoreView> = {}, data: Partial<TmRestoreData> = {}, width = 116, source: 'tm' | 'demo' = 'demo') {
   const full: TmRestoreData = { ...FRESH_RESTORE_DATA, ...demoRestore(NOW_MS), ...data }
   const rows = paneRows(full, 'this-session')
   const strip: StripView = {
@@ -45,7 +45,7 @@ function draw(view: Partial<TmRestoreView> = {}, data: Partial<TmRestoreData> = 
     digits: true,
     empty: 'No sessions',
   }
-  return restorePaneTree(testKit(), { data: full, view: { ...FRESH_RESTORE_VIEW, ...view }, rows, strip, now: NOW_MS / 1000, source: 'demo', tabs: TABS }, ON, width)
+  return restorePaneTree(testKit(), { data: full, view: { ...FRESH_RESTORE_VIEW, ...view }, rows, strip, now: NOW_MS / 1000, source, tabs: TABS }, ON, width)
 }
 const keysOf = (tree: unknown): Record<string, string[]> => {
   const keys: Record<string, string[]> = {}
@@ -119,6 +119,14 @@ describe('the restore pane, as drawn', () => {
   test('a failed scan and no scan yet each say so in one row', () => {
     expect(textsOf(draw({}, { error: 'Scan failed: OSError: no projects folder', scan: null }))).toEqual(expect.arrayContaining(['▲ scan failed', ' · OSError: no projects folder']))
     expect(textsOf(draw({}, { scan: null, refs: null }))).toContain('No scan yet: u scans this repo’s sessions')
+  })
+
+  test('tm offline: one ▲ row when the source is tm, refs null and nothing busy; none while busy, none in demo', () => {
+    const offline = (view: Partial<TmRestoreView>, source: 'tm' | 'demo') => textsOf(draw(view, { refs: null }, 116, source)).includes('▲ tm offline')
+    expect(offline({ busy: '' }, 'tm')).toBe(true)
+    expect(textsOf(draw({ busy: '' }, { refs: null }, 116, 'tm'))).toContain(' · statuses read ? · resume still works')
+    expect(offline({ busy: 'scanning' }, 'tm')).toBe(false)
+    expect(offline({ busy: '' }, 'demo')).toBe(false)
   })
 
   test('too tight for a whole bulk label, the count stays and the trailing sessions goes', () => {

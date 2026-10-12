@@ -31,6 +31,7 @@ import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demo
 import { bandTree } from './band'
 import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
+import { onRestore, refreshRestore } from './restore/hooks'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
@@ -306,6 +307,7 @@ function ensureFlows($: EngineInterface): TmFlows {
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details; every demo handover is in its open list
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id), readHandover: (id: string) => readHandover(host, id) } : {}),
+    refreshRestore,
     readPhases: mod.source === 'demo' ? pane => Promise.resolve(demoPhases(pane)) : pane => readPhases(host, pane, mod.scope.waitingOnly),
     // demo seeds its handover list with the snapshot and never re-reads it
     ...(mod.source === 'tm'
@@ -587,6 +589,7 @@ export const register: Register = (on, options) => {
   mod.resumedCache = new Map()
   mod.resolve = null
   onHandoverGuard(on, options)
+  onRestore(on, options, { flows: () => mod.flows })
 
   on('session.start', async ($, e, next) => {
     mod.sessionId = await $.session.id()

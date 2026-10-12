@@ -7,7 +7,7 @@ import { reviewKind } from './review-list'
 
 export const FRESH_NAV: TmNav = { sidebar: false, last: 'session' }
 /** False until the restore pane ships (Task E7 flips it): its sidebar entry draws dim and says so. */
-export const RESTORE_BUILT = false
+export const RESTORE_BUILT = true
 export const PANE_IDS: Readonly<Record<TmPane, string>> = { review: REVIEW, handovers: HANDOVERS, session: SESSION, restore: RESTORE }
 export const PANE_TITLES: Readonly<Record<TmPane, string>> = { review: 'Review', handovers: 'Handovers', session: 'Session', restore: 'Restore' }
 const PANES: readonly TmPane[] = ['review', 'handovers', 'session', 'restore']

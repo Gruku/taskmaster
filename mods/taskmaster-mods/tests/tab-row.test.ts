@@ -29,7 +29,7 @@ describe('tabRow', () => {
     for (const b of walk(tree).filter(e => e.type === 'Button')) expect(b.props?.hotkey, String(b.props?.key)).toBeUndefined()
   })
 
-  test('the current tab is bold signature text on the tint24 signature ground; counts subtle; Restore dim', () => {
+  test('the current tab is bold signature text on the tint24 signature ground; counts subtle; Restore live', () => {
     const v = view('handovers')
     const tree = tabRow(testKit(), v, { go: () => undefined, toggleSidebar: () => undefined }, 100)
     expect(byKey(tree, 'tab:handovers-box')?.props?.backgroundColor).toBe(T.tint24.page.signature)
@@ -40,7 +40,7 @@ describe('tabRow', () => {
     expect(count).not.toBe('')
     const reviewCount = walk(byKey(tree, 'tab:review')).find(e => e.type === 'Text' && textsOf(e).join('') === ` ${count} `)
     expect(reviewCount?.props?.color).toBe(T.fg.subtle)
-    expect(byKey(tree, 'tab:restore')?.props?.dimColor).toBe(true)
+    expect(byKey(tree, 'tab:restore')?.props?.dimColor).toBeUndefined()
   })
 
   test('widths: full at 100 and 60; counts dropped then names shortened, then the m hint dropped — never wider than its room', () => {
@@ -62,8 +62,9 @@ describe('the tab row in each pane', () => {
     ['session', 'tm-session', 'handovers', 'tm-handovers'],
     ['review', 'tm-review', 'session', 'tm-session'],
     ['handovers', 'tm-handovers', 'review', 'tm-review'],
+    ['restore', 'tm-restore', 'session', 'tm-session'],
   ] as const) {
-    test(`${paneName}: the row is there; ☰ opens the sidebar; dim Restore says why; a tab closes this pane and opens ${target}`, DEMO, async ($, on) => {
+    test(`${paneName}: the row is there; ☰ opens the sidebar; a tab closes this pane and opens ${target}`, DEMO, async ($, on) => {
       const world = worldOf(on, mock.clock(on))
       const state = stateOf(on)
       await $.session.start(SESSION)
@@ -72,8 +73,6 @@ describe('the tab row in each pane', () => {
       await ui.press({ key: 'tabs:sidebar' })
       expect((state.get(`${PLUGIN}.nav`) as { sidebar: boolean }).sidebar).toBe(true)
       await ui.press({ key: 'tabs:sidebar' })
-      await ui.press({ key: 'tab:restore' })
-      expect(world.toasts).toContain('Restore is not built yet')
       expect(world.opened).toEqual([])
       // Its own tab opens this pane (it was only mounted); the target's tab then swaps it out.
       await ui.press({ key: `tab:${paneName}` })

@@ -264,6 +264,10 @@ declare module 'claude-code' {
       handoverNotice: TmHandoverNotice | null
       /** One guard run (fork, handover, compaction) per session at most: `$.state` is per session, so /clear or a resume can earn another. */
       handoverGuard: TmHandoverGuard
+      /** The restore pane's last scan, what tm said of it, a scan failure and its window (spec §10). */
+      restoreData: TmRestoreData
+      /** The restore pane's page, focus, ticks, resume modes, reopened sessions, compact, busy flags and briefs. */
+      restoreView: TmRestoreView
       /** D5, resolved after each refresh, a written or recorded handover, and at start; a newer handover notice wins when drawn. */
       sessionHandover: TmSessionHandover | null
       /** The handover this session was resumed from ('' none): mirrors `$.store` `resumed-from:<session id>` (spec §10.5). */
