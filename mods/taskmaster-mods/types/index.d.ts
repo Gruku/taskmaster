@@ -153,6 +153,65 @@ export type TmReviewList = {
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 /** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
 export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly latch: 'none' | 'fired' | 'handover' }
+/** A handover a scanned session wrote: its backlog_handover_create input and the server's receipt (spec §10.1). */
+export type TmScannedHandover = { readonly id: string; readonly path: string; readonly tldr: string; readonly next: string }
+/** One of this repo's sessions as scanner/scan.py reports it: transcript facts only (spec §10.1). */
+export type TmScannedSession = {
+  readonly id: string
+  readonly cwd: string
+  readonly cwdExists: boolean
+  readonly branch: string
+  readonly title: string
+  readonly firstPrompt: string
+  readonly lastPrompt: string
+  readonly lastReply: string
+  readonly lastEvent: string
+  /** Closed mid-turn: an interrupt, or a prompt or tool call the agent never answered. */
+  readonly interrupted: boolean
+  readonly prompts: number
+  /** The context its last request carried: what a --resume reopens. */
+  readonly ctx: number
+  readonly cost: number
+  /** Epoch seconds the process exited (its cost-state), else its last record's time. */
+  readonly closedEpoch: number
+  /** It wrote a cost-state: it closed at least once (a running one was resumed since). */
+  readonly hasClosed: boolean
+  /** Open in a terminal now (its pid file names a live process). */
+  readonly running: boolean
+  readonly resumedAfterClose: boolean
+  /** The tm task ids its own tool calls named, last touched last: the last is its bound task (spec §10.2). */
+  readonly taskIds: readonly string[]
+  readonly handovers: readonly TmScannedHandover[]
+  readonly endedSession: boolean
+  readonly promptsAfterEnd: number
+}
+export type TmScan = { readonly scannedAt: number; readonly root: string; readonly sessions: readonly TmScannedSession[] }
+/** A scanned task as one backlog_query read it (spec §10.2): `phase` '' when it has none. */
+export type TmRefTask = { readonly id: string; readonly status: string; readonly lane: string; readonly phase: string; readonly title: string }
+/** What tm said of the scanned ids: tasks by id, handover statuses by id; an id tm does not hold is absent. */
+export type TmRefs = { readonly tasks: Readonly<Record<string, TmRefTask>>; readonly handovers: Readonly<Record<string, string>> }
+/**
+ * The restore pane's data: the last scan (null before the first), what tm said of it (null: not resolved, so statuses read
+ * `?`), why the last scan failed ('' when it did not), and the window it covered, in days.
+ */
+export type TmRestoreData = { readonly scan: TmScan | null; readonly refs: TmRefs | null; readonly error: string; readonly days: number }
+export type TmResumeMode = 'fresh' | 'resume'
+/**
+ * The restore pane's own state: the page and focused card, explicit ticks and resume modes (absent: the default rule),
+ * when each session was reopened, `◐ compact`, the busy line, and per-card busy flags and briefs.
+ */
+export type TmRestoreView = {
+  readonly page: number
+  readonly focus: string
+  readonly selected: Readonly<Record<string, boolean>>
+  readonly modes: Readonly<Record<string, TmResumeMode>>
+  readonly opened: Readonly<Record<string, number>>
+  readonly compact: boolean
+  readonly busy: string
+  readonly launching: readonly string[]
+  readonly briefing: readonly string[]
+  readonly briefs: Readonly<Record<string, string>>
+}
 /**
  * The band's and the Session tab's handover (spec D5): the one this session wrote, else the one it was resumed from, else the
  * newest open handover linked to its bound task. `created` is '' when the open list does not hold it.

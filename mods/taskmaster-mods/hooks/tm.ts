@@ -80,7 +80,7 @@ export type FetchResult = {
 }
 
 /** One call bounded to `ms`: no reply in time, or an engine error, throws TmUnreachable; the reply comes back as given. */
-async function bounded(host: TmHost, tool: string, args: Record<string, unknown>, ms: number): Promise<TmReply> {
+async function bounded(host: Pick<TmHost, 'call' | 'sleep'>,tool: string, args: Record<string, unknown>, ms: number): Promise<TmReply> {
   const stop = new AbortController()
   const timer = host.sleep(ms, stop.signal).then(
     () => 'timeout' as const,
@@ -100,7 +100,7 @@ async function bounded(host: TmHost, tool: string, args: Record<string, unknown>
   return first.reply
 }
 
-export async function callTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
+export async function callTm(host: Pick<TmHost, 'call' | 'sleep'>,tool: string, args: Record<string, unknown>): Promise<TmReply> {
   const reply = await bounded(host, tool, args, TM_TIMEOUT_MS)
   if (reply.isError) throw new TmUnreachable(`${tool}: ${firstParagraph(reply.text) || 'the server reported an error'}`)
   return reply
