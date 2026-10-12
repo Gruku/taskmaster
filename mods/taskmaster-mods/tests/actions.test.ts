@@ -27,12 +27,13 @@ const router = (over: Over) => (tool: string, args: Record<string, unknown>): Mc
   const given = answer(args)
   return typeof given === 'string' ? { text: given } : given
 }
-/** Every Text drawn, joined: a refusal wraps over several Text rows. */
+/** Every Text drawn, joined, runs of spaces as one: a refusal wraps over several indented Text rows. */
 const shown = async (ui: { drawn: () => Promise<unknown> }): Promise<string> =>
   elementsOf(await ui.drawn())
     .filter(e => e.type === 'Text')
     .map(e => (e.children ?? []).join(''))
     .join(' ')
+    .replace(/ +/g, ' ')
 const ID = 'unified-chat-022'
 const SIGNED = { tool: 'backlog_complete_task', args: { task_id: ID, done: SIGN_OFF } }
 const STATUS = { tool: 'backlog_update_task', args: { task_id: ID, field: 'status', value: 'in-progress' } }

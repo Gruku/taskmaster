@@ -43,33 +43,35 @@ async function tmQueue($: Engine, on: On, over: Record<string, (args: Record<str
 }
 
 describe('bulk done and to agent', () => {
-  test('Done N and To agent N count the selected tasks; at 0 they dim and say why', DEMO, async ($, on) => {
+  test('mark N tasks done and send N tasks to agent count the selected tasks; at 0 they dim and say why', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props).toMatchObject({ label: 'Done 0', hotkey: 'b', dimColor: true })
+    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props).toMatchObject({ label: 'mark 0 tasks done', hotkey: 'b', dimColor: true })
+    expect((await ui.find({ type: 'Button', key: 'bulk-agent' }))?.props).toMatchObject({ label: 'send 0 tasks to agent', hotkey: 'g', dimColor: true })
     await ui.press({ key: 'bulk-done' })
-    expect(world.toasts).toEqual(['Nothing selected to done'])
+    await ui.press({ key: 'bulk-agent' })
+    expect(world.toasts).toEqual(['Nothing selected to mark done', 'Nothing selected to send to the agent'])
     await ui.press({ key: 'sel:unified-chat-022' })
     await ui.press({ key: 'sel:docs-012' })
-    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props).toMatchObject({ label: 'Done 2', hotkey: 'b' })
-    expect((await ui.find({ type: 'Button', key: 'bulk-agent' }))?.props).toMatchObject({ label: 'To agent 2', hotkey: 'g' })
+    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props).toMatchObject({ label: 'mark 2 tasks done', hotkey: 'b' })
+    expect((await ui.find({ type: 'Button', key: 'bulk-agent' }))?.props).toMatchObject({ label: 'send 2 tasks to agent', hotkey: 'g' })
   })
 
-  test('Done N asks y/n naming the tasks, n focused and drawn after the pager; n cancels', DEMO, async ($, on) => {
+  test('mark N tasks done asks y/n naming the tasks, n focused and drawn after the pager; n cancels', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
     await ui.press({ key: `sel:${UC}` })
     await ui.press({ key: `sel:${TA}` })
     await ui.press({ key: 'bulk-done' })
-    expect(await ui.find({ type: 'Text', text: ` Done 2: ${UC}, ${TA}? ` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `mark 2 tasks done: ${UC}, ${TA}?` })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'bulk-no' }))?.props).toMatchObject({ hotkey: 'n', autoFocus: true })
     const drawn = JSON.stringify(await ui.drawn())
     expect(drawn.indexOf('"bulk-no"')).toBeGreaterThan(drawn.indexOf('"page-next"'))
     await ui.press({ key: 'bulk-no' })
     expect(await ui.find({ type: 'Button', key: 'bulk-yes' })).toBeUndefined()
-    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props.label).toBe('Done 2')
+    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props.label).toBe('mark 2 tasks done')
   })
 
   test('y signs each off; one toast names every refusal in the server words; a refused card stays selected', DEMO, async ($, on) => {
@@ -81,9 +83,9 @@ describe('bulk done and to agent', () => {
     await ui.press({ key: 'bulk-done' })
     await ui.press({ key: 'bulk-yes' })
     expect(world.toasts).toEqual([`1 done · 1 refused: ${TA} (${DEMO_REFUSAL})`])
-    expect(await ui.find({ type: 'Box', key: `card:${UC}` })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: `sel:${UC}` })).toBeUndefined()
     expect((await ui.find({ type: 'Button', key: `sel:${TA}` }))?.props.label).toBe('■')
-    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props.label).toBe('Done 1')
+    expect((await ui.find({ type: 'Button', key: 'bulk-done' }))?.props.label).toBe('mark 1 task done')
     expect(await ui.find({ type: 'Text', text: /1 done this pass/ })).toBeDefined()
   })
 
@@ -95,8 +97,8 @@ describe('bulk done and to agent', () => {
     await ui.press({ key: 'bulk-done' })
     await ui.press({ key: 'sel:docs-012' })
     await ui.press({ key: 'bulk-yes' })
-    expect(await ui.find({ type: 'Box', key: `card:${UC}` })).toBeUndefined()
-    expect(await ui.find({ type: 'Box', key: 'card:docs-012' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: `sel:${UC}` })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'sel:docs-012' })).toBeDefined()
   })
 
   test('tm: one backlog_complete_task per task, one at a time, in list order; while they run the row says so and no y is drawn', TM, async ($, on) => {
@@ -111,7 +113,7 @@ describe('bulk done and to agent', () => {
     expect(writes(world)).toEqual([signed(UC)])
     await ui.redraw()
     expect(await ui.find({ type: 'Button', key: 'bulk-yes' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: ' working' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^working · one task at a time/ })).toBeDefined()
     await clock.advance(1000)
     await clock.advance(1000)
     await clock.settle()
@@ -163,15 +165,15 @@ describe('bulk done and to agent', () => {
     expect(await ui.find({ type: 'Button', key: 'bulk-yes' })).toBeDefined()
   })
 
-  test('asking a bulk action lets go of tick mode: the digits are the strip again', DEMO, async ($, on) => {
+  test('asking a bulk action lets go of tick mode', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     await ui.press({ key: `sel:${UC}` })
     await ui.press({ key: 'tick' })
-    expect(await ui.find({ type: 'Text', text: /1-9 ticks a check/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' tick a check' })).toBeDefined()
     await ui.press({ key: 'bulk-done' })
-    expect(await ui.find({ type: 'Text', text: /1-9 ticks a check/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: ' tick a check' })).toBeUndefined()
   })
 
   // A write that throws is not a refusal the server worded: flows driven directly, with an action that throws.

@@ -1,8 +1,8 @@
-// User intent: pick the review queue's phase from inside the review pane with a two-way strip (spec §5) on a big backlog —
-// tabs, h / l both ways, the overlay for what does not fit, done phases on demand — the choice kept per pane and project.
+// User intent: pick the review queue's phase from inside the review pane (spec §5, §15.4) on a big backlog — the picker field,
+// h / l both ways, the dropdown list with every phase, done phases on demand — the choice kept per pane and project.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { OVERLAY_PLACEMENT } from '../hooks/kit'
+import { MENU_PLACEMENT } from '../hooks/vocab'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import * as R from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -13,13 +13,12 @@ const REVIEW_PANE = pane('tm-review')
 const WIDE_PANE = { ...REVIEW_PANE, props: { ...REVIEW_PANE.props, bodyColumns: 400 } }
 const PHASE_SQL =
   "SELECT json_array(p.id, p.status, json_extract(p.doc,'$.order'), (SELECT count(*) FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.status='in-review' AND json_extract(t.doc,'$.phase')=p.id AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''), 0, CASE WHEN p.status IN ('done','archived') THEN substr(coalesce(json_extract(p.doc,'$.completed'),''),1,10) ELSE substr(coalesce(json_extract(p.doc,'$.start_date'),''),1,10) END) AS phase, json_extract(p.doc,'$.name') AS name FROM entities p WHERE p.kind='phase' AND p.deleted=0 ORDER BY json_extract(p.doc,'$.order') DESC"
-const STRONG_SIGNATURE = '#4a5590' // rr-stub's 24% signature tint
 const listArgs = (world: World) => world.calls.filter(c => c.tool === 'backlog_list_tasks').map(c => c.args)
 const queries = (world: World) => world.calls.filter(c => c.tool === 'backlog_query')
 const reviewKey = (world: World) => `phase:review:${world.root}`
 
-describe('review phase strip', () => {
-  test('opening the pane reads the phase list once with the exact query; the strip shows All and the active phase', TM, async ($, on) => {
+describe('review phase picker', () => {
+  test('opening the pane reads the phase list once with the exact query; the picker shows All, its list the active phase', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -33,11 +32,13 @@ describe('review phase strip', () => {
     await clock.settle()
     expect(queries(world)).toHaveLength(1)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:' }))?.props.label).toMatch(/^All \d+$/)
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:2-0-4' }))?.props.label).toBe('Patch 2.0.4 · active 249')
-    expect((await ui.find({ type: 'Box', key: 'phase-tab:-box' }))?.props.backgroundColor).toBe(STRONG_SIGNATURE)
-    expect((await ui.find({ type: 'Button', key: 'phase-more' }))?.props).toMatchObject({ hotkey: 'f' })
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toMatch(/^ All {2}\d+ ▾ $/)
+    expect((await ui.find({ type: 'Button', key: 'key:f' }))?.props).toMatchObject({ hotkey: 'f' })
     expect(await ui.find({ type: 'Button', key: 'phase' })).toBeUndefined()
+    await ui.press({ key: 'phase-field' })
+    await clock.settle()
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:2-0-4' }))?.props.label).toMatch(/^Patch 2\.0\.4 · active +249$/)
   })
 
   test('l and h step both ways and stop at All; each step is kept and the list_tasks phase arg follows', TM, async ($, on) => {
@@ -68,7 +69,7 @@ describe('review phase strip', () => {
     expect(listArgs(world)).toHaveLength(calls)
   })
 
-  test('a tab press chooses that phase and fills it; the cursor goes back to the first card', TM, async ($, on) => {
+  test('a pick from the list chooses that phase and fills it; the cursor goes back to the first card', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -80,15 +81,18 @@ describe('review phase strip', () => {
     await ui.press({ key: 'focus-next' })
     await ui.redraw()
     expect(await focused('tm-audit-031')).toBe('round')
-    await ui.press({ key: 'phase-tab:p2' })
+    await ui.press({ key: 'phase-field' })
+    await clock.settle()
+    await ui.redraw()
+    await ui.press({ key: 'phase-pick:p2' })
     await clock.settle()
     await ui.redraw()
     expect(world.store.get(reviewKey(world))).toEqual({ phase: 'p2' })
-    expect((await ui.find({ type: 'Box', key: 'phase-tab:p2-box' }))?.props.backgroundColor).toBe(STRONG_SIGNATURE)
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toMatch(/^ Board Track +\d+ ▾ $/)
     expect(await focused('unified-chat-022')).toBe('round')
   })
 
-  test('done phases stay hidden over four until ◐ done; a chosen done phase stays drawn when they hide again', TM, async ($, on) => {
+  test('done phases stay out of the list over four until show done phases; a chosen done phase stays listed when they hide again', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -96,22 +100,29 @@ describe('review phase strip', () => {
     await $.command.run(command('tm-review'))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE_PANE })
-    expect(await ui.find({ type: 'Button', key: 'phase-tab:2-0-3' })).toBeUndefined()
+    const open = async () => {
+      await ui.press({ key: 'phase-field' })
+      await clock.settle()
+      await ui.redraw()
+    }
+    await open()
+    expect(await ui.find({ type: 'Button', key: 'phase-pick:2-0-3' })).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'phase-done' }))?.props.label).toBe('◐ show done phases')
+    expect(await ui.find({ type: 'Text', text: 'off' })).toBeDefined()
     await ui.press({ key: 'phase-done' })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'phase-done' }))?.props.label).toBe('◐ done')
-    await ui.press({ key: 'phase-more' })
-    await clock.settle()
-    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: 'on' })).toBeDefined()
     await ui.press({ key: 'phase-pick:2-0-3' })
     await clock.settle()
+    await ui.redraw()
+    await open()
     await ui.press({ key: 'phase-done' })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'phase-done' }))?.props.label).toBe('○ done')
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:2-0-3' }))?.props).toMatchObject({ label: 'Patch 2.0.3 ✓ 1', dimColor: true })
+    expect(await ui.find({ type: 'Text', text: 'off' })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:2-0-3' }))?.props.label).toMatch(/^ *Patch 2\.0\.3 ✓ +1$/)
   })
 
-  test('f opens the overlay with every phase; a pick chooses it and closes the overlay', TM, async ($, on) => {
+  test('the picker opens the list with every phase; a pick chooses it and closes the list', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -119,12 +130,14 @@ describe('review phase strip', () => {
     await $.command.run(command('tm-review'))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    await ui.press({ key: 'phase-more' })
+    await ui.press({ key: 'phase-field' })
     await clock.settle()
     await ui.redraw()
     expect(queries(world)).toHaveLength(2)
-    expect((await ui.find({ type: 'Button', key: 'phase-pick:p1' }))?.props.label).toBe('Pre-Alpha · done · 0')
-    if (OVERLAY_PLACEMENT === 'swap') expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeUndefined()
+    await ui.press({ key: 'phase-done' })
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:p1' }))?.props.label).toMatch(/^ *Pre-Alpha ✓ +0$/)
+    if (MENU_PLACEMENT === 'swap') expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeUndefined()
     await ui.press({ key: 'phase-pick:p2' })
     await clock.settle()
     await ui.redraw()
@@ -145,7 +158,7 @@ describe('review phase strip', () => {
     expect(world.store.has(`phase:${world.root}`)).toBe(false)
   })
 
-  test('a stored choice is the filter and the chosen tab; another project keeps its own', TM, async ($, on) => {
+  test('a stored choice is the filter and the picker shows it; another project keeps its own', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -157,7 +170,7 @@ describe('review phase strip', () => {
     await $.command.run(command('tm-review'))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Box', key: 'phase-tab:2-0-6-box' }))?.props.backgroundColor).toBe(STRONG_SIGNATURE)
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toMatch(/^ Patch 2\.0\.6 +\d+ ▾ $/)
   })
 
   test('the reviewPhase option is the default; a stored choice, an empty one included, overrides it', { ...TM, options: { reviewPhase: ' p2 ' } }, async ($, on) => {
@@ -204,10 +217,13 @@ describe('review phase strip', () => {
     const sql = String(queries(world)[0]?.args.sql)
     expect(sql).toBe(PHASE_SQL.replace(" AND coalesce(json_extract(t.doc,'$.human_action'),'')<>''", ''))
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:2-0-4' }))?.props.label).toBe('Patch 2.0.4 · active 252')
+    await ui.press({ key: 'phase-field' })
+    await clock.settle()
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:2-0-4' }))?.props.label).toMatch(/^Patch 2\.0\.4 · active +252$/)
   })
 
-  test('a failing or refusing phase read leaves the strip alone, logs, and the pane still draws', TM, async ($, on) => {
+  test('a failing or refusing phase read leaves the picker alone, logs, and the pane still draws', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.store.set(reviewKey(world), { phase: '2-0-6' })
@@ -223,24 +239,24 @@ describe('review phase strip', () => {
     await $.command.run(command('tm-review'))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:2-0-6' }))?.props.label).toBe('2-0-6 0')
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toBe(' 2-0-6  0 ▾ ')
     for (const next of ['refused', 'error', 'garbage', 'offline']) {
       mode = next
       const before = world.logs.length
-      await ui.press({ key: 'phase-more' })
+      await ui.press({ key: 'phase-field' })
       await clock.settle()
       await ui.redraw()
       expect(world.logs.length, next).toBeGreaterThan(before)
-      expect((await ui.find({ type: 'Button', key: 'phase-tab:2-0-6' }))?.props.label, next).toBe('2-0-6 0')
+      expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label, next).toBe(' 2-0-6  0 ▴ ')
       expect(world.store.get(reviewKey(world)), next).toEqual({ phase: '2-0-6' })
-      await ui.press({ key: 'phase-close' })
+      await ui.press({ key: 'phase-field' })
       await ui.redraw()
       expect(await ui.find({ type: 'Text', text: 'unified-chat-022' }), next).toBeDefined()
     }
     expect(world.logs.every(line => line.to === 'debug')).toBe(true)
   })
 
-  test('an empty queue under a phase says so and offers 0 All, which goes back to every phase', TM, async ($, on) => {
+  test('an empty queue under a phase says so and offers 0 show all phases, which goes back to every phase', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     const quiet = JSON.stringify({ view: 'action', total: 0, items: [] })
@@ -257,7 +273,7 @@ describe('review phase strip', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
     await ui.redraw()
     expect(await ui.find({ type: 'Text', text: 'Nothing waiting in Patch 2.0.6' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'phase-all' }))?.props).toMatchObject({ hotkey: '0', label: 'All' })
+    expect((await ui.find({ type: 'Button', key: 'phase-all' }))?.props).toMatchObject({ hotkey: '0', label: 'show all phases' })
     await ui.press({ key: 'phase-all' })
     await clock.settle()
     expect(world.store.get(reviewKey(world))).toEqual({ phase: '' })
@@ -268,11 +284,13 @@ describe('review phase strip', () => {
     const world = worldOf(on, clock)
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:patch-1-9' }))?.props.label).toBe('Patch 1.9 · active 3')
     await ui.press({ key: 'phase-next' })
     await clock.settle()
     await ui.redraw()
-    expect((await ui.find({ type: 'Box', key: 'phase-tab:patch-1-9-box' }))?.props.backgroundColor).toBe(STRONG_SIGNATURE)
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toBe(' Patch 1.9 · active  3 ▾ ')
+    await ui.press({ key: 'phase-field' })
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:patch-1-9' }))?.props.label).toMatch(/^Patch 1\.9 · active +3$/)
     expect(world.calls).toEqual([])
     expect([...world.store.keys()].filter(k => k.startsWith('phase:'))).toEqual([])
   })

@@ -15,62 +15,69 @@ const TM = { plugins: [RR_STUB] }
 const ID = 'unified-chat-022'
 const CHECK = DEMO_DETAILS[ID]!.humanAction
 const [FIRST, SECOND] = splitCheck(CHECK).items as [string, string]
-const ACTIONS = ['done', 'back', 'open', 'viewer', 'copy', 'details']
+/** In drawn order: `c` sits under the checks, the card's own actions close the box. */
+const ACTIONS = ['copy', 'done', 'back', 'open', 'viewer', 'details']
 const wide = (columns: number) => ({ ...pane('tm-review'), props: { ...pane('tm-review').props, bodyColumns: columns } })
 /** A tm-mode snapshot that is real data (not the demo marker), so tm-mode tests start from a state with a card. */
 const REAL: TmSnapshot = { ...demoSnapshot(0), reason: '' }
 
 describe('review card', () => {
-  test('the focused card: box, kind, id, title and age; then lane and gate; then the labelled check', DEMO, async ($, on) => {
+  test('the focused card: box, kind, id, title and age; then phase, lane and gate; then the human field and its checks', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
-    for (const text of [' BLOCKED   ', ID, '1h', 'FULL', ' review-gate pass', 'LIVE CHECK ON DEV', 'needs unifiedChatGenerate + unifiedChatBuild granted']) {
+    for (const text of ['▲ BLOCKED      ', ID, '1h', 'patch-1-9 · lane full · ', '● ', 'review-gate pass', 'human  ']) {
       expect(await ui.find({ type: 'Text', text }), text).toBeDefined()
     }
-    expect(await ui.find({ type: 'Text', text: /^Unified chat pre-build gets the full supervisor toolset/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Unified chat pre-build gets the full supervisor/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Live check on dev — needs unifiedChatGenerate \+ unifiedChatBuild/ })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props).toMatchObject({ label: `☐ ${FIRST}` })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBeUndefined()
     expect((await ui.find({ type: 'Button', key: 'tick-1' }))?.props).toMatchObject({ label: `☐ ${SECOND}` })
-    expect((await ui.find({ type: 'Button', key: 'details' }))?.props).toMatchObject({ hotkey: 'i', label: '▸ more' })
+    expect((await ui.find({ type: 'Button', key: 'details' }))?.props).toMatchObject({ hotkey: 'i', label: 'task detail ▸' })
   })
 
-  test('the action row: d done, a agent, o open, v viewer, c copy check, i more; it wraps rather than drops', DEMO, async ($, on) => {
+  test('the actions: d mark task done, a send task to agent, o open task, v task in viewer, c copy live check, i task detail; they wrap rather than drop', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
-    for (const columns of [100, 72, 48, 36, 28]) {
+    // Under ~48 columns the content column (19 cells in) leaves the check keys no room: the card's own floor, not this test's.
+    for (const columns of [100, 72, 48]) {
       const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(columns) })
       for (const [key, hotkey, label] of [
-        ['done', 'd', 'done'],
-        ['back', 'a', 'agent'],
-        ['open', 'o', 'open'],
-        ['viewer', 'v', 'viewer'],
-        ['copy', 'c', 'copy check'],
+        ['done', 'd', 'mark task done'],
+        ['back', 'a', 'send task to agent'],
+        ['open', 'o', 'open task'],
+        ['viewer', 'v', 'task in viewer'],
+        ['copy', 'c', 'copy live check'],
       ] as const) {
-        expect((await ui.find({ type: 'Button', key }))?.props, `${columns} ${key}`).toMatchObject({ hotkey, label, plain: true })
+        expect((await ui.find({ type: 'Button', key }))?.props, `${columns} ${key}`).toMatchObject({ hotkey, label })
       }
       const tree = (await ui.drawn()) as unknown as Drawn
-      expect(widthOf(tree), `${columns}`).toBeLessThanOrEqual(columns)
+      const card = elementsOf(tree).find(e => e.type === 'Box' && e.props?.key === `card:${ID}`)
+      expect(card, `${columns}`).toBeDefined()
+      expect(widthOf(card), `${columns}`).toBeLessThanOrEqual(columns)
       const keys = elementsOf(tree).flatMap(e => (e.type === 'Button' && ACTIONS.includes(String(e.props?.key)) ? [String(e.props?.key)] : []))
       expect(keys, `${columns}`).toEqual(ACTIONS)
       await ui.unmount()
     }
   })
 
-  test('a narrow card gives way: the title, then the kind word to its initial; the id shortens last', TM, async ($, on) => {
+  test('a narrow card gives way: it keeps the full kind badge and cuts the title; the id shortens last', TM, async ($, on) => {
     worldOf(on, mock.clock(on))
     const long = { kind: 'task' as const, id: 'a-very-long-task-id-001', title: 'A title that fits a wide pane', priority: 'high' as const, humanAction: 'x', timestamp: '' }
     stateOf(on, { [`${PLUGIN}.snapshot`]: { ...REAL, queue: [long], queueTotal: 1 } })
     await $.session.start(SESSION)
     const roomy = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
     expect(await roomy.find({ type: 'Text', text: 'A title that fits a wide pane' })).toBeDefined()
-    expect(await roomy.find({ type: 'Text', text: ' ACTION    ' })).toBeDefined()
+    expect(await roomy.find({ type: 'Text', text: '◆ ACTION       ' })).toBeDefined()
     await roomy.unmount()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(30) })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(36) })
     expect(await ui.find({ type: 'Text', text: /^A title/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: ' A ' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'a-very-long-ta…' })).toBeDefined()
-    expect(widthOf(await ui.drawn())).toBeLessThanOrEqual(30)
+    expect(await ui.find({ type: 'Text', text: '◆ ACTION       ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^a-v…/ })).toBeDefined()
+    const card = elementsOf(await ui.drawn()).find(e => e.type === 'Box' && e.props?.key === 'card:a-very-long-task-id-001')
+    // The head row (mark, badge, id, title, age) fits inside the card's border and padding.
+    expect(widthOf(card?.children?.[0])).toBeLessThanOrEqual(36 - 4)
   })
 
   test('a tick toggles ☐/☑, lives in $.store ticks:<id> (read before write), never in Taskmaster', DEMO, async ($, on) => {
@@ -92,15 +99,15 @@ describe('review card', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: / 2 of 2 unchecked — done anyway\? / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^2 of 2 unchecked — done anyway\?$/ })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
     await ui.press({ key: 'tick-0' })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: / 1 of 2 unchecked — done anyway\? / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^1 of 2 unchecked — done anyway\?$/ })).toBeDefined()
     await ui.press({ key: 'confirm-no' })
     await ui.press({ key: 'tick-1' })
     await ui.press({ key: 'done' })
-    expect(await ui.find({ type: 'Text', text: ` done ${ID}? ` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `done ${ID}?` })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus).toBe(true)
   })
 
@@ -122,8 +129,8 @@ describe('review card', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(100) })
     expect(await ui.find({ type: 'Text', text: /pull\/412/ })).toBeUndefined()
     await ui.press({ key: 'details' })
-    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.label).toBe('▾ more')
-    for (const text of [/no branch/, /pull\/412/, /cookbook owns the step order/, /docs\/specs\/unified-chat\.md/]) {
+    expect((await ui.find({ type: 'Button', key: 'details' }))?.props.label).toBe('task detail ▾')
+    for (const text of [/no branch/, /pull\/412/, /^note: Pre-build now hands the supervisor/, /docs\/specs\/unified-chat\.md/]) {
       expect(await ui.find({ type: 'Text', text }), String(text)).toBeDefined()
     }
     await ui.press({ key: 'details' })

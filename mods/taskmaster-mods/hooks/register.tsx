@@ -784,6 +784,7 @@ export const register: Register = (on, options) => {
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
       surface: e.surface,
       say: (text: string) => mod.host?.toast(text),
+      demo: mod.source === 'demo',
       // The digits are the strip's, save while `t` has armed the focused card's checks.
       strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: !list.ticking, empty: 'Nothing waiting' },
     }
@@ -819,11 +820,21 @@ export const register: Register = (on, options) => {
         bulkCancel: () => act(f => f.bulkCancel()),
         bulkDone: ids => act(f => f.bulkDone(ids)),
         bulkSendBack: (ids, note, actions) => act(f => f.bulkSendBack(ids, note, actions)),
+        toggleSidebar: () => act(f => f.toggleSidebar()),
       },
       e.props.bodyColumns,
     )
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
-    return withSidebar(k, tree, await sidebarFor($, 'review'), pane => act(f => f.goTo(pane)))
+    // The frame paints its own page ground; the column only makes the tree one element for the sidebar overlay.
+    const { Box } = ui
+    return withSidebar(
+      k,
+      <Box flexDirection="column" flexGrow={1}>
+        {tree}
+      </Box>,
+      await sidebarFor($, 'review'),
+      pane => act(f => f.goTo(pane)),
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-handovers' }, async ($, e) => {

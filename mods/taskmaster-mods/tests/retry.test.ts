@@ -73,7 +73,7 @@ describe('cold start in a session', () => {
     expect(JSON.stringify(await $.ui.render(BAND))).toContain(CONNECTING)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
     expect(await ui.find({ type: 'Text', text: CONNECTING })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeUndefined()
     connected = true
     await clock.advance(2000)
     await clock.settle()
@@ -116,8 +116,9 @@ describe('cold start in a session', () => {
     await clock.settle()
     expect(lists()).toBe(5)
     expect(world.statuses.at(-1)).toBe('◆ tm offline')
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    expect(await ui.find({ type: 'Text', text: ' Taskmaster unreachable' })).toBeDefined()
+    // Wide enough that the offline row's reason is not cut.
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review'), props: { ...pane('tm-review').props, bodyColumns: 240 } })
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /no connected MCP tool "backlog_list_tasks"/ })).toBeDefined()
     await clock.advance(60_000)
     await clock.settle()
