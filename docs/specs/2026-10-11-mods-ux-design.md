@@ -43,7 +43,7 @@
 | D1 | Where restore lives | Pane in taskmaster-mods (`tm-restore`), not a separate plugin |
 | D2 | Phase selector | Tab strip with full controls (§5) |
 | D3 | Review layout | Paged card list, focused card expands, bulk bar |
-| D4 | Restore + tm | Task + phase on cards; fresh-from-handover resume; status from tm; band keycap instead of toast |
+| D4 | Restore + tm | Task + phase on cards; fresh-from-handover resume; status from tm; burst shown in the sidebar's Restore entry instead of a toast (§15.5) |
 | D5 | Band handover | Best of: written here > resumed from > newest open for bound task |
 | D6 | Kit placement | Split: rr-tui keeps static recipes; `hooks/kit.tsx` owns interactive primitives |
 | D7 | Band size | Two lines max with own fill; the full panel becomes the Session tab |
@@ -108,7 +108,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 
 - **Own ground:** both lines share a raised fill across the full width, one blank line above. `◆ TASKMASTER` is a signature-tinted chip. Badges and keycaps as §4.1.
 - **Line 1:** tag, task status badge, id (subtle), title (bold, truncates first), `[3] session ›`. When the bound task is ready for done, a `[d] done` keycap appears here; otherwise `d`/`a` live in the Session tab.
-- **Line 2:** the band handover (D5) with tag `written here` / `resumed from` / `task`, one-line tldr, `[c] copy`; then the counts `[1] waiting`, `[2] handovers`, `[4] restore`.
+- **Line 2:** the band handover (D5) with tag `written here` / `resumed from` / `task`, one-line tldr, `[c] copy`; the counts moved to the sidebar's entries (§15.5, which supersedes this line).
 - **Collapse rules:** no handover → counts move up and the band is one line; no task → line 1 is tag + counts; narrow → title truncates, then labels shrink to key + count. Zero counts dim, never vanish. `[4]` only exists while a qualifying burst is pending (§10.4).
 - **Copy** (`c`) puts the full handover text on the clipboard in the Telegram-paste format the existing copy uses; a toast confirms.
 - **Faults:** tm offline shows a critical `offline` signal on line 1 and dims the counts; detail stays in the faults-only status line.
@@ -214,7 +214,7 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 
 ### 10.4 Band hook
 
-`session.start` runs a background 3-day scan. If the newest burst has ≥ 2 sessions, ≥ 1 unfinished, and is < 48 h old, the band shows `[4] N restore`. `x` on the keycap hides it for that burst (`$.store` `restore-hidden:<burstEpoch>`). No toast.
+`session.start` runs a background 3-day scan. If the newest burst has ≥ 2 sessions, ≥ 1 unfinished, and is < 48 h old, the sidebar's Restore entry shows `N` for it (the band carries no counts, §15.5). `x` hides it for that burst (`$.store` `restore-hidden:<burstEpoch>`). No toast.
 
 ### 10.5 "Resumed from"
 
@@ -226,12 +226,30 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 
 `$.model.complete` with a tag-structured prompt (state / next / blocker) over the scanner's `digest`, cached in `$.store` as `brief:<id>:<closedEpoch>`. New userConfig `briefModel`, default `claude-haiku-5-5`.
 
+### 10.7 Settled at the Stage E live check (2026-10-12)
+
+The user signed the restore pane off live. What the stage settled:
+
+1. **Facts in Python, judgement in TypeScript.** The scanner reports facts only. Bursts, classification, paging and ticks are pure TS (`restore/model.ts`), because classification needs tm (§10.2).
+2. **Task ids** come from `task_id` and `task_ids` arguments of the main thread's `mcp__plugin_taskmaster_tm__*` calls, kept in last-touched order. The bound task is the last one. Sidechain calls are ignored. **Handover ids** come from `Handover written: <id>` in a successful `backlog_handover_create` result (plain, `{"result": ...}`-wrapped, or a text block), with `- Path:` when given. Its `tldr` and `next_action` come from the call's input.
+3. **End-session** means the `taskmaster:end-session` Skill call or the `/taskmaster:end-session` slash command. A prompt typed after it counts in `promptsAfterEnd`.
+4. **Which handover counts:** the session's last one written. A `superseded` handover counts as settled, like `closed`.
+5. **tm unreachable:** only the end-session rule can be told, so every other status reads `?`. For ticks and the sidebar's Restore entry, `?` counts as unfinished: resume still works (§11). The session-start scan asks tm three more times, 5 s apart, before it settles for `?`.
+6. **Scope:** sessions whose first working directory lies under the repo root. Worktrees under it are included. `claude -p` runs (`entrypoint` `sdk-*`) and sibling folders with the same prefix are excluded. This session is scanned, for its burst line, but never listed.
+7. **Bursts** take running sessions that closed before at their last close (a `--resume` keeps the id), so a resumed session still knows its burst. A session that never closed is in no burst.
+8. **Paging under a phase:** that phase's sessions, newest first, with no burst page. Choosing a phase returns to page 1.
+9. **Resume mode toggle** is `v` (`m` opens the sidebar), offered on any session with a handover. `◐ compact` applies to `--resume` only; it is the toolbar toggle plus footer `z`. **Copy** puts the launcher's own command line on the clipboard, built by `hooks/launch.ts` `launchCommand` with the same refusals as a launch: on Windows `Set-Location -LiteralPath '<cwd>'; claude --resume <id>` (or the fresh-prompt form), not `cd "<cwd>"; ...`.
+10. **A launch that opened fewer tabs than asked** marks none reopened, so the ticks stay for another try.
+11. **Keys:** card `s` tick, `r resume session` (the one filled key), `v` fresh / --resume, `i` brief, `c` copy resume command; bulk `b` (primary) and `g`, with all · unfinished · none over the current page; `z` compact; `u` rescan (through `TmFlows.refresh('restore')`); `j` / `k` move; `p` / `n` page; the phase picker's `h` / `l`, `f`, and digits only while its list is open; `m` sidebar. The tab row sits atop the pane (§15.11). Only the focused card carries the card keys. Tab onto a card's box focuses it.
+12. **Refusals and escaping:** Brief prompt fields taken from transcripts are escaped (`&` `<` `>`). A session id is validated (`isSessionId`) before digest or resume. A bulk resume runs the launcher's refusal per row and skips refused rows with a toast.
+13. **Narrow bulk label:** at 28 columns or fewer the bulk label may shorten to `<verb> + compact N` (user accepted).
+
 ## 11. Failure handling
 
 | Case | Behaviour |
 |------|-----------|
 | tm unreachable | Band: `offline` signal, counts dim. Panes: critical signal + `[Retry]`; restore still lists transcript facts with status `?` and resume works. |
-| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[u]`; band shows no `[4]`. |
+| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[u]`; the sidebar's Restore entry shows no count. |
 | Bulk action partly refused | One toast: "3 done · 1 refused: tm-audit-031 (<server wording>)"; refused stay selected. |
 | Remembered phase gone | Fall back to All + toast. |
 | Launcher unavailable | Copy the command, toast "Copied — paste into a new terminal". |
@@ -250,7 +268,7 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 2. **Band + Session tab.**
 3. **Review list.**
 4. **Handovers.**
-5. **Restore:** scanner + tests, tm resolution, pane, launcher, band keycap, resumed-from.
+5. **Restore:** scanner + tests, tm resolution, pane, launcher, sidebar Restore count, resumed-from.
 
 Work in a worktree off `feat/database-native-foundation`; rebase onto the parallel handover-guard work rather than overwrite it. The installed desktop copy (`~/.claude/plugins/marketplaces/local-desktop-app-uploads/`) is re-synced only after the user signs off. No push without asking.
 
