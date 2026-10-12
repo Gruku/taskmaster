@@ -7,6 +7,47 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.3.0
+
+**The Claude Code mods get a new look and a Restore pane.** The Taskmaster mods (taskmaster-mods 0.2.0) ship inside this plugin and were left out of 7.2.0. This release covers the whole UX overhaul: its first three stages, which were already merged, and the visual rework and Restore pane on top of them.
+
+**One look across every screen.**
+
+- One design vocabulary: shared inks, glyph badges, a three-line list item, and a single filled key per screen, so the one action that matters is the one that stands out. Hover changes colour only.
+- The band above the prompt is redrawn: the subject on the left, its keys in one column on the right, `m` to open the sidebar, and one empty line above it to keep it apart from the chat.
+- A Taskmaster sidebar (`m`) lists the panes: `1`-`4` jump to one and the current pane is marked. Only one pane is open at a time, and Esc closes the innermost layer.
+- Every pane starts with a tab row: the menu glyph opens the sidebar and the tabs switch panes without the band. The panes remember the last one you used.
+- A phase picker (`‹ [ phase count ▾ ] ›`) filters Review and Handovers by phase. Its dropdown takes digits only while open.
+- Session, Review and Handovers are redrawn on this vocabulary and show three items a page. Session labels its actions and no longer clips. Review has a sentence of tallies, bulk Done (`b`) and To agent (`g`), and `t` plus a digit ticks a check. Handovers have their own list, `y`/`n` close and bulk close, and a toggle for closed ones.
+- `/tm-kit` shows the component sheet.
+
+**Restore: pick up where a session left off.**
+
+- A new pane, `/tm-restore`, scans this repo's Claude transcripts and groups them into bursts of work, three to a page. Each item has a status, taken from Taskmaster: done, handed off, interrupted or work in progress.
+- A scan at session start puts a Restore key in the band when there is something to pick up.
+- Resume a session fresh or with `--resume` (the resume-mode field picks which). Resuming records "resumed from" first. You can also copy the resume command, or open a Brief.
+- Transcript text is escaped, rows that cannot be resumed are refused up front, and one unreadable transcript no longer blanks the whole scan.
+
+**Handover guard and phases (merged earlier, unreleased until now).**
+
+- The handover guard gains fork, compact and cache-warm options.
+- Review gets a phase filter, and handover pages page by phase with `j`/`k` crossing pages.
+- Bulk review actions report a failure mid-run, naming what was done, failed and not run.
+- The new-tab launcher refuses control characters and quotes typographic quotes safely.
+
+**Fixed.**
+
+- Re-confirming a handover close no longer counts it twice.
+- The Session tab no longer clips its contents.
+- A focused card fits down to 28 columns.
+- Restore's tab and sidebar counts follow the same snapshot rule as the other panes.
+
+**Known limitations.**
+
+- Band keys need focus: press ctrl+x or Tab to reach them.
+- At 28 columns or fewer the bulk resume label shortens.
+
+---
 ## 7.2.0
 
 **The viewer has a new look, in a dark and a light theme.** Every screen is rebuilt on one design system, so the board, the table, the epics, the task, issue and bug pages, sessions, the archive, the dashboard and settings share one set of colours, type, spacing and controls. The viewer starts dark; the button at the right of the top bar switches theme, and Settings offers Dark, Light or System. Its three fonts ship with the viewer: nothing is loaded from Google Fonts any more, and it looks the same offline.
