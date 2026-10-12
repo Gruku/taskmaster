@@ -143,6 +143,8 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
   const on = a.on ?? 'page'
   const filled = rung === 'primary' && why === undefined
   const letter = why !== undefined ? t.fg.disabled : filled ? t.keycap.signature.ink : rung === 'destructive' ? t.tone.warning : t.signatureText
+  // The pointer inverts a Button; un-inverted + explicit colours keep a hovered primary one solid, lighter block (never black).
+  const lit = { backgroundColor: t.signatureText, color: t.keycap.signature.ink, inverse: false } as const
   const button = (
     <Button
       key={a.id}
@@ -152,11 +154,11 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
       {...(rung === 'primary' ? { variant: 'primary' as const } : {})}
       {...(why !== undefined ? { dimColor: true } : {})}
       {...(a.autoFocus === true ? { autoFocus: true as const } : {})}
-      hover={{ bold: true, color: filled ? t.keycap.signature.ink : t.fg.bold }}
+      hover={filled ? { ...lit, bold: true } : { bold: true, color: t.fg.bold }}
       onPress={why === undefined ? a.onPress : () => k.say(why)}
     >
       {filled ? (
-        <Text color={t.keycap.signature.ink} bold>
+        <Text color={t.keycap.signature.ink} bold hover={lit}>
           {a.label}
         </Text>
       ) : null}
@@ -179,7 +181,7 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
   const glyph =
     KEYCAP_FACE === 'overlay' ? (
       <Box position="absolute" left={0} top={0}>
-        <Text {...(filled ? { backgroundColor: t.keycap.signature.bg } : {})} color={letter} bold={why === undefined}>
+        <Text {...(filled ? { backgroundColor: t.keycap.signature.bg, hover: lit } : {})} color={letter} bold={why === undefined}>
           {` ${a.key} `}
         </Text>
       </Box>
@@ -190,8 +192,9 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
         key={`${a.id}-box`}
         flexDirection="row"
         flexShrink={0}
+        alignSelf="flex-start"
         {...(filled ? { backgroundColor: t.keycap.signature.bg, paddingRight: 1 } : {})}
-        hover={{ backgroundColor: filled ? t.keycap.signature.bg : stepUp(t, on) }}
+        hover={{ backgroundColor: filled ? t.signatureText : stepUp(t, on) }}
       >
         {button}
         {glyph}

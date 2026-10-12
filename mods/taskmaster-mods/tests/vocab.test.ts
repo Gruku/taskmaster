@@ -105,8 +105,22 @@ describe('the key ladder', () => {
     expect(() => actionKey(k, { id: 'x', key: 'R', label: 'x', onPress: noop })).toThrow(/key x: hotkey "R"/)
     const keys = [actionKey(k, { id: 'a', key: 'a', label: 'send task to agent', onPress: noop }), actionKey(k, { id: 'd', key: 'd', label: 'mark task done', rung: 'primary', onPress: noop })]
     for (const hover of keys.flatMap(p => hoversOf(p.el))) {
-      for (const prop of Object.keys(hover)) expect(['backgroundColor', 'color', 'bold']).toContain(prop)
+      for (const prop of Object.keys(hover)) expect(['backgroundColor', 'color', 'bold', 'inverse']).toContain(prop)
     }
+  })
+
+  test('primary hover: every element carrying the fill steps to the lighter token with ink, un-inverted; the key hugs its label', () => {
+    const k = testKit()
+    const key = actionKey(k, { id: 'done', key: 'd', label: 'mark task done', rung: 'primary', onPress: noop })
+    const lit = { backgroundColor: T.signatureText, color: T.keycap.signature.ink }
+    const hoverOf = (e: unknown) => (e as { hover?: unknown } | undefined)?.hover
+    expect(hoverOf(byKey(key.el, 'done-box'))).toMatchObject({ backgroundColor: T.signatureText })
+    expect(hoverOf(byKey(key.el, 'done'))).toMatchObject({ ...lit, bold: true, inverse: false })
+    const label = walk(key.el).find(e => e.type === 'Text' && (e.children ?? []).includes('mark task done'))
+    expect(hoverOf(label)).toMatchObject({ ...lit, inverse: false })
+    const glyph = walk(key.el).find(e => e.type === 'Text' && (e.children ?? []).includes(' d '))
+    expect(hoverOf(glyph)).toMatchObject(lit)
+    expect(byKey(key.el, 'done-box')?.props?.alignSelf).toBe('flex-start')
   })
 
   test('desktop: the letter sits beside the native button, the primary is the native primary', () => {
