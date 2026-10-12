@@ -27,10 +27,10 @@ import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './ac
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
 import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree } from './band'
-import { handoversPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
-import { FRESH_MARKS } from './handover-list'
+import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
+import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
 import { KIT, kitGalleryTree } from './kit-gallery'
@@ -574,7 +574,7 @@ export const register: Register = (on, options) => {
     await update($, REVIEW_LIST, l => (l.bulk === 'busy' ? { ...l, bulk: 'none' as const, bulkIds: [] } : l))
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
-      { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },
+      { name: HANDOVERS, description: 'Taskmaster handovers by phase: resume, open in a new tab, copy for Telegram, close' },
       { name: SESSION, description: "This session in Taskmaster: its task, its handover and where it came from" },
       ...(mod.source === 'demo' ? [{ name: KIT, description: 'The taskmaster-mods kit gallery: every primitive with sample data (demo source)' }] : []),
     ]) {
@@ -799,39 +799,81 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-handovers' }, async ($, e) => {
-    const { Text } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
     const { snapshot, summaries } = await dataOf($)
-    const view = {
+    const now = await $.clock.now()
+    const stored = await read($, HANDOVER_LIST)
+    const views = await read($, PHASE_VIEWS)
+    const demo = mod.source === 'demo'
+    // Demo draws its list and phases before the seed lands, as dataOf draws its snapshot (a render writes nothing).
+    const view: HandoversView = {
       snapshot,
+      list: demo && stored === null ? demoHandoverList(now) : stored,
+      marks: await read($, HANDOVER_MARKS),
+      phaseView: demo && !views.handovers.loaded ? { ...views.handovers, phases: demoPhases('handovers'), loaded: true } : views.handovers,
       pick: await read($, PICK),
+      page: await read($, HANDOVER_PAGE),
       summaries,
       summaryOpen: await read($, SUMMARY_OPEN),
-      page: await read($, HANDOVER_PAGE),
+      now,
+      focused: e.props.isFocused,
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
     }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {
-      const picked = handoverPage(snapshot.handovers, view.page, view.pick).picked
+      const shown = phaseHandovers(listedHandovers(view.list, snapshot, view.marks.showClosed), view.phaseView.choice, view.list?.tasks ?? {})
+      const picked = handoverPage(shown, view.page, view.pick).picked
       const held = picked === undefined ? undefined : summaries[picked.id]
       if (picked !== undefined && picked.id === view.summaryOpen && (held === undefined || held.stale === true)) askSummary(picked.id)
     }
-    return handoversPaneTree(
-      $.ui.resolve(e) as unknown as Ui,
-      rrOf($),
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    const ground = await $.rr.surfaceProps({ level: 'page' })
+    const tree = handoversPaneTree(
+      k,
       view,
       {
         pick: id => act(f => f.pick(id)),
-        copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
-        resume: handover => act(async f => {
-          if (await f.resumeHandover(handover)) await f.recordResumed(handover.id)
-        }),
-        toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
+        move: (page, id) => act(f => f.moveTo(page, id)),
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
+        select: id => act(f => f.selectHandover(id)),
+        selectOnly: ids => act(f => f.selectHandovers(ids)),
+        toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
+        resume: handover =>
+          act(async f => {
+            if (await f.resumeHandover(handover)) await f.recordResumed(handover.id)
+          }),
+        // Stage 2's launch only names what it would open in demo.
+        newTab: (handover, surface) =>
+          act(async f => {
+            await f.launch([await f.handoverLaunch(handover)], surface)
+          }),
+        copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
+        askClose: ask => act(f => f.askClose(ask)),
+        confirmClose: () => act(f => f.confirmClose()),
+        cancelClose: () => act(f => f.cancelClose()),
+        toggleClosed: () => act(f => f.toggleClosed()),
+        // u: Stage 3's refresh (snapshot and this pane's phases), then the pane's own list.
+        refresh: () =>
+          act(async f => {
+            await f.refresh('handovers')
+            await f.loadHandovers()
+          }),
+        strip: {
+          choose: id => act(f => f.choosePhase('handovers', id)),
+          toggleDone: () => act(f => f.toggleDone('handovers')),
+          overlay: open => act(f => f.setOverlay('handovers', open)),
+        },
       },
       e.props.bodyColumns,
+    )
+    return (
+      <Box {...ground} flexGrow={1}>
+        {tree}
+      </Box>
     )
   })
 
@@ -935,9 +977,9 @@ export const register: Register = (on, options) => {
 
   on('ui.focus', { requestId: 'tm-handovers' }, async ($, e, next) => {
     const moved = await next(e)
-    const element = e.element
-    if (element !== undefined && element.startsWith('ho:')) {
-      const id = element.slice(3)
+    // A card's row or its select box takes the focus: that card is the picked one.
+    const id = e.element?.match(/^ho(?:-sel)?:(.+)$/)?.[1]
+    if (id !== undefined) {
       await update($, PICK, () => id)
       await update($, SUMMARY_OPEN, open => (open === id ? open : '')) // another row shows collapsed, and so does this one later
     }
