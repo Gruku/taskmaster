@@ -45,6 +45,8 @@ export type TmHandover = {
   readonly taskIds: readonly string[]
   /** The list reply's `thread`: the copy block's `Resume: <thread> — <next action>` line. */
   readonly thread: string
+  /** The list reply's `status`; absent (read as open) on a snapshot written before the handovers pane's `◐ closed`. */
+  readonly status?: 'open' | 'closed'
 }
 /**
  * A handover's body sections for the expanded summary (backlog_handover_get, sections decisions + blockers), one entry per
@@ -57,6 +59,22 @@ export type TmHandoverSummary = {
   readonly unavailable?: true
   readonly stale?: true
 }
+/** A task a handover links (handover_tasks), as the handovers pane's card shows it: live status and phase ('' none). */
+export type TmLinkedTask = { readonly id: string; readonly status: string; readonly phase: string; readonly title: string }
+/**
+ * The handovers pane's own read (spec §9): up to 100 open handovers and, when `closed`, up to 100 closed ones, newest first;
+ * `total` is the server's count of open ones; `tasks` the linked tasks by id (one missing: not read, or gone).
+ */
+export type TmHandoverList = {
+  readonly handovers: readonly TmHandover[]
+  readonly total: number
+  readonly closed: boolean
+  readonly tasks: Readonly<Record<string, TmLinkedTask>>
+}
+/** A y/n close row: `one` from the focused card's `x`, `bulk` from `Close N`; `ids` are what `y` closes. */
+export type TmCloseAsk = { readonly kind: 'one' | 'bulk'; readonly ids: readonly string[] }
+/** The handovers pane's marks: the selected ids, the close row that is up (null: none), and `◐ closed`. */
+export type TmHandoverMarks = { readonly selected: readonly string[]; readonly ask: TmCloseAsk | null; readonly showClosed: boolean }
 /** One phase of the backlog (backlog_query) as one pane counts it. */
 export type TmPhase = {
   readonly id: string
@@ -175,6 +193,10 @@ declare module 'claude-code' {
       reviewList: TmReviewList
       /** The handovers pane's page (0 first); reset when the pane opens. */
       handoverPage: number
+      /** The handovers pane's own list (null until its first read: the pane draws the snapshot's window meanwhile). */
+      handoverList: TmHandoverList | null
+      /** The handovers pane's selection, its y/n close row and `◐ closed`. */
+      handoverMarks: TmHandoverMarks
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
       handoverNotice: TmHandoverNotice | null
       /** One guard run (fork, handover, compaction) per session at most: `$.state` is per session, so /clear or a resume can earn another. */

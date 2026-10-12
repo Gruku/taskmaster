@@ -1,6 +1,6 @@
 // User intent: built-in sample data so taskmaster-mods can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
-import type { TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverList, TmHandoverSummary, TmLinkedTask, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 import { NO_TASK } from './phases'
 
@@ -9,9 +9,10 @@ import { NO_TASK } from './phases'
  * the seed's version: bump DEMO_SEED whenever the demo data's shape changes, so a seed an older module left in $.state across
  * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added; 3: handovers gained
  * thread, for the copy block's Resume line; 4: phases gained dates and per-pane counts, seeded with the snapshot; 5: the
- * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab).
+ * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab; 7: the handovers
+ * pane's own list, with closed handovers and linked tasks, seeded beside the snapshot).
  */
-export const DEMO_SEED = 5
+export const DEMO_SEED = 7
 export const DEMO_REASON = `demo:${DEMO_SEED}`
 
 /** Any demo seed, of any version (tm mode never draws one). */
@@ -24,14 +25,20 @@ export const DEMO_PHASES: readonly TmPhase[] = [
   { id: 'patch-1-9', status: 'active', order: 2, count: 3, name: 'Patch 1.9 — Demo scope', date: '2026-10-06' },
   { id: 'patch-1-8', status: 'done', order: 1, count: 0, name: 'Patch 1.8 — Demo scope', date: '2026-10-05' },
 ]
-/** Open demo handovers per phase, through their tasks; three link no task. */
-const DEMO_HANDOVER_COUNTS: Readonly<Record<string, number>> = { 'patch-1-9': 2 }
+/** Demo handovers per phase through their linked tasks (DEMO_TASKS), open and closed; NO_TASK: those linking none. */
+const DEMO_HANDOVER_COUNTS: Readonly<Record<string, { readonly open: number; readonly closed: number }>> = {
+  'patch-1-9': { open: 2, closed: 0 },
+  'release-2': { open: 1, closed: 0 },
+  'patch-1-8': { open: 0, closed: 1 },
+  [NO_TASK]: { open: 2, closed: 1 },
+}
 
-/** Each pane's demo phases: review's counts; handovers' open handovers plus a no task tab; restore's are counted later (0). */
+/** Each pane's demo phases: review's counts; handovers' open and closed handovers plus a no task tab; restore's are counted later (0). */
 export function demoPhases(pane: TmPhasePane): readonly TmPhase[] {
   if (pane === 'review') return DEMO_PHASES
-  const counted = DEMO_PHASES.map(p => ({ ...p, count: pane === 'handovers' ? (DEMO_HANDOVER_COUNTS[p.id] ?? 0) : 0, closed: 0 }))
-  return [...counted, { id: NO_TASK, status: 'none', order: 0, count: pane === 'handovers' ? 3 : 0, closed: 0, name: 'no task', date: '' }]
+  const of = (id: string) => (pane === 'handovers' ? (DEMO_HANDOVER_COUNTS[id] ?? { open: 0, closed: 0 }) : { open: 0, closed: 0 })
+  const counted = DEMO_PHASES.map(p => ({ ...p, count: of(p.id).open, closed: of(p.id).closed }))
+  return [...counted, { id: NO_TASK, status: 'none', order: 0, count: of(NO_TASK).open, closed: of(NO_TASK).closed, name: 'no task', date: '' }]
 }
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
 /** The demo session was resumed from this handover (seeded into `resumedFrom`): the band and Session tab show it. */
@@ -98,6 +105,8 @@ export const DEMO_SUMMARIES: Readonly<Record<string, TmHandoverSummary>> = {
     blockers: ['Needs a CodeMaestro-sized store to measure'],
   },
   '2026-10-01-release-7-0-0': { decisions: [], blockers: [] },
+  '2026-09-30-row-counter-ported': { decisions: ['Count rows in the store, not the projection'], blockers: [] },
+  '2026-09-29-store-spike-notes': { decisions: [], blockers: ['Spike numbers were taken on a laptop on battery'] },
 }
 
 export function demoSnapshot(now: number): TmSnapshot {
@@ -167,4 +176,39 @@ export function demoSnapshot(now: number): TmSnapshot {
       pipeline: { laneless: false, lane: 'full', gateState: 'review-gate:pass', outstanding: [] },
     },
   }
+}
+
+/** The tasks the demo handovers link, with live status and phase (the handovers pane's card and phase tabs). */
+export const DEMO_TASKS: Readonly<Record<string, TmLinkedTask>> = {
+  'unified-chat-022': { id: 'unified-chat-022', status: 'in-review', phase: 'patch-1-9', title: 'Unified chat pre-build gets the full supervisor toolset' },
+  'tm-audit-030': { id: 'tm-audit-030', status: 'done', phase: 'patch-1-9', title: 'Agent tool-use audit fixes' },
+  'tm-audit-031': { id: 'tm-audit-031', status: 'in-review', phase: 'patch-1-9', title: 'Handover auto-supersede keeps the newest per thread' },
+  'B-082': { id: 'B-082', status: 'todo', phase: 'release-2', title: 'Store read hang: quarantined rows scanned under the writer mutex' },
+  'tm-audit-029': { id: 'tm-audit-029', status: 'done', phase: 'patch-1-8', title: 'Port the row counter' },
+}
+
+/** Closed demo handovers, `hours` old: shown dimmed under `◐ closed`. */
+const DEMO_CLOSED: readonly (Omit<TmHandover, 'created' | 'path' | 'status'> & { readonly hours: number })[] = [
+  {
+    id: '2026-09-30-row-counter-ported',
+    hours: 120,
+    tldr: 'Row counter ported to the native store',
+    nextAction: 'Nothing: closed',
+    branch: 'feat/tm-audit-029',
+    taskIds: ['tm-audit-029'],
+    thread: 'tm-audit',
+  },
+  { id: '2026-09-29-store-spike-notes', hours: 150, tldr: 'Store spike notes', nextAction: 'Fold them into the spec', branch: '', taskIds: [], thread: 'store-spike' },
+]
+
+/** The handovers pane's demo list: the snapshot's open handovers, then the closed ones, with every linked task. */
+export function demoHandoverList(now: number): TmHandoverList {
+  const s = demoSnapshot(now)
+  const closed = DEMO_CLOSED.map(({ hours, ...h }) => ({
+    ...h,
+    created: new Date(now - hours * HOUR).toISOString(),
+    path: handoverPath(DEMO_ROOT, h.id),
+    status: 'closed' as const,
+  }))
+  return { handovers: [...s.handovers.map(h => ({ ...h, status: 'open' as const })), ...closed], total: s.handoversTotal, closed: true, tasks: DEMO_TASKS }
 }

@@ -165,7 +165,8 @@ export const HANDOVER_WRITTEN = [
 export function backlog(tool: string, args: Record<string, unknown>): { text: string } {
   if (tool === 'backlog_list_tasks') return { text: LIST_IN_REVIEW }
   if (tool === 'backlog_continuity_items') return { text: args.action_class === 'decide' ? CONTINUITY_DECIDE : CONTINUITY_REVIEW }
-  if (tool === 'backlog_handover_list') return { text: HANDOVERS_OPEN }
+  if (tool === 'backlog_handover_list') return { text: args.status === 'closed' ? HANDOVERS_CLOSED : HANDOVERS_OPEN }
+  if (tool === 'backlog_query' && String(args.sql).includes(' AS task,')) return { text: LINKED_TASKS }
   if (tool === 'backlog_query') return { text: String(args.sql).includes("<>''") ? PHASES_WAITING : PHASES_ALL }
   if (tool === 'backlog_get_task') {
     const id = String(args.task_id)
@@ -180,3 +181,24 @@ export function backlog(tool: string, args: Record<string, unknown>): { text: st
   if (tool === 'backlog_task_pipeline') return { text: String(args.task_id) === 'tm-audit-030' ? PIPELINE_BOUND : PIPELINE_READY }
   return { text: `Error: ${tool} is not part of the test backlog` }
 }
+
+/** Closed handovers as backlog_handover_list words them (status closed), for the handovers pane's `◐ closed`. */
+export const HANDOVERS_CLOSED = JSON.stringify({
+  handovers: [
+    { id: '2026-10-02-row-counter-ported', date: '2026-10-02', created: '2026-10-02T16:00', thread: 'tm-audit', session_kind: 'build', status: 'closed', tldr: 'Row counter ported to the native store', next_action: 'Nothing: closed', task_ids: ['tm-audit-029'], tip_commit: '1a2b3c4', branch: 'feat/tm-audit-029', links: [], superseded_by: '' },
+  ],
+  returned: 1,
+  total: 1,
+  truncated: false,
+  archived_omitted: 0,
+})
+/** backlog_query's linked-task table (linkedTasksSql), cells padded, footer `N rows`. */
+export const LINKED_TASKS = [
+  'task                                       title',
+  '["unified-chat-022","in-review","2-0-4"]   Unified chat pre-build gets the full supervisor toolset; cookbook owns the order',
+  '["tm-audit-030","in-progress","2-0-6"]     Agent tool-use audit fixes',
+  '["tm-audit-029","done","2-0-3"]            Port the row counter',
+  '3 rows',
+].join('\n')
+/** backlog_handover_update_status's success, as the server words it. */
+export const handoverClosed = (id: string): string => `Handover ${id} → status=closed (user-set).`

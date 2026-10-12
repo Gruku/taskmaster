@@ -1,7 +1,7 @@
 // User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
 // 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
 // reply degrades to a fault instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBinding, TmBound, TmFault, TmHandover, TmHandoverList, TmHandoverSummary, TmLinkedTask, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -16,6 +16,7 @@ import {
   parseHandoverSlim,
   parseHandoverSummary,
   parseIssueList,
+  parseLinkedTasks,
   parseListTasks,
   parsePhases,
   parsePipeline,
@@ -354,4 +355,56 @@ export async function readPhases(host: TmHost, pane: TmPhasePane, waitingOnly: b
     host.log(`taskmaster-mods: phases not read: ${error instanceof Error ? error.message : String(error)}`)
     return null
   }
+}
+
+/** Handovers the handovers pane reads per status (spec §9), the archive past the server's 30-entry index searched too. */
+export const HANDOVER_PANE_LIMIT = 100
+/** backlog_query's row cap: the most linked tasks one read can answer. */
+const LINKED_TASK_CAP = 500
+const quoted = (id: string): string => `'${id.replace(/'/g, "''")}'`
+
+/** The linked tasks' live status and phase: `json_array(id, status, phase)` and the title, one row a task (cells under 80). */
+export function linkedTasksSql(ids: readonly string[]): string {
+  return `SELECT json_array(t.id, t.status, coalesce(json_extract(t.doc,'$.phase'),'')) AS task, json_extract(t.doc,'$.title') AS title FROM entities t WHERE t.kind='task' AND t.deleted=0 AND t.id IN (${ids.map(quoted).join(',')})`
+}
+
+async function readLinkedTasks(host: TmHost, ids: readonly string[]): Promise<Readonly<Record<string, TmLinkedTask>>> {
+  try {
+    const text = (await callTm(host, 'backlog_query', { sql: linkedTasksSql(ids), limit: LINKED_TASK_CAP })).text
+    const parsed = parseLinkedTasks(text)
+    if (parsed.ok) return Object.fromEntries(parsed.value.map(t => [t.id, t]))
+    host.log(`taskmaster-mods: unreadable backlog_query reply: ${text.slice(0, 2000)}`)
+  } catch (error) {
+    host.log(`taskmaster-mods: linked tasks not read: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return {}
+}
+
+/**
+ * The handovers pane's list: the open handovers (and, when `closed`, the closed ones), up to HANDOVER_PANE_LIMIT each with
+ * the archive searched, then one backlog_query for their linked tasks. Null when a list read fails or is unreadable (logged:
+ * the pane keeps what it shows); a failed task read keeps the list with no tasks (every handover then shows under All only).
+ */
+export async function readHandoverList(host: TmHost, root: string, closed: boolean): Promise<TmHandoverList | null> {
+  const listed = async (status: 'open' | 'closed') => {
+    const args = { format: 'json', status, limit: HANDOVER_PANE_LIMIT, include_archived: true }
+    const text = (await callTm(host, 'backlog_handover_list', args)).text
+    const parsed = parseHandovers(text, root)
+    if (!parsed.ok) host.log(`taskmaster-mods: unreadable backlog_handover_list reply: ${text.slice(0, 2000)}`)
+    return parsed.ok ? parsed.value : null
+  }
+  let open: Awaited<ReturnType<typeof listed>>
+  let shut: Awaited<ReturnType<typeof listed>> = { handovers: [], total: 0 }
+  try {
+    open = await listed('open')
+    if (open !== null && closed) shut = await listed('closed')
+  } catch (error) {
+    host.log(`taskmaster-mods: handovers not read: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+  if (open === null || shut === null) return null
+  const handovers = [...open.handovers, ...shut.handovers].sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
+  const ids = [...new Set(handovers.flatMap(h => h.taskIds))].slice(0, LINKED_TASK_CAP)
+  const tasks = ids.length === 0 ? {} : await readLinkedTasks(host, ids)
+  return { handovers, total: open.total, closed, tasks }
 }
