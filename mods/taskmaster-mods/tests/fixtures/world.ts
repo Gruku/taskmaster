@@ -54,6 +54,8 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     env: {},
   }
   let queue: Promise<void> = Promise.resolve()
+  // The panes open now (`$.ui.panes()`), as the engine keeps them: one per id, in open order.
+  const open = new Set<string>()
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}) as never)
@@ -61,12 +63,15 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', ($, e) => {
     world.opened.push(e.id)
+    open.add(e.id)
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', ($, e) => {
     world.closed.push(e.id)
+    open.delete(e.id)
     return { value: undefined }
   })
+  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }) as never)
   on('ui.toast', ($, e) => {
     world.toasts.push(e.text)
     return { value: undefined }

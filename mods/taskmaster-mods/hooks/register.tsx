@@ -34,7 +34,8 @@ import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
-import { FRESH_NAV } from './nav'
+import { escLayer, FRESH_NAV, paneOf } from './nav'
+import { SIDEBAR_ESC } from './vocab'
 import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
 import {
@@ -114,6 +115,7 @@ export function hostOf($: EngineInterface): TmHost {
     },
     openPane: async (id, title) => (await $.ui.open({ id, title, focus: true, closeOnEscape: true })).isPlaced,
     closePane: id => $.ui.close({ id }),
+    panes: async () => (await $.ui.panes()).map(pane => pane.id),
     focus: async (requestId, key) => {
       try {
         await $.ui.focus({ requestId, key })
@@ -996,4 +998,28 @@ export const register: Register = (on, options) => {
     }
     return moved
   }).catch(($, e, next) => next(e)) // a failed pick write never holds the focus move up: replay what the chain beneath settled
+
+  // Esc closes the innermost layer first (spec §15.8 S4): the person's close of a Taskmaster pane is refused while its sidebar
+  // or phase list is open, and closes that instead. Every close that goes through lets the sidebar go with its pane.
+  on('ui.close', async ($, e, next) => {
+    const pane = paneOf(e.id)
+    if (pane === null) return next(e)
+    if (e.origin.kind === 'person' && SIDEBAR_ESC === 'refuse') {
+      const nav = await read($, NAV)
+      const views = await read($, PHASE_VIEWS)
+      const menuOpen = pane !== 'session' && views[pane].overlay
+      const layer = escLayer(nav, menuOpen)
+      if (layer === 'sidebar') {
+        await update($, NAV, n => ({ ...n, sidebar: false }))
+        return { value: undefined }
+      }
+      if (layer === 'menu' && pane !== 'session') {
+        await update($, PHASE_VIEWS, all => ({ ...all, [pane]: { ...all[pane], overlay: false } }))
+        return { value: undefined }
+      }
+    }
+    const closed = await next(e)
+    await update($, NAV, n => (n.sidebar ? { ...n, sidebar: false } : n))
+    return closed
+  }).catch(($, e, next) => next(e)) // a failed read or write never keeps a pane open: replay what the chain beneath settled
 }

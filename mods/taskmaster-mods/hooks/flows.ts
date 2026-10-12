@@ -23,7 +23,7 @@ import type { TmActions, TmCloseHandover } from './actions'
 import { arrival, closeToast, FRESH_MARKS, listedHandovers, markClosed, withoutHandovers } from './handover-list'
 import type { TmHost } from './host'
 import { launchAll, type LaunchResult, type LaunchSpec, launchSummary, resumePrompt } from './launch'
-import { paneOf } from './nav'
+import { PANE_IDS, paneOf, TM_PANE_IDS } from './nav'
 import {
   afterDone,
   afterSendBack,
@@ -228,11 +228,22 @@ export function createFlows(d: TmFlowDeps) {
     await d.write.handoverMarks(m => (m.ask === null ? m : { ...m, ask: null }))
   }
   const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
+  // One Taskmaster pane at a time (spec §15.8 S2): the plugin's other open Taskmaster panes close first, so the engine never
+  // draws its tab row. A host without `panes` (or one answering something else) closes nothing.
+  const closeOthers = async (keep: string): Promise<void> => {
+    const open = await d.host.panes?.()
+    if (!Array.isArray(open)) return
+    for (const id of open) if (id !== keep && TM_PANE_IDS.includes(id)) await d.host.closePane(id)
+  }
+  // Whether the last pane opened was placed (false: the terminal is too narrow); openSidebar reads it.
+  const placed = { last: true }
   // Every Taskmaster pane opens through here: it becomes the pane the band's `m` reopens (spec §15.8).
   const open = async (id: string, title: string): Promise<void> => {
+    await closeOthers(id)
     const pane = paneOf(id)
     if (pane !== null) await d.write.nav(n => (n.last === pane ? n : { ...n, last: pane }))
-    if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
+    placed.last = await d.host.openPane(id, title)
+    if (!placed.last) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
   }
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
@@ -426,8 +437,28 @@ export function createFlows(d: TmFlowDeps) {
         last.pane = n.last
         return n
       })
+      placed.last = true
       await openPane(last.pane)
-      await d.write.nav(n => (n.sidebar ? n : { ...n, sidebar: true }))
+      // A pane the terminal could not place has no sidebar to show: nav.sidebar stays shut.
+      if (placed.last) await d.write.nav(n => (n.sidebar ? n : { ...n, sidebar: true }))
+    },
+    /** A sidebar entry: the sidebar closes and that pane opens; the pane already open only loses its sidebar. */
+    goTo: async (pane: TmPane): Promise<void> => {
+      await d.write.nav(n => (n.sidebar ? { ...n, sidebar: false } : n))
+      const open = await d.host.panes?.()
+      if (Array.isArray(open) && open.includes(PANE_IDS[pane])) return
+      await openPane(pane)
+    },
+    /** `m` in a pane: the sidebar opens or closes; opening it closes every phase list and lets review's ticking go. */
+    toggleSidebar: async (): Promise<void> => {
+      const was = { open: false }
+      await d.write.nav(n => {
+        was.open = n.sidebar
+        return { ...n, sidebar: !n.sidebar }
+      })
+      if (was.open) return
+      for (const pane of ['review', 'handovers', 'restore'] as const) await d.write.phaseView(pane, v => (v.overlay ? { ...v, overlay: false } : v))
+      await d.write.reviewList(l => (l.ticking ? { ...l, ticking: false } : l))
     },
     /** The band's `r` (tm offline) and Session's `u`: a fresh snapshot from tm; demo says it has nothing newer. */
     retry: async (): Promise<void> => {
@@ -490,6 +521,8 @@ export function createFlows(d: TmFlowDeps) {
     /** `+N ▾` / `f`: opens the overlay list (reading the phases fresh) or closes it. */
     setOverlay: async (pane: TmPhasePane, open: boolean): Promise<void> => {
       await d.write.phaseView(pane, v => ({ ...v, overlay: open }))
+      // The phase list and the sidebar never stand open together: their digits would clash.
+      if (open) await d.write.nav(n => (n.sidebar ? { ...n, sidebar: false } : n))
       // `f` takes the digits for the overlay's picks: review's tick mode lets go of them.
       if (pane === 'review') await d.write.reviewList(l => ({ ...l, ticking: false }))
       if (open) await loadPhases(pane)
@@ -569,7 +602,13 @@ export function createFlows(d: TmFlowDeps) {
      * move or a page turn: ticking is two keystrokes, and a stray digit never ticks.
      */
     armTick: async (): Promise<void> => {
-      await d.write.reviewList(l => ({ ...l, ticking: !l.ticking }))
+      const armed = { now: false }
+      await d.write.reviewList(l => {
+        armed.now = !l.ticking
+        return { ...l, ticking: !l.ticking }
+      })
+      // The sidebar's 1-4 and the checks' 1-9 never stand on Buttons together (F5).
+      if (armed.now) await d.write.nav(n => (n.sidebar ? { ...n, sidebar: false } : n))
     },
     /** s, or a press on a card's box. */
     toggleSelect: async (id: string): Promise<void> => {

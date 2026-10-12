@@ -23,6 +23,8 @@ export type TmHost = {
   copy: (text: string, surface: RenderSurface | undefined) => Promise<TmCopyResult>
   openPane: (id: string, title: string) => Promise<boolean>
   closePane: (id: string) => Promise<void>
+  /** The ids of this plugin's open panes (`$.ui.panes()`); absent (older rigs): nothing is closed before an open. */
+  panes?: () => Promise<readonly string[]>
   focus: (requestId: string, key: string) => Promise<void>
   sessionId: () => Promise<string>
   repoRoot: () => Promise<string>
