@@ -4,6 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { RCW } from '../hooks/band'
+import { DEMO_DETAILS, DEMO_REASON } from '../hooks/demo'
 import type { TmSnapshot } from '../types'
 import { BAND, PLUGIN, SESSION } from './fixtures/inputs'
 import { type Drawn, isEl, widthOf } from './fixtures/measure'
@@ -177,5 +178,77 @@ describe('band', () => {
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND, surface: 'desktop' })
     for (const key of ['band-done', 'band-sidebar', 'band-copy']) expect(await ui.find({ type: 'Button', key }), key).toBeDefined()
+  })
+
+  test('d shows only for a bound task that is ready: not for an in-progress one with gates outstanding', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const demo = state.get(SNAP) as TmSnapshot
+    const detail = { ...DEMO_DETAILS['tm-audit-031']!, status: 'in-progress' }
+    state.set(SNAP, { ...demo, reason: DEMO_REASON, bound: { taskId: 'tm-audit-031', inferred: false, detail, pipeline: { laneless: false, lane: 'full', gateState: '', outstanding: ['review-gate'] } } })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    expect(await ui.find({ type: 'Text', text: '● IN PROGRESS' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeUndefined()
+    state.set(SNAP, demo)
+    await ui.redraw()
+    expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeDefined()
+  })
+
+  test('with a confirm up, y and n always appear together: at 2 rows beside line 1, at 1 row line 1 drops and the y/n row stays', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    for (const maxRows of [2, 1]) {
+      const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND, props: { ...BAND.props, maxRows } })
+      await ui.press({ key: 'band-done' })
+      await ui.redraw()
+      expect(await ui.find({ type: 'Button', key: 'band-yes' }), `${maxRows} yes`).toBeDefined()
+      expect(await ui.find({ type: 'Button', key: 'band-no' }), `${maxRows} no`).toBeDefined()
+      const { outer, lines } = await bandOf(ui)
+      expect(outer.props?.paddingTop, `${maxRows} pad`).toBe(0)
+      expect(lines, `${maxRows} lines`).toHaveLength(maxRows)
+      if (maxRows === 1) expect(await ui.find({ type: 'Button', key: 'band-sidebar' })).toBeUndefined()
+      await ui.press({ key: 'band-no' })
+      await ui.unmount()
+    }
+  })
+
+  test('a refusal shows only for the task it was made on; one made on another id is not drawn', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    state.set(`${PLUGIN}.band`, { confirmingId: '', refusal: 'Cannot complete: review-gate outstanding', refusalId: 'tm-audit-031' })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: '▲ REFUSED  ' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'Cannot complete: review-gate outstanding' })).toBeUndefined()
+    state.set(`${PLUGIN}.band`, { confirmingId: '', refusal: 'Cannot complete: review-gate outstanding', refusalId: 'unified-chat-022' })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: '▲ REFUSED  ' })).toBeDefined()
+  })
+
+  test('a refresh between d and y never retargets y: the confirm drops with its task, and y signs off the asked task only', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const demo = state.get(SNAP) as TmSnapshot
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
+    await ui.press({ key: 'band-done' })
+    await ui.redraw()
+    state.set(SNAP, { ...demo, queue: [...demo.queue].reverse() })
+    await ui.redraw()
+    await ui.press({ key: 'band-yes' })
+    const after = state.get(SNAP) as TmSnapshot
+    expect(after.queue.map(i => i.id)).toEqual(['DEC-4', 'ISS-7', 'docs-012', 'tm-audit-031'])
+    expect(after.bound).toBeNull()
+    state.set(SNAP, { ...demo, bound: { taskId: 'tm-audit-031', inferred: false, detail: DEMO_DETAILS['tm-audit-031'] ?? null, pipeline: null } })
+    await ui.redraw()
+    await ui.press({ key: 'band-done' })
+    await ui.redraw()
+    state.set(SNAP, { ...demo })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'band-done' })).toBeDefined()
+    expect((state.get(SNAP) as TmSnapshot).queue).toHaveLength(5)
   })
 })
