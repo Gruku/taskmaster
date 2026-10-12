@@ -1,7 +1,18 @@
 // User intent: what the restore pane knows about a closed session, as plain functions (spec §10, §10.2) — the scanner's
 // facts read safely, the one backlog_query that resolves their task and handover ids, and the status Taskmaster gives
 // them — so a session is called unfinished by tm's word, never by a regex.
-import type { TmRefs, TmRefTask, TmScan, TmScannedHandover, TmScannedSession } from '../../types'
+import type {
+  TmRefs,
+  TmRefTask,
+  TmRestoreData,
+  TmRestorePending,
+  TmRestoreView,
+  TmResumeMode,
+  TmScan,
+  TmScannedHandover,
+  TmScannedSession,
+  TmSessionBurst,
+} from '../../types'
 import { firstParagraph, isRefusal, type Parsed } from '../parse'
 import { NO_TASK } from '../phases'
 import type { RrTone } from '../rr'
@@ -22,6 +33,31 @@ export const STATUS_TONE: Readonly<Record<RestoreStatus, RrTone>> = {
   unknown: 'signature',
   'handed-off': 'info',
   done: 'success',
+}
+/** A task's status badge tone on a restore card. */
+export const TASK_TONE: Readonly<Record<string, RrTone>> = {
+  todo: 'signature',
+  'in-progress': 'info',
+  'in-review': 'warning',
+  blocked: 'critical',
+  done: 'success',
+  archived: 'success',
+}
+/** `/tm-restore` with no argument scans this many days; the session-start scan, SIGNAL_DAYS (spec §10.4). */
+export const DEFAULT_DAYS = 4
+export const SIGNAL_DAYS = 3
+export const FRESH_RESTORE_DATA: TmRestoreData = { scan: null, refs: null, error: '', days: DEFAULT_DAYS }
+export const FRESH_RESTORE_VIEW: TmRestoreView = {
+  page: 0,
+  focus: '',
+  selected: {},
+  modes: {},
+  opened: {},
+  compact: false,
+  busy: '',
+  launching: [],
+  briefing: [],
+  briefs: {},
 }
 const DONE_TASK = new Set(['done', 'archived'])
 const SETTLED_HANDOVER = new Set(['closed', 'superseded'])
@@ -180,9 +216,260 @@ export function rowsOf(scan: TmScan | null, refs: TmRefs | null): RestoreRow[] {
   return scan === null ? [] : scan.sessions.map(s => rowOf(s, refs))
 }
 
+/** The rows the pane lists: every scanned session but this one (it is scanned for its burst, never offered back to itself). */
+export function paneRows(data: TmRestoreData, self: string): RestoreRow[] {
+  return rowsOf(data.scan, data.refs).filter(r => r.s.id !== self)
+}
+
 /** Restore's phase counts (spec §5): the closed sessions per bound task's phase, NO_TASK for the rest. */
 export function phaseCounts(rows: readonly RestoreRow[]): Map<string, number> {
   const counts = new Map<string, number>()
   for (const row of rows) if (!row.s.running) counts.set(row.phase, (counts.get(row.phase) ?? 0) + 1)
   return counts
+}
+
+// ── Bursts, pages, ticks and resume modes (ported from cm-restore's pure helpers) ─────────────────────────────────────
+
+/** Sessions closed within this many minutes of the next one belong to one burst. */
+export const BURST_GAP_MIN = 10
+/** Older sessions page this many at a time, newest first (spec §10, §15.6). */
+export const RESTORE_PAGE_SIZE = 3
+/** Context a resume reopens: warning once heavy, critical near a 1M window's end. */
+export const CTX_WARN = 400_000
+export const CTX_HIGH = 700_000
+/** The band's restore keycap shows for a burst this recent at most (spec §10.4). */
+export const PENDING_WITHIN_S = 48 * 3600
+
+/** Sessions closed together. `open`: members not running and not done. Newest burst first. */
+export type RestoreBurst = { readonly ids: readonly string[]; readonly from: number; readonly to: number; readonly open: number }
+/** A page: page 1 is the closing burst and what closed after it; `burstSize` counts the burst, `since` what closed after. */
+export type RestorePage = {
+  readonly ids: readonly string[]
+  readonly from: number
+  readonly to: number
+  readonly isBurst: boolean
+  readonly burstSize: number
+  readonly since: number
+}
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+export function hhmm(epoch: number): string {
+  const d = new Date(epoch * 1000)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+export function dayLabel(epoch: number, now: number): string {
+  const d = new Date(epoch * 1000)
+  const t = new Date(now * 1000)
+  const start = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diff = Math.round((start(t) - start(d)) / 86_400_000)
+  if (diff === 0) return 'today'
+  if (diff === 1) return 'yesterday'
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+/** `16:31` today, `yesterday 16:31`, else the date and time. */
+export function when(epoch: number, now: number): string {
+  const day = dayLabel(epoch, now)
+  return day === 'today' ? hhmm(epoch) : `${day} ${hhmm(epoch)}`
+}
+/** `today 16:14–16:31` within a day, `yesterday 22:10 – 09:05` across days. */
+export function spanLabel(from: number, to: number, now: number): string {
+  if (from === to) return `${dayLabel(to, now)} ${hhmm(to)}`
+  if (dayLabel(from, now) === dayLabel(to, now)) return `${dayLabel(to, now)} ${hhmm(from)}–${hhmm(to)}`
+  return `${dayLabel(from, now)} ${hhmm(from)} – ${when(to, now)}`
+}
+export function ago(epoch: number, now: number): string {
+  const m = Math.max(0, Math.round((now - epoch) / 60))
+  if (m < 60) return `${m}m ago`
+  const hours = Math.round(m / 60)
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
+}
+export function formatTokens(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`
+}
+/** The ctx figure's tone: critical from CTX_HIGH, warning from CTX_WARN, else none (subtle text). */
+export function ctxTone(ctx: number): 'critical' | 'warning' | null {
+  return ctx >= CTX_HIGH ? 'critical' : ctx >= CTX_WARN ? 'warning' : null
+}
+/** One line of prose from markdown-ish text. */
+export function plain(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`#>]+/g, '')
+    .replace(/(^|\s)[-•]\s+/gm, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Closing bursts, newest first: closed sessions (and running ones that closed before, by that close) whose close times sit
+ * within `gapMin` minutes of the next. A session that never closed (running, no cost-state) is in none.
+ */
+export function burstsOf(rows: readonly RestoreRow[], gapMin = BURST_GAP_MIN): RestoreBurst[] {
+  const closed = rows.filter(r => !r.s.running || r.s.hasClosed).sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
+  const bursts: { ids: string[]; from: number; to: number; open: number }[] = []
+  for (const r of closed) {
+    const last = bursts.at(-1)
+    if (last !== undefined && last.from - r.s.closedEpoch <= gapMin * 60) {
+      last.ids.push(r.s.id)
+      last.from = r.s.closedEpoch
+    } else {
+      bursts.push({ ids: [r.s.id], from: r.s.closedEpoch, to: r.s.closedEpoch, open: 0 })
+    }
+    if (!r.s.running && r.status !== 'done') bursts[bursts.length - 1]!.open += 1
+  }
+  return bursts
+}
+
+/** Page 1's burst: the newest of two or more sessions, else the newest. */
+export function defaultBurst(bursts: readonly RestoreBurst[]): number {
+  const at = bursts.findIndex(b => b.ids.length >= 2)
+  return at >= 0 ? at : 0
+}
+
+/** A row under the strip's choice: All, a phase id, or NO_TASK. */
+export const inPhase = (row: RestoreRow, choice: string): boolean => choice === '' || row.phase === choice
+
+const chunks = (rows: readonly RestoreRow[], size: number): RestorePage[] => {
+  const pages: RestorePage[] = []
+  for (let i = 0; i < rows.length; i += size) {
+    const chunk = rows.slice(i, i + size)
+    pages.push({ ids: chunk.map(r => r.s.id), from: chunk.at(-1)!.s.closedEpoch, to: chunk[0]!.s.closedEpoch, isBurst: false, burstSize: 0, since: 0 })
+  }
+  return pages
+}
+
+/**
+ * Burst-first paging (spec §10): under All, page 1 is the closing burst plus anything closed after it, then the rest newest
+ * first, RESTORE_PAGE_SIZE a page. Under a phase, that phase's sessions newest first. Running sessions are on no page.
+ */
+export function pagesOf(rows: readonly RestoreRow[], bursts: readonly RestoreBurst[], choice: string, size = RESTORE_PAGE_SIZE): RestorePage[] {
+  const closed = rows.filter(r => !r.s.running && inPhase(r, choice)).sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
+  if (choice !== '' || bursts.length === 0) return chunks(closed, size)
+  const at = defaultBurst(bursts)
+  const burst = bursts[at]!
+  const head = new Set(bursts.slice(0, at + 1).flatMap(b => b.ids))
+  const first = closed.filter(r => head.has(r.s.id))
+  const members = new Set(burst.ids)
+  const page: RestorePage = {
+    ids: first.map(r => r.s.id),
+    from: burst.from,
+    to: bursts[0]!.to,
+    isBurst: true,
+    burstSize: burst.ids.length,
+    since: first.filter(r => !members.has(r.s.id)).length,
+  }
+  return [page, ...chunks(closed.filter(r => !head.has(r.s.id)), size)]
+}
+
+/** A page's rows: the burst page unfinished first (STATUS_ORDER, then newest); other pages strictly newest first. */
+export function pageRows(rows: readonly RestoreRow[], page: RestorePage | undefined): RestoreRow[] {
+  if (page === undefined) return []
+  const byId = new Map(rows.map(r => [r.s.id, r]))
+  const list = page.ids.map(id => byId.get(id)).filter((r): r is RestoreRow => r !== undefined)
+  const rank = (r: RestoreRow): number => STATUS_ORDER.indexOf(r.status)
+  return page.isBurst ? list.sort((a, b) => rank(a) - rank(b) || b.s.closedEpoch - a.s.closedEpoch) : list.sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
+}
+
+/** The page's header: `4 closed together · today 16:14–16:31 · 12m ago · 1 closed since`, or an older page's span. */
+export function pageHeader(page: RestorePage, now: number): string {
+  const span = spanLabel(page.from, page.to, now)
+  if (!page.isBurst) return `${page.ids.length} ${page.ids.length === 1 ? 'session' : 'sessions'} · newest first · ${span}`
+  return [
+    page.burstSize === 1 ? 'Closed alone' : `${page.burstSize} closed together`,
+    span,
+    ago(page.to, now),
+    page.since > 0 ? `${page.since} closed since` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** Sessions open in another terminal now, most recently active first. */
+export function runningRows(rows: readonly RestoreRow[]): RestoreRow[] {
+  return rows.filter(r => r.s.running).sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
+}
+
+/** Why a session cannot be reopened from here, or '' when it can. */
+export function blockedWhy(row: RestoreRow): string {
+  if (row.s.running) return `${row.s.title} is open in another terminal`
+  if (!row.s.cwdExists) return `${row.s.title}: its folder is gone (${row.s.cwd || 'unknown'})`
+  return ''
+}
+
+/** Default ticks (spec §10): unfinished, resumable and not yet reopened from here; an explicit toggle wins. */
+export function isTicked(row: RestoreRow, selected: Readonly<Record<string, boolean>>, opened: Readonly<Record<string, number>>): boolean {
+  if (blockedWhy(row) !== '') return false
+  return selected[row.s.id] ?? (row.status !== 'done' && opened[row.s.id] === undefined)
+}
+
+/**
+ * How a session reopens (spec §10.3): with a handover, `fresh` (a new session told to resume from it) when its context is
+ * past CTX_WARN, else `resume`; an explicit toggle wins. Without a handover, always `resume`.
+ */
+export function resumeModeOf(row: RestoreRow, modes: Readonly<Record<string, TmResumeMode>>): TmResumeMode {
+  if (row.handover === null) return 'resume'
+  return modes[row.s.id] ?? (row.s.ctx > CTX_WARN ? 'fresh' : 'resume')
+}
+
+/** The card's one line of what was going on: the handover's next step, the interrupted prompt, the last reply, or why. */
+export function detailOf(row: RestoreRow): { readonly label: string; readonly text: string } {
+  if (row.handover !== null && row.status === 'handed-off') return { label: 'Next', text: plain(row.handover.next || row.handover.tldr) }
+  if (row.status === 'interrupted' && row.s.lastPrompt !== '') return { label: 'Working on', text: plain(row.s.lastPrompt) }
+  if (row.s.lastReply !== '') return { label: 'Last reply', text: plain(row.s.lastReply) }
+  return { label: 'Note', text: row.why }
+}
+
+/**
+ * The band's restore keycap (spec §10.4): page 1's burst when it holds two or more sessions, at least one unfinished, and
+ * closed under 48 hours ago; null otherwise. `epoch` names the burst (its last close, whole seconds).
+ */
+export function restorePendingOf(bursts: readonly RestoreBurst[], now: number): TmRestorePending | null {
+  const burst = bursts[defaultBurst(bursts)]
+  if (burst === undefined || burst.ids.length < 2 || burst.open < 1 || now - burst.to >= PENDING_WITHIN_S) return null
+  return { epoch: Math.round(burst.to), unfinished: burst.open }
+}
+
+/**
+ * The Session tab's burst line (spec §7): the burst this session closed in (a --resume keeps its id), or the burst of the
+ * session that wrote the handover it resumed from; `others`: the rest of that burst still unfinished and not open.
+ */
+export function sessionBurstOf(
+  bursts: readonly RestoreBurst[],
+  rows: readonly RestoreRow[],
+  sessionId: string,
+  resumedFrom: string | null,
+): TmSessionBurst | null {
+  const writer = resumedFrom === null ? undefined : rows.find(r => r.s.handovers.some(h => h.id === resumedFrom))?.s.id
+  const mine = new Set([sessionId, ...(writer === undefined ? [] : [writer])])
+  const burst = bursts.find(b => b.ids.some(id => mine.has(id)))
+  if (burst === undefined || burst.ids.length < 2) return null
+  const byId = new Map(rows.map(r => [r.s.id, r]))
+  const others = burst.ids.filter(id => {
+    const r = byId.get(id)
+    return !mine.has(id) && r !== undefined && !r.s.running && r.status !== 'done'
+  }).length
+  return { at: hhmm(burst.from), others }
+}
+
+// ── The page's sections (spec §15.6, Restore.dc.html): unfinished, handed off, idle ───────────────────────────────
+
+export type RestoreSection = 'unfinished' | 'handed-off' | 'idle'
+export const SECTION_ORDER: readonly RestoreSection[] = ['unfinished', 'handed-off', 'idle']
+export const SECTION_OF: Readonly<Record<RestoreStatus, RestoreSection>> = {
+  interrupted: 'unfinished',
+  wip: 'unfinished',
+  unknown: 'unfinished',
+  'handed-off': 'handed-off',
+  done: 'idle',
+}
+export const SECTION_LABEL: Readonly<Record<RestoreSection, string>> = { unfinished: 'UNFINISHED', 'handed-off': 'HANDED OFF', idle: 'IDLE' }
+export const SECTION_NOTE: Readonly<Record<RestoreSection, string>> = {
+  unfinished: 'interrupted or mid-work, no handover',
+  'handed-off': 'an open handover carries the next step',
+  idle: 'done or ended cleanly',
+}
+
+/** A page's rows by section, in section order, each keeping the page's order; empty sections left out. */
+export function sectionsOf(rows: readonly RestoreRow[]): { readonly section: RestoreSection; readonly rows: readonly RestoreRow[] }[] {
+  return SECTION_ORDER.map(section => ({ section, rows: rows.filter(r => SECTION_OF[r.status] === section) })).filter(s => s.rows.length > 0)
 }
