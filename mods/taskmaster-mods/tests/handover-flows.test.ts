@@ -139,6 +139,16 @@ describe('closing handovers', () => {
     expect(asked).toEqual([A])
   })
 
+  test('a handover already closed counts nothing off the totals when its close is confirmed again (Task 4.4 double-count)', async () => {
+    const { close } = closer()
+    const { flows, state } = rig({ closeHandover: close })
+    const listTotal = state.handoverList?.total
+    const snapshotTotal = state.snapshot?.handoversTotal
+    await flows.closeHandovers(['2026-09-30-row-counter-ported'])
+    expect(state.handoverList?.total).toBe(listTotal)
+    expect(state.snapshot?.handoversTotal).toBe(snapshotTotal)
+  })
+
   test('with no close dep a close only toasts why; tm reads phases and list again after a close, demo does not', async () => {
     const none = rig()
     await none.flows.closeHandovers([A])

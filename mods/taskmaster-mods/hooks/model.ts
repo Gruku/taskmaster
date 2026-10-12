@@ -428,10 +428,10 @@ export type HandoverPage = {
   readonly picked: TmHandover | undefined
 }
 
-/** One page of the handovers list (PAGE_SIZE a page, out-of-range pages clamped) and the handover its card shows. */
+/** One page of the handovers list (LIST_PAGE_SIZE a page, out-of-range pages clamped) and the handover its card shows. */
 export function handoverPage(list: readonly TmHandover[], page: number, pick: string): HandoverPage {
-  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+  const pages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE))
   const at = Math.min(Math.max(0, page), pages - 1)
-  const entries = list.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE)
+  const entries = list.slice(at * LIST_PAGE_SIZE, (at + 1) * LIST_PAGE_SIZE)
   return { entries, page: at, pages, picked: entries.find(h => h.id === pick) ?? entries[0] }
 }

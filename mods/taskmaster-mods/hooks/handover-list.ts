@@ -2,7 +2,7 @@
 // linked tasks, the `◐ closed` toggle, j / k across pages, where a handover opened from the band or Session tab sits, and
 // the one toast a close leaves — as plain functions, tested without drawing.
 import type { TmHandover, TmHandoverList, TmHandoverMarks, TmLinkedTask, TmPhase, TmSnapshot } from '../types'
-import { ageLabel, handoverPage, PAGE_SIZE } from './model'
+import { ageLabel, handoverPage, LIST_PAGE_SIZE as PAGE_SIZE } from './model'
 import { ALL, NO_TASK } from './phases'
 
 export const FRESH_MARKS: TmHandoverMarks = { selected: [], ask: null, showClosed: false }

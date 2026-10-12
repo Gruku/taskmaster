@@ -1,5 +1,5 @@
 // User intent: the handovers pane as a person uses it (spec §9) — opened by /tm-handovers, phases from linked tasks with a no
-// task tab, the focused card's keys (r resume here and recorded, w new tab, c Telegram copy, i decisions·blockers, x close
+// task row, the focused card's keys (r resume here and recorded, w new tab, c Telegram copy, i decisions·blockers, x close
 // with y/n), bulk Close N, `◐ closed`, j / k and u — in demo and against the tm server's own words.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
@@ -27,6 +27,9 @@ const AUDIT_ID = '2026-10-04-audit-fixes-landed'
 type Ui = { findAll: (q: { type: string }) => Promise<{ key?: string; props: Record<string, unknown> }[]> }
 const cardKeys = async (ui: Ui) =>
   (await ui.findAll({ type: 'Box' })).map(b => b.key ?? '').filter(key => key.startsWith('card:'))
+/** The items drawn on the page: each title is its `ho:<id>` pick Button. */
+const itemKeys = async (ui: Ui) =>
+  (await ui.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(key => key.startsWith('ho:'))
 const writes = (world: World) => world.calls.filter(c => c.tool === 'backlog_handover_update_status')
 const textsIn = (tree: unknown): string[] =>
   elementsOf(tree)
@@ -34,28 +37,35 @@ const textsIn = (tree: unknown): string[] =>
     .map(e => (e.children ?? []).join(''))
 
 describe('handovers pane, demo', () => {
-  test('/tm-handovers opens it: five cards, the first focused, the strip with a no task tab, nothing asked of tm', DEMO, async ($, on) => {
+  test('/tm-handovers opens it: three items, the first focused, the picker with a no task row, nothing asked of tm', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     expect(await $.command.run(command('tm-handovers'))).toEqual({ text: 'Handovers opened.' })
     expect(world.opened).toEqual(['tm-handovers'])
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
-    expect(await cardKeys(ui)).toEqual(SAMPLE.map(x => `card:${x.id}`))
+    expect(await itemKeys(ui)).toEqual(SAMPLE.slice(0, 3).map(x => `ho:${x.id}`))
+    expect(await cardKeys(ui)).toEqual([`card:${FIRST.id}`])
     expect((await ui.find({ type: 'Box', key: `card:${FIRST.id}` }))?.props.borderStyle).toBe('round')
-    expect((await ui.find({ type: 'Button', key: `phase-tab:${NO_TASK}` }))?.props.label).toBe('no task 2')
+    await ui.press({ key: 'phase-field' })
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: `phase-pick:${NO_TASK}` }))?.props.label).toMatch(/^no task +2$/)
     expect(world.calls).toEqual([])
   })
 
-  test('a phase tab narrows the cards to the handovers its tasks are in; 0 goes back to All', DEMO, async ($, on) => {
+  test('a phase picked from the list narrows the items to the handovers its tasks are in; All goes back', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
-    await ui.press({ key: 'phase-tab:release-2' })
+    await ui.press({ key: 'phase-field' })
     await ui.redraw()
-    expect(await cardKeys(ui)).toEqual(['card:2026-10-02-store-read-hang'])
-    await ui.press({ key: 'phase-tab:' })
+    await ui.press({ key: 'phase-pick:release-2' })
     await ui.redraw()
-    expect(await cardKeys(ui)).toHaveLength(5)
+    expect(await itemKeys(ui)).toEqual(['ho:2026-10-02-store-read-hang'])
+    await ui.press({ key: 'phase-field' })
+    await ui.redraw()
+    await ui.press({ key: 'phase-pick:' })
+    await ui.redraw()
+    expect(await itemKeys(ui)).toHaveLength(3)
   })
 
   test('c copies the Telegram block of the focused handover; r fills the resume line and keeps the pane', DEMO, async ($, on) => {
@@ -85,12 +95,14 @@ describe('handovers pane, demo', () => {
     await ui.press({ key: 'show-closed' })
     await ui.press({ key: 'page-next' })
     await ui.redraw()
+    await ui.press({ key: 'ho:2026-09-30-row-counter-ported' })
+    await ui.redraw()
     await ui.press({ key: 'copy' })
     const closed = demoHandoverList(0).handovers.find(x => x.id === '2026-09-30-row-counter-ported')!
     expect(world.copies).toEqual([handoverCopyText(closed)])
   })
 
-  test('s selects the focused card, Close 2 asks y/n, y closes both with one toast; the cards leave', DEMO, async ($, on) => {
+  test('marks select, close 2 handovers asks y/n, y closes both with one toast; the items leave', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
@@ -98,18 +110,18 @@ describe('handovers pane, demo', () => {
     await ui.press({ key: `ho:${SECOND.id}` })
     await ui.press({ key: `ho-sel:${SECOND.id}` })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('Close 2')
+    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('close 2 handovers')
     await ui.press({ key: 'close-selected' })
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: ' Close 2 handovers? ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'close 2 handovers?' })).toBeDefined()
     await ui.press({ key: 'bulk-close-yes' })
     await ui.redraw()
     expect(world.toasts).toEqual(['2 closed'])
-    expect(await cardKeys(ui)).toEqual([THIRD, ...SAMPLE.slice(3)].map(x => `card:${x.id}`))
-    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('Close 0')
+    expect(await itemKeys(ui)).toEqual([THIRD, ...SAMPLE.slice(3, 5)].map(x => `ho:${x.id}`))
+    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('close 0 handovers')
   })
 
-  test('x asks on the card, n keeps it; ◐ closed shows closed ones dimmed with x dim on them', DEMO, async ($, on) => {
+  test('x asks on the card, n keeps it; ◐ show closed shows closed ones faint with x dim on them', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
@@ -119,20 +131,24 @@ describe('handovers pane, demo', () => {
     await ui.press({ key: 'close-no' })
     await ui.redraw()
     expect(await ui.find({ type: 'Button', key: 'close-yes' })).toBeUndefined()
-    expect(await cardKeys(ui)).toHaveLength(5)
+    expect(await itemKeys(ui)).toHaveLength(3)
     await ui.press({ key: 'show-closed' })
     await ui.press({ key: 'page-next' })
     await ui.redraw()
-    expect(await cardKeys(ui)).toEqual(['card:2026-09-30-row-counter-ported', 'card:2026-09-29-store-spike-notes'])
-    expect(textsIn(await ui.drawn())).toContain(' CLOSED ')
+    expect(await itemKeys(ui)).toContain('ho:2026-09-30-row-counter-ported')
+    await ui.press({ key: 'ho:2026-09-30-row-counter-ported' })
+    await ui.redraw()
+    expect(textsIn(await ui.drawn())).toContain('✓ CLOSED       ')
     await ui.press({ key: 'close' })
     expect(world.toasts).toEqual(['Already closed'])
   })
 
-  test('j moves the focus down a card and across the page; k back up', DEMO, async ($, on) => {
-    worldOf(on, mock.clock(on))
+  test('j moves the focus down a card and across the page; k back up; k on the first one says so', DEMO, async ($, on) => {
+    const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
+    await ui.press({ key: 'move-up' })
+    expect(world.toasts).toEqual(['Already on the first handover'])
     await ui.press({ key: 'move-down' })
     await ui.redraw()
     expect((await ui.find({ type: 'Box', key: `card:${SECOND.id}` }))?.props.borderStyle).toBe('round')
@@ -161,7 +177,7 @@ describe('handovers pane, tm', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     await ui.press({ key: `ho:${AUDIT_ID}` })
     await ui.redraw()
-    expect(textsIn(await ui.drawn())).toEqual(expect.arrayContaining([' IN PROGRESS ', 'tm-audit-030', 'Agent tool-use audit fixes', 'Patch 2.0.6']))
+    expect(textsIn(await ui.drawn())).toEqual(expect.arrayContaining(['● IN PROGRESS', 'tm-audit-030', '  Agent tool-use audit fixes', '  Patch 2.0.6']))
   })
 
   test('r fills the resume line and records this session as resumed from it', TM, async ($, on) => {
@@ -212,11 +228,11 @@ describe('handovers pane, tm', () => {
     await clock.settle()
     await ui.redraw()
     expect(world.toasts).toContain(`0 closed · 1 refused: ${OPEN_ID} (Handover not found: ${OPEN_ID})`)
-    expect(await cardKeys(ui)).toContain(`card:${OPEN_ID}`)
-    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('Close 1')
+    expect(await itemKeys(ui)).toContain(`ho:${OPEN_ID}`)
+    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props.label).toBe('close 1 handover')
   })
 
-  test('◐ closed reads the closed handovers once; u refreshes the snapshot and reads the pane again', TM, async ($, on) => {
+  test('◐ show closed reads the closed handovers once; u refreshes the snapshot and reads the pane again', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -228,7 +244,8 @@ describe('handovers pane, tm', () => {
     await clock.settle()
     await ui.redraw()
     expect(world.calls.filter(c => c.tool === 'backlog_handover_list').map(c => c.args.status)).toEqual(['open', 'open', 'open', 'closed'])
-    expect(await cardKeys(ui)).toContain('card:2026-10-02-row-counter-ported')
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toMatch(/^ All +\d+ ▾ $/)
+    expect(await itemKeys(ui)).toContain('ho:2026-10-02-row-counter-ported')
     const before = world.calls.length
     await ui.press({ key: 'refresh' })
     await clock.settle()
@@ -237,7 +254,7 @@ describe('handovers pane, tm', () => {
     expect(after.filter(c => c.tool === 'backlog_handover_list' && c.args.limit === HANDOVER_PANE_LIMIT).map(c => c.args.status)).toEqual(['open', 'closed'])
   })
 
-  test('all selects the open handovers of this page only; b is Close N', TM, async ($, on) => {
+  test('all selects the open handovers of this page only; b is close N handovers', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = (tool, args) => (tool === 'backlog_handover_list' ? { text: R.handoversOpen(7) } : R.backlog(tool, args))
@@ -247,7 +264,7 @@ describe('handovers pane, tm', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     await ui.press({ key: 'select-all' })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props).toMatchObject({ hotkey: 'b', label: 'Close 5' })
+    expect((await ui.find({ type: 'Button', key: 'close-selected' }))?.props).toMatchObject({ hotkey: 'b', label: 'close 3 handovers' })
   })
 
   test('a phase choice is kept per project for the handovers pane', TM, async ($, on) => {

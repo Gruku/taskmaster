@@ -314,7 +314,7 @@ function ensureFlows($: EngineInterface): TmFlows {
         }
       : {}),
     closeHandover: mod.source === 'demo' ? demoCloseHandover() : tmCloseHandover((tool, args) => writeTm(host, tool, args)),
-    findHandover: async (id: string) => (await read($, HANDOVER_LIST))?.handovers.find(h => h.id === id) ?? null,
+    findHandover: async (id: string) => (await read($, HANDOVER_LIST))?.handovers.find(ho => ho.id === id) ?? null,
     phaseChosen: (pane, phase) => {
       if (pane !== 'review') return
       mod.scope = { ...mod.scope, phase }
@@ -859,6 +859,7 @@ export const register: Register = (on, options) => {
       now,
       focused: e.props.isFocused,
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
+      demo,
     }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
@@ -870,7 +871,6 @@ export const register: Register = (on, options) => {
     }
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
-    const ground = await $.rr.surfaceProps({ level: 'page' })
     const tree = handoversPaneTree(
       k,
       view,
@@ -906,12 +906,14 @@ export const register: Register = (on, options) => {
           toggleDone: () => act(f => f.toggleDone('handovers')),
           overlay: open => act(f => f.setOverlay('handovers', open)),
         },
+        toggleSidebar: () => act(f => f.toggleSidebar()),
       },
       e.props.bodyColumns,
     )
+    // The frame paints its own page ground; the column only makes the tree one element for the sidebar overlay.
     return withSidebar(
       k,
-      <Box {...ground} flexGrow={1}>
+      <Box flexDirection="column" flexGrow={1}>
         {tree}
       </Box>,
       await sidebarFor($, 'handovers'),

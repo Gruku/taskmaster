@@ -12,7 +12,7 @@ import {
   handoverPath,
   handoverRefs,
   oneLine,
-  PAGE_SIZE,
+  LIST_PAGE_SIZE,
   phaseName,
   handoverPage,
   isReady,
@@ -295,19 +295,19 @@ describe('the phase filter', () => {
 describe('handover pages', () => {
   const list = Array.from({ length: 13 }, (_, i) => ({ id: `h${i}` }) as TmHandover)
 
-  test('five to a page, the last one short; a page out of range is clamped', () => {
-    expect(PAGE_SIZE).toBe(5)
-    expect(handoverPage(list, 0, '').entries.map(h => h.id)).toEqual(['h0', 'h1', 'h2', 'h3', 'h4'])
-    const last = handoverPage(list, 2, '')
-    expect([last.page, last.pages, last.entries.map(h => h.id)]).toEqual([2, 3, ['h10', 'h11', 'h12']])
-    expect(handoverPage(list, 9, '').page).toBe(2)
+  test('three to a page, the last one short; a page out of range is clamped', () => {
+    expect(LIST_PAGE_SIZE).toBe(3)
+    expect(handoverPage(list, 0, '').entries.map(h => h.id)).toEqual(['h0', 'h1', 'h2'])
+    const last = handoverPage(list, 4, '')
+    expect([last.page, last.pages, last.entries.map(h => h.id)]).toEqual([4, 5, ['h12']])
+    expect(handoverPage(list, 9, '').page).toBe(4)
     expect(handoverPage(list, -1, '').page).toBe(0)
     expect(handoverPage([], 0, '')).toMatchObject({ page: 0, pages: 1, entries: [], picked: undefined })
   })
 
   test('the picked handover is the pick when it is on the page, else the page first', () => {
-    expect(handoverPage(list, 1, 'h7').picked?.id).toBe('h7')
-    expect(handoverPage(list, 1, 'h2').picked?.id).toBe('h5')
-    expect(handoverPage(list, 1, '').picked?.id).toBe('h5')
+    expect(handoverPage(list, 1, 'h4').picked?.id).toBe('h4')
+    expect(handoverPage(list, 1, 'h2').picked?.id).toBe('h3')
+    expect(handoverPage(list, 1, '').picked?.id).toBe('h3')
   })
 })

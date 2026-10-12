@@ -27,7 +27,9 @@ const band = async ($: { ui: { render: (i: typeof BAND) => Promise<unknown> } })
 const textOf = (e: Drawn): string => (e.children ?? []).join('')
 const flatOf = (tree: unknown): string[] =>
   elementsOf(tree).flatMap(e => (e.type === 'Text' ? [textOf(e)] : e.type === 'Button' ? [String(e.props?.label ?? '')] : []))
-const cardOf = (tree: unknown): Drawn => elementsOf(tree).filter(e => e.type === 'Box' && e.props?.borderStyle === 'round')[0]!
+// The focused card (the frame is round too, so the card is found by its key); wide enough that summary lines draw whole.
+const cardOf = (tree: unknown): Drawn => elementsOf(tree).filter(e => e.type === 'Box' && String(e.props?.key ?? '').startsWith('card:'))[0]!
+const HANDOVERS_WIDE = { ...pane('tm-handovers'), props: { ...pane('tm-handovers').props, bodyColumns: 140 } }
 const decisions = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `DEC-${i + 1}`, type: 'decision', title: `D${i + 1}`, next: 'open', action_class: 'decide', timestamp: '' }))
 
@@ -90,19 +92,19 @@ describe('handover summaries in tm mode', () => {
     world.mcp = R.backlog
     await $.session.start(SESSION)
     await clock.settle()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: 'summary' })
     await clock.settle()
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get').map(c => c.args)).toEqual([
       { handover_id: FIRST, sections: ['decisions', 'blockers'] },
     ])
     const shown = flatOf(cardOf(await ui.drawn()))
-    expect(shown.slice(shown.indexOf('DECISIONS'), shown.indexOf('NEXT'))).toEqual([
-      'DECISIONS',
-      'The cookbook owns the build order, not the pre-build',
-      'Pre-build hands the supervisor its full toolset',
-      'BLOCKERS',
-      'Needs unifiedChatGenerate + unifiedChatBuild on dev',
+    expect(shown.slice(shown.indexOf('decisions'), shown.indexOf('decisions') + 5)).toEqual([
+      'decisions',
+      '· The cookbook owns the build order, not the pre-build',
+      '· Pre-build hands the supervisor its full toolset',
+      'blockers',
+      '· Needs unifiedChatGenerate + unifiedChatBuild on dev',
     ])
     await ui.press({ key: 'summary' })
     await ui.press({ key: 'summary' })
@@ -116,7 +118,7 @@ describe('handover summaries in tm mode', () => {
     world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { text: `Handover not found: ${String(args.handover_id)}` } : R.backlog(tool, args))
     await $.session.start(SESSION)
     await clock.settle()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: 'summary' })
     await clock.settle()
     let shown = flatOf(cardOf(await ui.drawn()))
@@ -127,7 +129,7 @@ describe('handover summaries in tm mode', () => {
     await ui.press({ key: 'summary' })
     await clock.settle()
     shown = flatOf(cardOf(await ui.drawn()))
-    expect(shown).toContain('DECISIONS')
+    expect(shown).toContain('decisions')
     expect(shown).not.toContain('summary unavailable')
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
   })
@@ -139,7 +141,7 @@ describe('handover summaries in tm mode', () => {
     await $.session.start(SESSION)
     await clock.settle()
     world.mcp = () => 'offline'
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: 'summary' })
     await clock.settle()
     expect(flatOf(cardOf(await ui.drawn()))).toContain('summary unavailable')
@@ -151,10 +153,10 @@ describe('handover summaries in tm mode', () => {
     world.mcp = R.backlog
     await $.session.start(SESSION)
     await clock.settle()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: 'summary' })
     await clock.settle()
-    expect(flatOf(cardOf(await ui.drawn()))).toContain('Pre-build hands the supervisor its full toolset')
+    expect(flatOf(cardOf(await ui.drawn()))).toContain('· Pre-build hands the supervisor its full toolset')
     const edited = '## Handover: x\n\n### decisions\n- Edited after the first read'
     world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { hangMs: 1000, text: edited } : R.backlog(tool, args))
     await $.turn.complete(TURN_END)
@@ -162,14 +164,14 @@ describe('handover summaries in tm mode', () => {
     await ui.drawn()
     await clock.settle()
     const meanwhile = flatOf(cardOf(await ui.drawn()))
-    expect(meanwhile).toContain('Pre-build hands the supervisor its full toolset')
+    expect(meanwhile).toContain('· Pre-build hands the supervisor its full toolset')
     expect(meanwhile).not.toContain('loading summary…')
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
     await clock.advance(1000)
     await clock.settle()
     const shown = flatOf(cardOf(await ui.drawn()))
-    expect(shown).toContain('Edited after the first read')
-    expect(shown).not.toContain('Pre-build hands the supervisor its full toolset')
+    expect(shown).toContain('· Edited after the first read')
+    expect(shown).not.toContain('· Pre-build hands the supervisor its full toolset')
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
   })
 
@@ -179,7 +181,7 @@ describe('handover summaries in tm mode', () => {
     world.mcp = R.backlog
     await $.session.start(SESSION)
     await clock.settle()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: 'summary' })
     await clock.settle()
     world.mcp = (tool, args) => (tool === 'backlog_handover_get' ? { text: 'Handover not found: x' } : R.backlog(tool, args))
@@ -189,7 +191,7 @@ describe('handover summaries in tm mode', () => {
       await ui.drawn()
     }
     const shown = flatOf(cardOf(await ui.drawn()))
-    expect(shown).toContain('Pre-build hands the supervisor its full toolset')
+    expect(shown).toContain('· Pre-build hands the supervisor its full toolset')
     expect(shown).not.toContain('summary unavailable')
     expect(world.calls.filter(c => c.tool === 'backlog_handover_get')).toHaveLength(2)
   })
@@ -200,7 +202,7 @@ describe('handover summaries in tm mode', () => {
     world.mcp = R.backlog
     await $.session.start(SESSION)
     await clock.settle()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...HANDOVERS_WIDE })
     await ui.press({ key: `ho:${SECOND}` })
     await ui.press({ key: 'copy' })
     expect(world.copies).toEqual([

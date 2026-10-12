@@ -363,14 +363,20 @@ export function createFlows(d: TmFlowDeps) {
     }
     if (todo.length === 0) return
     if (closed.length > 0) {
+      // Only handovers that were open count off the totals: one already closed (its x under ◐ closed, a stale selection) that
+      // the server confirms again must not (Task 4.4's double-count). One the lists do not hold counts as open.
+      const before = await handoverState()
+      const held = [...(before.list?.handovers ?? []), ...(before.snapshot?.handovers ?? [])]
+      const opened = closed.filter(id => held.find(ho => ho.id === id)?.status !== 'closed')
       await d.write.handoverMarks(m => ({ ...m, selected: m.selected.filter(id => !closed.includes(id)) }))
-      await d.write.handoverList(l => (l === null ? l : markClosed(l, closed)))
-      await d.write.snapshot(s => (s === null ? s : withoutHandovers(s, closed)))
+      await d.write.handoverList(l => (l === null ? l : markClosed(l, opened)))
+      await d.write.snapshot(s => (s === null ? s : withoutHandovers(s, opened)))
     }
     d.host.toast(closeToast(closed, refused))
     if (closed.length === 0) return
     d.refresh?.()
-    if (d.source !== 'demo') await reloadHandovers()
+    // The closes stand; a failed re-read leaves the marked list drawn rather than rejecting the y.
+    if (d.source !== 'demo') await reloadHandovers().catch(() => undefined)
   }
   const moveTo = async (page: number, id: string): Promise<void> => {
     await d.write.handoverPage(page)
