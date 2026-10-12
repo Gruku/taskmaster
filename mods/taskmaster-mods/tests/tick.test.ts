@@ -1,5 +1,5 @@
 // User intent: ticking a review check is two keystrokes, `t` then the check's digit (spec §8, D8) — the digits are the phase
-// strip's the rest of the time, so a stray digit never ticks, and no digit is ever on two buttons at once.
+// picker's while its list is open and no Button's the rest of the time, so a stray digit never ticks, and no digit is ever on two buttons at once.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { DEMO_DETAILS } from '../hooks/demo'
@@ -24,20 +24,21 @@ const hotkeys = async (ui: Ui): Promise<Record<string, string[]>> => {
 const shared = (keys: Record<string, string[]>): string[] => Object.keys(keys).filter(key => (keys[key] ?? []).length > 1)
 
 describe('t + digit ticks a check', () => {
-  test('unarmed, the checks carry no digit and the strip owns 0-9', DEMO, async ($, on) => {
+  test('unarmed, the checks carry no digit, and with the phase list shut no Button carries one', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBeUndefined()
-    expect((await ui.find({ type: 'Button', key: 'tick' }))?.props).toMatchObject({ hotkey: 't', label: 'tick' })
+    expect((await ui.find({ type: 'Button', key: 'tick' }))?.props).toMatchObject({ hotkey: 't', label: 'tick check 1-9' })
     const keys = await hotkeys(ui)
-    expect(keys['0']).toEqual(['phase-tab:'])
-    expect(keys['1']).toEqual(['phase-tab:patch-1-9'])
+    expect(keys['0']).toBeUndefined()
+    expect(keys['1']).toBeUndefined()
     expect(shared(keys)).toEqual([])
-    expect(await ui.find({ type: 'Text', text: /t\+1-9 tick/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 't 1-9' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' tick' })).toBeDefined()
   })
 
-  test('t arms: the checks own 1-9, the strip lets go of its digits, no digit is on two buttons; the footer says how out', DEMO, async ($, on) => {
+  test('t arms: the checks own 1-9, no digit is on two buttons; the footer says how out', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
@@ -47,10 +48,11 @@ describe('t + digit ticks a check', () => {
     expect(keys['2']).toEqual(['tick-1'])
     expect(keys['0']).toBeUndefined()
     expect(shared(keys)).toEqual([])
-    expect(await ui.find({ type: 'Text', text: /1-9 ticks a check · t or f cancels/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1-9' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' tick a check' })).toBeDefined()
   })
 
-  test('the digit ticks once and disarms: the next digit is the strip again', DEMO, async ($, on) => {
+  test('the digit ticks once and disarms: then no Button carries a digit', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
@@ -58,7 +60,7 @@ describe('t + digit ticks a check', () => {
     await ui.press({ key: 'tick-0' })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props).toMatchObject({ label: `☑ ${FIRST}` })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBeUndefined()
-    expect((await hotkeys(ui))['1']).toEqual(['phase-tab:patch-1-9'])
+    expect((await hotkeys(ui))['1']).toBeUndefined()
     expect(world.store.get(`ticks:${ID}`)).toMatchObject({ items: [FIRST] })
   })
 
@@ -71,8 +73,8 @@ describe('t + digit ticks a check', () => {
     await ui.press({ key: 'tick' })
     expect(await armed()).toBe(false)
     await ui.press({ key: 'tick' })
-    await ui.press({ key: 'phase-more' })
-    await ui.press({ key: 'phase-close' })
+    await ui.press({ key: 'phase-field' })
+    await ui.press({ key: 'phase-field' })
     expect(await armed()).toBe(false)
     await ui.press({ key: 'tick' })
     await ui.press({ key: 'focus-next' })
@@ -86,7 +88,7 @@ describe('t + digit ticks a check', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     await ui.press({ key: 'tick' })
     await ui.press({ key: 'done' })
-    expect((await hotkeys(ui))['1']).toEqual(['phase-tab:patch-1-9'])
+    expect((await hotkeys(ui))['1']).toBeUndefined()
     await ui.press({ key: 'confirm-no' })
     expect((await ui.find({ type: 'Button', key: 'tick-0' }))?.props.hotkey).toBeUndefined()
     await ui.press({ key: 'tick' })
@@ -107,10 +109,9 @@ describe('t + digit ticks a check', () => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
-    await ui.press({ key: 'phase-more' })
+    await ui.press({ key: 'phase-field' })
     const keys = await hotkeys(ui)
     expect(keys['0']).toEqual(['phase-pick:'])
-    // `f` is on both `+N ▾` and the overlay's close: either closes it (Stage 1).
-    expect(shared(keys)).toEqual(['f'])
+    expect(shared(keys)).toEqual([])
   })
 })

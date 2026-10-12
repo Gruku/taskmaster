@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":false,"timestamp":"2026-10-10T15:00:00.000Z","cwd":"{{SIBLING}}","gitBranch":"main","entrypoint":"cli","sessionId":"elsewhere","message":{"role":"user","content":"Work on the sibling repo"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-10T15:00:02.000Z","cwd":"{{SIBLING}}","gitBranch":"main","entrypoint":"cli","sessionId":"elsewhere","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn","usage":{"input_tokens":3}}}

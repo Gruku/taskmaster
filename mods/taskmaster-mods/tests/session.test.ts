@@ -36,7 +36,7 @@ describe('session binding', () => {
     expect(world.store.get('binding:sess-A')).toEqual({ taskId: 'tm-audit-030', at: NOW })
     const tree = await band($)
     expect(tree).toContain('tm-audit-030')
-    expect(tree).toContain(' IN PROGRESS ')
+    expect(tree).toContain('● IN PROGRESS')
     expect(tree).toContain('Agent tool-use audit fixes')
   })
 
@@ -59,7 +59,7 @@ describe('session binding', () => {
     expect(world.store.has('binding:sess-A')).toBe(false)
     const tree = await band($)
     expect(tree).not.toContain('tm-audit-030')
-    expect(tree).toContain('4 waiting on you')
+    expect(tree).toContain('no task bound to this session')
   })
 
   test('a refused pick binds nothing', TM, async ($, on) => {
@@ -101,7 +101,7 @@ describe('session binding', () => {
     await clock.settle()
     const tree = await band($)
     expect(tree).toContain('unified-chat-022')
-    expect(tree).toContain(' IN REVIEW ')
+    expect(tree).toContain('● IN REVIEW')
   })
 
   test('/resume of a session with no stored binding shows no task: the binding is set to none, not kept', TM, async ($, on) => {
@@ -132,7 +132,7 @@ describe('session binding', () => {
     expect(world.store.has('binding:sess-OLD')).toBe(false)
     const tree = await band($)
     expect(tree).not.toContain('tm-audit-031')
-    expect(tree).toContain('4 waiting on you')
+    expect(tree).toContain('no task bound to this session')
   })
 
   test('a task id in the branch name shows dimmed as inferred, only when Taskmaster knows the task', TM, async ($, on) => {

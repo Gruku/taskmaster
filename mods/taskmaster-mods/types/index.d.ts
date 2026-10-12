@@ -45,6 +45,8 @@ export type TmHandover = {
   readonly taskIds: readonly string[]
   /** The list reply's `thread`: the copy block's `Resume: <thread> — <next action>` line. */
   readonly thread: string
+  /** The list reply's `status`; absent (read as open) on a snapshot written before the handovers pane's `◐ closed`. */
+  readonly status?: 'open' | 'closed'
 }
 /**
  * A handover's body sections for the expanded summary (backlog_handover_get, sections decisions + blockers), one entry per
@@ -57,6 +59,22 @@ export type TmHandoverSummary = {
   readonly unavailable?: true
   readonly stale?: true
 }
+/** A task a handover links (handover_tasks), as the handovers pane's card shows it: live status and phase ('' none). */
+export type TmLinkedTask = { readonly id: string; readonly status: string; readonly phase: string; readonly title: string }
+/**
+ * The handovers pane's own read (spec §9): up to 100 open handovers and, when `closed`, up to 100 closed ones, newest first;
+ * `total` is the server's count of open ones; `tasks` the linked tasks by id (one missing: not read, or gone).
+ */
+export type TmHandoverList = {
+  readonly handovers: readonly TmHandover[]
+  readonly total: number
+  readonly closed: boolean
+  readonly tasks: Readonly<Record<string, TmLinkedTask>>
+}
+/** A y/n close row: `one` from the focused card's `x`, `bulk` from `Close N`; `ids` are what `y` closes. */
+export type TmCloseAsk = { readonly kind: 'one' | 'bulk'; readonly ids: readonly string[] }
+/** The handovers pane's marks: the selected ids, the close row that is up (null: none), and `◐ closed`. */
+export type TmHandoverMarks = { readonly selected: readonly string[]; readonly ask: TmCloseAsk | null; readonly showClosed: boolean }
 /** One phase of the backlog (backlog_query) as one pane counts it. */
 export type TmPhase = {
   readonly id: string
@@ -135,6 +153,65 @@ export type TmReviewList = {
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 /** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
 export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly latch: 'none' | 'fired' | 'handover' }
+/** A handover a scanned session wrote: its backlog_handover_create input and the server's receipt (spec §10.1). */
+export type TmScannedHandover = { readonly id: string; readonly path: string; readonly tldr: string; readonly next: string }
+/** One of this repo's sessions as scanner/scan.py reports it: transcript facts only (spec §10.1). */
+export type TmScannedSession = {
+  readonly id: string
+  readonly cwd: string
+  readonly cwdExists: boolean
+  readonly branch: string
+  readonly title: string
+  readonly firstPrompt: string
+  readonly lastPrompt: string
+  readonly lastReply: string
+  readonly lastEvent: string
+  /** Closed mid-turn: an interrupt, or a prompt or tool call the agent never answered. */
+  readonly interrupted: boolean
+  readonly prompts: number
+  /** The context its last request carried: what a --resume reopens. */
+  readonly ctx: number
+  readonly cost: number
+  /** Epoch seconds the process exited (its cost-state), else its last record's time. */
+  readonly closedEpoch: number
+  /** It wrote a cost-state: it closed at least once (a running one was resumed since). */
+  readonly hasClosed: boolean
+  /** Open in a terminal now (its pid file names a live process). */
+  readonly running: boolean
+  readonly resumedAfterClose: boolean
+  /** The tm task ids its own tool calls named, last touched last: the last is its bound task (spec §10.2). */
+  readonly taskIds: readonly string[]
+  readonly handovers: readonly TmScannedHandover[]
+  readonly endedSession: boolean
+  readonly promptsAfterEnd: number
+}
+export type TmScan = { readonly scannedAt: number; readonly root: string; readonly sessions: readonly TmScannedSession[] }
+/** A scanned task as one backlog_query read it (spec §10.2): `phase` '' when it has none. */
+export type TmRefTask = { readonly id: string; readonly status: string; readonly lane: string; readonly phase: string; readonly title: string }
+/** What tm said of the scanned ids: tasks by id, handover statuses by id; an id tm does not hold is absent. */
+export type TmRefs = { readonly tasks: Readonly<Record<string, TmRefTask>>; readonly handovers: Readonly<Record<string, string>> }
+/**
+ * The restore pane's data: the last scan (null before the first), what tm said of it (null: not resolved, so statuses read
+ * `?`), why the last scan failed ('' when it did not), and the window it covered, in days.
+ */
+export type TmRestoreData = { readonly scan: TmScan | null; readonly refs: TmRefs | null; readonly error: string; readonly days: number }
+export type TmResumeMode = 'fresh' | 'resume'
+/**
+ * The restore pane's own state: the page and focused card, explicit ticks and resume modes (absent: the default rule),
+ * when each session was reopened, `◐ compact`, the busy line, and per-card busy flags and briefs.
+ */
+export type TmRestoreView = {
+  readonly page: number
+  readonly focus: string
+  readonly selected: Readonly<Record<string, boolean>>
+  readonly modes: Readonly<Record<string, TmResumeMode>>
+  readonly opened: Readonly<Record<string, number>>
+  readonly compact: boolean
+  readonly busy: string
+  readonly launching: readonly string[]
+  readonly briefing: readonly string[]
+  readonly briefs: Readonly<Record<string, string>>
+}
 /**
  * The band's and the Session tab's handover (spec D5): the one this session wrote, else the one it was resumed from, else the
  * newest open handover linked to its bound task. `created` is '' when the open list does not hold it.
@@ -147,7 +224,11 @@ export type TmSessionHandover = {
   readonly created: string
   readonly next?: string
 }
-/** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the band's `4 N restore`. */
+/** This session's branch and when it started, read once at `session.start`: the Session tab's toolbar words. */
+export type TmSessionInfo = { readonly branch: string; readonly startedAt: number }
+/** The Taskmaster sidebar (spec §15.8): whether it is open over the pane, and the pane `m` on the band reopens. */
+export type TmNav = { readonly sidebar: boolean; readonly last: 'review' | 'handovers' | 'session' | 'restore' }
+/** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the sidebar's Restore entry. */
 export type TmRestorePending = { readonly epoch: number; readonly unfinished: number }
 /** This session's place in the last restore scan's burst (Stage 5 writes it): the Session tab's "part of <at> burst". */
 export type TmSessionBurst = { readonly at: string; readonly others: number }
@@ -175,10 +256,18 @@ declare module 'claude-code' {
       reviewList: TmReviewList
       /** The handovers pane's page (0 first); reset when the pane opens. */
       handoverPage: number
+      /** The handovers pane's own list (null until its first read: the pane draws the snapshot's window meanwhile). */
+      handoverList: TmHandoverList | null
+      /** The handovers pane's selection, its y/n close row and `◐ closed`. */
+      handoverMarks: TmHandoverMarks
       /** The band's `HANDOVER  <tldr>  3: copy` row (null: none); cleared on copy, on /clear, or by a newer handover. */
       handoverNotice: TmHandoverNotice | null
       /** One guard run (fork, handover, compaction) per session at most: `$.state` is per session, so /clear or a resume can earn another. */
       handoverGuard: TmHandoverGuard
+      /** The restore pane's last scan, what tm said of it, a scan failure and its window (spec §10). */
+      restoreData: TmRestoreData
+      /** The restore pane's page, focus, ticks, resume modes, reopened sessions, compact, busy flags and briefs. */
+      restoreView: TmRestoreView
       /** D5, resolved after each refresh, a written or recorded handover, and at start; a newer handover notice wins when drawn. */
       sessionHandover: TmSessionHandover | null
       /** The handover this session was resumed from ('' none): mirrors `$.store` `resumed-from:<session id>` (spec §10.5). */
@@ -189,6 +278,10 @@ declare module 'claude-code' {
       restoreHidden: number | null
       /** Written by the restore scan (Stage 5); the Session tab's SESSION section reads it. Default null. */
       sessionBurst: TmSessionBurst | null
+      /** The Taskmaster sidebar: open over the pane or not, and the pane the band's `m` reopens (spec §15.8). */
+      nav: TmNav
+      /** This session's branch and start time (null until session.start ran in this instance). */
+      sessionInfo: TmSessionInfo | null
     }
   }
 }

@@ -99,7 +99,7 @@ describe('opening panes', () => {
   test('one handover opens the pane on its page, picked and focused; one not listed opens page 1 and says so', async () => {
     const { flows, seen } = rig()
     await flows.openHandover('h-7')
-    expect([seen.page, seen.pick, seen.opened, seen.focus]).toEqual([1, 'h-7', ['tm-handovers'], ['tm-handovers/ho:h-7']])
+    expect([seen.page, seen.pick, seen.opened, seen.focus]).toEqual([2, 'h-7', ['tm-handovers'], ['tm-handovers/ho:h-7']])
     await flows.openHandover('h-99')
     expect([seen.page, seen.pick]).toEqual([0, ''])
     expect(seen.toasts).toEqual(['taskmaster-mods: handover h-99 is not in the open list'])

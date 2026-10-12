@@ -1,6 +1,6 @@
 // User intent: read Taskmaster's MCP replies — markdown and JSON text — into plain data, purely, so every format quirk is
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
-import type { TmHandover, TmHandoverSummary, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
+import type { TmHandover, TmHandoverSummary, TmLinkedTask, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
@@ -220,6 +220,7 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
       branch: str(h.branch),
       taskIds: Array.isArray(h.task_ids) ? h.task_ids.filter((t): t is string => typeof t === 'string') : [],
       thread: str(h.thread),
+      status: str(h.status) === 'closed' ? ('closed' as const) : ('open' as const),
     }))
     .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
   const total = typeof doc.value.total === 'number' ? doc.value.total : handovers.length
@@ -228,6 +229,44 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
 
 const PHASE_ROW = /^(\[\S*\])(?:\s+(.*))?$/
 const ROWS_FOOTER = /^\d+ rows?(?: \(capped\))?$/
+
+/**
+ * backlog_query's `<json array>  <text>` table: each row's cells and its trailing text. A line whose JSON cell does not
+ * read (cut at 80 chars) is left out; a reply with no `N rows` footer is not a table the server finished.
+ */
+function queryRows(raw: string): Parsed<{ readonly cells: readonly unknown[]; readonly text: string }[]> {
+  const lines = raw.trim().split('\n')
+  if (isRefusal(raw)) return fail(`backlog_query: ${firstParagraph(raw)}`)
+  if (!ROWS_FOOTER.test((lines[lines.length - 1] ?? '').trim())) return fail('backlog_query: no "N rows" footer')
+  const rows: { cells: unknown[]; text: string }[] = []
+  for (const line of lines.slice(1, -1)) {
+    const row = PHASE_ROW.exec(line.trim())
+    if (row === null) continue
+    try {
+      const cells: unknown = JSON.parse(row[1] ?? '')
+      if (Array.isArray(cells)) rows.push({ cells, text: (row[2] ?? '').trim() })
+    } catch {
+      // a cell the server cut does not read: the row is left out
+    }
+  }
+  return ok(rows)
+}
+
+/** The handovers pane's linked-task table (linkedTasksSql): `["id","status","phase"]  title` a task; a title cut stays cut. */
+export function parseLinkedTasks(raw: string): Parsed<TmLinkedTask[]> {
+  const rows = queryRows(raw)
+  if (!rows.ok) return rows
+  return ok(
+    rows.value
+      .filter(r => typeof r.cells[0] === 'string' && r.cells[0] !== '')
+      .map(r => ({
+        id: String(r.cells[0]),
+        status: typeof r.cells[1] === 'string' ? r.cells[1] : '',
+        phase: typeof r.cells[2] === 'string' ? r.cells[2] : '',
+        title: r.text,
+      })),
+  )
+}
 
 /** The entities a name cell can hold (the server escapes `&`, `<`, `>`, quotes); `&amp;` last so `&amp;lt;` stays `&lt;`. */
 const decodeEntities = (text: string): string =>

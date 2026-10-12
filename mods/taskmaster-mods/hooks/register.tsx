@@ -10,26 +10,34 @@ import type {
   TmCursor,
   TmFault,
   TmHandover,
+  TmHandoverList,
+  TmHandoverMarks,
   TmHandoverNotice,
   TmHandoverSummary,
+  TmNav,
   TmPhasePane,
   TmPhaseView,
   TmRestorePending,
   TmReviewList,
   TmSessionBurst,
   TmSessionHandover,
+  TmSessionInfo,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
-import { demoActions, tmActions } from './actions'
+import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo } from './demo'
 import { bandTree } from './band'
-import { handoversPaneTree } from './draw'
-import { createFlows, type TmFlows, type TmWriter } from './flows'
+import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
+import { onRestore, refreshRestore } from './restore/hooks'
+import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
+import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
+import { escLayer, FRESH_NAV, paneOf, shownRestore, shownSnapshot, type SidebarView, sidebarView } from './nav'
+import { SIDEBAR_ESC, withSidebar } from './vocab'
 import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
 import {
@@ -55,7 +63,7 @@ import { FRESH_REVIEW_LIST, listView, reviewItems } from './review-list'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import { sessionTree } from './session'
 import type { Rr } from './rr'
-import { FAULT_LINE, loadDetail, readHandover, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
+import { FAULT_LINE, loadDetail, readHandover, readHandoverList, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
@@ -71,12 +79,16 @@ const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, nul
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
+const HANDOVER_LIST = atom({ plugin: 'taskmaster-mods', key: 'handoverList' } as const, null as TmHandoverList | null)
+const HANDOVER_MARKS = atom({ plugin: 'taskmaster-mods', key: 'handoverMarks' } as const, FRESH_MARKS as TmHandoverMarks)
 const REVIEW_LIST = atom({ plugin: 'taskmaster-mods', key: 'reviewList' } as const, FRESH_REVIEW_LIST as TmReviewList)
 const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover' } as const, null as TmSessionHandover | null)
 const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
 const RESTORE_PENDING = atom({ plugin: 'taskmaster-mods', key: 'restorePending' } as const, null as TmRestorePending | null)
 const RESTORE_HIDDEN = atom({ plugin: 'taskmaster-mods', key: 'restoreHidden' } as const, null as number | null)
 const SESSION_BURST = atom({ plugin: 'taskmaster-mods', key: 'sessionBurst' } as const, null as TmSessionBurst | null)
+const NAV = atom({ plugin: 'taskmaster-mods', key: 'nav' } as const, FRESH_NAV as TmNav)
+const SESSION_INFO = atom({ plugin: 'taskmaster-mods', key: 'sessionInfo' } as const, null as TmSessionInfo | null)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
@@ -106,6 +118,7 @@ export function hostOf($: EngineInterface): TmHost {
     },
     openPane: async (id, title) => (await $.ui.open({ id, title, focus: true, closeOnEscape: true })).isPlaced,
     closePane: id => $.ui.close({ id }),
+    panes: async () => (await $.ui.panes()).map(pane => pane.id),
     focus: async (requestId, key) => {
       try {
         await $.ui.focus({ requestId, key })
@@ -198,6 +211,12 @@ function writerOf($: EngineInterface): TmWriter {
     handoverPage: async page => {
       await update($, HANDOVER_PAGE, () => page)
     },
+    handoverList: async change => {
+      await update($, HANDOVER_LIST, change)
+    },
+    handoverMarks: async change => {
+      await update($, HANDOVER_MARKS, change)
+    },
     reviewList: async change => {
       await update($, REVIEW_LIST, change)
     },
@@ -206,6 +225,9 @@ function writerOf($: EngineInterface): TmWriter {
     },
     restoreHidden: async epoch => {
       await update($, RESTORE_HIDDEN, () => epoch)
+    },
+    nav: async change => {
+      await update($, NAV, change)
     },
   }
 }
@@ -285,7 +307,16 @@ function ensureFlows($: EngineInterface): TmFlows {
     source: mod.source,
     // demo seeds DEMO_SUMMARIES instead, as it does the task details; every demo handover is in its open list
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id), readHandover: (id: string) => readHandover(host, id) } : {}),
+    refreshRestore,
     readPhases: mod.source === 'demo' ? pane => Promise.resolve(demoPhases(pane)) : pane => readPhases(host, pane, mod.scope.waitingOnly),
+    // demo seeds its handover list with the snapshot and never re-reads it
+    ...(mod.source === 'tm'
+      ? {
+          readHandoverList: async (closed: boolean) => readHandoverList(host, await host.repoRoot(), closed),
+        }
+      : {}),
+    closeHandover: mod.source === 'demo' ? demoCloseHandover() : tmCloseHandover((tool, args) => writeTm(host, tool, args)),
+    findHandover: async (id: string) => (await read($, HANDOVER_LIST))?.handovers.find(ho => ho.id === id) ?? null,
     phaseChosen: (pane, phase) => {
       if (pane !== 'review') return
       mod.scope = { ...mod.scope, phase }
@@ -305,6 +336,7 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   await update($, SNAPSHOT, s => (isCurrentDemo(s) ? s : demoSnapshot(now)))
   await update($, DETAILS, () => DEMO_DETAILS)
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
+  await update($, HANDOVER_LIST, () => demoHandoverList(now))
   await update($, PHASE_VIEWS, all => ({
     review: { ...all.review, phases: demoPhases('review'), loaded: true },
     handovers: { ...all.handovers, phases: demoPhases('handovers'), loaded: true },
@@ -363,18 +395,30 @@ async function dataOf($: EngineInterface): Promise<{
   const details = await read($, DETAILS)
   const summaries = await read($, SUMMARIES)
   if (mod.source === 'demo') {
-    return isCurrentDemo(snapshot)
-      ? { snapshot, details, summaries }
-      : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
+    const shown = shownSnapshot(snapshot, 'demo', await $.clock.now())
+    return shown === snapshot ? { snapshot, details, summaries } : { snapshot: shown, details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
   }
-  return isDemoSnapshot(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
+  const shown = shownSnapshot(snapshot, 'tm', 0)
+  return shown === null && snapshot !== null ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
 }
 
 /** The restore burst the band offers (`4`): pending (the scan wrote it) and hidden neither here nor, for that burst, anywhere. */
 async function restoreShown($: EngineInterface): Promise<TmRestorePending | null> {
   const pending = await read($, RESTORE_PENDING)
-  if (pending === null || (await read($, RESTORE_HIDDEN)) === pending.epoch) return null
-  return (await $.store.get(restoreHiddenKey(pending.epoch))) === true ? null : pending
+  const here = await read($, RESTORE_HIDDEN)
+  return shownRestore(pending, here, pending !== null && here !== pending.epoch && (await $.store.get(restoreHiddenKey(pending.epoch))) === true)
+}
+
+/** The sidebar over a pane while `nav.sidebar` is on (null: off): its entries from the snapshot and the pending restore burst. */
+async function sidebarFor($: EngineInterface, current: TmPane): Promise<SidebarView | null> {
+  if (!(await read($, NAV)).sidebar) return null
+  return tabsFor($, current)
+}
+
+/** The tab row atop every pane (always drawn): the sidebar's entries, counts and current pane. */
+async function tabsFor($: EngineInterface, current: TmPane): Promise<SidebarView> {
+  const { snapshot } = await dataOf($)
+  return sidebarView({ current, snapshot, restore: await restoreShown($), now: await $.clock.now() })
 }
 
 /** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */
@@ -545,16 +589,20 @@ export const register: Register = (on, options) => {
   mod.resumedCache = new Map()
   mod.resolve = null
   onHandoverGuard(on, options)
+  onRestore(on, options, { flows: () => mod.flows })
 
   on('session.start', async ($, e, next) => {
     mod.sessionId = await $.session.id()
     await ready($)
+    const branch = (await mod.host?.branch()) ?? ''
+    const startedAt = await $.clock.now()
+    await update($, SESSION_INFO, () => ({ branch, startedAt }))
     await pruneTicks($)
     // A bulk run does not outlive its session: a row left `busy` by one that was cut off would show "working" for good.
     await update($, REVIEW_LIST, l => (l.bulk === 'busy' ? { ...l, bulk: 'none' as const, bulkIds: [] } : l))
     for (const command of [
       { name: REVIEW, description: 'Walk the Taskmaster review queue: in-review tasks, P0/P1 issues, open decisions' },
-      { name: HANDOVERS, description: 'Open Taskmaster handovers, five to a page: copy for Telegram or resume' },
+      { name: HANDOVERS, description: 'Taskmaster handovers by phase: resume, open in a new tab, copy for Telegram, close' },
       { name: SESSION, description: "This session in Taskmaster: its task, its handover and where it came from" },
       ...(mod.source === 'demo' ? [{ name: KIT, description: 'The taskmaster-mods kit gallery: every primitive with sample data (demo source)' }] : []),
     ]) {
@@ -696,14 +744,19 @@ export const register: Register = (on, options) => {
     if (model === null) return below
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
-    const ours = bandTree(k, model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
-      open: pane => act(f => f.openPane(pane)),
-      askDone: id => act(f => f.bandAskDone(id)),
-      confirmDone: id => act(f => f.bandConfirmDone(id)),
-      cancel: () => act(f => f.bandCancel()),
-      copy: (id, surface) => act(f => f.copyHandover(id, surface)),
-      hideRestore: () => act(f => (pending === null ? Promise.resolve() : f.hideRestore(pending.epoch))),
-    })
+    const ours = bandTree(
+      k,
+      model,
+      { mode: await read($, BAND), width: e.props.bodyColumns, maxRows: e.props.maxRows, now: await $.clock.now(), reason: snapshot?.reason ?? '' },
+      {
+        openSidebar: () => act(f => f.openSidebar()),
+        askDone: id => act(f => f.bandAskDone(id)),
+        confirmDone: id => act(f => f.bandConfirmDone(id)),
+        cancel: () => act(f => f.bandCancel()),
+        copy: (id, surface) => act(f => f.copyHandover(id, surface)),
+        retry: () => act(f => f.retry()),
+      },
+    )
     const { Box } = ui
     return (
       <Box flexDirection="column">
@@ -739,11 +792,14 @@ export const register: Register = (on, options) => {
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
       surface: e.surface,
       say: (text: string) => mod.host?.toast(text),
+      demo: mod.source === 'demo',
+      tabs: await tabsFor($, 'review'),
       // The digits are the strip's, save while `t` has armed the focused card's checks.
       strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: !list.ticking, empty: 'Nothing waiting' },
     }
-    return reviewPaneTree(
-      $.ui.resolve(e) as unknown as Ui,
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const tree = await reviewPaneTree(
+      ui,
       rrOf($),
       view,
       {
@@ -773,43 +829,107 @@ export const register: Register = (on, options) => {
         bulkCancel: () => act(f => f.bulkCancel()),
         bulkDone: ids => act(f => f.bulkDone(ids)),
         bulkSendBack: (ids, note, actions) => act(f => f.bulkSendBack(ids, note, actions)),
+        toggleSidebar: () => act(f => f.toggleSidebar()),
+        goTo: pane => act(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
+    )
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    // The frame paints its own page ground; the column only makes the tree one element for the sidebar overlay.
+    const { Box } = ui
+    return withSidebar(
+      k,
+      <Box flexDirection="column" flexGrow={1}>
+        {tree}
+      </Box>,
+      await sidebarFor($, 'review'),
+      pane => act(f => f.goTo(pane)),
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-handovers' }, async ($, e) => {
-    const { Text } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
     const { snapshot, summaries } = await dataOf($)
-    const view = {
+    const now = await $.clock.now()
+    const stored = await read($, HANDOVER_LIST)
+    const views = await read($, PHASE_VIEWS)
+    const demo = mod.source === 'demo'
+    // Demo draws its list and phases before the seed lands, as dataOf draws its snapshot (a render writes nothing).
+    const view: HandoversView = {
       snapshot,
+      list: demo && stored === null ? demoHandoverList(now) : stored,
+      marks: await read($, HANDOVER_MARKS),
+      phaseView: demo && !views.handovers.loaded ? { ...views.handovers, phases: demoPhases('handovers'), loaded: true } : views.handovers,
       pick: await read($, PICK),
+      page: await read($, HANDOVER_PAGE),
       summaries,
       summaryOpen: await read($, SUMMARY_OPEN),
-      page: await read($, HANDOVER_PAGE),
+      now,
+      focused: e.props.isFocused,
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
+      demo,
+      tabs: await tabsFor($, 'handovers'),
     }
     // The open summary is read again when a refresh marked it stale (the toggle reads it the first time); the stale one
     // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {
-      const picked = handoverPage(snapshot.handovers, view.page, view.pick).picked
+      const shown = phaseHandovers(listedHandovers(view.list, snapshot, view.marks.showClosed), view.phaseView.choice, view.list?.tasks ?? {})
+      const picked = handoverPage(shown, view.page, view.pick).picked
       const held = picked === undefined ? undefined : summaries[picked.id]
       if (picked !== undefined && picked.id === view.summaryOpen && (held === undefined || held.stale === true)) askSummary(picked.id)
     }
-    return handoversPaneTree(
-      $.ui.resolve(e) as unknown as Ui,
-      rrOf($),
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    const tree = handoversPaneTree(
+      k,
       view,
       {
         pick: id => act(f => f.pick(id)),
-        copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
-        resume: handover => act(f => f.resumeHandover(handover)),
-        toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
+        move: (page, id) => act(f => f.moveTo(page, id)),
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
+        select: id => act(f => f.selectHandover(id)),
+        selectOnly: ids => act(f => f.selectHandovers(ids)),
+        toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
+        resume: handover =>
+          act(async f => {
+            if (await f.resumeHandover(handover)) await f.recordResumed(handover.id)
+          }),
+        // Stage 2's launch only names what it would open in demo.
+        newTab: (handover, surface) =>
+          act(async f => {
+            await f.launch([await f.handoverLaunch(handover)], surface)
+          }),
+        copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
+        askClose: ask => act(f => f.askClose(ask)),
+        confirmClose: () => act(f => f.confirmClose()),
+        cancelClose: () => act(f => f.cancelClose()),
+        toggleClosed: () => act(f => f.toggleClosed()),
+        // u: Stage 3's refresh (snapshot and this pane's phases), then the pane's own list.
+        refresh: () =>
+          act(async f => {
+            await f.refresh('handovers')
+            await f.loadHandovers()
+          }),
+        strip: {
+          choose: id => act(f => f.choosePhase('handovers', id)),
+          toggleDone: () => act(f => f.toggleDone('handovers')),
+          overlay: open => act(f => f.setOverlay('handovers', open)),
+        },
+        toggleSidebar: () => act(f => f.toggleSidebar()),
+        goTo: pane => act(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
+    )
+    // The frame paints its own page ground; the column only makes the tree one element for the sidebar overlay.
+    return withSidebar(
+      k,
+      <Box flexDirection="column" flexGrow={1}>
+        {tree}
+      </Box>,
+      await sidebarFor($, 'handovers'),
+      pane => act(f => f.goTo(pane)),
     )
   })
 
@@ -823,7 +943,6 @@ export const register: Register = (on, options) => {
     const held = handover === null ? undefined : summaries[handover.id]
     // Read when open and missing, or stale after a refresh (the stale one stays drawn meanwhile), as the handovers pane does.
     if (mod.source === 'tm' && handover !== null && open && (held === undefined || held.stale === true)) askSummary(handover.id)
-    const pending = await restoreShown($)
     const cwd = await $.session.cwd()
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
@@ -834,16 +953,19 @@ export const register: Register = (on, options) => {
         handover,
         resumedFrom: await read($, RESUMED_FROM),
         burst: await read($, SESSION_BURST),
-        restore: pending?.unfinished ?? null,
         band: await read($, BAND),
         summary: held,
         summaryOpen: open,
         connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
         demo: mod.source === 'demo',
         now: await $.clock.now(),
+        info: await read($, SESSION_INFO),
+        tabs: await tabsFor($, 'session'),
       },
       {
-        open: pane => act(f => f.openPane(pane)),
+        goTo: pane => act(f => f.goTo(pane)),
+        refresh: () => act(f => f.retry()),
+        toggleSidebar: () => act(f => f.toggleSidebar()),
         askDone: id => act(f => f.bandAskDone(id)),
         confirmDone: id => act(f => f.bandConfirmDone(id)),
         cancel: () => act(f => f.bandCancel()),
@@ -860,10 +982,13 @@ export const register: Register = (on, options) => {
     )
     const ground = await $.rr.surfaceProps({ level: 'page' })
     const { Box } = ui
-    return (
+    return withSidebar(
+      k,
       <Box {...ground} flexGrow={1}>
         {tree}
-      </Box>
+      </Box>,
+      await sidebarFor($, 'session'),
+      pane => act(f => f.goTo(pane)),
     )
   })
 
@@ -913,12 +1038,36 @@ export const register: Register = (on, options) => {
 
   on('ui.focus', { requestId: 'tm-handovers' }, async ($, e, next) => {
     const moved = await next(e)
-    const element = e.element
-    if (element !== undefined && element.startsWith('ho:')) {
-      const id = element.slice(3)
+    // A card's row or its select box takes the focus: that card is the picked one.
+    const id = e.element?.match(/^ho(?:-sel)?:(.+)$/)?.[1]
+    if (id !== undefined) {
       await update($, PICK, () => id)
       await update($, SUMMARY_OPEN, open => (open === id ? open : '')) // another row shows collapsed, and so does this one later
     }
     return moved
   }).catch(($, e, next) => next(e)) // a failed pick write never holds the focus move up: replay what the chain beneath settled
+
+  // Esc closes the innermost layer first (spec §15.8 S4): the person's close of a Taskmaster pane is refused while its sidebar
+  // or phase list is open, and closes that instead. Every close that goes through lets the sidebar go with its pane.
+  on('ui.close', async ($, e, next) => {
+    const pane = paneOf(e.id)
+    if (pane === null) return next(e)
+    if (e.origin.kind === 'person' && SIDEBAR_ESC === 'refuse') {
+      const nav = await read($, NAV)
+      const views = await read($, PHASE_VIEWS)
+      const menuOpen = pane !== 'session' && views[pane].overlay
+      const layer = escLayer(nav, menuOpen)
+      if (layer === 'sidebar') {
+        await update($, NAV, n => ({ ...n, sidebar: false }))
+        return { value: undefined }
+      }
+      if (layer === 'menu' && pane !== 'session') {
+        await update($, PHASE_VIEWS, all => ({ ...all, [pane]: { ...all[pane], overlay: false } }))
+        return { value: undefined }
+      }
+    }
+    const closed = await next(e)
+    await update($, NAV, n => (n.sidebar ? { ...n, sidebar: false } : n))
+    return closed
+  }).catch(($, e, next) => next(e)) // a failed read or write never keeps a pane open: replay what the chain beneath settled
 }

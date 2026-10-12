@@ -4,7 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { RETRY_DELAYS_MS, singleFlight } from '../hooks/refresh'
-import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import { BAND, pane, PLUGIN, SESSION, waitingOf } from './fixtures/inputs'
 import { backlog } from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
 import { type McpAnswer, worldOf } from './fixtures/world'
@@ -73,13 +73,13 @@ describe('cold start in a session', () => {
     expect(JSON.stringify(await $.ui.render(BAND))).toContain(CONNECTING)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
     expect(await ui.find({ type: 'Text', text: CONNECTING })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeUndefined()
     connected = true
     await clock.advance(2000)
     await clock.settle()
     expect(world.statuses).toEqual([undefined, undefined])
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
     expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
   })
 
@@ -96,7 +96,7 @@ describe('cold start in a session', () => {
     await clock.advance(2000)
     await clock.settle()
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
   })
 
   test('every retry fails: the offline fault appears only after the last one, with the reason in the pane', TM, async ($, on) => {
@@ -116,8 +116,9 @@ describe('cold start in a session', () => {
     await clock.settle()
     expect(lists()).toBe(5)
     expect(world.statuses.at(-1)).toBe('◆ tm offline')
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    expect(await ui.find({ type: 'Text', text: ' Taskmaster unreachable' })).toBeDefined()
+    // Wide enough that the offline row's reason is not cut.
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review'), props: { ...pane('tm-review').props, bodyColumns: 240 } })
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /no connected MCP tool "backlog_list_tasks"/ })).toBeDefined()
     await clock.advance(60_000)
     await clock.settle()
@@ -175,6 +176,6 @@ describe('cold start in a session', () => {
     await clock.settle()
     expect(lists()).toBe(5)
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
   })
 })

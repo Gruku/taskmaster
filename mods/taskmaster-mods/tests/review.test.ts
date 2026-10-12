@@ -1,4 +1,4 @@
-// User intent: the review queue as a paged card list (spec §8) — cards in review order, five a page, only the focused one open,
+// User intent: the review queue as a paged card list (spec §8) — cards in review order, three a page, only the focused one open,
 // j / k and p / n to move, s to select, u to refresh — and the sign-off and send-back a person makes on the focused card.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
@@ -15,7 +15,7 @@ const TM = { plugins: [RR_STUB] }
 const REVIEW_PANE = pane('tm-review')
 const SNAP = `${PLUGIN}.snapshot`
 const REAL: TmSnapshot = { ...demoSnapshot(0), reason: '' }
-/** Twelve waiting tasks, newest first: three pages. */
+/** Twelve waiting tasks, newest first: four pages. */
 const TWELVE: TmQueueItem[] = Array.from({ length: 12 }, (_, i) => ({
   kind: 'task',
   id: `t-${String(i + 1).padStart(3, '0')}`,
@@ -41,29 +41,34 @@ describe('review list', () => {
   test('cards in review order, the summary and the kinds row; only the first card is open, and it is focused', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    const keys = (await ui.findAll({ type: 'Box' })).map(b => String(b.props.key ?? '')).filter(key => key.startsWith('card:'))
-    expect(keys).toEqual(['card:unified-chat-022', 'card:tm-audit-031', 'card:docs-012', 'card:ISS-7', 'card:DEC-4'])
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE, props: { ...REVIEW_PANE.props, bodyColumns: 112 } })
+    const keys = (await ui.findAll({ type: 'Button' })).map(b => String(b.props.key ?? '')).filter(key => key.startsWith('sel:'))
+    expect(keys).toEqual(['sel:unified-chat-022', 'sel:tm-audit-031', 'sel:docs-012'])
     expect(await focusedId(ui)).toBe('unified-chat-022')
     expect(await ui.find({ type: 'Text', text: '5 waiting on you · newest 1h ago' })).toBeDefined()
-    for (const text of [' 1 BLOCKED ', ' 4 ACTION ', ' 0 IN REVIEW ', ' BLOCKED   ', ' ACTION    ']) {
+    for (const text of ['▲ BLOCKED', ' 1', '◆ ACTION', ' 4', '● IN REVIEW', ' 0', '▲ BLOCKED      ', '◆ ACTION       ']) {
       expect(await ui.find({ type: 'Text', text }), text).toBeDefined()
     }
     expect(await ui.findAll({ type: 'Button', key: 'done' })).toHaveLength(1)
     expect(await ui.find({ text: /second message builds with the full toolset/ })).toBeDefined()
   })
 
-  test('the toolbar holds REVIEW, the pager (dim on one page), its count and u refresh; the footer j / k', DEMO, async ($, on) => {
+  test('the frame holds REVIEW, the pager (p dim on page 1), its count and u refresh; the footer owns j / k, p / n and u', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
     expect(await ui.find({ type: 'Text', text: 'REVIEW' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'page-prev' }))?.props).toMatchObject({ hotkey: 'p', dimColor: true })
-    expect((await ui.find({ type: 'Button', key: 'page-next' }))?.props).toMatchObject({ hotkey: 'n', dimColor: true })
-    expect(await ui.find({ type: 'Text', text: '1 / 1' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props).toMatchObject({ hotkey: 'u', label: 'refresh' })
-    expect((await ui.find({ type: 'Button', key: 'focus-prev' }))?.props).toMatchObject({ hotkey: 'k', dimColor: true })
-    expect((await ui.find({ type: 'Button', key: 'focus-next' }))?.props).toMatchObject({ hotkey: 'j' })
+    expect((await ui.find({ type: 'Button', key: 'page-prev' }))?.props).toMatchObject({ dimColor: true })
+    expect((await ui.find({ type: 'Button', key: 'page-prev' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'page-next' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'key:p' }))?.props).toMatchObject({ hotkey: 'p' })
+    expect((await ui.find({ type: 'Button', key: 'key:n' }))?.props).toMatchObject({ hotkey: 'n' })
+    expect(await ui.find({ type: 'Text', text: ' 1 / 2 ' })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props).toMatchObject({ label: 'u refresh' })
+    expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'key:u' }))?.props).toMatchObject({ hotkey: 'u' })
+    expect((await ui.find({ type: 'Button', key: 'focus-prev' }))?.props).toMatchObject({ hotkey: 'k', label: '' })
+    expect((await ui.find({ type: 'Button', key: 'focus-next' }))?.props).toMatchObject({ hotkey: 'j', label: '' })
   })
 
   test('j and k move the focus card by card, the card left closes; at either end they dim and say why', DEMO, async ($, on) => {
@@ -83,7 +88,7 @@ describe('review list', () => {
     expect(await focusedId(ui)).toBe('ISS-7')
   })
 
-  test('five a page: n turns to the next page and focuses its first card; j and k cross pages', TM, async ($, on) => {
+  test('three a page: n turns to the next page and focuses its first card; j and k cross pages', TM, async ($, on) => {
     worldOf(on, mock.clock(on))
     stateOf(on, { [SNAP]: { ...REAL, queue: TWELVE, queueTotal: 12 } })
     await $.session.start(SESSION)
@@ -92,16 +97,17 @@ describe('review list', () => {
       await ui.press({ key })
       await ui.redraw()
     }
-    expect(await ui.find({ type: 'Text', text: '1 / 3' })).toBeDefined()
-    await press('page-next')
-    expect(await ui.find({ type: 'Text', text: '2 / 3' })).toBeDefined()
-    expect(await focusedId(ui)).toBe('t-006')
+    expect(await ui.find({ type: 'Text', text: ' 1 / 4 ' })).toBeDefined()
+    await press('key:n')
+    expect(await ui.find({ type: 'Text', text: ' 2 / 4 ' })).toBeDefined()
+    expect(await focusedId(ui)).toBe('t-004')
     await press('focus-prev')
-    expect(await ui.find({ type: 'Text', text: '1 / 3' })).toBeDefined()
-    expect(await focusedId(ui)).toBe('t-005')
+    expect(await ui.find({ type: 'Text', text: ' 1 / 4 ' })).toBeDefined()
+    expect(await focusedId(ui)).toBe('t-003')
     await press('focus-next')
     await press('page-next')
-    expect(await ui.find({ type: 'Text', text: '3 / 3' })).toBeDefined()
+    await press('page-next')
+    expect(await ui.find({ type: 'Text', text: ' 4 / 4 ' })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'page-next' }))?.props.dimColor).toBe(true)
   })
 
@@ -113,18 +119,18 @@ describe('review list', () => {
     })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    for (const key of ['page-next', 'sel:t-006', 'phase-next']) {
+    for (const key of ['page-next', 'sel:t-004', 'phase-next']) {
       await ui.press({ key })
       await ui.redraw()
     }
-    expect(await ui.find({ type: 'Text', text: '1 / 3' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' 1 / 4 ' })).toBeDefined()
     expect(await focusedId(ui)).toBe('t-001')
     await ui.press({ key: 'page-next' })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'sel:t-006' }))?.props.label).toBe('□')
+    expect((await ui.find({ type: 'Button', key: 'sel:t-004' }))?.props.label).toBe('□')
   })
 
-  test('under a phase the All tab counts the sum across the phases, not the filtered queue', TM, async ($, on) => {
+  test('under a phase the All entry counts the sum across the phases, not the filtered queue', TM, async ($, on) => {
     worldOf(on, mock.clock(on))
     stateOf(on, {
       [SNAP]: { ...REAL, queue: TWELVE, queueTotal: 2 },
@@ -132,27 +138,37 @@ describe('review list', () => {
     })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE, props: { ...REVIEW_PANE.props, bodyColumns: 100 } })
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:' }))?.props.label).toBe('All 2')
+    expect((await ui.find({ type: 'Button', key: 'phase-field' }))?.props.label).toBe(' All  2 ▾ ')
     await ui.press({ key: 'phase-next' })
     await ui.redraw()
-    expect((await ui.find({ type: 'Button', key: 'phase-tab:' }))?.props.label).toBe('All 5')
+    await ui.press({ key: 'phase-field' })
+    await ui.redraw()
+    expect((await ui.find({ type: 'Button', key: 'phase-pick:' }))?.props.label).toMatch(/^All +5$/)
   })
 
   test('s selects the focused task; a press on any box selects that card; all takes the page, none clears', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect((await ui.find({ type: 'Button', key: 'sel:unified-chat-022' }))?.props).toMatchObject({ hotkey: 's', label: '□' })
-    expect((await ui.find({ type: 'Button', key: 'sel:tm-audit-031' }))?.props.hotkey).toBeUndefined()
-    await ui.press({ key: 'sel:unified-chat-022' })
+    expect((await ui.find({ type: 'Button', key: 'sel:unified-chat-022' }))?.props).toMatchObject({ label: '□' })
+    expect((await ui.find({ type: 'Button', key: 'sel:unified-chat-022' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'key:s' }))?.props).toMatchObject({ hotkey: 's' })
+    await ui.press({ key: 'key:s' })
     expect((await ui.find({ type: 'Button', key: 'sel:unified-chat-022' }))?.props.label).toBe('■')
+    await ui.press({ key: 'sel:tm-audit-031' })
+    expect((await ui.find({ type: 'Button', key: 'sel:tm-audit-031' }))?.props.label).toBe('■')
+    await ui.press({ key: 'page-next' })
     await ui.press({ key: 'sel:ISS-7' })
     expect(world.toasts).toEqual(['Issues and decisions are not signed off from the list'])
+    await ui.press({ key: 'sel-all' })
+    expect((await ui.find({ type: 'Button', key: 'sel:ISS-7' }))?.props.label).toBe('□')
+    expect((await ui.find({ type: 'Button', key: 'sel:DEC-4' }))?.props.label).toBe('□')
+    await ui.press({ key: 'page-prev' })
+    await ui.press({ key: 'sel-none' })
     await ui.press({ key: 'sel-all' })
     for (const id of ['unified-chat-022', 'tm-audit-031', 'docs-012']) {
       expect((await ui.find({ type: 'Button', key: `sel:${id}` }))?.props.label, id).toBe('■')
     }
-    expect((await ui.find({ type: 'Button', key: 'sel:ISS-7' }))?.props.label).toBe('□')
     await ui.press({ key: 'sel-none' })
     expect((await ui.find({ type: 'Button', key: 'sel:unified-chat-022' }))?.props.label).toBe('□')
   })
@@ -186,7 +202,7 @@ describe('review list', () => {
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
     await ui.press({ key: 'done' })
     expect(await ui.find({ type: 'Button', key: 'done' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: / 2 of 2 unchecked — done anyway\? / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^2 of 2 unchecked — done anyway\?$/ })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'confirm-no' }))?.props.autoFocus).toBe(true)
     await ui.press({ key: 'confirm-no' })
     await ui.press({ key: 'done' })
@@ -246,8 +262,7 @@ describe('review list', () => {
     stateOf(on, { [SNAP]: { ...REAL, queue: [], queueTotal: 0 } })
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect(await ui.find({ type: 'Text', text: ' Queue clear' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '  0 done this pass' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Queue clear · 0 done this pass' })).toBeDefined()
   })
 
   test('u asks tm for a fresh snapshot and the phases; demo says it has nothing newer', TM, async ($, on) => {
@@ -281,8 +296,8 @@ describe('review list', () => {
     await clock.advance(60_000)
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...REVIEW_PANE })
-    expect(await ui.find({ type: 'Text', text: ' Taskmaster unreachable' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props).toMatchObject({ hotkey: 'u', label: 'retry' })
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props).toMatchObject({ hotkey: 'u', label: 'retry tm connection' })
   })
 
   test('every mode validates on the terminal and the desktop', DEMO, async ($, on) => {
@@ -324,7 +339,8 @@ describe('review list', () => {
     await ui.redraw()
     await ui.press({ key: 'confirm-yes' })
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: /^Taskmaster unreachable: backlog_complete_task: / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Taskmaster unreachable:/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^backlog_complete_task: / })).toBeDefined()
     expect(await focusedId(ui)).toBe('unified-chat-022')
   })
 

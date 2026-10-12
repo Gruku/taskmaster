@@ -2,7 +2,7 @@
 // in what order, what fits, where ‹ › and the digits land, what a remembered choice falls back to and where it is kept — so
 // the strip moves both ways and is tested without drawing.
 import type { TmPhase, TmPhasePane, TmPhaseView } from '../types'
-import { phaseName, truncate } from './model'
+import { phaseName } from './model'
 
 /** The All tab's id (and the stored "every phase" choice). */
 export const ALL = ''
@@ -10,8 +10,6 @@ export const ALL = ''
 export const NO_TASK = '~none'
 /** `◐ done` is off by default once more done phases than this exist. */
 export const DONE_HIDE_OVER = 4
-/** All plus nine: the digits 0–9. */
-export const MAX_VISIBLE = 10
 export const PHASE_PANES: readonly TmPhasePane[] = ['review', 'handovers', 'restore']
 export const FRESH_PHASE_VIEW: TmPhaseView = { choice: ALL, phases: [], loaded: false, showDone: null, overlay: false }
 export const FRESH_PHASE_VIEWS: Readonly<Record<TmPhasePane, TmPhaseView>> = {
@@ -30,9 +28,6 @@ export type PhaseTab = {
   readonly date: string
   readonly dim: boolean
 }
-/** The tabs the strip draws, in order, and the shown ones that did not fit (they live behind `+N ▾`). */
-export type StripFit = { readonly tabs: readonly PhaseTab[]; readonly hidden: readonly PhaseTab[] }
-
 function tabOf(p: TmPhase): PhaseTab {
   const kind: PhaseTabKind =
     p.id === NO_TASK ? 'none' : p.status === 'active' ? 'active' : p.status === 'done' || p.status === 'archived' ? 'done' : 'planned'
@@ -71,39 +66,6 @@ export function shownTabs(tabs: readonly PhaseTab[], choice: string, showDone: b
   return tabs.filter(tab => showDone || tab.kind !== 'done' || tab.id === choice)
 }
 
-/** A tab's words: `All 31`, `Patch 1.9 · active 12`, `Release 2.0 4`, `Patch 1.8 ✓ 0`, `no task 3`. */
-export function tabLabel(tab: PhaseTab): string {
-  const name = tab.kind === 'active' ? `${tab.name} · active` : tab.kind === 'done' ? `${tab.name} ✓` : tab.name
-  return `${name} ${tab.count}`
-}
-
-/** Cells a tab takes in the strip: its digit glyph when shown, its label, and the ` │ ` before it. */
-export function tabCells(tab: PhaseTab, digit: boolean): number {
-  return (digit ? 3 : 0) + tabLabel(tab).length + 3
-}
-
-/**
- * What fits in `room`: the chosen tab always, then the others in order (All first) until one does not fit or ten are
- * drawn; the rest go behind `+N ▾`.
- */
-export function visibleTabs(shown: readonly PhaseTab[], choice: string, room: number, digits: boolean): StripFit {
-  const keep = new Set<string>()
-  let used = 0
-  const chosen = shown.find(tab => tab.id === choice)
-  if (chosen !== undefined) {
-    keep.add(chosen.id)
-    used += tabCells(chosen, digits)
-  }
-  for (const tab of shown) {
-    if (keep.has(tab.id)) continue
-    const need = tabCells(tab, digits)
-    if (used + need > room || keep.size >= MAX_VISIBLE) break
-    keep.add(tab.id)
-    used += need
-  }
-  return { tabs: shown.filter(tab => keep.has(tab.id)), hidden: shown.filter(tab => !keep.has(tab.id)) }
-}
-
 /** ‹ (-1) or › (+1) from the chosen tab over the shown tabs; no wrap (the end stays put); an unknown choice steps to All. */
 export function step(shown: readonly PhaseTab[], choice: string, dir: -1 | 1): string {
   const at = shown.findIndex(tab => tab.id === choice)
@@ -117,12 +79,6 @@ export function atEnd(shown: readonly PhaseTab[], choice: string, dir: -1 | 1): 
   return at < 0 ? dir === -1 : shown[at + dir] === undefined
 }
 
-/** Digit `n`: 0 is All; 1–9 the visible tabs after All, in order; null when no tab carries it. */
-export function jump(visible: StripFit, n: number): string | null {
-  if (n === 0) return ALL
-  return visible.tabs.filter(tab => tab.id !== ALL)[n - 1]?.id ?? null
-}
-
 /** A remembered choice the read list no longer holds falls back to All; `lost` names it ('' when kept). */
 export function fallback(view: TmPhaseView): { readonly choice: string; readonly lost: string } {
   if (!view.loaded || view.choice === ALL || view.phases.some(p => p.id === view.choice)) return { choice: view.choice, lost: '' }
@@ -133,19 +89,6 @@ export function fallback(view: TmPhaseView): { readonly choice: string; readonly
 export function emptyLine(empty: string, tab: PhaseTab | undefined): string {
   if (tab === undefined || tab.kind === 'all') return empty
   return `${empty} in ${tab.name}${tab.kind === 'done' && tab.date !== '' ? ` · done ${tab.date}` : ''}`
-}
-
-const KIND_WORD: Readonly<Record<PhaseTabKind, string>> = {
-  all: 'every phase',
-  active: 'active',
-  planned: 'planned',
-  done: 'done',
-  none: 'no linked task',
-}
-
-/** The overlay list's line: `Patch 1.8 · done · 0 · 2026-10-05`, cut to `width`. */
-export function overlayLine(tab: PhaseTab, width: number): string {
-  return truncate([tab.name, KIND_WORD[tab.kind], String(tab.count), ...(tab.date === '' ? [] : [tab.date])].join(' · '), width)
 }
 
 /** Restore's phases: the list's phases with the pane's own counts (absent: 0), and a no task tab when the counts name one. */
@@ -197,4 +140,12 @@ export async function loadChoice(store: PhaseStore, pane: TmPhasePane, root: str
 
 export async function saveChoice(store: PhaseStore, pane: TmPhasePane, root: string, choice: string): Promise<void> {
   await store.set(phaseKey(pane, root), { phase: choice })
+}
+
+/** The picker's and the dropdown's name for a tab (spec §15.4): `All`, `Patch 1.9 · active`, `Patch 1.8 ✓`, `no task`. */
+export function pickerName(tab: PhaseTab): string {
+  if (tab.kind === 'all') return 'All'
+  if (tab.kind === 'active') return `${tab.name} · active`
+  if (tab.kind === 'done') return `${tab.name} ✓`
+  return tab.name
 }

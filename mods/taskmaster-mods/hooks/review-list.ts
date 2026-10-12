@@ -2,7 +2,7 @@
 // first), which page and card hold the focus, what a bulk action may touch and how its outcome is told — as plain functions
 // tested without drawing.
 import type { TmCursor, TmQueueItem, TmReviewList, TmSnapshot, TmTaskDetail } from '../types'
-import { PAGE_SIZE, reviewQueue, truncate } from './model'
+import { LIST_PAGE_SIZE as PAGE_SIZE, reviewQueue, truncate } from './model'
 
 export type ReviewKind = 'blocked' | 'action' | 'review'
 export const KIND_WORD: Readonly<Record<ReviewKind, string>> = { blocked: 'blocked', action: 'action', review: 'in review' }

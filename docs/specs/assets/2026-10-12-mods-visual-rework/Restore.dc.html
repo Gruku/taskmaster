@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Restore pane</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap">
+<style>
+body{margin:0}
+.t{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:18px;letter-spacing:0;font-variant-ligatures:none}
+.r{white-space:pre;height:18px;overflow:hidden}
+.k{all:unset;white-space:pre;cursor:pointer;font:inherit}
+.band{background:#1d1d1b}.ov{background:#272725}
+.fb{color:#f5f3ed;font-weight:700}.fd{color:#d2cfc8}.fs{color:#a09c95}.fh{color:#7d7b76}.fx{color:#66645f}.fz{color:#4d4c48}
+.bd{color:#343331}.bs{color:#4d4c48}
+.sg{color:#5e79e6}.sv{color:#8a9eeb;font-weight:700}.svn{color:#8a9eeb}
+.cr{color:#e06060;font-weight:700}.wa{color:#d69a2e;font-weight:700}.in{color:#7aa6d6;font-weight:700}.ok{color:#4fb071;font-weight:700}
+.wan{color:#d69a2e}.crn{color:#e06060}.okn{color:#4fb071}
+.pri{background:#5e79e6;color:#f5f3ed;font-weight:700}
+.chip{background:rgba(94,121,230,0.20);color:#b5c2ee;font-weight:700}
+.sel{background:#272725;color:#f5f3ed;font-weight:700}
+.fld{background:#272725;color:#f5f3ed}
+.hl{background:rgba(94,121,230,0.22);color:#f5f3ed;font-weight:700}
+.k:hover{color:#f5f3ed}
+.k:focus-visible{outline:1px solid #5e79e6}
+</style>
+</helmet>
+<div style="width: 1022px; height: 902px; box-sizing: border-box; background: #151514; padding: 24px; overflow: hidden;">
+<div class="t" style="color: #7d7b76; margin-bottom: 20px; font-size: 12px; line-height: 18px;">RESTORE — grouped UNFINISHED / HANDED OFF / IDLE / RUNNING NOW. Each item: title + closed time / project · branch · cwd · ctx (≥400k warning, ≥700k critical) / bound task + status or last prompt. ■ default ticks on unfinished + resumable.</div>
+<div class="t" style="width: 974px;">
+<div class="r"><span class="bd">╭─</span><span class="sg">◆ </span><span class="fs">TASKMASTER · </span><span class="fb">RESTORE</span><span class="fd"> </span><span class="bd">─────────────────────────────────────────────────────────────────────────────────</span><span class="fd"> </span><span class="okn">● </span><span class="fs">tm ok</span><span class="bd">─╮</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">‹ </span><button class="k fld" type="button"> All  7 ▾ </button><span class="fs"> ›</span><span class="fd">                                                                  </span><button class="k fx" type="button">◐ compact</button><span class="fd">   </span><span class="fs">‹ 1 / 3 ›</span><span class="fd">   </span><span class="fs">u </span><span class="fx">rescan</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">4 closed together · today 16:14–16:31 · 12m ago · 1 closed since</span><span class="fd">    </span><span class="cr">▲ INTERRUPTED</span><span class="crn"> 1</span><span class="fd">   </span><span class="wa">◆ WIP</span><span class="wan"> 2</span><span class="fd">   </span><span class="in">● HANDED OFF 1</span><span class="fd">  </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><button class="k sv" type="button">b</button><span class="fd"> resume 3 sessions   </span><button class="k sv" type="button">g</button><span class="fd"> brief 3 sessions                                                 </span><button class="k fs" type="button">all</button><span class="fz"> · </span><button class="k fs" type="button">unfinished</button><span class="fz"> · </span><button class="k fs" type="button">none</button><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="fs">UNFINISHED</span><span class="fx">  3 · interrupted or mid-work, no handover</span><span class="fd">                                                          </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">■ </span><span class="cr">▲ INTERRUPTED  </span><span class="fb">Port row counter to native store</span><span class="fd">                                                          </span><span class="fs">16:29</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">taskmaster · feat/store-native · .worktrees/store-native · </span><span class="wan">512k ctx</span><span class="fd">                          </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="in">● IN PROGRESS</span><span class="fb">  tm-audit-033</span><span class="fs"> · last prompt &quot;run the row-count probe again&quot;</span><span class="fd">                    </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">■ </span><span class="wa">◆ WIP          </span><span class="fb">Viewer RR re-skin plan 2b tokens</span><span class="fd">                                                          </span><span class="fs">16:22</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">taskmaster · feat/viewer-reskin · .worktrees/viewer-reskin · 164k ctx</span><span class="fd">                        </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="in">● IN PROGRESS</span><span class="fb">  viewer-rr-014</span><span class="fs"> · last reply &quot;tokens.css split, 3 files left&quot;</span><span class="fd">                   </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fx">□ </span><span class="wa">◆ WIP          </span><span class="fb">Scanner cache version bump</span><span class="fd">                                                                </span><span class="fs">16:14</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">taskmaster · main · repo root · </span><span class="crn">731k ctx</span><span class="fd">                                                     </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fx">no task touched</span><span class="fs"> · last prompt &quot;bump the cache version and rerun&quot;</span><span class="fd">                             </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="fs">HANDED OFF</span><span class="fx">  1 · an open handover carries the next step</span><span class="fd">                                                        </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ ■ </span><span class="in">● HANDED OFF   </span><span class="fb">U5 brief approval</span><span class="fd">                                                                     </span><span class="fs">16:31</span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="fs">taskmaster · master · repo root · 378k ctx</span><span class="fd">                                               </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="svn">task  </span><span class="in">● IN PROGRESS</span><span class="fb">  unified-chat-027</span><span class="fs"> · phase-b</span><span class="fd">                                          </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="svn">handover  </span><span class="fb">H-0412</span><span class="fd"> · next: run end-session to close 027, then Phase B of 009               </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="svn">via  </span><button class="k fld" type="button"> fresh from H-0412 </button><span class="fx">  --resume</span><span class="fd">   </span><button class="k sv" type="button">v</button><span class="fd"> switch resume mode                                </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                                                                                                            </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">  </span><button class="k pri" type="button"> r resume session </button><span class="fd">   </span><button class="k sv" type="button">i</button><span class="fd"> brief session   </span><button class="k sv" type="button">c</button><span class="fd"> copy resume command                                              </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="fs">IDLE</span><span class="fx">  1 · done or ended cleanly</span><span class="fd">                                                                               </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="fz">✓ DONE         Release notes for 7.2.0</span><span class="fd">                                                                   </span><span class="fz">16:41</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fz">taskmaster · master · repo root · 88k ctx</span><span class="fd">                                                    </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fz">✓ DONE  docs-020 · end-session ran · closed after the burst</span><span class="fd">                                  </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="fs">RUNNING NOW</span><span class="fx">  2 · open in other terminals, not resumable here</span><span class="fd">                                                  </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="okn">○ RUNNING      </span><span class="fb">Mods UX stage 4 handovers pane</span><span class="fd">                                                            </span><span class="fs">   3m</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">taskmaster · feat/mods-ux · .worktrees/mods-ux · 221k ctx</span><span class="fd">                                    </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="okn">○ RUNNING      </span><span class="fb">Backlog validate after migration</span><span class="fd">                                                          </span><span class="fs">   9m</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">taskmaster · main · repo root · 47k ctx</span><span class="fd">                                                      </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">j/k</span><span class="fx"> move</span><span class="fz"> · </span><span class="fs">s</span><span class="fx"> tick</span><span class="fz"> · </span><span class="fs">v</span><span class="fx"> resume mode</span><span class="fz"> · </span><span class="fs">h/l</span><span class="fx"> phase</span><span class="fz"> · </span><span class="fs">f</span><span class="fx"> phases</span><span class="fz"> · </span><span class="fs">p/n</span><span class="fx"> page</span><span class="fz"> · </span><span class="fs">u</span><span class="fx"> rescan</span><span class="fz"> · </span><span class="fs">m</span><span class="fx"> sidebar</span><span class="fz"> · </span><span class="fs">esc</span><span class="fx"> close</span><span class="fd">          </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1022,"height":902}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

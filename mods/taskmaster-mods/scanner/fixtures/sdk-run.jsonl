@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":false,"timestamp":"2026-10-10T14:00:00.000Z","cwd":"{{ROOT}}","gitBranch":"main","entrypoint":"sdk-cli","sessionId":"sdk-run","message":{"role":"user","content":"Reply with the single word ok."}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-10T14:00:02.000Z","cwd":"{{ROOT}}","gitBranch":"main","entrypoint":"sdk-cli","sessionId":"sdk-run","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3}}}

@@ -43,7 +43,7 @@
 | D1 | Where restore lives | Pane in taskmaster-mods (`tm-restore`), not a separate plugin |
 | D2 | Phase selector | Tab strip with full controls (§5) |
 | D3 | Review layout | Paged card list, focused card expands, bulk bar |
-| D4 | Restore + tm | Task + phase on cards; fresh-from-handover resume; status from tm; band keycap instead of toast |
+| D4 | Restore + tm | Task + phase on cards; fresh-from-handover resume; status from tm; burst shown in the sidebar's Restore entry instead of a toast (§15.5) |
 | D5 | Band handover | Best of: written here > resumed from > newest open for bound task |
 | D6 | Kit placement | Split: rr-tui keeps static recipes; `hooks/kit.tsx` owns interactive primitives |
 | D7 | Band size | Two lines max with own fill; the full panel becomes the Session tab |
@@ -108,7 +108,7 @@ Hard rules (user preferences): no coloured left rails, no motion on hover, no bo
 
 - **Own ground:** both lines share a raised fill across the full width, one blank line above. `◆ TASKMASTER` is a signature-tinted chip. Badges and keycaps as §4.1.
 - **Line 1:** tag, task status badge, id (subtle), title (bold, truncates first), `[3] session ›`. When the bound task is ready for done, a `[d] done` keycap appears here; otherwise `d`/`a` live in the Session tab.
-- **Line 2:** the band handover (D5) with tag `written here` / `resumed from` / `task`, one-line tldr, `[c] copy`; then the counts `[1] waiting`, `[2] handovers`, `[4] restore`.
+- **Line 2:** the band handover (D5) with tag `written here` / `resumed from` / `task`, one-line tldr, `[c] copy`; the counts moved to the sidebar's entries (§15.5, which supersedes this line).
 - **Collapse rules:** no handover → counts move up and the band is one line; no task → line 1 is tag + counts; narrow → title truncates, then labels shrink to key + count. Zero counts dim, never vanish. `[4]` only exists while a qualifying burst is pending (§10.4).
 - **Copy** (`c`) puts the full handover text on the clipboard in the Telegram-paste format the existing copy uses; a toast confirms.
 - **Faults:** tm offline shows a critical `offline` signal on line 1 and dims the counts; detail stays in the faults-only status line.
@@ -214,7 +214,7 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 
 ### 10.4 Band hook
 
-`session.start` runs a background 3-day scan. If the newest burst has ≥ 2 sessions, ≥ 1 unfinished, and is < 48 h old, the band shows `[4] N restore`. `x` on the keycap hides it for that burst (`$.store` `restore-hidden:<burstEpoch>`). No toast.
+`session.start` runs a background 3-day scan. If the newest burst has ≥ 2 sessions, ≥ 1 unfinished, and is < 48 h old, the sidebar's Restore entry shows `N` for it (the band carries no counts, §15.5). `x` hides it for that burst (`$.store` `restore-hidden:<burstEpoch>`). No toast.
 
 ### 10.5 "Resumed from"
 
@@ -226,12 +226,30 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 
 `$.model.complete` with a tag-structured prompt (state / next / blocker) over the scanner's `digest`, cached in `$.store` as `brief:<id>:<closedEpoch>`. New userConfig `briefModel`, default `claude-haiku-5-5`.
 
+### 10.7 Settled at the Stage E live check (2026-10-12)
+
+The user signed the restore pane off live. What the stage settled:
+
+1. **Facts in Python, judgement in TypeScript.** The scanner reports facts only. Bursts, classification, paging and ticks are pure TS (`restore/model.ts`), because classification needs tm (§10.2).
+2. **Task ids** come from `task_id` and `task_ids` arguments of the main thread's `mcp__plugin_taskmaster_tm__*` calls, kept in last-touched order. The bound task is the last one. Sidechain calls are ignored. **Handover ids** come from `Handover written: <id>` in a successful `backlog_handover_create` result (plain, `{"result": ...}`-wrapped, or a text block), with `- Path:` when given. Its `tldr` and `next_action` come from the call's input.
+3. **End-session** means the `taskmaster:end-session` Skill call or the `/taskmaster:end-session` slash command. A prompt typed after it counts in `promptsAfterEnd`.
+4. **Which handover counts:** the session's last one written. A `superseded` handover counts as settled, like `closed`.
+5. **tm unreachable:** only the end-session rule can be told, so every other status reads `?`. For ticks and the sidebar's Restore entry, `?` counts as unfinished: resume still works (§11). The session-start scan asks tm three more times, 5 s apart, before it settles for `?`.
+6. **Scope:** sessions whose first working directory lies under the repo root. Worktrees under it are included. `claude -p` runs (`entrypoint` `sdk-*`) and sibling folders with the same prefix are excluded. This session is scanned, for its burst line, but never listed.
+7. **Bursts** take running sessions that closed before at their last close (a `--resume` keeps the id), so a resumed session still knows its burst. A session that never closed is in no burst.
+8. **Paging under a phase:** that phase's sessions, newest first, with no burst page. Choosing a phase returns to page 1.
+9. **Resume mode toggle** is `v` (`m` opens the sidebar), offered on any session with a handover. `◐ compact` applies to `--resume` only; it is the toolbar toggle plus footer `z`. **Copy** puts the launcher's own command line on the clipboard, built by `hooks/launch.ts` `launchCommand` with the same refusals as a launch: on Windows `Set-Location -LiteralPath '<cwd>'; claude --resume <id>` (or the fresh-prompt form), not `cd "<cwd>"; ...`.
+10. **A launch that opened fewer tabs than asked** marks none reopened, so the ticks stay for another try.
+11. **Keys:** card `s` tick, `r resume session` (the one filled key), `v` fresh / --resume, `i` brief, `c` copy resume command; bulk `b` (primary) and `g`, with all · unfinished · none over the current page; `z` compact; `u` rescan (through `TmFlows.refresh('restore')`); `j` / `k` move; `p` / `n` page; the phase picker's `h` / `l`, `f`, and digits only while its list is open; `m` sidebar. The tab row sits atop the pane (§15.11). Only the focused card carries the card keys. Tab onto a card's box focuses it.
+12. **Refusals and escaping:** Brief prompt fields taken from transcripts are escaped (`&` `<` `>`). A session id is validated (`isSessionId`) before digest or resume. A bulk resume runs the launcher's refusal per row and skips refused rows with a toast.
+13. **Narrow bulk label:** at 28 columns or fewer the bulk label may shorten to `<verb> + compact N` (user accepted).
+
 ## 11. Failure handling
 
 | Case | Behaviour |
 |------|-----------|
 | tm unreachable | Band: `offline` signal, counts dim. Panes: critical signal + `[Retry]`; restore still lists transcript facts with status `?` and resume works. |
-| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[u]`; band shows no `[4]`. |
+| Scanner fails / no Python | Restore shows "Scan failed: <reason>" in the pane with `[u]`; the sidebar's Restore entry shows no count. |
 | Bulk action partly refused | One toast: "3 done · 1 refused: tm-audit-031 (<server wording>)"; refused stay selected. |
 | Remembered phase gone | Fall back to All + toast. |
 | Launcher unavailable | Copy the command, toast "Copied — paste into a new terminal". |
@@ -250,7 +268,7 @@ After a scan, one `backlog_query` resolves the scanned task ids (status, lane, t
 2. **Band + Session tab.**
 3. **Review list.**
 4. **Handovers.**
-5. **Restore:** scanner + tests, tm resolution, pane, launcher, band keycap, resumed-from.
+5. **Restore:** scanner + tests, tm resolution, pane, launcher, sidebar Restore count, resumed-from.
 
 Work in a worktree off `feat/database-native-foundation`; rebase onto the parallel handover-guard work rather than overwrite it. The installed desktop copy (`~/.claude/plugins/marketplaces/local-desktop-app-uploads/`) is re-synced only after the user signs off. No push without asking.
 
@@ -268,3 +286,105 @@ Work in a worktree off `feat/database-native-foundation`; rebase onto the parall
    - Resolved 2026-10-11 (plan Task 0.2): variant A (overlay) reads as a filled key cap followed by a word and presses → KEYCAP_FACE = 'overlay'.
 6. Hotkeys: the engine accepts one digit or one lowercase letter only (probed 2026-10-11: `[`, `/`, `R` and space fail the render), and arrows scroll a focused pane.
    - Resolved 2026-10-11: keys remapped: `[`/`]` → `h`/`l`, `/` → `f`, `R` → `u`, space → `s`, ↑↓ → `j`/`k` plus the Tab ring (plan Stage 0 key map).
+
+## 15. Visual rework (2026-10-12)
+
+**Status:** approved by the user 2026-10-12 (HTML prototype, round 4). **Plan:** `docs/superpowers/plans/2026-10-12-mods-visual-rework.md`.
+**Why:** at the Stage 4 live check the panes read as noise: every key a filled keycap, no hierarchy, cramped lists, the Session tab clipped at the right edge.
+**Prototype (the visual source of truth):** `docs/specs/assets/2026-10-12-mods-visual-rework/` — `Main.dc.html` (the band in its final form and its states, the sidebar drawn open, and the **component sheet**, the canonical element vocabulary), `Session.dc.html`, `Review.dc.html`, `Handovers.dc.html`, `Restore.dc.html`, and `gen.py`, the generator that holds every element's exact shape, ink and label in readable form. Every prototype row is a literal 116-column terminal row.
+
+### 15.1 Supersedes
+
+| Section | Superseded by |
+|---------|---------------|
+| §4.1 kit table (keycap, panel, card, toolbar, pager, selection bar, footer) | §15.2 vocabulary (`hooks/vocab.tsx`); `kit.tsx` keeps `kitOf`, `badge` (the band chip only), `fit`, `row`, `label`, `signal`, `rule`; the y/n row is the vocabulary's `askRow` |
+| §5 phase strip (tabs, `+N ▾`, `0`–`9` on the strip) | §15.4 phase picker |
+| §6 band layout and key map (`1`–`4`, counts on line 2, `x hide`) | §15.5 band |
+| §7–§10 presentation (panels, cards, keycaps, help lines) | §15.6 lists and §15.7 per screen; the behaviour, data and flows of §7–§10 stand |
+| §3 D7 navigation by band digits | §15.8 sidebar |
+| The key map in §6 and the Stage 0 table | §15.9 keys |
+
+Everything else (data, tm calls, D5, launcher, scanner, classification, bursts, faults, testing) stands.
+
+### 15.2 One vocabulary (decision 1)
+
+Every screen is built from the component sheet's elements and no others: FRAME, BAND, SIDEBAR, TOOLBAR, SUMMARY, BULK, SECTION, BADGE, ITEM, CARD, FIELD, SELECTION, KEY 1–5, LABELS, FOOTER, EMPTY, OFFLINE. Inks map onto RR tokens only: bold `fg.bold`, default `fg.default`, subtle `fg.subtle`, disabled `fg.disabled`, faint `border.strong`; rules `border.default`; the focused card's box `border.focus`; signature words `signatureText`; status words `tone.*`; the one filled key `keycap.signature`; the field and sidebar ground `surface.overlay`; the chosen row `tint24.overlay.signature`. Badges are a glyph and an upper-case word in their tone (`▲ BLOCKED`, `◆ ACTION`, `● IN REVIEW`, `✓ DONE`, `○ OPEN`, `↳ RESUMED FROM`, …), never a fill. The only tinted chip left is the band's `◆ TASKMASTER`.
+
+### 15.3 The keycap ladder and labels (decisions 2, 3)
+
+1. **Primary**: one filled key per context, the focused card's first action (review `d mark task done`, handovers `r resume handover here`, restore `r resume session`) and the Session tab's `d mark task done`. The band has none.
+2. **Secondary**: the key letter bold in signature ink, no fill, then the label.
+3. **Nav / meta**: never capped. They appear only in the one dim footer row per pane (`j/k move · s select · … · m sidebar · esc close`).
+4. **Disabled**: the whole key dim; a press toasts why.
+5. **Destructive**: the letter in warning ink, always last in its row; it asks y/n.
+
+Every action label names its subject (`c copy handover`, `d mark task done`, `r resume session`, `b mark 2 tasks done`) and sits next to what it acts on. A bulk label carries its count and is disabled at 0.
+
+### 15.4 Phases: a picker, no strip (decision 4)
+
+Row 1 of a list pane starts with `‹ [ <chosen phase>  <count> ▾ ] ›`. `h`/`l` (or a click on `‹`/`›`) step both ways without wrapping; `f` (or a click on the field) opens the dropdown. The field's value is the chosen phase with its count (`Patch 1.9 · active  3`, `All  7`). The open list shows every shown phase with its count, the chosen one highlighted and done phases dim; `0`–`9` pick only while it is open; its last row is the `◐ show done phases` toggle. Order, counts, the `◐ done` default, per-pane memory and the fallback are §5's and stay.
+
+### 15.5 Band (decision 5, direction C)
+
+Subject text on the left, keys in one fixed right column (35 cells while the band is at least 80 cells wide: the prototype's 34 plus the leading cell of the key face, S6). Narrower, the labels shorten to `done`, `sidebar`, `copy`, `retry` before the subject text drops below 12 cells.
+
+- Line 1: the `◆ TASKMASTER` chip, the task's glyph badge, its id (subtle), its title (bold); keys `d mark task done` (only when the bound task is ready for done, never when inferred) and `m open sidebar`.
+- Line 2: `↳ resumed from <handover id> · <age> · <tldr>` (likewise `written here`, `for this task`) with `c copy handover`.
+- States: **no handover**, line 2 reads `↳ no handover yet for this task` with no key; **nothing bound**, one line `no task bound to this session` with `m open sidebar`; **tm offline**, `▲ tm offline · <reason>` with `r retry tm connection` (a handover written here keeps its line 2 and `c`); **connecting**, `Connecting to Taskmaster…` with `m`; **confirm**, line 2 asks `mark <id> done?` with `y yes` / `n no`; **refused**, line 2 is `▲ REFUSED` and the server's words.
+- No counts on the band. The waiting count lives in the sidebar's Review entry, the restore burst in its Restore entry. When the band shows (its visibility rule is §6's) is unchanged.
+- Deviation from the prototype: the offline line names the failure's reason instead of "last ok 2m ago", because no last-good time is kept (follow-up).
+
+### 15.6 Lists (decision 7)
+
+Review, Handovers and Restore use the Session tab's round-1 layout: a fixed label column (selection mark 2 cells, badge 15 cells) with content from cell 19; each item 2–3 lines (title and age; dim context; the detail: `human`, `next`, the bound task); a dim `┄` rule between collapsed items; **3 items a page**; collapsed items show no keys; the focused item sits in a `border.focus` box with its action row under a blank line. Restore groups a page into UNFINISHED / HANDED OFF / IDLE, then RUNNING NOW, each under a section row; its burst page keeps the whole burst (§10).
+
+### 15.7 Per screen
+
+- **Frame:** `╭─ ◆ TASKMASTER · <PANE> ─ … ─ ● tm ok ─╮` on the page ground; its first row is the Taskmaster tab row (§15.11), not the engine's. Every row fits `bodyColumns`; the Session clipping bug is fixed by fitting every row, pinned by a width test.
+- **Row order in a list pane:** toolbar (picker · toggles · pager · `u`), summary sentence and tallies, bulk row, blank, the list, blank, footer.
+- **Session:** toolbar `this session · <branch> · started <age> ago`; sections TASK / HANDOVER / SESSION in the label column; actions under what they act on (`d mark task done`, `a send task to agent`; `c copy handover`, `h show in handovers`, `w resume in new tab`, `i handover decisions·blockers ▸`; `4 show burst in restore` once a burst is known).
+- **Review / Handovers / Restore:** as their prototype artboards, with §15.9's labels and keys.
+
+### 15.8 Sidebar and navigation (decision 6), with the feasibility decisions
+
+**What the API allows (claude-code.d.ts 2.1.296).** A `Pane` is placed by the surface: docked beside the transcript in the fullscreen layout from 110 columns, else inline above the prompt; the dock's side is the engine's. A plugin's panes share one region, "one shown, the rest tabs", and the engine draws a tab row while more than one is open. No surface hosts a second, left-docked plugin region, and the `AbovePrompt` band cannot open a region of its own over the transcript.
+
+**S1. The sidebar is an overlay inside the Taskmaster pane, not a region of its own.** It is a `position: "absolute"` box at the pane body's top-left (34 cells, `surface.overlay` ground, strong border) drawn over the pane's content, as the prototype draws it over the conversation. Absolute overlays passed the Stage 0 probe (Task 0.2: clean paint, Tab and press work). Reason: it is the closest faithful form the API can host; a separate `tm-nav` pane would be a tab or would replace the content, never a sidebar.
+
+**S2. One Taskmaster pane at a time.** Opening any Taskmaster pane first closes the plugin's other open Taskmaster panes (`$.ui.panes()`, then `$.ui.close`), so the engine never draws its tab row. The sidebar and the plugin's own tab row atop every pane (§15.11) are the navigation surfaces.
+
+**S3. `m` opens the sidebar.** In a pane, `m` toggles it. On the band, `m open sidebar` opens the last Taskmaster pane shown (Session at first) with the sidebar already open. The sidebar lists Review, Handovers, Session and Restore with counts (Review: the waiting total and a `▲ blocked ◆ action` note; Handovers: the open total and the newest age; Restore: the unfinished count of the pending burst and its time), the current pane marked; `1`–`4` jump, Tab + Enter pick, and picking the current pane only closes the sidebar. Restore is listed dim ("not built yet") until the restore pane ships.
+
+**S4. Esc closes the innermost layer.** While the sidebar or the phase list is open, the person's Esc (`ui.close`, origin `person`) is refused for the pane and closes that layer instead; `m` and `f` close them too. To be confirmed live (plan Task A0). If a refusal does not hold, `SIDEBAR_ESC = 'pane'` and the hints say `m close` / `f close`.
+
+**S5. The phase dropdown is an absolute overlay** two cells in, under the toolbar, over the list (`MENU_PLACEMENT = 'absolute'`; `'swap'`, which replaces the list while open, is the fallback). Stage 0 chose swap only because the Stage 1–4 tests assumed it; the rework rewrites those tests.
+
+**S6. How a key letter is drawn.** The engine paints a hotkey Button as `k: label`. Action keys keep Stage 0's overlay face: a 3-cell glyph ` k ` laid over the engine's `k: ` (filled for the primary, a bold signature letter for secondary, warning ink for destructive, disabled ink when dim), so a key reads ` k label`. Footer keys are label-less hotkey Buttons drawn under the footer's text (`FOOTER_KEYS = 'under'`), so the footer reads as plain dim text while every listed key works; the fallback `'inline'` draws them as the engine's own `k: word`. Pager arrows, the picker's `‹ ▾ ›`, toggles and `u` are clickable Buttons without hotkeys; their keys live in the footer. To be confirmed live in Task A0 (the paint, and whether Tab stopping on the hidden footer keys is acceptable).
+
+**S7. Tab, not ↑↓.** A focused pane scrolls on the arrows and walks its Buttons on Tab, so the sidebar and dropdown hints read `Tab move · enter open` where the prototype says `↑↓ move`.
+
+### 15.9 Keys
+
+Hotkeys stay `/^[a-z0-9]$/`.
+
+| Where | Keys |
+|-------|------|
+| Band | `d` mark task done · `m` open sidebar · `c` copy handover · `r` retry tm connection (offline) · `y` / `n` |
+| Every pane footer | `m` sidebar · `esc` close (the engine's) · `u` refresh (restore: rescan) |
+| List pane footer | `j` / `k` move · `s` select (restore: tick) · `h` / `l` phase · `f` phases · `p` / `n` page |
+| Sidebar | `1` Review · `2` Handovers · `3` Session · `4` Restore |
+| Phase list (open) | `0`–`9` pick |
+| Session | `d` mark task done (primary) · `a` send task to agent · `c` copy handover · `h` show in handovers · `w` resume in new tab · `i` decisions·blockers · `4` show burst in restore |
+| Review card | `d` mark task done (primary) · `a` send task to agent · `o` open task · `v` task in viewer · `i` task detail · `t` tick check 1-9 · `c` copy live check; bulk `b` mark N tasks done · `g` send N tasks to agent |
+| Handovers card | `r` resume handover here (primary) · `w` resume in new tab · `c` copy handover · `i` decisions·blockers · `x` close handover (destructive); bulk `b` close N handovers |
+| Restore card | `r` resume session (primary) · `v` switch resume mode · `i` brief session · `c` copy resume command; bulk `b` resume N sessions · `g` brief N sessions; footer `z` compact |
+
+While a y/n is up, the footer drops `p/n page`, so `n` can only answer no.
+
+### 15.10 Constraints (unchanged)
+
+RR via `$.rr` only and no hex in taskmaster-mods; no coloured left rails, no hover motion, no shadows; hotkeys `/^[a-z0-9]$/`; `hooks/handover-guard.ts` untouched; every new file opens with a `// User intent:` header; the validator's rules (no variable `h` in .tsx, `$`-taking functions at file top, every `$.state` key in `types/index.d.ts`, atom sources consts in the same file, `$` never crosses an import).
+
+### 15.11 Tab row (2026-10-12, user request at Stage D check)
+
+Every Taskmaster pane (Session, Review, Handovers; Restore in Stage E) draws a tab row as the first row inside its frame, above the toolbar, followed by one blank row: `☰ m  Review 5 │ Handovers 6 │ Session │ Restore`. `☰` opens or closes the sidebar; the `m` beside it is a signature-coloured hint drawn as text, not a hotkey (the footer owns `m`). Then one tab per pane in sidebar order, separated by a faint `│`: a plain Button with no hotkey (digits stay the sidebar's, the ticks' and the phase list's), clickable, Enter- and Tab-reachable, that opens its pane in place of the current one (`goTo`: still one Taskmaster pane at a time). A tab reads its pane's name and, where the sidebar shows one, its count in subtle ink (Review waiting, Handovers open, Restore unfinished once built). The current tab is bold signature text on the tint24 signature ground; others default ink; Restore is dim and toasts the sidebar's reason while unbuilt. Hover steps the background only. Narrow, the row gives way in this order: counts, then short names (Rev, Hand, Sess, Rest), then the `m` hint, then the tabs' padding; it is never wider than its room. A note page (review's `a` / bulk `g`) keeps its single key and draws no tab row. The sidebar (`m`, band `m`) is unchanged; the tab row is an always-visible shortcut beside it.

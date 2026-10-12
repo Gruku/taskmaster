@@ -67,20 +67,20 @@ describe('review list', () => {
     expect(ids(reviewItems(snap(queue), FRESH_CURSOR, {}))).toEqual(['b-001', 'a-001'])
   })
 
-  test('pages of five: the focused card picks the page; without one, the stored page (clamped) and its first card', () => {
+  test('pages of three: the focused card picks the page; without one, the stored page (clamped) and its first card', () => {
     const items = many(12)
-    expect(listView(items, '', 0)).toMatchObject({ page: 0, pages: 3, index: 0 })
-    expect(ids(listView(items, '', 2).entries)).toEqual(['t-011', 't-012'])
-    expect(listView(items, '', 9)).toMatchObject({ page: 2, index: 10 })
-    expect(listView(items, 't-007', 0)).toMatchObject({ page: 1, index: 6 })
-    expect(listView(items, 'gone', 1).focused?.id).toBe('t-006')
+    expect(listView(items, '', 0)).toMatchObject({ page: 0, pages: 4, index: 0 })
+    expect(ids(listView(items, '', 3).entries)).toEqual(['t-010', 't-011', 't-012'])
+    expect(listView(items, '', 9)).toMatchObject({ page: 3, index: 9 })
+    expect(listView(items, 't-007', 0)).toMatchObject({ page: 2, index: 6 })
+    expect(listView(items, 'gone', 1).focused?.id).toBe('t-004')
     expect(listView([], '', 3)).toMatchObject({ page: 0, pages: 1, index: -1, focused: null })
   })
 
   test('j / k step across pages and stop at both ends', () => {
     const items = many(7)
-    expect(neighbour(items, listView(items, 't-005', 0), 1)).toEqual({ id: 't-006', page: 1 })
-    expect(neighbour(items, listView(items, 't-006', 0), -1)).toEqual({ id: 't-005', page: 0 })
+    expect(neighbour(items, listView(items, 't-003', 0), 1)).toEqual({ id: 't-004', page: 1 })
+    expect(neighbour(items, listView(items, 't-004', 0), -1)).toEqual({ id: 't-003', page: 0 })
     expect(neighbour(items, listView(items, '', 0), -1)).toBeNull()
     expect(neighbour(items, listView(items, 't-007', 0), 1)).toBeNull()
     expect(neighbour([], listView([], '', 0), 1)).toBeNull()
