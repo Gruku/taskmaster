@@ -27,7 +27,8 @@ import {
   actionRows,
   askRow,
   bulkRow,
-  CONTENT_COL,
+  cardInner,
+  contentCol,
   emptyRow,
   fieldSegs,
   focusedItem,
@@ -151,7 +152,9 @@ const actionOf = (it: TmQueueItem, v: ReviewView): string => (it.kind === 'task'
 function checkRows(k: Kit, it: TmQueueItem, check: TmCheck, ticked: readonly string[], armed: boolean, ticking: boolean, on: ReviewHandlers, width: number): RenderNode[] {
   const { Box, Text, Button } = k.ui
   const { t } = k
-  const room = Math.max(8, width - CONTENT_COL - 3)
+  // Tight, the checks start at the card's left edge and their text is cut to what is left.
+  const col = contentCol(width)
+  const room = Math.max(1, width - col - 3)
   return check.items.map((entry, i) => {
     const label = `${ticked.includes(entry) ? '☑' : '☐'} ${entry}`
     const shown = truncate(label, room)
@@ -159,14 +162,14 @@ function checkRows(k: Kit, it: TmQueueItem, check: TmCheck, ticked: readonly str
     const key = armed && ticking && i < 9 ? digit : undefined
     if (!armed) {
       return (
-        <Box paddingLeft={CONTENT_COL} flexDirection="row">
+        <Box paddingLeft={col} flexDirection="row">
           <Text color={t.fg.disabled}>{`${digit}  `}</Text>
           <Text color={t.fg.default}>{shown}</Text>
         </Box>
       )
     }
     return (
-      <Box paddingLeft={CONTENT_COL} flexDirection="row">
+      <Box paddingLeft={col} flexDirection="row">
         {key === undefined ? <Text color={t.fg.disabled}>{`${digit}  `}</Text> : null}
         <Box key={`tick-${i}-col`} flexDirection="row">
           <Button key={`tick-${i}`} plain {...(key === undefined ? {} : { hotkey: key })} label={shown} onPress={() => on.toggleTick(it.id, entry)}>
@@ -186,7 +189,8 @@ function checkRows(k: Kit, it: TmQueueItem, check: TmCheck, ticked: readonly str
 /** The focused item: its context, the `human` field, the checks with `t` and `c` under them, details, a refusal, then its actions or y/n. */
 async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderNode> {
   const { t } = k
-  const room = width - 4
+  const room = cardInner(width)
+  const col = contentCol(room)
   if (it.kind !== 'task') {
     const what = it.kind === 'issue' ? `An open ${it.severity} issue: look at it with the agent.` : 'An open decision: resolve it with the decision skill (taskmaster:decision).'
     const open = actionKey(k, {
@@ -196,7 +200,7 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
       rung: 'primary',
       onPress: () => on.fill(it.kind === 'decision' ? `Resolve decision ${it.id} with the taskmaster:decision skill` : `Look at ${it.id}`),
     })
-    const lines: Seg[][] = [contextOf(k, it, v, true), ...wrapText(what, room - CONTENT_COL).map(text => [{ text, color: t.fg.default }])]
+    const lines: Seg[][] = [contextOf(k, it, v, true), ...wrapText(what, room - col).map(text => [{ text, color: t.fg.default }])]
     return focusedItem(k, { id: it.id, head, lines, actions: actionRows(k, [open], room - 1) }, width)
   }
   const action = actionOf(it, v)
@@ -213,8 +217,8 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
     ]
     const { Box } = k.ui
     extra.push(
-      <Box paddingLeft={CONTENT_COL} flexDirection="column">
-        {actionRows(k, keys, room - CONTENT_COL)}
+      <Box paddingLeft={col} flexDirection="column">
+        {actionRows(k, keys, room - col)}
       </Box>,
     )
   }
@@ -227,13 +231,13 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
     for (const fact of facts) extra.push(itemLine(k, [{ text: fact, color: t.fg.subtle }], room))
   }
   if (v.cursor.refusal !== '' && v.cursor.currentId === it.id) {
-    wrapText(oneLine(v.cursor.refusal), Math.max(10, room - CONTENT_COL - 11)).forEach((text, i) =>
+    wrapText(oneLine(v.cursor.refusal), Math.max(10, room - col - 11)).forEach((text, i) =>
       extra.push(itemLine(k, [{ text: i === 0 ? '▲ REFUSED  ' : '           ', color: t.tone.critical, bold: true }, { text, color: t.fg.default }], room)),
     )
   }
   if (mode === 'confirm') {
     const open = check.items.filter(entry => !ticked.includes(entry)).length
-    const question = doneQuestion(open, check.items.length, it.id, room - 16)
+    const question = doneQuestion(open, check.items.length, it.id, Math.max(room - 16, Math.min(room - 1, 16)))
     return focusedItem(k, { id: it.id, head, lines, extra, actions: askRow(k, { id: 'confirm', question, onYes: () => on.confirmDone(it.id), onNo: on.cancel, width: room - 1 }) }, width)
   }
   const actions = actionRows(
@@ -286,7 +290,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   const { Text } = ui
   const { t } = k
   const s = v.snapshot
-  const inner = Math.max(30, width - 4)
+  const inner = Math.max(10, width - 4)
   const frame = (children: readonly RenderNode[]): RenderNode => paneFrame(k, { name: 'review', health: healthOf(v), width }, children)
   const tail: FooterItem[] = [
     { keys: 'm', word: 'sidebar', press: [{ key: 'm', onPress: on.toggleSidebar }] },

@@ -40,8 +40,7 @@ describe('review card', () => {
   test('the actions: d mark task done, a send task to agent, o open task, v task in viewer, c copy live check, i task detail; they wrap rather than drop', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
-    // Under ~48 columns the content column (19 cells in) leaves the check keys no room: the card's own floor, not this test's.
-    for (const columns of [100, 72, 48]) {
+    for (const columns of [100, 72, 48, 36, 28]) {
       const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(columns) })
       for (const [key, hotkey, label] of [
         ['done', 'd', 'mark task done'],
@@ -53,9 +52,7 @@ describe('review card', () => {
         expect((await ui.find({ type: 'Button', key }))?.props, `${columns} ${key}`).toMatchObject({ hotkey, label })
       }
       const tree = (await ui.drawn()) as unknown as Drawn
-      const card = elementsOf(tree).find(e => e.type === 'Box' && e.props?.key === `card:${ID}`)
-      expect(card, `${columns}`).toBeDefined()
-      expect(widthOf(card), `${columns}`).toBeLessThanOrEqual(columns)
+      expect(widthOf(tree), `${columns}`).toBeLessThanOrEqual(columns)
       const keys = elementsOf(tree).flatMap(e => (e.type === 'Button' && ACTIONS.includes(String(e.props?.key)) ? [String(e.props?.key)] : []))
       expect(keys, `${columns}`).toEqual(ACTIONS)
       await ui.unmount()
@@ -71,13 +68,14 @@ describe('review card', () => {
     expect(await roomy.find({ type: 'Text', text: 'A title that fits a wide pane' })).toBeDefined()
     expect(await roomy.find({ type: 'Text', text: '◆ ACTION       ' })).toBeDefined()
     await roomy.unmount()
-    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(36) })
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...wide(30) })
     expect(await ui.find({ type: 'Text', text: /^A title/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: '◆ ACTION       ' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^a-v…/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^a-.*…/ })).toBeDefined()
     const card = elementsOf(await ui.drawn()).find(e => e.type === 'Box' && e.props?.key === 'card:a-very-long-task-id-001')
-    // The head row (mark, badge, id, title, age) fits inside the card's border and padding.
-    expect(widthOf(card?.children?.[0])).toBeLessThanOrEqual(36 - 4)
+    expect(card).toBeDefined()
+    expect(widthOf(card)).toBeLessThanOrEqual(30)
+    expect(widthOf(await ui.drawn())).toBeLessThanOrEqual(30)
   })
 
   test('a tick toggles ☐/☑, lives in $.store ticks:<id> (read before write), never in Taskmaster', DEMO, async ($, on) => {

@@ -306,17 +306,28 @@ export function footer(k: Kit, items: readonly FooterItem[], width: number): Ren
       </Box>
     )
   }
-  const room = Math.max(1, width, keys.length * 3)
+  // Each label-less key takes 3 cells (`k: `): too many for one row, they wrap to rows under the hints, blanked over.
+  const room = Math.max(3, width)
+  const perRow = Math.max(1, Math.floor(room / 3))
+  const rows: FooterKey[][] = []
+  for (let i = 0; i < keys.length; i += perRow) rows.push(keys.slice(i, i + perRow))
   return (
-    <Box flexDirection="row" width={room}>
-      {keys.map(p => (
-        <Button key={p.id ?? `key:${p.key}`} plain hotkey={p.key} label="" onPress={p.onPress} />
-      ))}
-      <Box position="absolute" top={0} left={0} width={room}>
+    <Box flexDirection="column" width={room}>
+      {rows.map(r => (
         <Box flexDirection="row" width={room}>
-          {hints(k, items, Math.max(1, width))}
+          {r.map(p => (
+            <Button key={p.id ?? `key:${p.key}`} plain hotkey={p.key} label="" onPress={p.onPress} />
+          ))}
+        </Box>
+      ))}
+      <Box position="absolute" top={0} left={0} width={room} flexDirection="column">
+        <Box flexDirection="row" width={room}>
+          {hints(k, items, room)}
           <Box flexGrow={1} />
         </Box>
+        {rows.slice(1).map(() => (
+          <Text>{' '.repeat(room)}</Text>
+        ))}
       </Box>
     </Box>
   )
@@ -329,6 +340,10 @@ export const MARK_W = 2
 export const LABEL_COL = MARK_W + BADGE_W
 /** Where an item's detail lines and a section's content start. */
 export const CONTENT_COL = LABEL_COL + 2
+/** The least room a detail line keeps after the content column; tighter, the line starts at the item's left edge instead. */
+export const TIGHT_ROOM = 24
+/** Where an item's content starts in `width` cells: the content column, or 0 when that would leave under TIGHT_ROOM. */
+export const contentCol = (width: number): number => (width - CONTENT_COL >= TIGHT_ROOM ? CONTENT_COL : 0)
 
 export type MarkSpec = { readonly key: string; readonly selected: boolean; readonly onPress: () => void; readonly dim?: string }
 
@@ -375,8 +390,10 @@ export function itemHead(k: Kit, a: HeadSpec, width: number): RenderNode {
   const faint = t.border.strong
   const m = mark(k, a.mark)
   const b = glyphBadge(k, a.badge, { pad: true, dim })
-  const age = a.age.padStart(5)
-  const identRoom = Math.max(4, width - m.width - b.width - age.length - 4)
+  // Tight: the age goes first, then the id shortens to what is left (the badge stays whole).
+  const avail = width - m.width - b.width
+  const age = avail >= 5 + 6 ? a.age.padStart(5) : ''
+  const identRoom = Math.max(1, avail - age.length - (age === '' ? 2 : 4))
   const ident = a.ident === undefined || a.ident === '' ? '' : `${truncate(a.ident, identRoom)}  `
   const metaWanted = a.meta === undefined || a.meta === '' ? '' : `${a.meta}   `
   const meta = width - m.width - b.width - ident.length - metaWanted.length - age.length >= 8 ? metaWanted : ''
@@ -412,10 +429,11 @@ export function itemHead(k: Kit, a: HeadSpec, width: number): RenderNode {
   )
 }
 
-/** A detail line in the content column, cut to the room. */
+/** A detail line in the content column (at the left edge when tight), cut to the room. */
 export function itemLine(k: Kit, segs: readonly Seg[], width: number): RenderNode {
   const { Box } = k.ui
-  return <Box paddingLeft={CONTENT_COL}>{line(k, segs, Math.max(1, width - CONTENT_COL)).el}</Box>
+  const col = contentCol(width)
+  return <Box paddingLeft={col}>{line(k, segs, Math.max(1, width - col)).el}</Box>
 }
 
 /** A field: the lowercase name in signature ink beside its value (`next  Record the merge`). */
@@ -428,6 +446,11 @@ export const fieldSegs = (k: Kit, name: string, value: string): Seg[] => [
 export function item(k: Kit, head: HeadSpec, lines: readonly (readonly Seg[])[], width: number): RenderNode[] {
   return [itemHead(k, head, width), ...lines.map(l => itemLine(k, l, width))]
 }
+
+/** A focused card is tight when its padded inside would leave a detail line under TIGHT_ROOM: it drops its side padding. */
+const cardTight = (width: number): boolean => width - 4 < TIGHT_ROOM
+/** The cells inside a focused card drawn in `width`: its border and (unless tight) its side padding taken off. */
+export const cardInner = (width: number): number => Math.max(10, width - (cardTight(width) ? 2 : 4))
 
 /** The focused item: boxed in the focus border, its lines, any extra rows, then a blank row and its action rows. */
 export function focusedItem(
@@ -442,15 +465,16 @@ export function focusedItem(
   width: number,
 ): RenderNode {
   const { Box, Text } = k.ui
-  const inner = Math.max(10, width - 4)
+  const tight = cardTight(width)
+  const inner = cardInner(width)
   return (
-    <Box key={`card:${a.id}`} flexDirection="column" borderStyle="round" borderColor={k.t.border.focus} paddingX={1}>
+    <Box key={`card:${a.id}`} flexDirection="column" borderStyle="round" borderColor={k.t.border.focus} paddingX={tight ? 0 : 1}>
       {itemHead(k, a.head, inner)}
       {a.lines.map(l => itemLine(k, l, inner))}
       {[...(a.extra ?? [])]}
       {a.actions.length === 0 ? null : <Text> </Text>}
       {a.actions.length === 0 ? null : (
-        <Box flexDirection="column" paddingLeft={1}>
+        <Box flexDirection="column" paddingLeft={tight ? 0 : 1}>
           {[...a.actions]}
         </Box>
       )}
@@ -656,15 +680,24 @@ export type Scope = { readonly id: string; readonly label: string; readonly onPr
 export function bulkRow(k: Kit, a: { readonly keys: readonly Piece[]; readonly scopes: readonly Scope[]; readonly width: number }): RenderNode {
   const { Box, Text } = k.ui
   const scopeWidth = a.scopes.reduce((n, s) => n + s.label.length, 0) + 3 * Math.max(0, a.scopes.length - 1)
+  const keysWidth = a.keys.reduce((n, p) => n + p.width, 0) + 3 * Math.max(0, a.keys.length - 1)
+  const scopes = a.scopes.flatMap((s, i) => [...(i === 0 ? [] : [<Text color={k.t.border.strong}> · </Text>]), quietButton(k, s.id, s.label, k.t.fg.subtle, s.onPress)])
+  // Too tight for one row: the keys wrap (never dropped) and the scopes go under them.
+  if (keysWidth + 2 + scopeWidth > a.width) {
+    return (
+      <Box flexDirection="column">
+        {actionRows(k, a.keys, a.width)}
+        <Box flexDirection="row">{scopes}</Box>
+      </Box>
+    )
+  }
   return (
     <Box flexDirection="row" alignItems="flex-start">
       <Box flexDirection="row" columnGap={3}>
         {fit(a.keys, Math.max(1, a.width - scopeWidth - 2), 3)}
       </Box>
       <Box flexGrow={1} />
-      <Box flexDirection="row">
-        {a.scopes.flatMap((s, i) => [...(i === 0 ? [] : [<Text color={k.t.border.strong}> · </Text>]), quietButton(k, s.id, s.label, k.t.fg.subtle, s.onPress)])}
-      </Box>
+      <Box flexDirection="row">{scopes}</Box>
     </Box>
   )
 }
