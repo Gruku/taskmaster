@@ -145,7 +145,8 @@ describe('closing a handover', () => {
 
 describe('demo handovers', () => {
   test('seed 7: the snapshot window plus two closed ones, every linked task known, and the strip counts agree', () => {
-    expect(DEMO_SEED).toBe(7)
+    // The handovers list arrived with seed 7; later seeds (8: restore) keep it.
+    expect(DEMO_SEED).toBeGreaterThanOrEqual(7)
     const list = demoHandoverList(0)
     const open = demoSnapshot(0).handovers
     expect(list.handovers.filter(h => h.status === 'open').map(h => h.id)).toEqual(open.map(h => h.id))
