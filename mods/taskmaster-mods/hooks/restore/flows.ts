@@ -1,6 +1,6 @@
 // User intent: what every key in the restore pane does, and the session-start scan behind the band's restore keycap, in
 // one place over injected closures (no `$`), so the pane, the band and the Session tab never disagree about a burst.
-import type { TmRefs, TmRestoreData, TmRestorePending, TmRestoreView, TmSessionBurst } from '../../types'
+import type { TmRefs, TmRestoreData, TmResumeMode, TmRestorePending, TmRestoreView, TmSessionBurst } from '../../types'
 import { DEMO_BRIEF, demoRestore } from '../demo'
 import type { TmHost } from '../host'
 import { isSessionId, type LaunchResult, launchRefusal, type LaunchSpec, type Platform } from '../launch'
@@ -104,6 +104,7 @@ export function createRestoreFlows(d: RestoreDeps) {
     const key = briefKey(row)
     const cached = await d.store.get(key)
     if (typeof cached === 'string') return cached
+    if (!isSessionId(row.s.id)) return 'Brief failed: unusable session id'
     let prompt: string
     try {
       prompt = briefPrompt(row, await runDigest(d.rh, row.s.id))
@@ -217,18 +218,27 @@ export function createRestoreFlows(d: RestoreDeps) {
         if (row === undefined || view.launching.includes(id)) continue
         const why = blockedWhy(row)
         if (why !== '') d.toast(why)
-        else if (resumeModeOf(row, view.modes) === 'resume' && !isSessionId(row.s.id)) d.toast(`${row.s.title}: unusable session id`)
         else ready.push(row)
       }
       if (ready.length === 0) return
       const root = await d.repoRoot()
-      const specs: LaunchSpec[] = []
+      const platform = await d.platform()
+      // The launcher's own refusals, up front: a refused row is said and skipped before anything is recorded for it.
+      const go: { row: RestoreRow; mode: TmResumeMode; spec: LaunchSpec }[] = []
       for (const row of ready) {
         const mode = resumeModeOf(row, view.modes)
-        if (mode === 'resume' && row.handover !== null && d.source === 'tm') await recordResumedFrom(d.store, row.s.id, row.handover.id)
-        specs.push(launchSpecOf(row, mode, view.compact, root))
+        const spec = launchSpecOf(row, mode, view.compact, root)
+        const refused = launchRefusal(spec, platform, undefined)
+        if (refused !== '') d.toast(`${row.s.title}: ${refused}`)
+        else go.push({ row, mode, spec })
       }
-      const launched = ready.map(r => r.s.id)
+      if (go.length === 0) return
+      const specs: LaunchSpec[] = []
+      for (const { row, mode, spec } of go) {
+        if (mode === 'resume' && row.handover !== null && d.source === 'tm') await recordResumedFrom(d.store, row.s.id, row.handover.id)
+        specs.push(spec)
+      }
+      const launched = go.map(g => g.row.s.id)
       await d.write.view(v => ({ ...v, launching: [...v.launching, ...launched] }))
       try {
         const out = await d.launch(specs)

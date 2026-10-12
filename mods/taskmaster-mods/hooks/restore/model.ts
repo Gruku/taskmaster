@@ -443,6 +443,8 @@ export function copyTextOf(row: RestoreRow, mode: TmResumeMode, root: string, pl
 /** A brief is cached per session and close (spec §10.6): a session closed again gets a new one. */
 export const briefKey = (row: RestoreRow): string => `brief:${row.s.id}:${Math.round(row.s.closedEpoch)}`
 const attr = (text: string): string => text.replace(/[<>"&]/g, ' ')
+/** Transcript and handover text inside a tag: escaped, so it can never close the prompt's tags. */
+const body = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /** The brief's prompt (spec §10.6): the scanner's digest and what tm said, tag-structured, asking for state / next / blocker. */
 export function briefPrompt(row: RestoreRow, digest: { readonly first: string; readonly tail: string }): string {
@@ -450,9 +452,9 @@ export function briefPrompt(row: RestoreRow, digest: { readonly first: string; r
   return [
     '<task>A developer closed this Claude Code session and wants to resume it. From the transcript excerpt, say where the work stopped and the single next step. Be concrete: name files, task ids, branches, open questions. No preamble.</task>',
     `<session title="${attr(row.s.title)}" branch="${attr(row.s.branch)}" status="${row.status}" task="${attr(row.boundId)}"/>`,
-    ...(h === null ? [] : [`<handover id="${attr(h.id)}" status="${attr(row.handoverStatus)}">${h.tldr} | next: ${h.next}</handover>`]),
-    `<opening>${digest.first}</opening>`,
-    `<transcript_tail>${digest.tail}</transcript_tail>`,
+    ...(h === null ? [] : [`<handover id="${attr(h.id)}" status="${attr(row.handoverStatus)}">${body(h.tldr)} | next: ${body(h.next)}</handover>`]),
+    `<opening>${body(digest.first)}</opening>`,
+    `<transcript_tail>${body(digest.tail)}</transcript_tail>`,
     '<output_format>Reply with exactly: <state>one or two sentences</state><next>one sentence</next><blocker>one sentence or none</blocker></output_format>',
   ].join('\n')
 }
