@@ -13,6 +13,8 @@ import type {
   TmScannedSession,
   TmSessionBurst,
 } from '../../types'
+import { launchCommand, type LaunchSpec, type Platform, resumePrompt } from '../launch'
+import { handoverPath } from '../model'
 import { firstParagraph, isRefusal, type Parsed } from '../parse'
 import { NO_TASK } from '../phases'
 import type { RrTone } from '../rr'
@@ -417,6 +419,51 @@ export function detailOf(row: RestoreRow): { readonly label: string; readonly te
   if (row.status === 'interrupted' && row.s.lastPrompt !== '') return { label: 'Working on', text: plain(row.s.lastPrompt) }
   if (row.s.lastReply !== '') return { label: 'Last reply', text: plain(row.s.lastReply) }
   return { label: 'Note', text: row.why }
+}
+
+const handoverPathOf = (h: TmScannedHandover, root: string): string => h.path || handoverPath(root, h.id)
+
+/** What the launcher opens for a session (spec §10.3): a fresh session told to resume from its handover, or --resume. */
+export function launchSpecOf(row: RestoreRow, mode: TmResumeMode, compact: boolean, root: string): LaunchSpec {
+  const base = { cwd: row.s.cwd, title: row.s.title }
+  if (mode === 'fresh' && row.handover !== null) {
+    return { ...base, mode: 'fresh', prompt: resumePrompt(row.handover.id, handoverPathOf(row.handover, root)) }
+  }
+  return { ...base, mode: 'resume', sessionId: row.s.id, ...(compact ? { compact: true } : {}) }
+}
+
+/**
+ * `c`: one line to paste in a new terminal, built by the launcher itself (its quoting and session-id check), never by
+ * concatenation here. Throws on a session id the launcher refuses.
+ */
+export function copyTextOf(row: RestoreRow, mode: TmResumeMode, root: string, platform: Platform): string {
+  return launchCommand(platform, launchSpecOf(row, mode, false, root), undefined)
+}
+
+/** A brief is cached per session and close (spec §10.6): a session closed again gets a new one. */
+export const briefKey = (row: RestoreRow): string => `brief:${row.s.id}:${Math.round(row.s.closedEpoch)}`
+const attr = (text: string): string => text.replace(/[<>"&]/g, ' ')
+
+/** The brief's prompt (spec §10.6): the scanner's digest and what tm said, tag-structured, asking for state / next / blocker. */
+export function briefPrompt(row: RestoreRow, digest: { readonly first: string; readonly tail: string }): string {
+  const h = row.handover
+  return [
+    '<task>A developer closed this Claude Code session and wants to resume it. From the transcript excerpt, say where the work stopped and the single next step. Be concrete: name files, task ids, branches, open questions. No preamble.</task>',
+    `<session title="${attr(row.s.title)}" branch="${attr(row.s.branch)}" status="${row.status}" task="${attr(row.boundId)}"/>`,
+    ...(h === null ? [] : [`<handover id="${attr(h.id)}" status="${attr(row.handoverStatus)}">${h.tldr} | next: ${h.next}</handover>`]),
+    `<opening>${digest.first}</opening>`,
+    `<transcript_tail>${digest.tail}</transcript_tail>`,
+    '<output_format>Reply with exactly: <state>one or two sentences</state><next>one sentence</next><blocker>one sentence or none</blocker></output_format>',
+  ].join('\n')
+}
+
+/** The reply's tags as `State:` / `Next:` / `Blocker:` lines (a `none` blocker left out); an untagged reply as it came. */
+export function briefText(reply: string): string {
+  const pick = (tag: string): string | undefined => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(reply)?.[1]?.trim()
+  const state = pick('state')
+  if (state === undefined) return reply.trim()
+  const blocker = pick('blocker')
+  return [`State: ${state}`, `Next: ${pick('next') ?? '?'}`, ...(blocker !== undefined && !/^none\.?$/i.test(blocker) ? [`Blocker: ${blocker}`] : [])].join('\n')
 }
 
 /**

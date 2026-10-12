@@ -1,15 +1,21 @@
 // User intent: what every key in the restore pane does, and the session-start scan behind the band's restore keycap, in
 // one place over injected closures (no `$`), so the pane, the band and the Session tab never disagree about a burst.
 import type { TmRefs, TmRestoreData, TmRestorePending, TmRestoreView, TmSessionBurst } from '../../types'
-import { demoRestore } from '../demo'
+import { DEMO_BRIEF, demoRestore } from '../demo'
 import type { TmHost } from '../host'
+import { isSessionId, type LaunchResult, launchRefusal, type LaunchSpec, type Platform } from '../launch'
 import type { PhaseStore } from '../phases'
-import { readResumedFrom } from '../resumed'
+import { readResumedFrom, recordResumedFrom } from '../resumed'
 import {
   blockedWhy,
+  briefKey,
+  briefPrompt,
+  briefText,
   burstsOf,
+  copyTextOf,
   defaultBurst,
   isTicked,
+  launchSpecOf,
   paneRows,
   restorePendingOf,
   type RestoreRow,
@@ -18,7 +24,7 @@ import {
   sessionBurstOf,
   SIGNAL_DAYS,
 } from './model'
-import { type RestoreHost, resolveRefs, runScan } from './scan'
+import { type RestoreHost, resolveRefs, runDigest, runScan } from './scan'
 
 /** tm connects seconds after a session starts: the start scan asks this many more times, this far apart. */
 export const RESOLVE_RETRIES = 3
@@ -48,6 +54,13 @@ export type RestoreDeps = {
   readonly openPane: () => Promise<boolean>
   /** Reads restore's phase list fresh into the strip, when the main flows are built (a no-op before). */
   readonly loadPhases: () => void
+  /** The platform the copy line is written for (launch.ts's platformOf). */
+  readonly platform: () => Promise<Platform>
+  /** Stage 2's launcher (TmFlows.launch): staggered tabs, a copy fallback, one summary toast. */
+  readonly launch: (specs: readonly LaunchSpec[]) => Promise<LaunchResult>
+  readonly copy: (text: string) => Promise<boolean>
+  /** One completion on the briefModel (spec §10.6). */
+  readonly complete: (prompt: string) => Promise<{ readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string }>
 }
 
 export type RestoreFlows = ReturnType<typeof createRestoreFlows>
@@ -83,6 +96,36 @@ export function createRestoreFlows(d: RestoreDeps) {
     }
     // Only onto the scan they were read for ($.state hands back copies, so the scan is known by its time, not its identity).
     await d.write.data(prev => (prev.scan?.scannedAt === found.scannedAt ? { ...prev, refs } : prev))
+  }
+
+  /** A session's brief: cached per close in $.store, else the digest put to the briefModel; a failure is said in the brief. */
+  const briefOf = async (row: RestoreRow): Promise<string> => {
+    if (d.source === 'demo') return DEMO_BRIEF
+    const key = briefKey(row)
+    const cached = await d.store.get(key)
+    if (typeof cached === 'string') return cached
+    let prompt: string
+    try {
+      prompt = briefPrompt(row, await runDigest(d.rh, row.s.id))
+    } catch (error) {
+      return `Brief failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+    const answer = await d.complete(prompt)
+    if (!answer.ok) return `Brief failed: ${answer.reason}`
+    const text = briefText(answer.text)
+    await d.store.set(key, text)
+    return text
+  }
+
+  const runBrief = async (row: RestoreRow): Promise<void> => {
+    const id = row.s.id
+    await d.write.view(v => ({ ...v, briefing: [...v.briefing, id] }))
+    try {
+      const text = await briefOf(row)
+      await d.write.view(v => ({ ...v, briefs: { ...v.briefs, [id]: text } }))
+    } finally {
+      await d.write.view(v => ({ ...v, briefing: v.briefing.filter(x => x !== id) }))
+    }
   }
 
   const rescan = async (days: number, retries = 0): Promise<void> => {
@@ -155,6 +198,91 @@ export function createRestoreFlows(d: RestoreDeps) {
     /** `z`: --resume launches ask the session to compact first. */
     toggleCompact: async (): Promise<void> => {
       await d.write.view(v => ({ ...v, compact: !v.compact }))
+    },
+    /**
+     * `r` on a card, `b` for the ticked: what cannot reopen says why (a --resume of a session id the launcher would refuse
+     * among them); a --resume of a session with a handover records `resumed-from:<id>` first (spec §10.5); then one
+     * staggered launch. Only a launch that opened every tab marks them reopened and unticks them.
+     */
+    resume: async (ids: readonly string[]): Promise<void> => {
+      if (ids.length === 0) {
+        d.toast('Nothing ticked to resume')
+        return
+      }
+      const view = await d.read.view()
+      const rows = await rowsNow()
+      const ready: RestoreRow[] = []
+      for (const id of ids) {
+        const row = rows.find(r => r.s.id === id)
+        if (row === undefined || view.launching.includes(id)) continue
+        const why = blockedWhy(row)
+        if (why !== '') d.toast(why)
+        else if (resumeModeOf(row, view.modes) === 'resume' && !isSessionId(row.s.id)) d.toast(`${row.s.title}: unusable session id`)
+        else ready.push(row)
+      }
+      if (ready.length === 0) return
+      const root = await d.repoRoot()
+      const specs: LaunchSpec[] = []
+      for (const row of ready) {
+        const mode = resumeModeOf(row, view.modes)
+        if (mode === 'resume' && row.handover !== null && d.source === 'tm') await recordResumedFrom(d.store, row.s.id, row.handover.id)
+        specs.push(launchSpecOf(row, mode, view.compact, root))
+      }
+      const launched = ready.map(r => r.s.id)
+      await d.write.view(v => ({ ...v, launching: [...v.launching, ...launched] }))
+      try {
+        const out = await d.launch(specs)
+        if (out.opened === specs.length) {
+          const at = (await d.now()) / 1000
+          await d.write.view(v => ({
+            ...v,
+            opened: { ...v.opened, ...Object.fromEntries(launched.map(id => [id, at])) },
+            selected: { ...v.selected, ...Object.fromEntries(launched.map(id => [id, false])) },
+          }))
+        }
+      } catch (error) {
+        d.toast(`taskmaster-mods: could not open the sessions (${error instanceof Error ? error.message : String(error)})`)
+      } finally {
+        await d.write.view(v => ({ ...v, launching: v.launching.filter(id => !launched.includes(id)) }))
+      }
+    },
+    /** `c`: the launcher's own command that reopens it, to paste in a new terminal; what the launcher refuses is not copied. */
+    copy: async (id: string): Promise<void> => {
+      const row = await rowById(id)
+      if (row === undefined) return
+      const mode = resumeModeOf(row, (await d.read.view()).modes)
+      const root = await d.repoRoot()
+      const platform = await d.platform()
+      const why = launchRefusal(launchSpecOf(row, mode, false, root), platform, undefined)
+      if (why !== '') {
+        d.toast(`${row.s.title}: cannot copy (${why})`)
+        return
+      }
+      const text = copyTextOf(row, mode, root, platform)
+      d.toast((await d.copy(text)) ? `Copied: ${text}` : `Clipboard unavailable: ${text}`)
+    },
+    /** `i` on a card: shows its brief (asking for one the first time), or hides it. */
+    toggleBrief: async (id: string): Promise<void> => {
+      const view = await d.read.view()
+      if (view.briefs[id] !== undefined) {
+        await d.write.view(v => ({ ...v, briefs: Object.fromEntries(Object.entries(v.briefs).filter(([k]) => k !== id)) }))
+        return
+      }
+      const row = await rowById(id)
+      if (row !== undefined && !view.briefing.includes(id)) await runBrief(row)
+    },
+    /** `g`: a brief for each ticked session that has none, one after another. */
+    brief: async (ids: readonly string[]): Promise<void> => {
+      if (ids.length === 0) {
+        d.toast('Nothing ticked to brief')
+        return
+      }
+      const rows = await rowsNow()
+      for (const id of ids) {
+        const view = await d.read.view()
+        const row = rows.find(r => r.s.id === id)
+        if (row !== undefined && view.briefs[id] === undefined && !view.briefing.includes(id)) await runBrief(row)
+      }
     },
   }
 }

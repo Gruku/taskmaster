@@ -152,6 +152,19 @@ export function fakeRestore(
     loadPhases: () => {
       f.phasesAsked += 1
     },
+    platform: async () => 'windows',
+    launch: async specs => {
+      f.launches.push(specs)
+      return f.launchResult(specs)
+    },
+    copy: async text => {
+      f.copies.push(text)
+      return !text.includes('NOCLIP')
+    },
+    complete: async prompt => {
+      f.prompts.push(prompt)
+      return f.complete(prompt)
+    },
   }
   return f
 }
