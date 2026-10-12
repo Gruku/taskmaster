@@ -198,3 +198,11 @@ export async function loadChoice(store: PhaseStore, pane: TmPhasePane, root: str
 export async function saveChoice(store: PhaseStore, pane: TmPhasePane, root: string, choice: string): Promise<void> {
   await store.set(phaseKey(pane, root), { phase: choice })
 }
+
+/** The picker's and the dropdown's name for a tab (spec §15.4): `All`, `Patch 1.9 · active`, `Patch 1.8 ✓`, `no task`. */
+export function pickerName(tab: PhaseTab): string {
+  if (tab.kind === 'all') return 'All'
+  if (tab.kind === 'active') return `${tab.name} · active`
+  if (tab.kind === 'done') return `${tab.name} ✓`
+  return tab.name
+}

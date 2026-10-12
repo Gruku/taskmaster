@@ -4,8 +4,9 @@
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderNode, UiPressArgument } from 'claude-code'
 
-import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp } from './kit'
+import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp, type StripHandlers, type StripView } from './kit'
 import { truncate } from './model'
+import { atEnd, isDoneShown, orderPhases, pickerName, shownTabs, step } from './phases'
 import type { RrGround, RrSignalKind } from './rr'
 
 /** Footer keys (spec §15.8 S6, Task A0): `under` hides label-less hotkey Buttons under the footer text; `inline` draws `k: word`. */
@@ -720,4 +721,128 @@ export function offlineRow(k: Kit, detail: string, retry: Piece, width: number):
       {retry.el}
     </Box>
   )
+}
+
+// ── The phase picker and its dropdown (spec §15.4) ─────────────────────────────────────────────────────────────────
+
+export const MENU_W = 44
+
+function tabsOf(s: StripView) {
+  const tabs = orderPhases(s.view.phases, s.allCount, s.view.choice)
+  const showDone = isDoneShown(tabs, s.view.showDone)
+  return { tabs, showDone, shown: shownTabs(tabs, s.view.choice, showDone) }
+}
+
+/** `‹ [ Patch 1.9 · active  3 ▾ ] ›`: quiet Buttons; `h` / `l` / `f` are the footer's (phaseFooter). */
+export function phasePicker(k: Kit, s: StripView, on: StripHandlers): Piece {
+  const { Box, Text, Button } = k.ui
+  const { t } = k
+  const { tabs, shown } = tabsOf(s)
+  const choice = s.view.choice
+  const chosen = tabs.find(tab => tab.id === choice) ?? tabs[0]
+  const value = ` ${chosen === undefined ? 'All' : pickerName(chosen)}  ${chosen?.count ?? 0} ${s.view.overlay ? '▴' : '▾'} `
+  return {
+    el: (
+      <Box flexDirection="row">
+        {quietButton(k, 'phase-prev', '‹', t.fg.subtle, () => on.choose(step(shown, choice, -1)), atEnd(shown, choice, -1) ? 'Already on the first phase' : '')}
+        <Text> </Text>
+        <Box key="phase-field-box" flexDirection="row" hover={{ backgroundColor: stepUp(t, 'overlay') }}>
+          <Button key="phase-field" plain label={value} onPress={() => on.overlay(!s.view.overlay)}>
+            <Text backgroundColor={t.surface.overlay} color={t.fg.bold}>
+              {value}
+            </Text>
+          </Button>
+        </Box>
+        <Text> </Text>
+        {quietButton(k, 'phase-next', '›', t.fg.subtle, () => on.choose(step(shown, choice, 1)), atEnd(shown, choice, 1) ? 'Already on the last phase' : '')}
+      </Box>
+    ),
+    width: value.length + 4,
+  }
+}
+
+/** The footer's phase keys: `h/l phase` (h back, l on; at an end it says why) and `f phases` (opens or closes the list). */
+export function phaseFooter(k: Kit, s: StripView, on: StripHandlers): FooterItem[] {
+  const { shown } = tabsOf(s)
+  const choice = s.view.choice
+  const move = (dir: -1 | 1) => (): void => {
+    if (atEnd(shown, choice, dir)) k.say(dir === -1 ? 'Already on the first phase' : 'Already on the last phase')
+    else on.choose(step(shown, choice, dir))
+  }
+  return [
+    { keys: 'h/l', word: 'phase', press: [{ key: 'h', onPress: move(-1) }, { key: 'l', onPress: move(1) }] },
+    { keys: 'f', word: 'phases', press: [{ key: 'f', onPress: () => on.overlay(!s.view.overlay) }] },
+  ]
+}
+
+/** The open list: each shown phase with its count, `0`–`9` on the first ten, the chosen row tinted and focused, done rows dim. */
+export function phaseMenu(k: Kit, s: StripView, on: StripHandlers): RenderNode {
+  const { Box, Text, Button } = k.ui
+  const { t } = k
+  const { shown, showDone } = tabsOf(s)
+  const room = MENU_W - 4 - 3
+  const rows = shown.map((tab, i) => {
+    const digit = i <= 9 ? String(i) : undefined
+    const name = pickerName(tab)
+    const count = String(tab.count)
+    const text = `${truncate(name, room - count.length - 1).padEnd(room - count.length)}${count}`
+    const chosen = tab.id === s.view.choice
+    const id = `phase-pick:${tab.id}`
+    return (
+      <Box key={`${id}-box`} flexDirection="row" {...(chosen ? { backgroundColor: t.tint24.overlay.signature } : {})} hover={{ backgroundColor: chosen ? t.tint24.overlay.signature : stepUp(t, 'overlay') }}>
+        <Button
+          key={id}
+          plain
+          {...(digit === undefined ? {} : { hotkey: digit })}
+          label={digit === undefined ? `   ${text}` : text}
+          {...(tab.dim && !chosen ? { dimColor: true } : {})}
+          {...(chosen ? { autoFocus: true as const } : {})}
+          onPress={() => on.choose(tab.id)}
+        >
+          {chosen ? (
+            <Text color={t.fg.bold} bold>
+              {text}
+            </Text>
+          ) : null}
+        </Button>
+        {digit === undefined || KEYCAP_FACE !== 'overlay' ? null : (
+          <Box position="absolute" left={0} top={0}>
+            <Text color={chosen ? t.fg.bold : t.fg.disabled}>{`${digit}  `}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+  const toggle = (
+    <Box flexDirection="row">
+      {quietButton(k, 'phase-done', '◐ show done phases', t.signatureText, on.toggleDone)}
+      <Box flexGrow={1} />
+      <Text color={t.fg.subtle}>{showDone ? 'on' : 'off'}</Text>
+    </Box>
+  )
+  const close = SIDEBAR_ESC === 'refuse' ? 'esc' : 'f'
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={t.border.strong} backgroundColor={t.surface.overlay} paddingX={1} width={MENU_W}>
+      {rows}
+      <Text> </Text>
+      {toggle}
+      {hints(k, [{ keys: 'Tab', word: 'move' }, { keys: 'enter', word: 'pick' }, { keys: '0-9', word: 'pick' }, { keys: close, word: 'close' }], MENU_W - 4)}
+    </Box>
+  )
+}
+
+/** A list pane's body under row 1: as it is while the list is closed; with the list floating over it (or replacing it) while open. */
+export function withPhaseMenu(k: Kit, s: StripView, on: StripHandlers, body: readonly RenderNode[]): RenderNode[] {
+  const { Box } = k.ui
+  if (!s.view.overlay) return [...body]
+  const menu = phaseMenu(k, s, on)
+  if (MENU_PLACEMENT === 'swap') return [menu]
+  return [
+    <Box flexDirection="column">
+      {[...body]}
+      <Box position="absolute" top={0} left={2}>
+        {menu}
+      </Box>
+    </Box>,
+  ]
 }
