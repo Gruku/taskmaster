@@ -936,3 +936,10 @@ export function withSidebar(k: Kit, body: RenderElement, v: SidebarView | null, 
     </Box>
   )
 }
+
+/** A badge as a line segment (`● IN REVIEW` in its ink): for rows built from segments. Pass a task status through statusBadgeWord. */
+export function badgeSeg(k: Kit, word: string): Seg {
+  const upper = word.toUpperCase()
+  const spec = BADGES[upper] ?? UNKNOWN_BADGE
+  return { text: `${spec.glyph} ${upper}`, color: badgeInk(k, upper), bold: spec.bold }
+}

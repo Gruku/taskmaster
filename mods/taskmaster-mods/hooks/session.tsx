@@ -1,13 +1,33 @@
-// User intent: the Session tab (spec §7; band `3`, /tm-session) — everything about this session in one ◆ TASKMASTER panel:
-// its task with `d` done and `a` to agent, its handover with copy / open / new tab / decisions, and where it came from.
+// User intent: the Session tab (spec §7, §15.7; band `m`, /tm-session) — this session's task, its handover and where it came
+// from in the round-1 label column, each action named for its subject and drawn under what it acts on, one filled key, one
+// dim footer — and every row inside the pane, so nothing is clipped at the right edge.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderNode, RenderSurface } from 'claude-code'
 
-import type { TmBandMode, TmHandoverSummary, TmSessionBurst, TmSessionHandover, TmSnapshot } from '../types'
+import type { TmBandMode, TmHandoverSummary, TmSessionBurst, TmSessionHandover, TmSessionInfo, TmSnapshot } from '../types'
 import { HANDOVER_TAG } from './band'
 import type { TmPane } from './flows'
-import { badge, confirmRow, keycap, type Kit, label, panel, panelTitle, type Piece, row, rule } from './kit'
-import { ageLabel, gateSignal, isReady, oneLine, statusTone, statusWord, truncate, wrapText } from './model'
+import type { Kit } from './kit'
+import { ageLabel, gateSignal, isReady, oneLine, wrapText } from './model'
+import {
+  actionKey,
+  actionRows,
+  askRow,
+  badgeSeg,
+  CONTENT_COL,
+  fieldSegs,
+  footer,
+  type Health,
+  itemRule,
+  labelRow,
+  line,
+  paneFrame,
+  paneToolbar,
+  refreshPiece,
+  type Seg,
+  statusBadgeWord,
+  underLabel,
+} from './vocab'
 
 export type SessionView = {
   readonly snapshot: TmSnapshot | null
@@ -15,8 +35,6 @@ export type SessionView = {
   readonly handover: TmSessionHandover | null
   readonly resumedFrom: string
   readonly burst: TmSessionBurst | null
-  /** The pending restore burst's unfinished sessions (null: no `4`). */
-  readonly restore: number | null
   readonly band: TmBandMode
   /** The handover's decisions and blockers when read; shown while `summaryOpen`. */
   readonly summary: TmHandoverSummary | undefined
@@ -24,10 +42,12 @@ export type SessionView = {
   readonly connecting: boolean
   readonly demo: boolean
   readonly now: number
+  /** This session's branch and start (null: not read yet): the toolbar's words. */
+  readonly info: TmSessionInfo | null
 }
 
 export type SessionHandlers = {
-  readonly open: (pane: TmPane) => void
+  readonly goTo: (pane: TmPane) => void
   readonly askDone: (taskId: string) => void
   readonly confirmDone: (taskId: string) => void
   readonly cancel: () => void
@@ -36,56 +56,8 @@ export type SessionHandlers = {
   readonly openHandover: (handoverId: string) => void
   readonly launch: (handover: TmSessionHandover, surface: RenderSurface) => void
   readonly toggleSummary: (handoverId: string, open: boolean) => void
-}
-
-/** The section label column: `HANDOVER` and two cells. */
-const LABEL_W = 10
-
-/** A section's first row: its label in the label column, then the pieces. */
-function head(k: Kit, word: string, pieces: readonly RenderNode[]): RenderNode {
-  const { Box } = k.ui
-  return (
-    <Box flexDirection="row" alignItems="flex-start">
-      <Box width={LABEL_W} flexShrink={0}>
-        {label(k, word).el}
-      </Box>
-      <Box flexDirection="row" columnGap={2} alignItems="flex-start">
-        {pieces}
-      </Box>
-    </Box>
-  )
-}
-
-/** A row under a section's first, in the content column. */
-function under(k: Kit, children: readonly RenderNode[]): RenderNode {
-  const { Box } = k.ui
-  return (
-    <Box flexDirection="column" paddingLeft={LABEL_W}>
-      {children}
-    </Box>
-  )
-}
-
-function line(k: Kit, text: string, color: string, width: number): RenderNode {
-  const { Text } = k.ui
-  return (
-    <Text color={color} wrap="truncate-end">
-      {truncate(text, Math.max(1, width))}
-    </Text>
-  )
-}
-
-/** `full · patch-1-9 · review-gate pass ✓ · ready for done`: lane, phase, gate and where the pipeline stands. */
-function metaOf(snapshot: TmSnapshot): string {
-  const b = snapshot.bound
-  const d = b?.detail ?? null
-  if (b === null || d === null) return ''
-  const gate = gateSignal(d.gateState)
-  const p = b.pipeline
-  const stage = p === null ? '' : p.laneless ? 'no pipeline' : p.outstanding.length === 0 ? 'ready for done' : `next: ${p.outstanding[0]}`
-  return [d.lane || 'no lane', d.phase ?? '', gate === null ? '' : `${gate.word}${gate.kind === 'success' ? ' ✓' : ''}`, stage, b.inferred ? 'inferred from the branch' : '']
-    .filter(Boolean)
-    .join(' · ')
+  readonly refresh: () => void
+  readonly toggleSidebar: () => void
 }
 
 /** Why `d` (and `a`) cannot act on the bound task, or '' when they can. */
@@ -99,80 +71,126 @@ function whyNot(snapshot: TmSnapshot, forDone: boolean): string {
   return p !== null && !p.laneless && p.outstanding.length > 0 ? `Not ready for done: ${p.outstanding[0]} is outstanding` : 'Not ready for done yet'
 }
 
+/** `full · patch-1-9 · review-gate pass ✓ · ready for done`: lane, phase and gate subtle, the pass and ready in success ink. */
+function metaSegs(k: Kit, s: TmSnapshot): Seg[] {
+  const { t } = k
+  const b = s.bound
+  const d = b?.detail ?? null
+  if (b === null || d === null) return []
+  const gate = gateSignal(d.gateState)
+  const p = b.pipeline
+  const segs: Seg[] = [{ text: [d.lane || 'no lane', d.phase ?? '', gate === null ? '' : gate.word].filter(Boolean).join(' · '), color: t.fg.subtle }]
+  if (gate?.kind === 'success') segs.push({ text: ' ✓', color: t.tone.success })
+  const stage = p === null ? '' : p.laneless ? 'no pipeline' : p.outstanding.length === 0 ? 'ready for done' : `next: ${p.outstanding[0]}`
+  if (stage !== '') segs.push({ text: ' · ', color: t.fg.subtle }, { text: stage, color: stage === 'ready for done' ? t.tone.success : t.fg.subtle })
+  if (b.inferred) segs.push({ text: ' · inferred from the branch', color: t.fg.subtle })
+  return segs
+}
+
+const blank = (k: Kit): RenderNode => {
+  const { Text } = k.ui
+  return <Text> </Text>
+}
+
 function taskSection(k: Kit, v: SessionView, on: SessionHandlers, inner: number): RenderNode[] {
   const { t } = k
-  const room = inner - LABEL_W
+  const room = inner - CONTENT_COL
   const s = v.snapshot
   const b = s?.bound ?? null
-  if (s === null || b === null) return [head(k, 'task', [line(k, 'No task bound to this session', t.fg.subtle, room)])]
+  if (s === null || b === null) return [labelRow(k, 'TASK', [{ text: 'No task bound to this session', color: t.fg.disabled }], inner)]
   const d = b.detail
-  const first: Piece[] = []
-  if (s.reachable && d !== null) first.push(badge(k, statusWord(d.status), statusTone(d.status), { on: 'raised', strength: 12 }))
-  first.push({ el: line(k, b.taskId, t.fg.subtle, b.taskId.length), width: b.taskId.length })
-  const used = first.reduce((n, p) => n + p.width + 2, 0)
   const title = d === null ? '' : oneLine(d.title)
   const rows: RenderNode[] = [
-    head(k, 'task', [...first.map(p => p.el), ...(title === '' || room - used < 4 ? [] : [line(k, title, b.inferred ? t.fg.subtle : t.fg.bold, room - used)])]),
+    labelRow(
+      k,
+      'TASK',
+      [
+        ...(s.reachable && d !== null ? [badgeSeg(k, statusBadgeWord(d.status)), { text: '  ', color: t.fg.default }] : []),
+        { text: b.taskId, color: t.fg.bold, bold: true },
+        ...(title === '' ? [] : [{ text: `  ${title}`, color: b.inferred ? t.fg.subtle : t.fg.default }]),
+      ],
+      inner,
+    ),
   ]
-  const meta = metaOf(s)
-  if (meta !== '') rows.push(under(k, [line(k, meta, t.fg.subtle, room)]))
+  const meta = metaSegs(k, s)
+  if (meta.length > 0) rows.push(labelRow(k, '', meta, inner))
+  const human = d === null ? '' : oneLine(d.humanAction)
+  if (human !== '') rows.push(labelRow(k, '', fieldSegs(k, 'human', human), inner))
+  rows.push(blank(k))
   if (v.band.confirmingId === b.taskId) {
-    rows.push(under(k, confirmRow(k, { id: 'session', question: `done ${b.taskId}?`, onYes: () => on.confirmDone(b.taskId), onNo: on.cancel, width: room, on: 'raised' })))
+    rows.push(underLabel(k, askRow(k, { id: 'session', question: `mark ${b.taskId} done?`, onYes: () => on.confirmDone(b.taskId), onNo: on.cancel, width: room })))
     return rows
   }
   const noDone = whyNot(s, true)
   const noAgent = whyNot(s, false)
-  const keys = row(k, [
-    keycap(k, { id: 'session-done', key: 'd', label: 'done', tone: 'success', on: 'raised', onPress: () => on.askDone(b.taskId), ...(noDone === '' ? {} : { dim: noDone }) }),
-    keycap(k, { id: 'session-agent', key: 'a', label: 'agent', tone: 'warning', on: 'raised', onPress: () => on.sendBack(b.taskId), ...(noAgent === '' ? {} : { dim: noAgent }) }),
-  ], 2)
-  const human = d === null ? '' : oneLine(d.humanAction)
-  const { Box } = k.ui
   rows.push(
-    under(k, [
-      <Box flexDirection="row" columnGap={2} alignItems="flex-start">
-        {human === '' ? null : line(k, `human: ${human}`, t.fg.default, room - keys.width - 2)}
-        <Box flexGrow={1} />
-        {keys.el}
-      </Box>,
-    ]),
+    underLabel(
+      k,
+      actionRows(
+        k,
+        [
+          actionKey(k, { id: 'session-done', key: 'd', label: 'mark task done', rung: 'primary', onPress: () => on.askDone(b.taskId), ...(noDone === '' ? {} : { dim: noDone }) }),
+          actionKey(k, { id: 'session-agent', key: 'a', label: 'send task to agent', onPress: () => on.sendBack(b.taskId), ...(noAgent === '' ? {} : { dim: noAgent }) }),
+        ],
+        room,
+      ),
+    ),
   )
   if (v.band.refusal !== '' && v.band.refusalId === b.taskId) {
-    rows.push(under(k, [badge(k, 'refused', 'critical', { on: 'raised' }).el, ...wrapText(v.band.refusal, room).map(text => line(k, text, t.fg.default, room))]))
+    const words = wrapText(oneLine(v.band.refusal), Math.max(10, room - 11))
+    words.forEach((text, i) =>
+      rows.push(labelRow(k, '', [{ text: i === 0 ? '▲ REFUSED  ' : '           ', color: t.tone.critical, bold: true }, { text, color: t.fg.default }], inner)),
+    )
   }
   return rows
 }
 
 function handoverSection(k: Kit, v: SessionView, on: SessionHandlers, inner: number): RenderNode[] {
   const { t } = k
-  const room = inner - LABEL_W
+  const room = inner - CONTENT_COL
   const ho = v.handover
-  if (ho === null) return [head(k, 'handover', [line(k, 'No handover for this session yet', t.fg.subtle, room)])]
+  if (ho === null) return [labelRow(k, 'HANDOVER', [{ text: 'No handover for this session yet', color: t.fg.disabled }], inner)]
   const age = ageLabel(ho.created, v.now)
-  const tag = badge(k, HANDOVER_TAG[ho.tag], 'signature', { on: 'raised', strength: 12 })
-  const id = `${ho.id}${age === '' ? '' : ` · ${age} ago`}`
   const rows: RenderNode[] = [
-    head(k, 'handover', [tag.el, line(k, id, t.fg.subtle, room - tag.width - 2)]),
-    under(k, [line(k, oneLine(ho.tldr) || ho.id, t.fg.default, room)]),
+    labelRow(
+      k,
+      'HANDOVER',
+      [
+        badgeSeg(k, HANDOVER_TAG[ho.tag]),
+        { text: '  ', color: t.fg.default },
+        { text: ho.id, color: t.fg.default },
+        { text: age === '' ? '' : ` · ${age} ago`, color: t.fg.subtle },
+      ],
+      inner,
+    ),
+    labelRow(k, '', [{ text: oneLine(ho.tldr) || ho.id, color: t.fg.bold, bold: true }], inner),
   ]
-  if (ho.next !== undefined && ho.next !== '') rows.push(under(k, [line(k, `Next: ${oneLine(ho.next)}`, t.fg.subtle, room)]))
+  if (ho.next !== undefined && ho.next !== '') rows.push(labelRow(k, '', fieldSegs(k, 'next', oneLine(ho.next)), inner))
+  rows.push(blank(k))
   rows.push(
-    under(k, [
-      row(k, [
-        keycap(k, { id: 'session-copy', key: 'c', label: 'copy', on: 'raised', onPress: press => on.copy(ho.id, press.surface) }),
-        keycap(k, { id: 'session-open', key: 'h', label: 'in handovers', on: 'raised', onPress: () => on.openHandover(ho.id) }),
-        keycap(k, { id: 'session-launch', key: 'w', label: 'new tab', on: 'raised', onPress: press => on.launch(ho, press.surface) }),
-        keycap(k, { id: 'session-summary', key: 'i', label: 'decisions·blockers', on: 'raised', selected: v.summaryOpen, onPress: () => on.toggleSummary(ho.id, !v.summaryOpen) }),
-      ], 2).el,
-    ]),
+    underLabel(
+      k,
+      actionRows(
+        k,
+        [
+          actionKey(k, { id: 'session-copy', key: 'c', label: 'copy handover', onPress: press => on.copy(ho.id, press.surface) }),
+          actionKey(k, { id: 'session-open', key: 'h', label: 'show in handovers', onPress: () => on.openHandover(ho.id) }),
+          actionKey(k, { id: 'session-launch', key: 'w', label: 'resume in new tab', onPress: press => on.launch(ho, press.surface) }),
+          actionKey(k, { id: 'session-summary', key: 'i', label: `handover decisions·blockers ${v.summaryOpen ? '▾' : '▸'}`, onPress: () => on.toggleSummary(ho.id, !v.summaryOpen) }),
+        ],
+        room,
+      ),
+    ),
   )
   if (v.summaryOpen) {
     const sum = v.summary
-    if (sum === undefined) rows.push(under(k, [line(k, 'loading decisions and blockers…', t.fg.subtle, room)]))
-    else if (sum.unavailable === true) rows.push(under(k, [line(k, 'Decisions and blockers unavailable: i asks again', t.fg.subtle, room)]))
+    if (sum === undefined) rows.push(labelRow(k, '', [{ text: 'loading decisions and blockers…', color: t.fg.subtle }], inner))
+    else if (sum.unavailable === true) rows.push(labelRow(k, '', [{ text: 'Decisions and blockers unavailable: i asks again', color: t.fg.subtle }], inner))
     else {
       for (const [word, items] of [['decisions', sum.decisions], ['blockers', sum.blockers]] as const) {
-        rows.push(under(k, [label(k, word).el, ...(items.length === 0 ? [line(k, 'none', t.fg.subtle, room)] : items.map(item => line(k, `· ${oneLine(item)}`, t.fg.default, room)))]))
+        rows.push(labelRow(k, '', [{ text: word, color: t.signatureText }], inner))
+        if (items.length === 0) rows.push(labelRow(k, '', [{ text: 'none', color: t.fg.subtle }], inner))
+        for (const entry of items) rows.push(labelRow(k, '', [{ text: `· ${oneLine(entry)}`, color: t.fg.default }], inner))
       }
     }
   }
@@ -181,43 +199,62 @@ function handoverSection(k: Kit, v: SessionView, on: SessionHandlers, inner: num
 
 function sessionSection(k: Kit, v: SessionView, on: SessionHandlers, inner: number): RenderNode[] {
   const { t } = k
-  const room = inner - LABEL_W
-  const where = [
-    v.resumedFrom === '' ? 'not resumed from a handover' : `resumed from ${v.resumedFrom}`,
-    v.burst === null ? '' : `part of the ${v.burst.at} burst (${v.burst.others} others open)`,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  const s = v.snapshot
-  const live = s !== null && s.reachable
-  const n = (count: number): string => (live ? `${count}` : '–')
-  const counts: Piece[] = [
-    keycap(k, { id: 'session-review', key: '1', label: `${n(s?.queueTotal ?? 0)}${s?.queueCapped === true ? '+' : ''} waiting on you`, on: 'raised', faded: !live || s.queueTotal === 0, onPress: () => on.open('review') }),
-    keycap(k, { id: 'session-handovers', key: '2', label: `${n(s?.handoversTotal ?? 0)} handovers`, on: 'raised', faded: !live || s.handoversTotal === 0, onPress: () => on.open('handovers') }),
-  ]
-  if (v.restore !== null) counts.push(keycap(k, { id: 'session-restore', key: '4', label: `${v.restore} unfinished · restore`, on: 'raised', onPress: () => on.open('restore') }))
-  return [head(k, 'session', [line(k, where, v.resumedFrom === '' && v.burst === null ? t.fg.subtle : t.fg.default, room)]), row(k, counts, 3).el]
+  const where: Seg[] =
+    v.resumedFrom === ''
+      ? [{ text: 'not resumed from a handover', color: t.fg.disabled }]
+      : [
+          { text: 'resumed from ', color: t.fg.subtle },
+          { text: v.resumedFrom, color: t.fg.default },
+        ]
+  if (v.burst !== null) where.push({ text: ` · part of the ${v.burst.at} burst · ${v.burst.others} others open`, color: t.fg.subtle })
+  const rows: RenderNode[] = [labelRow(k, 'SESSION', where, inner)]
+  if (v.burst !== null) {
+    rows.push(blank(k))
+    rows.push(underLabel(k, actionRows(k, [actionKey(k, { id: 'session-restore', key: '4', label: 'show burst in restore', onPress: () => on.goTo('restore') })], inner - CONTENT_COL)))
+  }
+  return rows
 }
 
-/** The Session tab's panel (spec §7): TASK, HANDOVER and SESSION between dashed rules, the health at the top right. */
-export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: number): RenderNode {
-  const inner = Math.max(LABEL_W + 8, width - 4)
+function healthOf(v: SessionView): Health {
   const s = v.snapshot
-  const health =
-    v.connecting && (s === null || !s.reachable)
-      ? { kind: 'info' as const, word: 'connecting' }
-      : s === null
-        ? { kind: 'info' as const, word: 'loading' }
-        : !s.reachable
-          ? { kind: 'critical' as const, word: 'offline' }
-          : v.demo
-            ? { kind: 'info' as const, word: 'demo' }
-            : { kind: 'success' as const, word: 'tm ok' }
-  return panel(k, { title: panelTitle('session'), health, width }, [
+  if (v.connecting && (s === null || !s.reachable)) return { kind: 'info', word: 'connecting' }
+  if (s === null) return { kind: 'info', word: 'loading' }
+  if (!s.reachable) return { kind: 'critical', word: 'offline' }
+  return v.demo ? { kind: 'info', word: 'demo' } : { kind: 'success', word: 'tm ok' }
+}
+
+/** The Session tab (spec §15.7): the frame, `this session · <branch> · started <age> ago`, TASK / HANDOVER / SESSION, the footer. */
+export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: number): RenderNode {
+  const { t } = k
+  const inner = Math.max(CONTENT_COL + 12, width - 4)
+  const started = v.info === null ? '' : ageLabel(new Date(v.info.startedAt).toISOString(), v.now)
+  const words = line(
+    k,
+    [
+      { text: 'this session', color: t.fg.subtle },
+      { text: v.info === null ? '' : [` · ${v.info.branch || 'no branch'}`, started === '' ? '' : ` · started ${started} ago`].join(''), color: t.fg.disabled },
+    ],
+    Math.max(12, inner - 14),
+  )
+  const top = paneToolbar(k, { left: words, right: [refreshPiece(k, { label: 'refresh', onPress: on.refresh })], width: inner })
+  const keys = footer(
+    k,
+    [
+      { keys: 'u', word: 'refresh', press: [{ key: 'u', onPress: on.refresh }] },
+      { keys: 'm', word: 'sidebar', press: [{ key: 'm', onPress: on.toggleSidebar }] },
+      { keys: 'esc', word: 'close' },
+    ],
+    inner,
+  )
+  return paneFrame(k, { name: 'session', health: healthOf(v), width }, [
+    top,
+    blank(k),
     ...taskSection(k, v, on, inner),
-    rule(k, inner),
+    itemRule(k, inner),
     ...handoverSection(k, v, on, inner),
-    rule(k, inner),
+    itemRule(k, inner),
     ...sessionSection(k, v, on, inner),
+    blank(k),
+    keys,
   ])
 }

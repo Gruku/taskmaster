@@ -21,6 +21,7 @@ import type {
   TmReviewList,
   TmSessionBurst,
   TmSessionHandover,
+  TmSessionInfo,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
@@ -86,6 +87,7 @@ const RESTORE_PENDING = atom({ plugin: 'taskmaster-mods', key: 'restorePending' 
 const RESTORE_HIDDEN = atom({ plugin: 'taskmaster-mods', key: 'restoreHidden' } as const, null as number | null)
 const SESSION_BURST = atom({ plugin: 'taskmaster-mods', key: 'sessionBurst' } as const, null as TmSessionBurst | null)
 const NAV = atom({ plugin: 'taskmaster-mods', key: 'nav' } as const, FRESH_NAV as TmNav)
+const SESSION_INFO = atom({ plugin: 'taskmaster-mods', key: 'sessionInfo' } as const, null as TmSessionInfo | null)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
@@ -584,6 +586,9 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     mod.sessionId = await $.session.id()
     await ready($)
+    const branch = (await mod.host?.branch()) ?? ''
+    const startedAt = await $.clock.now()
+    await update($, SESSION_INFO, () => ({ branch, startedAt }))
     await pruneTicks($)
     // A bulk run does not outlive its session: a row left `busy` by one that was cut off would show "working" for good.
     await update($, REVIEW_LIST, l => (l.bulk === 'busy' ? { ...l, bulk: 'none' as const, bulkIds: [] } : l))
@@ -913,7 +918,6 @@ export const register: Register = (on, options) => {
     const held = handover === null ? undefined : summaries[handover.id]
     // Read when open and missing, or stale after a refresh (the stale one stays drawn meanwhile), as the handovers pane does.
     if (mod.source === 'tm' && handover !== null && open && (held === undefined || held.stale === true)) askSummary(handover.id)
-    const pending = await restoreShown($)
     const cwd = await $.session.cwd()
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
@@ -924,16 +928,18 @@ export const register: Register = (on, options) => {
         handover,
         resumedFrom: await read($, RESUMED_FROM),
         burst: await read($, SESSION_BURST),
-        restore: pending?.unfinished ?? null,
         band: await read($, BAND),
         summary: held,
         summaryOpen: open,
         connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
         demo: mod.source === 'demo',
         now: await $.clock.now(),
+        info: await read($, SESSION_INFO),
       },
       {
-        open: pane => act(f => f.openPane(pane)),
+        goTo: pane => act(f => f.goTo(pane)),
+        refresh: () => act(f => f.retry()),
+        toggleSidebar: () => act(f => f.toggleSidebar()),
         askDone: id => act(f => f.bandAskDone(id)),
         confirmDone: id => act(f => f.bandConfirmDone(id)),
         cancel: () => act(f => f.bandCancel()),

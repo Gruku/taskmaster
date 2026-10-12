@@ -165,6 +165,8 @@ export type TmSessionHandover = {
   readonly created: string
   readonly next?: string
 }
+/** This session's branch and when it started, read once at `session.start`: the Session tab's toolbar words. */
+export type TmSessionInfo = { readonly branch: string; readonly startedAt: number }
 /** The Taskmaster sidebar (spec §15.8): whether it is open over the pane, and the pane `m` on the band reopens. */
 export type TmNav = { readonly sidebar: boolean; readonly last: 'review' | 'handovers' | 'session' | 'restore' }
 /** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the sidebar's Restore entry. */
@@ -215,6 +217,8 @@ declare module 'claude-code' {
       sessionBurst: TmSessionBurst | null
       /** The Taskmaster sidebar: open over the pane or not, and the pane the band's `m` reopens (spec §15.8). */
       nav: TmNav
+      /** This session's branch and start time (null until session.start ran in this instance). */
+      sessionInfo: TmSessionInfo | null
     }
   }
 }

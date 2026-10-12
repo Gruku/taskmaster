@@ -7,7 +7,7 @@ import type { RenderNode, RenderSurface } from 'claude-code'
 import type { TmBandMode, TmSessionHandover } from '../types'
 import { badge, type Kit, type Piece, TM_TAG } from './kit'
 import { ageLabel, type BandModel, CONNECTING, oneLine } from './model'
-import { actionKey, BADGES, badgeInk, line, type Seg, statusBadgeWord } from './vocab'
+import { actionKey, badgeSeg, line, type Seg, statusBadgeWord } from './vocab'
 
 export type BandHandlers = {
   readonly openSidebar: () => void
@@ -57,12 +57,6 @@ type BandLine = { readonly lead: Piece; readonly segs: readonly Seg[]; readonly 
 
 const keysWidth = (keys: readonly Piece[]): number => keys.reduce((n, p) => n + p.width, 0) + 3 * Math.max(0, keys.length - 1)
 
-function badgeSeg(k: Kit, status: string): Seg {
-  const word = statusBadgeWord(status)
-  const spec = BADGES[word]
-  return { text: `${spec?.glyph ?? '·'} ${word}`, color: badgeInk(k, word), bold: spec?.bold ?? false }
-}
-
 /** The band (spec §15.5). Squeezes level by level (short labels, the short chip, keys alone) until every subject keeps MIN_TEXT. */
 export function bandTree(k: Kit, m: BandModel, a: BandArgs, on: BandHandlers): RenderNode {
   const { Box, Text } = k.ui
@@ -109,7 +103,7 @@ export function bandTree(k: Kit, m: BandModel, a: BandArgs, on: BandHandlers): R
       lines.push({
         lead: lead1,
         segs: [
-          ...(task.status === '' || level >= 3 ? [] : [badgeSeg(k, task.status), sp(2)]),
+          ...(task.status === '' || level >= 3 ? [] : [badgeSeg(k, statusBadgeWord(task.status)), sp(2)]),
           { text: task.id, color: t.fg.subtle },
           ...(task.inferred ? [sp(2), { text: 'inferred', color: t.fg.subtle }] : []),
           ...(title === '' ? [] : [sp(2), { text: title, color: task.inferred ? t.fg.subtle : t.fg.bold, bold: !task.inferred }]),

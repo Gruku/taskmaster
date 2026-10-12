@@ -1,20 +1,20 @@
-// User intent: the Session tab as a person uses it (spec §7) — one ◆ TASKMASTER panel with this session's task (d done, a to
-// agent), its handover (copy, open in handovers, new tab, decisions and blockers) and where it came from, each section saying
-// so when empty, and every key reaching the same flows as the band.
+// User intent: the Session tab as the approved prototype draws it (spec §7, §15.7) — TASK, HANDOVER and SESSION in the label
+// column, actions named for their subject under what they act on, one filled key (d mark task done), one dim footer — every
+// key reaching the same flows as the band, and every row inside the pane (the clipping bug).
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { DEMO_REASON } from '../hooks/demo'
 import { resumePrompt, wtArgv } from '../hooks/launch'
 import type { TmSnapshot } from '../types'
 import { BAND, command, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import { elementsOf, widthOf } from './fixtures/measure'
 import * as R from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
 import { stateOf, worldOf } from './fixtures/world'
 
 const DEMO = { options: { source: 'demo' }, plugins: [RR_STUB] }
 const TM = { plugins: [RR_STUB] }
-// Wide enough that no line of the panel is cut (the panel takes the pane's width).
-const TAB = { ...pane('tm-session'), props: { ...pane('tm-session').props, bodyColumns: 100 } }
+const TAB = { ...pane('tm-session'), props: { ...pane('tm-session').props, bodyColumns: 112 } }
 const SNAP = `${PLUGIN}.snapshot`
 const AUDIT = '2026-10-04-audit-fixes-landed'
 const AUDIT_BLOCK = `Audit fixes landed on the native branch\nC:\\Users\\demo\\project\\.taskmaster\\handovers\\${AUDIT}.md\nResume: tm-audit — Record the merge for tm-audit-030`
@@ -47,26 +47,32 @@ describe('session tab', () => {
     expect(world.opened).toEqual(['tm-session', 'tm-session'])
   })
 
-  test('demo: TASK, HANDOVER and SESSION in one ◆ TASKMASTER · SESSION panel, on both surfaces', DEMO, async ($, on) => {
+  test('demo: the frame, the toolbar, TASK, HANDOVER and SESSION in the label column, on both surfaces', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB, surface })
       for (const text of [
-        /◆ TASKMASTER · SESSION/,
-        ' demo',
-        'TASK',
-        ' IN REVIEW ',
-        'unified-chat-022',
-        'full · patch-1-9 · review-gate pass ✓ · ready for done',
-        /^human: Live check on dev/,
-        'HANDOVER',
-        ' RESUMED FROM ',
-        /^2026-10-04-audit-fixes-landed · 20h ago$/,
-        'Audit fixes landed on the native branch',
-        'Next: Record the merge for tm-audit-030',
         'SESSION',
-        `resumed from ${AUDIT}`,
+        'demo',
+        'this session',
+        /^ · main · started \d+m ago$/,
+        `  ${'TASK'.padEnd(17)}`,
+        '● IN REVIEW',
+        'unified-chat-022',
+        'full · patch-1-9 · review-gate pass',
+        'ready for done',
+        'human  ',
+        /^Live check on dev/,
+        `  ${'HANDOVER'.padEnd(17)}`,
+        '↳ RESUMED FROM',
+        AUDIT,
+        ' · 20h ago',
+        'Audit fixes landed on the native branch',
+        'next  ',
+        'Record the merge for tm-audit-030',
+        `  ${'SESSION'.padEnd(17)}`,
+        'resumed from ',
       ]) {
         expect(await ui.find({ type: 'Text', text }), `${surface}: ${String(text)}`).toBeDefined()
       }
@@ -74,35 +80,48 @@ describe('session tab', () => {
     }
   })
 
-  test('every action is a keycap with its key', DEMO, async ($, on) => {
+  test('every action names its subject; d is the one filled key; the footer holds u and m', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB })
     for (const [key, hotkey, label] of [
-      ['session-done', 'd', 'done'],
-      ['session-agent', 'a', 'agent'],
-      ['session-copy', 'c', 'copy'],
-      ['session-open', 'h', 'in handovers'],
-      ['session-launch', 'w', 'new tab'],
-      ['session-summary', 'i', 'decisions·blockers'],
-      ['session-review', '1', '5 waiting on you'],
-      ['session-handovers', '2', '6 handovers'],
+      ['session-done', 'd', 'mark task done'],
+      ['session-agent', 'a', 'send task to agent'],
+      ['session-copy', 'c', 'copy handover'],
+      ['session-open', 'h', 'show in handovers'],
+      ['session-launch', 'w', 'resume in new tab'],
+      ['session-summary', 'i', 'handover decisions·blockers ▸'],
+      ['key:u', 'u', ''],
+      ['key:m', 'm', ''],
     ] as const) {
-      expect((await ui.find({ type: 'Button', key }))?.props, key).toMatchObject({ hotkey, label, plain: true })
+      expect((await ui.find({ type: 'Button', key }))?.props, key).toMatchObject({ hotkey, plain: true, ...(label === '' ? {} : { label }) })
     }
+    expect((await ui.find({ type: 'Box', key: 'session-done-box' }))?.props.backgroundColor).toBe('#8a9eeb')
+    expect((await ui.find({ type: 'Box', key: 'session-copy-box' }))?.props.backgroundColor).toBeUndefined()
     expect(await ui.find({ type: 'Button', key: 'session-restore' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'session-review' })).toBeUndefined()
   })
 
-  test('d asks with y/n in the tab and y signs the task off, as the band does', DEMO, async ($, on) => {
+  test('every row fits the pane at 60 and 100 columns (no clipping at the right edge)', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    for (const columns of [60, 100]) {
+      const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB, props: { ...TAB.props, bodyColumns: columns } })
+      const rows = elementsOf(await ui.drawn()).filter(e => e.type === 'Box' && e.props?.flexDirection === 'row' && e.props?.position !== 'absolute')
+      for (const row of rows) expect(widthOf(row), `${columns}: ${JSON.stringify(row).slice(0, 120)}`).toBeLessThanOrEqual(columns - 4)
+      await ui.unmount()
+    }
+  })
+
+  test('d asks with y/n under the task and y signs it off, as the band does', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB })
     await ui.press({ key: 'session-done' })
-    expect(await ui.find({ type: 'Text', text: ' done unified-chat-022? ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'mark unified-chat-022 done?' })).toBeDefined()
     expect((await ui.find({ type: 'Button', key: 'session-no' }))?.props.autoFocus).toBe(true)
     await ui.press({ key: 'session-yes' })
     expect(await ui.find({ type: 'Text', text: 'No task bound to this session' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'session-review' }))?.props.label).toBe('4 waiting on you')
   })
 
   test('a opens the review note on the bound task even when the loaded window does not hold it, and the note goes back on it', DEMO, async ($, on) => {
@@ -120,7 +139,7 @@ describe('session tab', () => {
     expect(world.fills).toEqual(['Back to far-001: not yet'])
   })
 
-  test('c copies the handover, h opens it in handovers, w says what demo would open, i shows its decisions and blockers', DEMO, async ($, on) => {
+  test('c copies the handover, h shows it in handovers, w says what demo would open, i shows decisions and blockers', DEMO, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     await $.session.start(SESSION)
@@ -136,7 +155,7 @@ describe('session tab', () => {
     await ui.redraw()
     expect(await ui.find({ type: 'Text', text: '· Audit fixes ride the native branch; no backport to master' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '· tm-audit-030 merge not recorded yet' })).toBeDefined()
-    expect((await ui.find({ type: 'Box', key: 'session-summary-box' }))?.props.backgroundColor).toBe('#4a5590')
+    expect((await ui.find({ type: 'Button', key: 'session-summary' }))?.props.label).toBe('handover decisions·blockers ▾')
   })
 
   test('tm: w opens a Windows Terminal tab whose first prompt resumes from the handover', TM, async ($, on) => {
@@ -155,13 +174,13 @@ describe('session tab', () => {
     expect(world.toasts).toEqual(['Opened 1 tab'])
   })
 
-  test('offline: the health says offline, d and a dim and say why, the empty sections say so', TM, async ($, on) => {
+  test('offline: the health says offline, d and a are disabled and say why, the empty sections say so', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock, BOUND)
     await $.session.start(SESSION)
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB })
-    expect(await ui.find({ type: 'Text', text: ' offline' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'offline' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'tm-audit-030' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'No handover for this session yet' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'not resumed from a handover' })).toBeDefined()
@@ -172,7 +191,7 @@ describe('session tab', () => {
     expect(world.opened).toEqual([])
   })
 
-  test('a task only inferred from the branch: d and a dim and name it; nothing bound says so', TM, async ($, on) => {
+  test('a task only inferred from the branch: d and a are disabled and name it; nothing bound says so', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock)
     world.mcp = R.backlog
@@ -190,17 +209,30 @@ describe('session tab', () => {
     expect(await ui.find({ type: 'Text', text: 'No task bound to this session' })).toBeDefined()
   })
 
-  test('a restore burst adds 4 · restore and the burst line; 4 opens restore', TM, async ($, on) => {
+  test('a known burst adds its line and 4 show burst in restore, which goes to the restore pane', TM, async ($, on) => {
     const clock = mock.clock(on)
     const world = worldOf(on, clock, BOUND)
     world.mcp = R.backlog
-    stateOf(on, { [`${PLUGIN}.restorePending`]: { epoch: 1_760_000_000, unfinished: 3 }, [`${PLUGIN}.sessionBurst`]: { at: '16:14', others: 3 } })
+    stateOf(on, { [`${PLUGIN}.sessionBurst`]: { at: '16:14', others: 3 } })
     await $.session.start(SESSION)
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB })
-    expect(await ui.find({ type: 'Text', text: 'not resumed from a handover · part of the 16:14 burst (3 others open)' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'session-restore' }))?.props).toMatchObject({ hotkey: '4', label: '3 unfinished · restore' })
+    expect(await ui.find({ type: 'Text', text: ' · part of the 16:14 burst · 3 others open' })).toBeDefined()
+    expect((await ui.find({ type: 'Button', key: 'session-restore' }))?.props).toMatchObject({ hotkey: '4', label: 'show burst in restore' })
     await ui.press({ key: 'session-restore' })
     expect(world.opened).toEqual(['tm-restore'])
+  })
+
+  test('u asks tm again; m opens the sidebar over the tab', DEMO, async ($, on) => {
+    const world = worldOf(on, mock.clock(on))
+    const state = stateOf(on)
+    await $.session.start(SESSION)
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...TAB })
+    await ui.press({ key: 'key:u' })
+    expect(world.toasts).toEqual(['taskmaster-mods: demo data has nothing newer to read'])
+    await ui.press({ key: 'key:m' })
+    expect(state.get(`${PLUGIN}.nav`)).toMatchObject({ sidebar: true })
+    await ui.redraw()
+    expect(await ui.find({ type: 'Button', key: 'nav:session' })).toBeDefined()
   })
 })
