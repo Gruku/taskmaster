@@ -144,7 +144,7 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
   const filled = rung === 'primary' && why === undefined
   const letter = why !== undefined ? t.fg.disabled : filled ? t.keycap.signature.ink : rung === 'destructive' ? t.tone.warning : t.signatureText
   // The pointer inverts a Button; un-inverted + explicit colours keep a hovered primary one solid, lighter block (never black).
-  const lit = { backgroundColor: t.signatureText, color: t.keycap.signature.ink, inverse: false } as const
+  const lit = { backgroundColor: t.fg.bold, color: t.keycap.signature.ink, inverse: false } as const
   const button = (
     <Button
       key={a.id}
@@ -194,7 +194,7 @@ export function actionKey(k: Kit, a: ActionSpec): Piece {
         flexShrink={0}
         alignSelf="flex-start"
         {...(filled ? { backgroundColor: t.keycap.signature.bg, paddingRight: 1 } : {})}
-        hover={{ backgroundColor: filled ? t.signatureText : stepUp(t, on) }}
+        hover={{ backgroundColor: filled ? t.fg.bold : stepUp(t, on) }}
       >
         {button}
         {glyph}

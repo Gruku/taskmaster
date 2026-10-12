@@ -112,9 +112,9 @@ describe('the key ladder', () => {
   test('primary hover: every element carrying the fill steps to the lighter token with ink, un-inverted; the key hugs its label', () => {
     const k = testKit()
     const key = actionKey(k, { id: 'done', key: 'd', label: 'mark task done', rung: 'primary', onPress: noop })
-    const lit = { backgroundColor: T.signatureText, color: T.keycap.signature.ink }
+    const lit = { backgroundColor: T.fg.bold, color: T.keycap.signature.ink }
     const hoverOf = (e: unknown) => (e as { hover?: unknown } | undefined)?.hover
-    expect(hoverOf(byKey(key.el, 'done-box'))).toMatchObject({ backgroundColor: T.signatureText })
+    expect(hoverOf(byKey(key.el, 'done-box'))).toMatchObject({ backgroundColor: T.fg.bold })
     expect(hoverOf(byKey(key.el, 'done'))).toMatchObject({ ...lit, bold: true, inverse: false })
     const label = walk(key.el).find(e => e.type === 'Text' && (e.children ?? []).includes('mark task done'))
     expect(hoverOf(label)).toMatchObject({ ...lit, inverse: false })
