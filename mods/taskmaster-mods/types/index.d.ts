@@ -165,7 +165,9 @@ export type TmSessionHandover = {
   readonly created: string
   readonly next?: string
 }
-/** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the band's `4 N restore`. */
+/** The Taskmaster sidebar (spec §15.8): whether it is open over the pane, and the pane `m` on the band reopens. */
+export type TmNav = { readonly sidebar: boolean; readonly last: 'review' | 'handovers' | 'session' | 'restore' }
+/** The newest closing burst the restore scan found with unfinished sessions (Stage 5 writes it): the sidebar's Restore entry. */
 export type TmRestorePending = { readonly epoch: number; readonly unfinished: number }
 /** This session's place in the last restore scan's burst (Stage 5 writes it): the Session tab's "part of <at> burst". */
 export type TmSessionBurst = { readonly at: string; readonly others: number }

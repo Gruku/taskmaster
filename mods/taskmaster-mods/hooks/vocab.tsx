@@ -6,6 +6,8 @@ import type { RenderNode, UiPressArgument } from 'claude-code'
 
 import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp, type StripHandlers, type StripView } from './kit'
 import { truncate } from './model'
+import type { TmPane } from './flows'
+import type { SidebarView } from './nav'
 import { atEnd, isDoneShown, orderPhases, pickerName, shownTabs, step } from './phases'
 import type { RrGround, RrSignalKind } from './rr'
 
@@ -845,4 +847,89 @@ export function withPhaseMenu(k: Kit, s: StripView, on: StripHandlers, body: rea
       </Box>
     </Box>,
   ]
+}
+
+// ── The Taskmaster sidebar (spec §15.8): an overlay at the pane body's top-left ────────────────────────────────────────
+
+export const SIDEBAR_W = 34
+
+/** The sidebar: one row per pane (`1`–`4`), the current one tinted and focused, the bound task, then its hints. */
+export function sidebar(k: Kit, v: SidebarView, go: (pane: TmPane) => void): RenderNode {
+  const { Box, Text, Button } = k.ui
+  const { t } = k
+  const inner = SIDEBAR_W - 4
+  const room = inner - 3
+  const rows = v.entries.map(entry => {
+    const current = entry.pane === v.current
+    const right = [entry.note, entry.count.padStart(2)].filter(part => part.trim() !== '').join('  ')
+    const text = `${truncate(entry.name, room - right.length - 1).padEnd(room - right.length)}${right}`
+    const id = `nav:${entry.pane}`
+    const why = entry.dim
+    return (
+      <Box key={`${id}-box`} flexDirection="row" {...(current ? { backgroundColor: t.tint24.overlay.signature } : {})} hover={{ backgroundColor: current ? t.tint24.overlay.signature : stepUp(t, 'overlay') }}>
+        <Button
+          key={id}
+          plain
+          hotkey={entry.key}
+          label={text}
+          {...(why !== undefined ? { dimColor: true } : {})}
+          {...(current ? { autoFocus: true as const } : {})}
+          onPress={why === undefined ? () => go(entry.pane) : () => k.say(why)}
+        >
+          {current ? (
+            <Text color={t.fg.bold} bold>
+              {text}
+            </Text>
+          ) : null}
+        </Button>
+        {KEYCAP_FACE !== 'overlay' ? null : (
+          <Box position="absolute" left={0} top={0}>
+            <Text color={current ? t.fg.bold : t.fg.disabled}>{`${entry.key}  `}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+  const close = SIDEBAR_ESC === 'refuse' ? 'esc' : 'm'
+  const title = (
+    <Text>
+      <Text color={t.signatureText}>◆ </Text>
+      <Text color={t.fg.bold} bold>
+        TASKMASTER
+      </Text>
+    </Text>
+  )
+  const desktop = PANEL_TITLE[k.surface === 'desktop' ? 'desktop' : 'terminal'] === 'row'
+  return (
+    <Box flexDirection="column" width={SIDEBAR_W} borderStyle="round" borderColor={t.border.strong} backgroundColor={t.surface.overlay} paddingX={1}>
+      {desktop ? (
+        title
+      ) : (
+        <Box position="absolute" top={-1} left={1} backgroundColor={t.surface.overlay} paddingX={1}>
+          {title}
+        </Box>
+      )}
+      <Text> </Text>
+      {rows}
+      <Text> </Text>
+      {line(k, [{ text: v.context, color: t.fg.disabled }], inner).el}
+      <Text> </Text>
+      {hints(k, [{ keys: 'Tab', word: 'move' }, { keys: 'enter', word: 'open' }], inner)}
+      {hints(k, [{ keys: '1-4', word: 'jump' }, { keys: close, word: 'close' }], inner)}
+    </Box>
+  )
+}
+
+/** A pane's body with the sidebar floating over its top-left while open; the body alone while it is shut. */
+export function withSidebar(k: Kit, body: RenderNode, v: SidebarView | null, go: (pane: TmPane) => void): RenderNode {
+  const { Box } = k.ui
+  if (v === null) return body
+  return (
+    <Box flexDirection="column" flexGrow={1}>
+      {body}
+      <Box position="absolute" top={0} left={0}>
+        {sidebar(k, v, go)}
+      </Box>
+    </Box>
+  )
 }
