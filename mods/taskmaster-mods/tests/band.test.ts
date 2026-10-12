@@ -52,7 +52,21 @@ describe('band', () => {
     expect(tree.indexOf('◆ TASKMASTER')).toBeLessThan(tree.indexOf('BELOW'))
   })
 
-  test('yields entirely to a survey', DEMO, async ($, on) => {
+  test('the blank row above the band is unfilled and is the first row given up: 12 and 3 rows keep it, 2 and 1 drop it', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    for (const [maxRows, pad, count] of [[12, 1, 2], [3, 1, 2], [2, 0, 2], [1, 0, 1]] as const) {
+      const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND, props: { ...BAND.props, maxRows } })
+      const { outer, ground, lines } = await bandOf(ui)
+      expect(outer.props?.paddingTop, `${maxRows} pad`).toBe(pad)
+      expect(outer.props?.backgroundColor, `${maxRows} outer unfilled`).toBeUndefined()
+      expect(ground.props?.backgroundColor, `${maxRows} ground filled`).toBe('#1d1d1b')
+      expect(lines, `${maxRows} lines`).toHaveLength(count)
+      await ui.unmount()
+    }
+  })
+
+  test('yields entirely to a survey',DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const tree = JSON.stringify(await $.ui.render({ ...BAND, props: { ...BAND.props, hasSurvey: true } }))
