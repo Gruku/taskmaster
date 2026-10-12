@@ -3,6 +3,7 @@
 // launches, Brief asks the configured model — and the session-start scan feeds the sidebar's Restore entry (spec §10.4).
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { demoSnapshot } from '../hooks/demo'
 import { command, pane, PLUGIN, SESSION } from './fixtures/inputs'
 import { refsReply, scanOf, session } from './fixtures/restore'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -216,4 +217,26 @@ describe('the session-start scan (spec §10.4)', () => {
     await clock.settle()
     expect(world.runs.some(argv => argv[3] === 'scan')).toBe(false)
   })
+})
+
+describe('the tab row counts match the other panes after a source switch', () => {
+  const NOW = 1_791_700_000_000
+  const tabLabels = async (ui: { find: (q: { type: string; key: string }) => Promise<{ props?: Record<string, unknown> } | undefined> }) =>
+    Promise.all(['tab:review', 'tab:handovers'].map(async key => String((await ui.find({ type: 'Button', key }))?.props?.label)))
+  for (const [name, setup, source] of [
+    ['demo mode over a stale demo seed', DEMO, { ...demoSnapshot(NOW - 86_400_000), reason: 'demo:old', queueTotal: 42, handoversTotal: 17 }],
+    ['tm mode over a leftover demo seed', TM, demoSnapshot(NOW)],
+  ] as const) {
+    test(`${name}: Restore's tabs read what Review's tabs read`, setup, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const world = worldOf(on, clock)
+      world.env = ENV
+      stateOf(on, { 'taskmaster-mods.snapshot': source })
+      const restore = await $.ui.mount({ plugin: PLUGIN, ...RESTORE_PANE })
+      const review = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
+      const mine = await tabLabels(restore)
+      expect(mine).toEqual(await tabLabels(review))
+      expect(mine.join(' ')).not.toMatch(/42|17/)
+    })
+  }
 })

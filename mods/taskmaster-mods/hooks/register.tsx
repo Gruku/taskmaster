@@ -27,7 +27,7 @@ import type {
 } from '../types'
 import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo } from './demo'
 import { bandTree } from './band'
 import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
@@ -36,7 +36,7 @@ import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
-import { escLayer, FRESH_NAV, paneOf, type SidebarView, sidebarView } from './nav'
+import { escLayer, FRESH_NAV, paneOf, shownRestore, shownSnapshot, type SidebarView, sidebarView } from './nav'
 import { SIDEBAR_ESC, withSidebar } from './vocab'
 import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
@@ -395,18 +395,18 @@ async function dataOf($: EngineInterface): Promise<{
   const details = await read($, DETAILS)
   const summaries = await read($, SUMMARIES)
   if (mod.source === 'demo') {
-    return isCurrentDemo(snapshot)
-      ? { snapshot, details, summaries }
-      : { snapshot: demoSnapshot(await $.clock.now()), details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
+    const shown = shownSnapshot(snapshot, 'demo', await $.clock.now())
+    return shown === snapshot ? { snapshot, details, summaries } : { snapshot: shown, details: DEMO_DETAILS, summaries: DEMO_SUMMARIES }
   }
-  return isDemoSnapshot(snapshot) ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
+  const shown = shownSnapshot(snapshot, 'tm', 0)
+  return shown === null && snapshot !== null ? { snapshot: null, details: {}, summaries: {} } : { snapshot, details, summaries }
 }
 
 /** The restore burst the band offers (`4`): pending (the scan wrote it) and hidden neither here nor, for that burst, anywhere. */
 async function restoreShown($: EngineInterface): Promise<TmRestorePending | null> {
   const pending = await read($, RESTORE_PENDING)
-  if (pending === null || (await read($, RESTORE_HIDDEN)) === pending.epoch) return null
-  return (await $.store.get(restoreHiddenKey(pending.epoch))) === true ? null : pending
+  const here = await read($, RESTORE_HIDDEN)
+  return shownRestore(pending, here, pending !== null && here !== pending.epoch && (await $.store.get(restoreHiddenKey(pending.epoch))) === true)
 }
 
 /** The sidebar over a pane while `nav.sidebar` is on (null: off): its entries from the snapshot and the pending restore burst. */

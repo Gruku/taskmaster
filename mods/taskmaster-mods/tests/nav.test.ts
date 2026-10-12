@@ -4,7 +4,7 @@ import type { RenderElement } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
 import { demoSnapshot } from '../hooks/demo'
-import { escLayer, FRESH_NAV, hhmm, paneOf, RESTORE_BUILT, sidebarView, TM_PANE_IDS } from '../hooks/nav'
+import { escLayer, FRESH_NAV, hhmm, paneOf, RESTORE_BUILT, shownRestore, shownSnapshot, sidebarView, TM_PANE_IDS } from '../hooks/nav'
 import { SIDEBAR_W, sidebar, withSidebar } from '../hooks/vocab'
 import { byKey, testKit, textsOf, walk } from './fixtures/kit-ui'
 import { widthOf } from './fixtures/measure'
@@ -77,5 +77,28 @@ describe('the sidebar drawing', () => {
     expect(withSidebar(k, body, null, () => undefined)).toBe(body)
     const open = withSidebar(k, body, v, () => undefined)
     expect(walk(open).some(e => e.props?.position === 'absolute' && e.props?.top === 0 && e.props?.left === 0)).toBe(true)
+  })
+})
+
+describe('what every pane shows of the snapshot and the restore burst', () => {
+  const live = { ...demoSnapshot(NOW), reason: '', queueTotal: 7 }
+  test('shownSnapshot: demo keeps a current seed and rebuilds a stale or missing one; tm drops any demo seed', () => {
+    const current = demoSnapshot(NOW)
+    expect(shownSnapshot(current, 'demo', NOW + 1)).toBe(current)
+    expect(shownSnapshot({ ...current, reason: 'demo:old' }, 'demo', NOW)).toEqual(demoSnapshot(NOW))
+    expect(shownSnapshot(null, 'demo', NOW)).toEqual(demoSnapshot(NOW))
+    expect(shownSnapshot(live, 'demo', NOW)).toEqual(demoSnapshot(NOW))
+    expect(shownSnapshot(current, 'tm', NOW)).toBeNull()
+    expect(shownSnapshot({ ...current, reason: 'demo:old' }, 'tm', NOW)).toBeNull()
+    expect(shownSnapshot(live, 'tm', NOW)).toBe(live)
+    expect(shownSnapshot(null, 'tm', NOW)).toBeNull()
+  })
+  test('shownRestore: a burst hidden here or in the store is not offered', () => {
+    const pending = { epoch: 1_000, unfinished: 2 }
+    expect(shownRestore(pending, null, false)).toBe(pending)
+    expect(shownRestore(pending, 999, false)).toBe(pending)
+    expect(shownRestore(pending, 1_000, false)).toBeNull()
+    expect(shownRestore(pending, null, true)).toBeNull()
+    expect(shownRestore(null, null, false)).toBeNull()
   })
 })

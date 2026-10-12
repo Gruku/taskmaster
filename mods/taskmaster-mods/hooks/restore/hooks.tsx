@@ -5,12 +5,12 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import type { TmNav, TmPhasePane, TmPhaseView, TmRestorePending, TmSessionBurst, TmSnapshot } from '../../types'
-import { demoPhases, demoRestore, demoSnapshot } from '../demo'
+import { demoPhases, demoRestore } from '../demo'
 import type { TmFlows } from '../flows'
 import { kitOf, type KitRr, type Ui } from '../kit'
 import { platformOf } from '../launch'
 import { RESTORE, restoreHiddenKey } from '../model'
-import { FRESH_NAV, type SidebarView, sidebarView } from '../nav'
+import { FRESH_NAV, shownRestore, shownSnapshot, type SidebarView, sidebarView } from '../nav'
 import { replyText } from '../parse'
 import { FRESH_PHASE_VIEWS, withCounts } from '../phases'
 import { withSidebar } from '../vocab'
@@ -141,13 +141,13 @@ function sayOf($: EngineInterface): (text: string) => void {
   return text => $.ui.toast(text)
 }
 
-/** The tab row's entries, as register.tsx's tabsFor draws them for the other panes: a hidden burst is not counted. */
+/** The tab row's entries, by the same rules register.tsx's tabsFor uses for the other panes (nav.ts's shown* helpers). */
 async function restoreTabsOf($: EngineInterface, now: number): Promise<SidebarView> {
-  const stored = await read($, SNAPSHOT)
-  const snapshot = stored === null && rs.source === 'demo' ? demoSnapshot(now) : stored
+  const snapshot = shownSnapshot(await read($, SNAPSHOT), rs.source, now)
   const pending = await read($, PENDING)
-  const hidden = pending !== null && ((await read($, HIDDEN)) === pending.epoch || (await $.store.get(restoreHiddenKey(pending.epoch))) === true)
-  return sidebarView({ current: 'restore', snapshot, restore: hidden ? null : pending, now })
+  const here = await read($, HIDDEN)
+  const stored = pending !== null && here !== pending.epoch && (await $.store.get(restoreHiddenKey(pending.epoch))) === true
+  return sidebarView({ current: 'restore', snapshot, restore: shownRestore(pending, here, stored), now })
 }
 
 // Press handlers run after the ui.press hook below built the flows; they read rs.flows then.
@@ -178,10 +178,14 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
     } catch {
       // already registered by an earlier load of this module: commands persist across reloads
     }
-    const flows = flowsOf($)
-    $.clock.after(0, () => {
-      void flows.startScan().catch(() => undefined)
-    })
+    try {
+      const flows = flowsOf($)
+      $.clock.after(0, () => {
+        void flows.startScan().catch(() => undefined)
+      })
+    } catch {
+      // the start never fails over the quiet scan: the pane's own command scans again
+    }
     return started
   })
 

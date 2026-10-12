@@ -1,6 +1,7 @@
 // User intent: the Taskmaster sidebar's navigation model (spec §15.8) — which pane an id is, what each sidebar entry counts,
 // which layer Esc closes first — as plain functions, so the band, every pane and the restore module agree without drawing.
 import type { TmNav, TmRestorePending, TmSnapshot } from '../types'
+import { demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import type { TmPane } from './flows'
 import { ageLabel, HANDOVERS, RESTORE, REVIEW, SESSION } from './model'
 import { reviewKind } from './review-list'
@@ -71,6 +72,18 @@ export function sidebarView(a: {
       restore,
     ],
   }
+}
+
+/** The snapshot every pane shows: demo keeps its current seed and rebuilds any other; tm never shows a demo seed. */
+export function shownSnapshot(stored: TmSnapshot | null, source: 'tm' | 'demo', now: number): TmSnapshot | null {
+  if (source === 'demo') return isCurrentDemo(stored) ? stored : demoSnapshot(now)
+  return isDemoSnapshot(stored) ? null : stored
+}
+
+/** The restore burst offered: pending, and hidden neither in this session (`hiddenHere`) nor for that burst in the store. */
+export function shownRestore(pending: TmRestorePending | null, hiddenHere: number | null, hiddenStored: boolean): TmRestorePending | null {
+  if (pending === null || hiddenHere === pending.epoch || hiddenStored) return null
+  return pending
 }
 
 export type EscLayer = 'sidebar' | 'menu' | 'pane'
