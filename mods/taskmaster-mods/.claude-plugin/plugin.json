@@ -4,7 +4,7 @@
   "description": "Taskmaster in the terminal: review queue, this session's current task above the prompt, handovers pane, faults-only status line.",
   "author": { "name": "gruku" },
   "types": "./types/index.d.ts",
-  "dependencies": ["rr-tui"],
+  "dependencies": [{ "name": "rr-tui", "version": ">=0.2.0" }],
   "userConfig": {
     "source": {
       "type": "string",
