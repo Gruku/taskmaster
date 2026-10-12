@@ -82,6 +82,7 @@ describe('order', () => {
     expect(tabs[2]?.count).toBe(47)
     expect(tabs.find(t => t.id === 'alpha-followup')).toMatchObject({ name: 'Alpha Patches', dim: true })
     expect(pickerName(tabs.find(t => t.id === '2-0-3')!)).toBe('Patch 2.0.3 ✓')
+    expect(tabs.find(t => t.id === '2-0-3')?.count).toBe(1)
   })
 
   test('done phases with dates sort newest first; no task comes last; a choice the list lacks shows as its bare id after All', () => {

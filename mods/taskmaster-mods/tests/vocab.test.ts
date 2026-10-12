@@ -1,9 +1,23 @@
 // User intent: pin the visual rework's element vocabulary (spec §15.2–15.3) — inks, glyph badges, the five-rung key ladder,
-// labelled actions, the y/n row and the footer — so every screen built on it shows the approved prototype's parts.
+// labelled actions, the y/n row and the footer — so every screen built on it shows the approved prototype's parts — and the hard UI rules (no motion on hover, no
+// shadows, no one-sided coloured borders) on every vocabulary element.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { DEMO_PHASES, demoSnapshot } from '../hooks/demo'
+import { ALL, FRESH_PHASE_VIEW } from '../hooks/phases'
+import { sidebarView } from '../hooks/nav'
 import {
   actionKey,
+  bulkRow,
+  focusedItem,
+  pagerPiece,
+  paneToolbar,
+  phaseMenu,
+  phasePicker,
+  refreshPiece,
+  sidebar,
+  item,
+  togglePiece,
   actionRows,
   askRow,
   BADGE_W,
@@ -181,5 +195,39 @@ describe('the footer', () => {
     const short = hints(k, items([]), 10)
     expect(textsOf(short).join('').length).toBeLessThanOrEqual(10)
     expect(() => footer(k, [{ keys: '[', word: 'x', press: [{ key: '[', onPress: noop }] }], 40)).toThrow(/hotkey "\["/)
+  })
+})
+
+const STYLE_ONLY = new Set(['backgroundColor', 'borderColor', 'borderStyle', 'borderDimColor', 'bold', 'color', 'dimColor', 'italic', 'underline', 'inverse'])
+
+describe('the hard UI rules, on the vocabulary', () => {
+  test('every hover only restyles (no offsets), and nothing draws a one-sided border or a shadow', () => {
+    const k = testKit()
+    const strip = { pane: 'review' as const, view: { ...FRESH_PHASE_VIEW, choice: ALL, phases: DEMO_PHASES, loaded: true, overlay: true }, allCount: 5, focused: true, digits: true, empty: 'Nothing waiting' }
+    const on = { choose: noop, toggleDone: noop, overlay: noop }
+    const keys = [
+      actionKey(k, { id: 'p', key: 'd', label: 'mark task done', rung: 'primary', onPress: noop }),
+      actionKey(k, { id: 's', key: 'a', label: 'send task to agent', onPress: noop }),
+      actionKey(k, { id: 'x', key: 'x', label: 'drop task', rung: 'destructive', onPress: noop }),
+      actionKey(k, { id: 'z', key: 'z', label: 'nothing yet', dim: 'why', onPress: noop }),
+    ]
+    const head = { mark: { key: 'sel:a', selected: true, onPress: noop }, badge: 'ACTION', ident: 'docs-012', title: 'README mentions the review queue', age: '30h' }
+    const view = sidebarView({ current: 'session', snapshot: demoSnapshot(Date.UTC(2026, 9, 12, 12, 0)), restore: null, now: Date.UTC(2026, 9, 12, 12, 0) })
+    const trees = [
+      ...keys.map(p => p.el),
+      ...item(k, head, [], 80),
+      focusedItem(k, { id: 'a', head, lines: [], actions: keys.map(p => p.el) }, 80),
+      paneToolbar(k, { left: phasePicker(k, strip, on), right: [togglePiece(k, { id: 't', label: 'show closed', on: true, onPress: noop }), pagerPiece(k, { page: 0, pages: 2, onTurn: noop }), refreshPiece(k, { label: 'refresh', onPress: noop })], width: 100 }),
+      bulkRow(k, { keys, scopes: [{ id: 'sel-all', label: 'all', onPress: noop }], width: 80 }),
+      phaseMenu(k, strip, on),
+      sidebar(k, view, noop),
+      footer(k, [{ keys: 'h l', word: 'phase', press: [{ key: 'h', onPress: noop }] }], 80),
+    ]
+    for (const tree of trees) {
+      for (const hover of hoversOf(tree)) for (const key of Object.keys(hover)) expect(STYLE_ONLY.has(key), key).toBe(true)
+      for (const e of walk(tree)) {
+        for (const key of Object.keys(e.props ?? {})) expect(/^border(Left|Right|Top|Bottom)|shadow/i.test(key), key).toBe(false)
+      }
+    }
   })
 })
