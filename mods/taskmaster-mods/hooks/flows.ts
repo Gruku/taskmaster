@@ -4,8 +4,11 @@ import type { RenderSurface } from 'claude-code'
 
 import type {
   TmBandMode,
+  TmCloseAsk,
   TmCursor,
   TmHandover,
+  TmHandoverList,
+  TmHandoverMarks,
   TmHandoverNotice,
   TmHandoverSummary,
   TmPhase,
@@ -15,9 +18,10 @@ import type {
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
-import type { TmActions } from './actions'
+import type { TmActions, TmCloseHandover } from './actions'
+import { arrival, closeToast, FRESH_MARKS, listedHandovers, markClosed, withoutHandovers } from './handover-list'
 import type { TmHost } from './host'
-import { launchAll, type LaunchResult, type LaunchSpec, launchSummary } from './launch'
+import { launchAll, type LaunchResult, type LaunchSpec, launchSummary, resumePrompt } from './launch'
 import {
   afterDone,
   afterSendBack,
@@ -33,7 +37,7 @@ import {
   ticksOf,
   toggleTick,
 } from './model'
-import { ALL, fallback, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
+import { ALL, fallback, FRESH_PHASE_VIEW, isDoneShown, orderPhases, phaseStoreOf, saveChoice } from './phases'
 import { type BulkResult, bulkSummary, FRESH_REVIEW_LIST, toggled } from './review-list'
 import { recordResumedFrom } from './resumed'
 
@@ -52,6 +56,8 @@ export type TmWriter = {
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
   phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
   handoverPage: (page: number) => Promise<void>
+  handoverList: (change: (l: TmHandoverList | null) => TmHandoverList | null) => Promise<void>
+  handoverMarks: (change: (m: TmHandoverMarks) => TmHandoverMarks) => Promise<void>
   reviewList: (change: (l: TmReviewList) => TmReviewList) => Promise<void>
   resumedFrom: (handoverId: string) => Promise<void>
   restoreHidden: (epoch: number) => Promise<void>
@@ -79,6 +85,12 @@ export type TmFlowDeps = {
   readPhases?: (pane: TmPhasePane) => Promise<readonly TmPhase[] | null>
   /** A pane's strip moved to this phase id ('' All): review's scope follows and a refresh is asked. */
   phaseChosen?: (pane: TmPhasePane, phaseId: string) => void
+  /** The handovers pane's own read (tm: readHandoverList). Absent in demo, whose list is seeded with the snapshot. */
+  readHandoverList?: (closed: boolean) => Promise<TmHandoverList | null>
+  /** A handover the pane's own list holds (up to 100, closed ones too): copyHandover looks here after the snapshot window. */
+  findHandover?: (handoverId: string) => Promise<TmHandover | null>
+  /** Closes one handover (tm: backlog_handover_update_status; demo: always closes). Absent: a close only toasts why not. */
+  closeHandover?: TmCloseHandover
   /** Resolves the session's handover again (D5) after something it depends on changed. */
   resolve?: () => Promise<void>
   /** Reads one handover by id (tm: backlog_handover_get), for a copy the open list and the notice cannot answer. */
@@ -210,6 +222,7 @@ export function createFlows(d: TmFlowDeps) {
   const pick = async (id: string): Promise<void> => {
     await d.write.pick(id)
     await d.write.summaryOpen(open => (open === id ? open : ''))
+    await d.write.handoverMarks(m => (m.ask === null ? m : { ...m, ask: null }))
   }
   const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
   const open = async (id: string, title: string): Promise<void> => {
@@ -231,14 +244,20 @@ export function createFlows(d: TmFlowDeps) {
       seen.listed = s?.handovers.find(h => h.id === id)
       return s
     })
-    const found = seen.listed ?? (await d.readHandover?.(id)) ?? null
+    const found = seen.listed ?? (await d.findHandover?.(id)) ?? (await d.readHandover?.(id)) ?? null
     return found === null ? null : { text: handoverCopyText(found), path: found.path }
   }
+  // /tm-handovers, band and Session `2`: the pane from its top, nothing selected; it draws at once (the snapshot's window),
+  // then its phases and its own list land, read off the open.
   const openHandovers = async (): Promise<void> => {
     await d.write.pick('')
     await d.write.summaryOpen(() => '')
     await d.write.handoverPage(0)
+    await unmark()
     await open(HANDOVERS, 'Handovers')
+    d.host.after(0, () => {
+      void reloadHandovers().catch(() => undefined)
+    })
   }
   const keepChoice = async (pane: TmPhasePane, phaseId: string): Promise<void> => {
     if (d.source !== 'demo') await saveChoice(phaseStoreOf(d.host), pane, await d.host.repoRoot(), phaseId)
@@ -277,8 +296,95 @@ export function createFlows(d: TmFlowDeps) {
     if (pane === 'handovers') {
       await d.write.handoverPage(0)
       await pick('')
+      await d.write.handoverMarks(m => ({ ...m, selected: [], ask: null }))
     }
     d.phaseChosen?.(pane, phaseId)
+  }
+  // The handovers pane's own list (spec §9), read with `◐ closed`'s current setting; a failed read keeps what is drawn.
+  const loadHandovers = async (): Promise<void> => {
+    if (d.readHandoverList === undefined) return
+    const held = { closed: false }
+    await d.write.handoverMarks(m => {
+      held.closed = m.showClosed
+      return m
+    })
+    const list = await d.readHandoverList(held.closed)
+    if (list !== null) await d.write.handoverList(() => list)
+  }
+  // The pane's phases, then its list: one call after another (the server answers one at a time).
+  const reloadHandovers = async (): Promise<void> => {
+    await loadPhases('handovers')
+    await loadHandovers()
+  }
+  const unmark = async (): Promise<void> => {
+    await d.write.handoverMarks(m => ({ ...m, selected: [], ask: null }))
+  }
+  // Ids being closed now: a second y (or a bulk row drawn before the first answered) never closes one twice.
+  const closing = new Set<string>()
+  /**
+   * Closes handovers one at a time (backlog_handover_update_status), then one toast for all of them (spec §11): closed ones
+   * leave the selection, turn closed in the list and leave the snapshot's window; refused ones stay selected.
+   */
+  const closeHandovers = async (ids: readonly string[]): Promise<void> => {
+    const close = d.closeHandover
+    if (close === undefined) {
+      d.host.toast('taskmaster-mods: handovers cannot be closed from here')
+      return
+    }
+    const todo = ids.filter(id => !closing.has(id))
+    for (const id of todo) closing.add(id)
+    const closed: string[] = []
+    const refused: { id: string; refusal: string }[] = []
+    try {
+      for (const id of todo) {
+        const out = await close(id)
+        if (out.ok) closed.push(id)
+        else refused.push({ id, refusal: out.refusal })
+      }
+    } finally {
+      for (const id of todo) closing.delete(id)
+    }
+    if (todo.length === 0) return
+    if (closed.length > 0) {
+      await d.write.handoverMarks(m => ({ ...m, selected: m.selected.filter(id => !closed.includes(id)) }))
+      await d.write.handoverList(l => (l === null ? l : markClosed(l, closed)))
+      await d.write.snapshot(s => (s === null ? s : withoutHandovers(s, closed)))
+    }
+    d.host.toast(closeToast(closed, refused))
+    if (closed.length === 0) return
+    d.refresh?.()
+    if (d.source !== 'demo') await reloadHandovers()
+  }
+  const moveTo = async (page: number, id: string): Promise<void> => {
+    await d.write.handoverPage(page)
+    await pick(id)
+    await d.host.focus(HANDOVERS, `ho:${id}`)
+  }
+  // What the handovers pane draws from, read through the writers (each change hands its value back unchanged).
+  const handoverState = async () => {
+    const at: { list: TmHandoverList | null; snapshot: TmSnapshot | null; marks: TmHandoverMarks; view: TmPhaseView } = {
+      list: null,
+      snapshot: null,
+      marks: FRESH_MARKS,
+      view: FRESH_PHASE_VIEW,
+    }
+    await d.write.handoverList(l => {
+      at.list = l
+      return l
+    })
+    await d.write.snapshot(s => {
+      at.snapshot = s
+      return s
+    })
+    await d.write.handoverMarks(m => {
+      at.marks = m
+      return m
+    })
+    await d.write.phaseView('handovers', v => {
+      at.view = v
+      return v
+    })
+    return at
   }
   const openReview = async (pin = '', mode: TmCursor['mode'] = 'card'): Promise<void> => {
     await d.write.cursor(() => ({ ...FRESH_CURSOR, currentId: pin, mode }))
@@ -302,19 +408,29 @@ export function createFlows(d: TmFlowDeps) {
       if (pane === 'handovers') return openHandovers()
       return pane === 'session' ? open(SESSION, 'Session') : open(RESTORE, 'Restore')
     },
-    /** Session `h`: the handovers pane on the page that holds this handover, picked and focused (Stage 4 adds its phase). */
+    /**
+     * Session `h` (spec §9): the pane opens on that handover at once, then, once its phases and list are read, shows it under
+     * its phase (the chosen one when that holds it) on its page, focused. One the list does not hold leaves page 1 unpicked, and says so.
+     */
     openHandover: async (handoverId: string): Promise<void> => {
-      const at = { index: -1 }
-      await d.write.snapshot(s => {
-        at.index = s?.handovers.findIndex(h => h.id === handoverId) ?? -1
-        return s
-      })
+      await d.write.pick(handoverId)
       await d.write.summaryOpen(() => '')
-      await d.write.handoverPage(at.index < 0 ? 0 : Math.floor(at.index / PAGE_SIZE))
-      await d.write.pick(at.index < 0 ? '' : handoverId)
+      await d.write.handoverPage(0)
+      await unmark()
       await open(HANDOVERS, 'Handovers')
-      if (at.index < 0) d.host.toast(`taskmaster-mods: handover ${handoverId} is not in the open list`)
-      else await d.host.focus(HANDOVERS, `ho:${handoverId}`)
+      await reloadHandovers()
+      const at = await handoverState()
+      const listed = listedHandovers(at.list, at.snapshot, at.marks.showClosed)
+      const found = arrival(listed, handoverId, at.list?.tasks ?? {}, at.view.phases, at.view.choice)
+      if (found === null) {
+        await d.write.pick('')
+        d.host.toast(`taskmaster-mods: handover ${handoverId} is not in the open list`)
+        return
+      }
+      if (found.choice !== at.view.choice) await choosePhase('handovers', found.choice)
+      await d.write.handoverPage(found.page)
+      await pick(handoverId)
+      await d.host.focus(HANDOVERS, `ho:${handoverId}`)
     },
     /** Band `x`: the restore burst's `4` goes for good (kept per burst, not in demo). */
     hideRestore: async (epoch: number): Promise<void> => {
@@ -595,6 +711,59 @@ export function createFlows(d: TmFlowDeps) {
         return holdOf(out)
       }),
     pick,
+    /** The pane's own list, read again (`u` runs it after Stage 3's `refresh('handovers')`). */
+    loadHandovers,
+    /** `◐ closed`: closed handovers join (read when the list holds none yet) or leave; the pane starts over at its top. */
+    toggleClosed: async (): Promise<void> => {
+      const held = { show: false, has: false }
+      await d.write.handoverMarks(m => {
+        held.show = !m.showClosed
+        return { ...m, showClosed: held.show, ask: null }
+      })
+      await d.write.handoverPage(0)
+      await pick('')
+      await d.write.handoverList(l => {
+        held.has = l?.closed === true
+        return l
+      })
+      if (held.show && !held.has) await loadHandovers()
+    },
+    /** `s` or a click on a card's box; any change of selection takes the close row down. */
+    selectHandover: async (id: string): Promise<void> => {
+      await d.write.handoverMarks(m => ({ ...m, ask: null, selected: m.selected.includes(id) ? m.selected.filter(x => x !== id) : [...m.selected, id] }))
+    },
+    /** `all` (this page's open ones) and `none` ([]). */
+    selectHandovers: async (ids: readonly string[]): Promise<void> => {
+      await d.write.handoverMarks(m => ({ ...m, ask: null, selected: [...ids] }))
+    },
+    /** j / k: show that page and focus that handover. */
+    moveTo,
+    /** `x` on the focused card, or `Close N`: the y/n row comes up, `n` (the safe default) focused. */
+    askClose: async (ask: TmCloseAsk): Promise<void> => {
+      if (ask.ids.length === 0) return
+      await d.write.handoverMarks(m => ({ ...m, ask }))
+      await d.host.focus(HANDOVERS, ask.kind === 'one' ? 'close-no' : 'bulk-close-no')
+    },
+    cancelClose: async (): Promise<void> => {
+      await d.write.handoverMarks(m => (m.ask === null ? m : { ...m, ask: null }))
+    },
+    /** `y`: closes what the row asked about, only while that row is up (a second `y` finds nothing armed). */
+    confirmClose: async (): Promise<void> => {
+      const held: { ask: TmCloseAsk | null } = { ask: null }
+      await d.write.handoverMarks(m => {
+        held.ask = m.ask
+        return m.ask === null ? m : { ...m, ask: null }
+      })
+      if (held.ask !== null) await closeHandovers(held.ask.ids)
+    },
+    closeHandovers,
+    /** `w`: a fresh session in a new tab, as the Session tab's `w` starts one: this cwd, `handover <id>`, the resume line. */
+    handoverLaunch: async (h: TmHandover): Promise<LaunchSpec> => ({
+      cwd: await d.host.cwd(),
+      title: `handover ${h.id}`,
+      mode: 'fresh',
+      prompt: resumePrompt(h.id, h.path),
+    }),
     /** n / p: turn to a page and pick its first handover. */
     turnPage: async (page: number, firstId: string): Promise<void> => {
       await d.write.handoverPage(page)
@@ -610,8 +779,11 @@ export function createFlows(d: TmFlowDeps) {
       const r = await d.host.copy(found.text, surface)
       d.host.toast(r.isCopied ? `Copied handover ${handoverId}` : `Clipboard unavailable (${r.reason}): copy by hand from ${found.path}`)
     },
-    resumeHandover: async (h: TmHandover): Promise<void> => {
-      await fill(`Resume from handover ${h.id} (${h.path})`)
+    /** `r`: the resume line in the prompt; true when the prompt took it (the caller then records the resume). */
+    resumeHandover: async (h: TmHandover): Promise<boolean> => {
+      const filled = await d.host.fill(resumePrompt(h.id, h.path))
+      if (!filled) d.host.toast(PROMPT_REFUSED)
+      return filled
     },
     /** This session continues the work of `handoverId` (spec §10.5): kept per session id (not in demo), then D5 again. */
     recordResumed: async (handoverId: string): Promise<void> => {

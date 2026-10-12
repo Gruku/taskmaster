@@ -10,6 +10,8 @@ import type {
   TmCursor,
   TmFault,
   TmHandover,
+  TmHandoverList,
+  TmHandoverMarks,
   TmHandoverNotice,
   TmHandoverSummary,
   TmPhasePane,
@@ -21,13 +23,14 @@ import type {
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
-import { demoActions, tmActions } from './actions'
+import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
+import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree } from './band'
 import { handoversPaneTree } from './draw'
 import { createFlows, type TmFlows, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
+import { FRESH_MARKS } from './handover-list'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
 import { KIT, kitGalleryTree } from './kit-gallery'
@@ -55,7 +58,7 @@ import { FRESH_REVIEW_LIST, listView, reviewItems } from './review-list'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import { sessionTree } from './session'
 import type { Rr } from './rr'
-import { FAULT_LINE, loadDetail, readHandover, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
+import { FAULT_LINE, loadDetail, readHandover, readHandoverList, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
 const SNAPSHOT = atom({ plugin: 'taskmaster-mods', key: 'snapshot' } as const, null as TmSnapshot | null)
 const CURSOR = atom({ plugin: 'taskmaster-mods', key: 'cursor' } as const, FRESH_CURSOR as TmCursor)
@@ -71,6 +74,8 @@ const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, nul
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
 const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
+const HANDOVER_LIST = atom({ plugin: 'taskmaster-mods', key: 'handoverList' } as const, null as TmHandoverList | null)
+const HANDOVER_MARKS = atom({ plugin: 'taskmaster-mods', key: 'handoverMarks' } as const, FRESH_MARKS as TmHandoverMarks)
 const REVIEW_LIST = atom({ plugin: 'taskmaster-mods', key: 'reviewList' } as const, FRESH_REVIEW_LIST as TmReviewList)
 const SESSION_HANDOVER = atom({ plugin: 'taskmaster-mods', key: 'sessionHandover' } as const, null as TmSessionHandover | null)
 const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as const, '')
@@ -198,6 +203,12 @@ function writerOf($: EngineInterface): TmWriter {
     handoverPage: async page => {
       await update($, HANDOVER_PAGE, () => page)
     },
+    handoverList: async change => {
+      await update($, HANDOVER_LIST, change)
+    },
+    handoverMarks: async change => {
+      await update($, HANDOVER_MARKS, change)
+    },
     reviewList: async change => {
       await update($, REVIEW_LIST, change)
     },
@@ -286,6 +297,14 @@ function ensureFlows($: EngineInterface): TmFlows {
     // demo seeds DEMO_SUMMARIES instead, as it does the task details; every demo handover is in its open list
     ...(mod.source === 'tm' ? { summary: (id: string) => readSummary(host, id), readHandover: (id: string) => readHandover(host, id) } : {}),
     readPhases: mod.source === 'demo' ? pane => Promise.resolve(demoPhases(pane)) : pane => readPhases(host, pane, mod.scope.waitingOnly),
+    // demo seeds its handover list with the snapshot and never re-reads it
+    ...(mod.source === 'tm'
+      ? {
+          readHandoverList: async (closed: boolean) => readHandoverList(host, await host.repoRoot(), closed),
+        }
+      : {}),
+    closeHandover: mod.source === 'demo' ? demoCloseHandover() : tmCloseHandover((tool, args) => writeTm(host, tool, args)),
+    findHandover: async (id: string) => (await read($, HANDOVER_LIST))?.handovers.find(h => h.id === id) ?? null,
     phaseChosen: (pane, phase) => {
       if (pane !== 'review') return
       mod.scope = { ...mod.scope, phase }
@@ -305,6 +324,7 @@ async function ensureSeeded($: EngineInterface): Promise<void> {
   await update($, SNAPSHOT, s => (isCurrentDemo(s) ? s : demoSnapshot(now)))
   await update($, DETAILS, () => DEMO_DETAILS)
   await update($, SUMMARIES, () => DEMO_SUMMARIES)
+  await update($, HANDOVER_LIST, () => demoHandoverList(now))
   await update($, PHASE_VIEWS, all => ({
     review: { ...all.review, phases: demoPhases('review'), loaded: true },
     handovers: { ...all.handovers, phases: demoPhases('handovers'), loaded: true },
@@ -805,7 +825,9 @@ export const register: Register = (on, options) => {
       {
         pick: id => act(f => f.pick(id)),
         copy: (handover, surface) => act(f => f.copyHandover(handover.id, surface)),
-        resume: handover => act(f => f.resumeHandover(handover)),
+        resume: handover => act(async f => {
+          if (await f.resumeHandover(handover)) await f.recordResumed(handover.id)
+        }),
         toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
         turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
       },
