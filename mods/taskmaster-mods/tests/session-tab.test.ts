@@ -38,12 +38,12 @@ const FAR: TmSnapshot = {
 }
 
 describe('session tab', () => {
-  test('/tm-session and the band 3 open it', DEMO, async ($, on) => {
+  test('/tm-session and the band m open it', DEMO, async ($, on) => {
     const world = worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     expect(await $.command.run(command('tm-session'))).toEqual({ text: 'Session opened.' })
     const band = await $.ui.mount({ plugin: PLUGIN, ...BAND })
-    await band.press({ key: 'band-session' })
+    await band.press({ key: 'band-sidebar' })
     expect(world.opened).toEqual(['tm-session', 'tm-session'])
   })
 

@@ -4,7 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { BAND, command, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import { BAND, command, pane, PLUGIN, SESSION, waitingOf } from './fixtures/inputs'
 import { type Drawn, elementsOf, widthOf } from './fixtures/measure'
 import * as R from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
@@ -63,7 +63,7 @@ describe('the review window and its count', () => {
       tool === 'backlog_list_tasks' ? { text: R.LIST_IN_REVIEW.replace('**2 tasks:**', '**355 tasks (showing first 2):**') } : R.backlog(tool, args)
     await $.session.start(SESSION)
     await clock.settle()
-    expect(await band($)).toContain('357 waiting on you')
+    expect(await waitingOf($)).toContain('357 waiting on you')
   })
 
   test('a continuity reply with no total and a full window reads 50+', TM, async ($, on) => {
@@ -77,7 +77,7 @@ describe('the review window and its count', () => {
     }
     await $.session.start(SESSION)
     await clock.settle()
-    const tree = await band($)
+    const tree = await waitingOf($)
     expect(tree).toContain('50+ waiting on you')
     expect(world.statuses).toEqual([undefined])
   })
@@ -223,17 +223,17 @@ describe('handover-written notice', () => {
     await $.tool.call(call('backlog_handover_create', CREATE))
     await clock.settle()
     const ui = await $.ui.mount({ plugin: PLUGIN, ...BAND })
-    expect(await ui.find({ type: 'Text', text: '↳ HANDOVER' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '↳ written here ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '2026-10-06-live-data-wired' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Live data wired into the band' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'band-copy' }))?.props).toMatchObject({ hotkey: 'c', label: 'copy' })
+    expect((await ui.find({ type: 'Button', key: 'band-copy' }))?.props).toMatchObject({ hotkey: 'c', label: 'copy handover' })
     await ui.press({ key: 'band-copy' })
     await clock.settle()
     expect(world.copies).toEqual([BLOCK])
     expect(world.toasts).toEqual(['Copied handover 2026-10-06-live-data-wired'])
     await ui.redraw()
-    expect(await ui.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
-    expect((await ui.find({ type: 'Button', key: 'band-review' }))?.props.label).toBe('4 waiting on you')
+    expect(await ui.find({ type: 'Text', text: '↳ written here ' })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'band-review' })).toBeUndefined()
   })
 
   test('with no clipboard the toast carries the path and the row stays', TM, async ($, on) => {
@@ -250,7 +250,7 @@ describe('handover-written notice', () => {
     expect(world.toasts).toEqual([
       'Clipboard unavailable (no-clipboard): copy by hand from C:\\work\\proj\\.taskmaster\\handovers\\2026-10-06-live-data-wired.md',
     ])
-    expect(await ui.find({ type: 'Text', text: '↳ HANDOVER' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '↳ written here ' })).toBeDefined()
   })
 
   test('offline, the handover written here still shows with c, beside the offline signal, and a 30-column band fits', TM, async ($, on) => {
@@ -263,14 +263,14 @@ describe('handover-written notice', () => {
     expect(world.statuses).toEqual(['◆ tm offline'])
     const narrow = await $.ui.mount({ plugin: PLUGIN, ...BAND, props: { ...BAND.props, bodyColumns: 30 } })
     const tree = await narrow.drawn()
-    for (const row of elementsOf(tree).filter(e => e.type === 'Box' && e.props?.flexDirection === 'row' && e.props?.columnGap === 2)) {
+    for (const row of elementsOf(tree).filter(e => e.type === 'Box' && e.props?.flexDirection === 'row')) {
       expect(widthOf(row)).toBeLessThanOrEqual(28)
     }
-    for (const key of ['band-copy', 'band-review', 'band-handovers', 'band-session']) expect(await narrow.find({ type: 'Button', key }), key).toBeDefined()
+    for (const key of ['band-copy', 'band-retry']) expect(await narrow.find({ type: 'Button', key }), key).toBeDefined()
     await narrow.unmount()
     const wide = await $.ui.mount({ plugin: PLUGIN, ...BAND })
-    expect(await wide.find({ type: 'Text', text: ' offline' })).toBeDefined()
-    expect(await wide.find({ type: 'Text', text: 'written here ·' })).toBeDefined()
+    expect(await wide.find({ type: 'Text', text: '▲ tm offline' })).toBeDefined()
+    expect(await wide.find({ type: 'Text', text: '↳ written here ' })).toBeDefined()
   })
 
   test('a refused create, or a subagent writing one, puts nothing on the band; /clear clears the row', TM, async ($, on) => {
@@ -282,15 +282,15 @@ describe('handover-written notice', () => {
     await $.session.start(SESSION)
     await clock.settle()
     await $.tool.call(call('backlog_handover_create', CREATE))
-    expect(await band($)).not.toContain('HANDOVER')
+    expect(await band($)).not.toContain('↳ written here')
     answers.backlog_handover_create = R.HANDOVER_WRITTEN
     await $.tool.call({ tool: `${T}backlog_handover_create`, ...CREATE, agentId: 'ag1' } as never)
-    expect(await band($)).not.toContain('HANDOVER')
+    expect(await band($)).not.toContain('↳ written here')
     await $.tool.call(call('backlog_handover_create', CREATE))
-    expect(await band($)).toContain('HANDOVER')
+    expect(await band($)).toContain('↳ written here')
     await $.classic.SessionStart({ source: 'clear', session_id: 'sess-B' } as never)
     await clock.settle()
-    expect(await band($)).not.toContain('HANDOVER')
+    expect(await band($)).not.toContain('↳ written here')
   })
 })
 
@@ -318,7 +318,7 @@ describe('P0/P1 issues, read on their own', () => {
       { status: 'open', severity: 'P1', limit: 50 },
     ])
     // 2 tasks + (1 P0 + 1 P1 shown + 6 hidden) + 1 decision
-    expect(await band($)).toContain('11 waiting on you')
+    expect(await waitingOf($)).toContain('11 waiting on you')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
     // BLOCKED first (the critical task, then the P0 issue), then ACTION: the dated decision, then the undated task and P1 issue.
     await ui.press({ key: 'focus-next' })
@@ -339,7 +339,7 @@ describe('after a reload (no session.start)', () => {
     await $.turn.complete(TURN_END)
     await clock.settle()
     expect(world.calls.filter(c => c.tool === 'backlog_list_tasks')).toHaveLength(1)
-    expect(await band($)).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
   })
 
   test('a draw alone reads nothing from tm and writes nothing', TM, async ($, on) => {

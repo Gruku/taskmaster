@@ -415,7 +415,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
 
   const newest = ageLabel(newestStamp(items), v.now)
   const summary = [
-    `${s.queueTotal} waiting on you`,
+    `${s.queueTotal}${s.queueCapped === true ? '+' : ''} waiting on you`,
     ...(newest === '' ? [] : [`newest ${newest} ago`]),
     ...(s.queueTotal > items.length ? [`${items.length} listed`] : []),
     ...(done > 0 ? [`${done} done this pass`] : []),

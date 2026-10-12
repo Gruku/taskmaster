@@ -722,14 +722,19 @@ export const register: Register = (on, options) => {
     if (model === null) return below
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
-    const ours = bandTree(k, model, await read($, BAND), e.props.bodyColumns, e.props.maxRows, {
-      open: pane => act(f => f.openPane(pane)),
-      askDone: id => act(f => f.bandAskDone(id)),
-      confirmDone: id => act(f => f.bandConfirmDone(id)),
-      cancel: () => act(f => f.bandCancel()),
-      copy: (id, surface) => act(f => f.copyHandover(id, surface)),
-      hideRestore: () => act(f => (pending === null ? Promise.resolve() : f.hideRestore(pending.epoch))),
-    })
+    const ours = bandTree(
+      k,
+      model,
+      { mode: await read($, BAND), width: e.props.bodyColumns, maxRows: e.props.maxRows, now: await $.clock.now(), reason: snapshot?.reason ?? '' },
+      {
+        openSidebar: () => act(f => f.openSidebar()),
+        askDone: id => act(f => f.bandAskDone(id)),
+        confirmDone: id => act(f => f.bandConfirmDone(id)),
+        cancel: () => act(f => f.bandCancel()),
+        copy: (id, surface) => act(f => f.copyHandover(id, surface)),
+        retry: () => act(f => f.retry()),
+      },
+    )
     const { Box } = ui
     return (
       <Box flexDirection="column">

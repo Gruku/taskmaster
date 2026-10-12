@@ -4,7 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { RETRY_DELAYS_MS, singleFlight } from '../hooks/refresh'
-import { BAND, pane, PLUGIN, SESSION } from './fixtures/inputs'
+import { BAND, pane, PLUGIN, SESSION, waitingOf } from './fixtures/inputs'
 import { backlog } from './fixtures/replies'
 import { RR_STUB } from './fixtures/rr-stub'
 import { type McpAnswer, worldOf } from './fixtures/world'
@@ -79,7 +79,7 @@ describe('cold start in a session', () => {
     await clock.settle()
     expect(world.statuses).toEqual([undefined, undefined])
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
     expect(await ui.find({ type: 'Text', text: 'unified-chat-022' })).toBeDefined()
   })
 
@@ -96,7 +96,7 @@ describe('cold start in a session', () => {
     await clock.advance(2000)
     await clock.settle()
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
   })
 
   test('every retry fails: the offline fault appears only after the last one, with the reason in the pane', TM, async ($, on) => {
@@ -175,6 +175,6 @@ describe('cold start in a session', () => {
     await clock.settle()
     expect(lists()).toBe(5)
     expect(world.statuses).not.toContain('◆ tm offline')
-    expect(JSON.stringify(await $.ui.render(BAND))).toContain('4 waiting on you')
+    expect(await waitingOf($)).toContain('4 waiting on you')
   })
 })

@@ -42,7 +42,7 @@ describe('reload without session.start', () => {
     await ui.press({ key: 'band-done' })
     expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeDefined()
     await ui.press({ key: 'band-yes' })
-    expect((await ui.find({ type: 'Button', key: 'band-review' }))?.props.label).toBe('4 waiting on you')
+    expect(await ui.find({ type: 'Button', key: 'band-yes' })).toBeUndefined()
   })
 
   test('demo: the commands open their panes', DEMO, async ($, on) => {
