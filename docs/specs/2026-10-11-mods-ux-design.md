@@ -279,7 +279,7 @@ Work in a worktree off `feat/database-native-foundation`; rebase onto the parall
 
 | Section | Superseded by |
 |---------|---------------|
-| §4.1 kit table (keycap, panel, card, toolbar, pager, selection bar, footer) | §15.2 vocabulary (`hooks/vocab.tsx`); `kit.tsx` keeps `kitOf`, `badge` (the band chip only), `confirmRow`, `fit`, `row`, `label`, `signal`, `rule` |
+| §4.1 kit table (keycap, panel, card, toolbar, pager, selection bar, footer) | §15.2 vocabulary (`hooks/vocab.tsx`); `kit.tsx` keeps `kitOf`, `badge` (the band chip only), `fit`, `row`, `label`, `signal`, `rule`; the y/n row is the vocabulary's `askRow` |
 | §5 phase strip (tabs, `+N ▾`, `0`–`9` on the strip) | §15.4 phase picker |
 | §6 band layout and key map (`1`–`4`, counts on line 2, `x hide`) | §15.5 band |
 | §7–§10 presentation (panels, cards, keycaps, help lines) | §15.6 lists and §15.7 per screen; the behaviour, data and flows of §7–§10 stand |
