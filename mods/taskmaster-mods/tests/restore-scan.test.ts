@@ -75,9 +75,9 @@ describe('runScan', () => {
 describe('runDigest', () => {
   test('reads the first prompt and the tail; a missing session is an error', async () => {
     const found = hostOf(() => ok({ first: 'USER: start', tail: 'USER: start\nASSISTANT: done' }))
-    expect(await runDigest(found.rh, 'abc')).toEqual({ first: 'USER: start', tail: 'USER: start\nASSISTANT: done' })
-    expect(found.runs[0]).toEqual(['python', '-I', PATHS.script, 'digest', '--config-dir', PATHS.configDir, '--session', 'abc'])
-    await expect(runDigest(hostOf(() => ok({ error: 'session not found' })).rh, 'zz')).rejects.toThrow('session not found')
+    expect(await runDigest(found.rh, 'abc', ROOT)).toEqual({ first: 'USER: start', tail: 'USER: start\nASSISTANT: done' })
+    expect(found.runs[0]).toEqual(['python', '-I', PATHS.script, 'digest', '--config-dir', PATHS.configDir, '--session', 'abc', '--root', ROOT])
+    await expect(runDigest(hostOf(() => ok({ error: 'session not found' })).rh, 'zz', ROOT)).rejects.toThrow('session not found')
   })
 })
 

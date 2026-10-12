@@ -145,7 +145,7 @@ describe('brief', () => {
     await flows.toggleBrief('plain')
     expect(f.view.briefs).toEqual({ plain: 'State: Stopped at the parser.\nNext: Finish the error rows.' })
     expect(f.prompts).toHaveLength(1)
-    expect(f.runs.at(-1)?.slice(3)).toEqual(['digest', '--config-dir', 'C:\\Users\\me\\.claude', '--session', 'plain'])
+    expect(f.runs.at(-1)?.slice(3)).toEqual(['digest', '--config-dir', 'C:\\Users\\me\\.claude', '--session', 'plain', '--root', 'C:\\work\\proj'])
     expect(f.store.get(`brief:plain:${T0 - 120}`)).toBe('State: Stopped at the parser.\nNext: Finish the error rows.')
     await flows.toggleBrief('plain')
     expect(f.view.briefs).toEqual({})

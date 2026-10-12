@@ -255,6 +255,9 @@ def load_cache(path: Path | None) -> dict:
     return cache.get("files", {}) if isinstance(cache, dict) and cache.get("v") == CACHE_VERSION else {}
 
 
+SKIPPABLE = (OSError, TypeError, ValueError, AttributeError, KeyError)
+
+
 def facts(s: dict, mtime: float, live: set[str]) -> dict:
     end = iso_to_epoch(s["end"]) or 0
     return {
@@ -292,40 +295,51 @@ def scan(args) -> dict:
     cache_path = Path(args.cache) if args.cache else None
     entries = load_cache(cache_path)
     fresh: dict = {}
-    found: list[tuple[dict, float]] = []
+    found: list[dict] = []
+    live = live_sessions(cfg)
     if projects.is_dir():
         for pdir in projects.iterdir():
             # The folder name is the encoded working directory: anything under the root starts with the root's encoding.
             if not pdir.is_dir() or not pdir.name.lower().startswith(prefix):
                 continue
             for f in pdir.glob("*.jsonl"):
-                st = f.stat()
-                if st.st_mtime < cutoff or f.stem == args.exclude:
+                # One vanished or oddly-typed transcript must not blank the whole list.
+                try:
+                    st = f.stat()
+                    if st.st_mtime < cutoff or f.stem == args.exclude:
+                        continue
+                    key = str(f)
+                    sig = f"{st.st_mtime_ns}:{st.st_size}"
+                    hit = entries.get(key)
+                    s = hit["s"] if isinstance(hit, dict) and hit.get("sig") == sig else scan_file(f)
+                    keep = s["prompts"] > 0 and is_under(s["cwd"], root) and not str(s["entrypoint"] or "").startswith("sdk")
+                    row = facts(s, st.st_mtime, live) if keep else None
+                except SKIPPABLE:
                     continue
-                key = str(f)
-                sig = f"{st.st_mtime_ns}:{st.st_size}"
-                hit = entries.get(key)
-                s = hit["s"] if isinstance(hit, dict) and hit.get("sig") == sig else scan_file(f)
                 fresh[key] = {"sig": sig, "s": s}
-                if s["prompts"] > 0 and is_under(s["cwd"], root) and not str(s["entrypoint"] or "").startswith("sdk"):
-                    found.append((s, st.st_mtime))
+                if row is not None:
+                    found.append(row)
     if cache_path:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(json.dumps({"v": CACHE_VERSION, "files": fresh}), encoding="utf-8")
         except OSError:
             pass
-    live = live_sessions(cfg)
-    sessions = sorted((facts(s, mtime, live) for s, mtime in found), key=lambda x: -x["closedEpoch"])
+    sessions = sorted(found, key=lambda x: -x["closedEpoch"])
     return {"v": CACHE_VERSION, "scannedAt": time.time(), "root": root, "sessions": sessions}
 
 
 def digest(args) -> dict:
     """The condensed tail of one transcript (human prompts and assistant prose), for a model brief."""
-    path = next((Path(args.config_dir) / "projects").glob(f"*/{args.session}.jsonl"), None)
+    prefix = encode_dir(os.path.normpath(args.root)).lower() if args.root else ""
+    path = next(
+        (p for p in (Path(args.config_dir) / "projects").glob(f"*/{args.session}.jsonl") if p.parent.name.lower().startswith(prefix)),
+        None,
+    )
     if path is None:
         return {"error": "session not found"}
     rows: list[str] = []
+    root = os.path.normpath(args.root) if args.root else ""
     with path.open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
@@ -334,6 +348,11 @@ def digest(args) -> dict:
                 continue
             if not isinstance(rec, dict) or rec.get("isSidechain"):
                 continue
+            if root and isinstance(rec.get("cwd"), str):
+                # The folder prefix also matches siblings (repo-x for repo); the recorded cwd decides.
+                if not is_under(rec["cwd"], root):
+                    return {"error": "session not found"}
+                root = ""
             if is_human_prompt(rec):
                 rows.append("USER: " + clip(text_of(rec["message"].get("content")), 1200))
             elif rec.get("type") == "assistant":

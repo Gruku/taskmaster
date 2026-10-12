@@ -193,3 +193,34 @@ def test_a_truncated_last_line_and_bad_bytes_are_skipped(world, capsys):
     s = world.by_id(capsys)["interrupted"]
     assert s["lastEvent"] == "interrupt"
     assert s["prompts"] == 1
+
+
+def test_a_vanished_or_wrongly_typed_file_is_skipped_and_the_rest_still_report(world, capsys, monkeypatch):
+    bad_cost = world.lay("ended", world.root).with_name("bad-cost.jsonl")
+    bad_cost.write_text(
+        json.dumps({"type": "user", "message": "just a string", "cwd": str(world.root), "timestamp": "2026-10-10T11:00:00.000Z"})
+        + "\n"
+        + json.dumps({"type": "result", "totalCostUSD": "lots", "cwd": str(world.root)})
+        + "\n",
+        encoding="utf-8",
+    )
+    ghost = bad_cost.with_name("ghost.jsonl")
+    ghost.write_text("{}\n", encoding="utf-8")
+    real_stat = Path.stat
+
+    def stat(self, *a, **k):
+        if self.name == "ghost.jsonl":
+            raise FileNotFoundError(str(self))
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    ids = set(world.by_id(capsys))
+    assert {"interrupted", "ended", "ended-then-more", "handed-off", "worktree"} <= ids
+    assert "ghost" not in ids
+
+
+def test_digest_only_reads_sessions_under_the_given_root(world, capsys):
+    assert scan.main(["digest", "--config-dir", str(world.cfg), "--session", "elsewhere", "--root", str(world.root)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"error": "session not found"}
+    assert scan.main(["digest", "--config-dir", str(world.cfg), "--session", "ended", "--root", str(world.root)]) == 0
+    assert json.loads(capsys.readouterr().out)["first"] == "USER: Pick up beta-002"

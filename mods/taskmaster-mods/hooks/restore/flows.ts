@@ -107,7 +107,7 @@ export function createRestoreFlows(d: RestoreDeps) {
     if (!isSessionId(row.s.id)) return 'Brief failed: unusable session id'
     let prompt: string
     try {
-      prompt = briefPrompt(row, await runDigest(d.rh, row.s.id))
+      prompt = briefPrompt(row, await runDigest(d.rh, row.s.id, await d.repoRoot()))
     } catch (error) {
       return `Brief failed: ${error instanceof Error ? error.message : String(error)}`
     }

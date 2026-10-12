@@ -55,9 +55,9 @@ export async function runScan(rh: RestoreHost, a: { readonly root: string; reado
 }
 
 /** One transcript's condensed tail for a brief; an Error names why it could not be read. */
-export async function runDigest(rh: RestoreHost, sessionId: string): Promise<Digest> {
+export async function runDigest(rh: RestoreHost, sessionId: string, root: string): Promise<Digest> {
   const { configDir } = await rh.paths()
-  const out = await runPython(rh, ['digest', '--config-dir', configDir, '--session', sessionId], DIGEST_TIMEOUT_MS)
+  const out = await runPython(rh, ['digest', '--config-dir', configDir, '--session', sessionId, '--root', root], DIGEST_TIMEOUT_MS)
   const v = typeof out === 'object' && out !== null ? (out as Record<string, unknown>) : {}
   if (typeof v.error === 'string') throw new Error(v.error)
   return { first: typeof v.first === 'string' ? v.first : '', tail: typeof v.tail === 'string' ? v.tail : '' }
