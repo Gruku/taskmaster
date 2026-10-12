@@ -213,6 +213,8 @@ declare module 'claude-code' {
       restoreHidden: number | null
       /** Written by the restore scan (Stage 5); the Session tab's SESSION section reads it. Default null. */
       sessionBurst: TmSessionBurst | null
+      /** The Taskmaster sidebar: open over the pane or not, and the pane the band's `m` reopens (spec §15.8). */
+      nav: TmNav
     }
   }
 }

@@ -11,6 +11,7 @@ import type {
   TmHandoverMarks,
   TmHandoverNotice,
   TmHandoverSummary,
+  TmNav,
   TmPhase,
   TmPhasePane,
   TmPhaseView,
@@ -22,6 +23,7 @@ import type { TmActions, TmCloseHandover } from './actions'
 import { arrival, closeToast, FRESH_MARKS, listedHandovers, markClosed, withoutHandovers } from './handover-list'
 import type { TmHost } from './host'
 import { launchAll, type LaunchResult, type LaunchSpec, launchSummary, resumePrompt } from './launch'
+import { paneOf } from './nav'
 import {
   afterDone,
   afterSendBack,
@@ -61,6 +63,7 @@ export type TmWriter = {
   reviewList: (change: (l: TmReviewList) => TmReviewList) => Promise<void>
   resumedFrom: (handoverId: string) => Promise<void>
   restoreHidden: (epoch: number) => Promise<void>
+  nav: (change: (n: TmNav) => TmNav) => Promise<void>
 }
 
 export type TmFlowDeps = {
@@ -225,7 +228,10 @@ export function createFlows(d: TmFlowDeps) {
     await d.write.handoverMarks(m => (m.ask === null ? m : { ...m, ask: null }))
   }
   const isBound = async (id: string): Promise<boolean> => (await d.boundId()) === id
+  // Every Taskmaster pane opens through here: it becomes the pane the band's `m` reopens (spec §15.8).
   const open = async (id: string, title: string): Promise<void> => {
+    const pane = paneOf(id)
+    if (pane !== null) await d.write.nav(n => (n.last === pane ? n : { ...n, last: pane }))
     if (!(await d.host.openPane(id, title))) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
   }
   const fill = async (text: string): Promise<void> => {
@@ -399,14 +405,34 @@ export function createFlows(d: TmFlowDeps) {
     if (mode === 'note') await d.host.focus(REVIEW, 'note')
   }
 
+  /** A pane, opened as its own command opens it. */
+  const openPane = async (pane: TmPane): Promise<void> => {
+    if (pane === 'review') return openReview()
+    if (pane === 'handovers') return openHandovers()
+    return pane === 'session' ? open(SESSION, 'Session') : open(RESTORE, 'Restore')
+  }
+
   return {
     openReview,
     openHandovers,
-    /** Band and Session `1`–`4`: the pane, opened as its own command opens it. */
-    openPane: async (pane: TmPane): Promise<void> => {
-      if (pane === 'review') return openReview()
-      if (pane === 'handovers') return openHandovers()
-      return pane === 'session' ? open(SESSION, 'Session') : open(RESTORE, 'Restore')
+    openPane,
+    /**
+     * The band's `m`: the last Taskmaster pane (Session at first), opened with the sidebar open over it. The sidebar is
+     * written after the open: opening a pane closes the other panes, and each close clears nav.sidebar (Task C1).
+     */
+    openSidebar: async (): Promise<void> => {
+      const last: { pane: TmPane } = { pane: 'session' }
+      await d.write.nav(n => {
+        last.pane = n.last
+        return n
+      })
+      await openPane(last.pane)
+      await d.write.nav(n => (n.sidebar ? n : { ...n, sidebar: true }))
+    },
+    /** The band's `r` (tm offline) and Session's `u`: a fresh snapshot from tm; demo says it has nothing newer. */
+    retry: async (): Promise<void> => {
+      if (d.refresh === undefined) d.host.toast('taskmaster-mods: demo data has nothing newer to read')
+      else d.refresh()
     },
     /**
      * Session `h` (spec §9): the pane opens on that handover at once, then, once its phases and list are read, shows it under

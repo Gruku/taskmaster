@@ -14,6 +14,7 @@ import type {
   TmHandoverMarks,
   TmHandoverNotice,
   TmHandoverSummary,
+  TmNav,
   TmPhasePane,
   TmPhaseView,
   TmRestorePending,
@@ -33,6 +34,7 @@ import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
+import { FRESH_NAV } from './nav'
 import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
 import {
@@ -82,6 +84,7 @@ const RESUMED_FROM = atom({ plugin: 'taskmaster-mods', key: 'resumedFrom' } as c
 const RESTORE_PENDING = atom({ plugin: 'taskmaster-mods', key: 'restorePending' } as const, null as TmRestorePending | null)
 const RESTORE_HIDDEN = atom({ plugin: 'taskmaster-mods', key: 'restoreHidden' } as const, null as number | null)
 const SESSION_BURST = atom({ plugin: 'taskmaster-mods', key: 'sessionBurst' } as const, null as TmSessionBurst | null)
+const NAV = atom({ plugin: 'taskmaster-mods', key: 'nav' } as const, FRESH_NAV as TmNav)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
@@ -217,6 +220,9 @@ function writerOf($: EngineInterface): TmWriter {
     },
     restoreHidden: async epoch => {
       await update($, RESTORE_HIDDEN, () => epoch)
+    },
+    nav: async change => {
+      await update($, NAV, change)
     },
   }
 }
