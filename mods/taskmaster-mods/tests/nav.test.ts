@@ -1,6 +1,6 @@
 // User intent: pin the Taskmaster sidebar (spec §15.8) — four entries with their counts and notes, the current pane marked,
 // 1–4 jumping, Restore dim until it is built — and the navigation rules behind it: which pane an id is, which layer Esc closes.
-import type { RenderNode } from 'claude-code'
+import type { RenderElement } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
 import { demoSnapshot } from '../hooks/demo'
@@ -73,7 +73,7 @@ describe('the sidebar drawing', () => {
     const tree = sidebar(k, v, () => undefined)
     expect(byKey(tree, 'nav:review')?.props?.dimColor).toBeUndefined()
     expect(byKey(tree, 'nav:restore')?.props?.dimColor).toBe(RESTORE_BUILT ? undefined : true)
-    const body = h('Text', {}, 'body') as RenderNode
+    const body = h('Text', {}, 'body') as RenderElement
     expect(withSidebar(k, body, null, () => undefined)).toBe(body)
     const open = withSidebar(k, body, v, () => undefined)
     expect(walk(open).some(e => e.props?.position === 'absolute' && e.props?.top === 0 && e.props?.left === 0)).toBe(true)

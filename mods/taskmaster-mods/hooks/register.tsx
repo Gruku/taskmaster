@@ -28,14 +28,14 @@ import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './ac
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
 import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import { bandTree } from './band'
-import { createFlows, type TmFlows, type TmWriter } from './flows'
+import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
 import { kitOf, type Ui } from './kit'
-import { escLayer, FRESH_NAV, paneOf } from './nav'
-import { SIDEBAR_ESC } from './vocab'
+import { escLayer, FRESH_NAV, paneOf, type SidebarView, sidebarView } from './nav'
+import { SIDEBAR_ESC, withSidebar } from './vocab'
 import { KIT, kitGalleryTree } from './kit-gallery'
 import { resumePrompt } from './launch'
 import {
@@ -403,6 +403,13 @@ async function restoreShown($: EngineInterface): Promise<TmRestorePending | null
   const pending = await read($, RESTORE_PENDING)
   if (pending === null || (await read($, RESTORE_HIDDEN)) === pending.epoch) return null
   return (await $.store.get(restoreHiddenKey(pending.epoch))) === true ? null : pending
+}
+
+/** The sidebar over a pane while `nav.sidebar` is on (null: off): its entries from the snapshot and the pending restore burst. */
+async function sidebarFor($: EngineInterface, current: TmPane): Promise<SidebarView | null> {
+  if (!(await read($, NAV)).sidebar) return null
+  const { snapshot } = await dataOf($)
+  return sidebarView({ current, snapshot, restore: await restoreShown($), now: await $.clock.now() })
 }
 
 /** A card's ticks: the $.state mirror once a toggle wrote it, else what $.store kept (another session, a reload). */
@@ -775,8 +782,9 @@ export const register: Register = (on, options) => {
       // The digits are the strip's, save while `t` has armed the focused card's checks.
       strip: { pane: 'review' as const, view: phaseView, allCount: phaseView.choice === ALL ? (snapshot?.queueTotal ?? 0) : phaseView.phases.reduce((n, p) => n + p.count, 0), focused: e.props.isFocused, digits: !list.ticking, empty: 'Nothing waiting' },
     }
-    return reviewPaneTree(
-      $.ui.resolve(e) as unknown as Ui,
+    const ui = $.ui.resolve(e) as unknown as Ui
+    const tree = await reviewPaneTree(
+      ui,
       rrOf($),
       view,
       {
@@ -809,6 +817,8 @@ export const register: Register = (on, options) => {
       },
       e.props.bodyColumns,
     )
+    const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
+    return withSidebar(k, tree, await sidebarFor($, 'review'), pane => act(f => f.goTo(pane)))
   })
 
   on('ui.render', { component: 'Pane', requestId: 'tm-handovers' }, async ($, e) => {
@@ -883,10 +893,13 @@ export const register: Register = (on, options) => {
       },
       e.props.bodyColumns,
     )
-    return (
+    return withSidebar(
+      k,
       <Box {...ground} flexGrow={1}>
         {tree}
-      </Box>
+      </Box>,
+      await sidebarFor($, 'handovers'),
+      pane => act(f => f.goTo(pane)),
     )
   })
 
@@ -937,10 +950,13 @@ export const register: Register = (on, options) => {
     )
     const ground = await $.rr.surfaceProps({ level: 'page' })
     const { Box } = ui
-    return (
+    return withSidebar(
+      k,
       <Box {...ground} flexGrow={1}>
         {tree}
-      </Box>
+      </Box>,
+      await sidebarFor($, 'session'),
+      pane => act(f => f.goTo(pane)),
     )
   })
 

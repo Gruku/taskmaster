@@ -2,7 +2,7 @@
 // inks, glyph badges, the five-rung key ladder, labelled actions, the footer, list items, the frame, the phase picker and the
 // Taskmaster sidebar — so every screen is built from the approved prototype's parts and nothing else.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
-import type { RenderNode, UiPressArgument } from 'claude-code'
+import type { RenderElement, RenderNode, UiPressArgument } from 'claude-code'
 
 import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp, type StripHandlers, type StripView } from './kit'
 import { truncate } from './model'
@@ -924,7 +924,7 @@ export function sidebar(k: Kit, v: SidebarView, go: (pane: TmPane) => void): Ren
 }
 
 /** A pane's body with the sidebar floating over its top-left while open; the body alone while it is shut. */
-export function withSidebar(k: Kit, body: RenderNode, v: SidebarView | null, go: (pane: TmPane) => void): RenderNode {
+export function withSidebar(k: Kit, body: RenderElement, v: SidebarView | null, go: (pane: TmPane) => void): RenderElement {
   const { Box } = k.ui
   if (v === null) return body
   return (
