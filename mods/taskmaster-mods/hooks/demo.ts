@@ -1,6 +1,18 @@
 // User intent: built-in sample data so taskmaster-mods can be seen, screenshotted and tuned without a Taskmaster backlog
 // (userConfig source = demo); one task refuses sign-off exactly as the server words it.
-import type { TmHandover, TmHandoverSummary, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
+import type {
+  TmHandover,
+  TmHandoverList,
+  TmHandoverSummary,
+  TmLinkedTask,
+  TmPhase,
+  TmPhasePane,
+  TmRefs,
+  TmScan,
+  TmScannedSession,
+  TmSnapshot,
+  TmTaskDetail,
+} from '../types'
 import { handoverPath } from './model'
 import { NO_TASK } from './phases'
 
@@ -9,9 +21,11 @@ import { NO_TASK } from './phases'
  * the seed's version: bump DEMO_SEED whenever the demo data's shape changes, so a seed an older module left in $.state across
  * a reload is rebuilt rather than drawn (2: handovers gained branch / taskIds, summaries were added; 3: handovers gained
  * thread, for the copy block's Resume line; 4: phases gained dates and per-pane counts, seeded with the snapshot; 5: the
- * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab).
+ * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab; 7: the handovers
+ * pane's own list, with closed handovers and linked tasks, seeded beside the snapshot; 8: the restore pane's sessions, refs
+ * and brief).
  */
-export const DEMO_SEED = 5
+export const DEMO_SEED = 8
 export const DEMO_REASON = `demo:${DEMO_SEED}`
 
 /** Any demo seed, of any version (tm mode never draws one). */
@@ -24,14 +38,20 @@ export const DEMO_PHASES: readonly TmPhase[] = [
   { id: 'patch-1-9', status: 'active', order: 2, count: 3, name: 'Patch 1.9 — Demo scope', date: '2026-10-06' },
   { id: 'patch-1-8', status: 'done', order: 1, count: 0, name: 'Patch 1.8 — Demo scope', date: '2026-10-05' },
 ]
-/** Open demo handovers per phase, through their tasks; three link no task. */
-const DEMO_HANDOVER_COUNTS: Readonly<Record<string, number>> = { 'patch-1-9': 2 }
+/** Demo handovers per phase through their linked tasks (DEMO_TASKS), open and closed; NO_TASK: those linking none. */
+const DEMO_HANDOVER_COUNTS: Readonly<Record<string, { readonly open: number; readonly closed: number }>> = {
+  'patch-1-9': { open: 2, closed: 0 },
+  'release-2': { open: 1, closed: 0 },
+  'patch-1-8': { open: 0, closed: 1 },
+  [NO_TASK]: { open: 2, closed: 1 },
+}
 
-/** Each pane's demo phases: review's counts; handovers' open handovers plus a no task tab; restore's are counted later (0). */
+/** Each pane's demo phases: review's counts; handovers' open and closed handovers plus a no task tab; restore's are counted later (0). */
 export function demoPhases(pane: TmPhasePane): readonly TmPhase[] {
   if (pane === 'review') return DEMO_PHASES
-  const counted = DEMO_PHASES.map(p => ({ ...p, count: pane === 'handovers' ? (DEMO_HANDOVER_COUNTS[p.id] ?? 0) : 0, closed: 0 }))
-  return [...counted, { id: NO_TASK, status: 'none', order: 0, count: pane === 'handovers' ? 3 : 0, closed: 0, name: 'no task', date: '' }]
+  const of = (id: string) => (pane === 'handovers' ? (DEMO_HANDOVER_COUNTS[id] ?? { open: 0, closed: 0 }) : { open: 0, closed: 0 })
+  const counted = DEMO_PHASES.map(p => ({ ...p, count: of(p.id).open, closed: of(p.id).closed }))
+  return [...counted, { id: NO_TASK, status: 'none', order: 0, count: of(NO_TASK).open, closed: of(NO_TASK).closed, name: 'no task', date: '' }]
 }
 export const DEMO_ROOT = 'C:\\Users\\demo\\project'
 /** The demo session was resumed from this handover (seeded into `resumedFrom`): the band and Session tab show it. */
@@ -98,6 +118,8 @@ export const DEMO_SUMMARIES: Readonly<Record<string, TmHandoverSummary>> = {
     blockers: ['Needs a CodeMaestro-sized store to measure'],
   },
   '2026-10-01-release-7-0-0': { decisions: [], blockers: [] },
+  '2026-09-30-row-counter-ported': { decisions: ['Count rows in the store, not the projection'], blockers: [] },
+  '2026-09-29-store-spike-notes': { decisions: [], blockers: ['Spike numbers were taken on a laptop on battery'] },
 }
 
 export function demoSnapshot(now: number): TmSnapshot {
@@ -165,6 +187,115 @@ export function demoSnapshot(now: number): TmSnapshot {
       inferred: false,
       detail: DEMO_DETAILS['unified-chat-022'] ?? null,
       pipeline: { laneless: false, lane: 'full', gateState: 'review-gate:pass', outstanding: [] },
+    },
+  }
+}
+
+/** The tasks the demo handovers link, with live status and phase (the handovers pane's card and phase tabs). */
+export const DEMO_TASKS: Readonly<Record<string, TmLinkedTask>> = {
+  'unified-chat-022': { id: 'unified-chat-022', status: 'in-review', phase: 'patch-1-9', title: 'Unified chat pre-build gets the full supervisor toolset' },
+  'tm-audit-030': { id: 'tm-audit-030', status: 'done', phase: 'patch-1-9', title: 'Agent tool-use audit fixes' },
+  'tm-audit-031': { id: 'tm-audit-031', status: 'in-review', phase: 'patch-1-9', title: 'Handover auto-supersede keeps the newest per thread' },
+  'B-082': { id: 'B-082', status: 'todo', phase: 'release-2', title: 'Store read hang: quarantined rows scanned under the writer mutex' },
+  'tm-audit-029': { id: 'tm-audit-029', status: 'done', phase: 'patch-1-8', title: 'Port the row counter' },
+}
+
+/** Closed demo handovers, `hours` old: shown dimmed under `◐ closed`. */
+const DEMO_CLOSED: readonly (Omit<TmHandover, 'created' | 'path' | 'status'> & { readonly hours: number })[] = [
+  {
+    id: '2026-09-30-row-counter-ported',
+    hours: 120,
+    tldr: 'Row counter ported to the native store',
+    nextAction: 'Nothing: closed',
+    branch: 'feat/tm-audit-029',
+    taskIds: ['tm-audit-029'],
+    thread: 'tm-audit',
+  },
+  { id: '2026-09-29-store-spike-notes', hours: 150, tldr: 'Store spike notes', nextAction: 'Fold them into the spec', branch: '', taskIds: [], thread: 'store-spike' },
+]
+
+/** The handovers pane's demo list: the snapshot's open handovers, then the closed ones, with every linked task. */
+export function demoHandoverList(now: number): TmHandoverList {
+  const s = demoSnapshot(now)
+  const closed = DEMO_CLOSED.map(({ hours, ...h }) => ({
+    ...h,
+    created: new Date(now - hours * HOUR).toISOString(),
+    path: handoverPath(DEMO_ROOT, h.id),
+    status: 'closed' as const,
+  }))
+  return { handovers: [...s.handovers.map(h => ({ ...h, status: 'open' as const })), ...closed], total: s.handoversTotal, closed: true, tasks: DEMO_TASKS }
+}
+
+/** What tm says of the demo sessions' ids (spec §10.2), as if one backlog_query had read them. */
+export const DEMO_REFS: TmRefs = {
+  tasks: {
+    'unified-chat-022': { id: 'unified-chat-022', status: 'in-review', lane: 'full', phase: 'patch-1-9', title: 'Unified chat pre-build gets the full supervisor toolset' },
+    'tm-audit-031': { id: 'tm-audit-031', status: 'in-progress', lane: 'full', phase: 'patch-1-9', title: 'Handover auto-supersede keeps the newest per thread' },
+    'docs-012': { id: 'docs-012', status: 'todo', lane: '', phase: 'release-2', title: 'README mentions the review queue' },
+    'tm-audit-029': { id: 'tm-audit-029', status: 'done', lane: 'full', phase: 'patch-1-8', title: 'Port the row counter' },
+  },
+  handovers: { '2026-10-05-shipped-unified-chat-022': 'open' },
+}
+export const DEMO_BRIEF =
+  'State: The handover guard forks and files its handover; compaction after it is not wired yet.\nNext: Wire the compaction call behind the fork and run the guard tests.\nBlocker: none'
+
+/**
+ * The restore pane's demo scan: four sessions closed together an hour ago (handed off, interrupted, wip, done), one closed
+ * after them, two older ones (one whose folder is gone) and one open in another terminal now.
+ */
+export function demoRestore(now: number): { readonly scan: TmScan; readonly refs: TmRefs } {
+  const at = (minutes: number) => now / 1000 - minutes * 60
+  const base = (id: string, title: string, closedMinutes: number, over: Partial<TmScannedSession>): TmScannedSession => ({
+    id,
+    cwd: DEMO_ROOT,
+    cwdExists: true,
+    branch: 'master',
+    title,
+    firstPrompt: title,
+    lastPrompt: `Carry on with ${title.toLowerCase()}`,
+    lastReply: `Stopped after the tests for ${title.toLowerCase()}.`,
+    lastEvent: 'end_turn',
+    interrupted: false,
+    prompts: 12,
+    ctx: 150_000,
+    cost: 4,
+    closedEpoch: at(closedMinutes),
+    hasClosed: true,
+    running: false,
+    resumedAfterClose: false,
+    taskIds: [],
+    handovers: [],
+    endedSession: false,
+    promptsAfterEnd: 0,
+    ...over,
+  })
+  const shipped = '2026-10-05-shipped-unified-chat-022'
+  return {
+    refs: DEMO_REFS,
+    scan: {
+      scannedAt: now / 1000,
+      root: DEMO_ROOT,
+      sessions: [
+        base('demo-live', 'Plan the restore pane', 1, { running: true, hasClosed: false, ctx: 210_000 }),
+        base('demo-late', 'Spike: viewer colours', 20, { ctx: 40_000, branch: 'spike/colours' }),
+        base('demo-u5', 'U5 brief approval', 43, {
+          ctx: 431_000,
+          taskIds: ['unified-chat-022'],
+          handovers: [{ id: shipped, path: handoverPath(DEMO_ROOT, shipped), tldr: 'Shipped unified-chat-022 to dev', next: 'Live check, then sign off in the review queue' }],
+        }),
+        base('demo-audit', 'Handover auto-supersede', 48, {
+          ctx: 712_000,
+          branch: 'feat/tm-audit-031',
+          interrupted: true,
+          lastEvent: 'interrupt',
+          lastPrompt: 'Make the supersede keep the newest handover per thread',
+          taskIds: ['tm-audit-031'],
+        }),
+        base('demo-docs', 'README review queue', 55, { ctx: 95_000, taskIds: ['docs-012'] }),
+        base('demo-counter', 'Port the row counter', 60, { taskIds: ['tm-audit-029'], endedSession: true }),
+        base('demo-old-1', 'Release 7.0.0 notes', 26 * 60, { endedSession: true }),
+        base('demo-old-2', 'Store read hang', 30 * 60, { cwd: 'C:\\Users\\demo\\gone', cwdExists: false, taskIds: ['tm-audit-031'] }),
+      ],
     },
   }
 }

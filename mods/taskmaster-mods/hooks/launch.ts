@@ -4,6 +4,7 @@
 
 /** Session ids are uuids: anything else never reaches a command line. */
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9-]*$/
+export const isSessionId = (id: string): boolean => SESSION_ID.test(id)
 export const LAUNCH_STAGGER_MS = 700
 export const COMPACT_PROMPT = '/compact Keep where the work stopped, open decisions, branches and worktrees, and the next step.'
 
@@ -130,7 +131,7 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/
  * quoting in a typed terminal; on macOS the script is typed into the person's own shell, where a backslash inside single
  * quotes is not safe in fish, so it is refused there.
  */
-function refusal(spec: LaunchSpec, p: Platform, dir: string | undefined): string {
+export function launchRefusal(spec: LaunchSpec, p: Platform, dir: string | undefined): string {
   if (spec.cwd === '') return 'no folder'
   const typed = [spec.cwd, spec.prompt ?? '', dir ?? '']
   if (typed.some(t => CONTROL.test(t))) return 'control characters'
@@ -166,7 +167,7 @@ export async function launchAll(io: LaunchIo, specs: readonly LaunchSpec[]): Pro
   const left: LaunchSpec[] = []
   const failed: string[] = []
   for (const spec of specs) {
-    const why = refusal(spec, p, dir)
+    const why = launchRefusal(spec, p, dir)
     if (why !== '') {
       failed.push(`${spec.title} (${why})`)
       continue

@@ -27,6 +27,8 @@ export type World = {
   runs: string[][]
   /** The exit code a command gets (default 0); git's branch read answers `branch` either way. */
   runExit: (argv: readonly string[]) => number
+  /** A whole answer for a command (null: runExit and an empty stdout): the restore tests answer scan.py here. */
+  answer: (argv: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | null
   /** What `$.env.get` answers, by name. */
   env: Record<string, string>
 }
@@ -51,9 +53,12 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     serialMs: null,
     runs: [],
     runExit: () => 0,
+    answer: () => null,
     env: {},
   }
   let queue: Promise<void> = Promise.resolve()
+  // The panes open now (`$.ui.panes()`), as the engine keeps them: one per id, in open order.
+  const open = new Set<string>()
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('classic.SessionStart', () => ({}) as never)
@@ -61,12 +66,15 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', ($, e) => {
     world.opened.push(e.id)
+    open.add(e.id)
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', ($, e) => {
     world.closed.push(e.id)
+    open.delete(e.id)
     return { value: undefined }
   })
+  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }) as never)
   on('ui.toast', ($, e) => {
     world.toasts.push(e.text)
     return { value: undefined }
@@ -103,6 +111,10 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('session.repo', () => ({ value: { root: world.root, remote: null, internal: false, name: null } }))
   on('process.run', ($, e) => {
     world.runs.push([...e.argv])
+    const answer = world.answer(e.argv)
+    if (answer !== null) {
+      return { value: { exitCode: answer.exitCode, stdout: answer.stdout, stderr: answer.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     const exitCode = e.argv[0] === 'git' ? 0 : world.runExit(e.argv)
     return { value: { exitCode, stdout: e.argv[0] === 'git' ? `${world.branch}\n` : '', stderr: '' } } as never
   })

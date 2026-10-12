@@ -67,11 +67,10 @@ describe('faults', () => {
     await clock.settle()
     expect(world.statuses.at(-1)).toBe('◆ tm offline')
     const tree = JSON.stringify(await $.ui.render(BAND))
-    expect(tree).toContain('tm-audit-030')
-    expect(tree).toContain(' offline')
-    expect(tree).toContain('– waiting on you')
+    expect(tree).toContain('▲ tm offline')
+    expect(tree).toContain('retry tm connection')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeDefined()
   })
 
   test('a hung server is cut at 3 s and retried (no fault meanwhile); it reads as offline only when the last retry times out', TM, async ($, on) => {
@@ -110,7 +109,7 @@ describe('faults', () => {
     }
     expect(world.statuses).not.toContain('◆ tm offline')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-review') })
-    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeUndefined()
   })
 
   test('replies wrapped as {"result": text} (the engine passing on the structured result) read as the text inside', TM, async ($, on) => {
@@ -123,7 +122,7 @@ describe('faults', () => {
     expect(world.statuses).not.toContain('◆ tm offline')
     const ui = await $.ui.mount({ plugin: PLUGIN, ...pane('tm-handovers') })
     expect(await ui.find({ type: 'Text', text: /No open handovers/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /Taskmaster unreachable/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '▲ tm offline' })).toBeUndefined()
   })
 
   test('"Error: … no backlog" from the server reads as offline, with the reason in the pane', TM, async ($, on) => {

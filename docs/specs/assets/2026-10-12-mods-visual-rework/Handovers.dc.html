@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Handovers pane</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap">
+<style>
+body{margin:0}
+.t{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:18px;letter-spacing:0;font-variant-ligatures:none}
+.r{white-space:pre;height:18px;overflow:hidden}
+.k{all:unset;white-space:pre;cursor:pointer;font:inherit}
+.band{background:#1d1d1b}.ov{background:#272725}
+.fb{color:#f5f3ed;font-weight:700}.fd{color:#d2cfc8}.fs{color:#a09c95}.fh{color:#7d7b76}.fx{color:#66645f}.fz{color:#4d4c48}
+.bd{color:#343331}.bs{color:#4d4c48}
+.sg{color:#5e79e6}.sv{color:#8a9eeb;font-weight:700}.svn{color:#8a9eeb}
+.cr{color:#e06060;font-weight:700}.wa{color:#d69a2e;font-weight:700}.in{color:#7aa6d6;font-weight:700}.ok{color:#4fb071;font-weight:700}
+.wan{color:#d69a2e}.crn{color:#e06060}.okn{color:#4fb071}
+.pri{background:#5e79e6;color:#f5f3ed;font-weight:700}
+.chip{background:rgba(94,121,230,0.20);color:#b5c2ee;font-weight:700}
+.sel{background:#272725;color:#f5f3ed;font-weight:700}
+.fld{background:#272725;color:#f5f3ed}
+.hl{background:rgba(94,121,230,0.22);color:#f5f3ed;font-weight:700}
+.k:hover{color:#f5f3ed}
+.k:focus-visible{outline:1px solid #5e79e6}
+</style>
+</helmet>
+<div style="width: 1022px; height: 542px; box-sizing: border-box; background: #151514; padding: 24px; overflow: hidden;">
+<div class="t" style="color: #7d7b76; margin-bottom: 20px; font-size: 12px; line-height: 18px;">HANDOVERS — same item form: title / slug · branch · linked tasks / next step. Focused card lists each linked task with its live status. r resume handover here is the one primary; x close handover is the destructive key, always last.</div>
+<div class="t" style="width: 974px;">
+<div class="r"><span class="bd">╭─</span><span class="sg">◆ </span><span class="fs">TASKMASTER · </span><span class="fb">HANDOVERS</span><span class="fd"> </span><span class="bd">───────────────────────────────────────────────────────────────────────────────</span><span class="fd"> </span><span class="okn">● </span><span class="fs">tm ok</span><span class="bd">─╮</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">‹ </span><button class="k fld" type="button"> Patch 1.9 · active  3 ▾ </button><span class="fs"> ›</span><span class="fd">                                              </span><button class="k fx" type="button">◐ show closed</button><span class="fd">   </span><span class="fs">‹ 1 / 2 ›</span><span class="fd">   </span><span class="fs">u </span><span class="fx">refresh</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">5 open · newest 2h ago</span><span class="fd">                                                                                          </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><button class="k fz" type="button">b close 0 handovers</button><span class="fd">                                                                                   </span><button class="k fs" type="button">all</button><span class="fz"> · </span><button class="k fs" type="button">none</button><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fx">□ </span><span class="fs">○ OPEN         </span><span class="fb">Shipped unified-chat-022 to dev</span><span class="fd">                                                       </span><span class="fs">   2h</span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="fs">2026-10-05-shipped-unified-chat-022 · main · 1 linked task</span><span class="fd">                               </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="svn">next  </span><span class="fd">Live check, then sign off in the review queue                                      </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                   </span><span class="svn">task  </span><span class="in">● IN REVIEW</span><span class="fb">  unified-chat-022  </span><span class="fd">Unified chat pre-build gets the full…</span><span class="fs">  patch-1-9</span><span class="fd">    </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                                                                                                            </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">  </span><button class="k pri" type="button"> r resume handover here </button><span class="fd">   </span><button class="k sv" type="button">w</button><span class="fd"> resume in new tab   </span><button class="k sv" type="button">c</button><span class="fd"> copy handover   </span><button class="k sv" type="button">i</button><span class="fd"> decisions·blockers   </span><button class="k wa" type="button">x</button><span class="fd"> close handover</span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fx">□ </span><span class="fs">○ OPEN         </span><span class="fb">Audit fixes landed on the native branch</span><span class="fd">                                                   </span><span class="fs">  20h</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">2026-10-04-audit-fixes-landed · feat/database-native-foundation · 2 linked tasks</span><span class="fd">             </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="svn">next  </span><span class="fd">Record the merge for tm-audit-030                                                      </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fx">□ </span><span class="fs">○ OPEN         </span><span class="fb">Viewer RR re-skin plan 2a closed</span><span class="fd">                                                          </span><span class="fs">  44h</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">2026-10-03-viewer-reskin-2a-closed · feat/viewer-reskin · no linked task</span><span class="fd">                     </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="svn">next  </span><span class="fd">Start the plan 2b token pass                                                           </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">j/k</span><span class="fx"> move</span><span class="fz"> · </span><span class="fs">s</span><span class="fx"> select</span><span class="fz"> · </span><span class="fs">b</span><span class="fx"> close selected</span><span class="fz"> · </span><span class="fs">h/l</span><span class="fx"> phase</span><span class="fz"> · </span><span class="fs">f</span><span class="fx"> phases</span><span class="fz"> · </span><span class="fs">p/n</span><span class="fx"> page</span><span class="fz"> · </span><span class="fs">u</span><span class="fx"> refresh</span><span class="fz"> · </span><span class="fs">m</span><span class="fx"> sidebar</span><span class="fz"> · </span><span class="fs">esc</span><span class="fx"> close</span><span class="fd">    </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1022,"height":542}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

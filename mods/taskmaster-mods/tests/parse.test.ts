@@ -149,6 +149,7 @@ describe('JSON replies', () => {
       branch: 'main',
       taskIds: ['unified-chat-022'],
       thread: 'unified-chat',
+      status: 'open',
     })
   })
 

@@ -21,6 +21,10 @@ export const pane = (requestId: string): RenderInput<'Pane'> => ({
   props: { title: requestId, isFocused: true, bodyColumns: 72, placement: 'dock', scroll: { offset: 0, bodyRows: 44 }, view: {} },
 })
 
+/** "N waiting on you" as the person reads it now the band has no counts: the review pane's summary line, drawn as JSON. */
+export const waitingOf = async ($: { ui: { render: (input: RenderInput<'Pane'>) => Promise<unknown> } }): Promise<string> =>
+  JSON.stringify(await $.ui.render(pane('tm-review')))
+
 export const command = (name: string) => ({
   command: name,
   args: '',

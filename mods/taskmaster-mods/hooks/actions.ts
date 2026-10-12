@@ -82,3 +82,31 @@ export function tmActions(call: (tool: string, args: Record<string, unknown>) =>
     },
   }
 }
+
+/** The handovers pane's close (spec §9): one handover moved to `closed`; a refusal comes back as the server words it. */
+export type TmCloseHandover = (handoverId: string) => Promise<TmWriteOutcome>
+/** The `status_reason` a close from the pane records. */
+export const CLOSE_REASON = 'Closed in the handovers pane'
+const CLOSED = /^Handover \S+ → status=closed\b/
+
+export function tmCloseHandover(call: (tool: string, args: Record<string, unknown>) => Promise<TmReply>): TmCloseHandover {
+  return async handoverId => {
+    let reply: TmReply
+    try {
+      reply = await call('backlog_handover_update_status', { handover_id: handoverId, status: 'closed', reason: CLOSE_REASON })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      const pending = error instanceof TmUnreachable ? error.pending : undefined
+      if (pending === undefined) return { ok: false, refusal: `Taskmaster unreachable: ${reason}` }
+      return { ok: false, refusal: `Taskmaster unreachable: ${reason} — it may still have been closed: check before pressing again`, pending }
+    }
+    const head = firstParagraph(stripSeq(reply.text))
+    if (!reply.isError && CLOSED.test(head)) return { ok: true }
+    return { ok: false, refusal: head === '' ? 'Taskmaster refused without a reason' : head }
+  }
+}
+
+/** Demo closes every handover (the pane marks it closed in $.state; tm is never reached). */
+export function demoCloseHandover(): TmCloseHandover {
+  return async () => ({ ok: true })
+}

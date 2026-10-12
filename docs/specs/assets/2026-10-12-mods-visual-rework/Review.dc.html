@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review pane</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap">
+<style>
+body{margin:0}
+.t{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:18px;letter-spacing:0;font-variant-ligatures:none}
+.r{white-space:pre;height:18px;overflow:hidden}
+.k{all:unset;white-space:pre;cursor:pointer;font:inherit}
+.band{background:#1d1d1b}.ov{background:#272725}
+.fb{color:#f5f3ed;font-weight:700}.fd{color:#d2cfc8}.fs{color:#a09c95}.fh{color:#7d7b76}.fx{color:#66645f}.fz{color:#4d4c48}
+.bd{color:#343331}.bs{color:#4d4c48}
+.sg{color:#5e79e6}.sv{color:#8a9eeb;font-weight:700}.svn{color:#8a9eeb}
+.cr{color:#e06060;font-weight:700}.wa{color:#d69a2e;font-weight:700}.in{color:#7aa6d6;font-weight:700}.ok{color:#4fb071;font-weight:700}
+.wan{color:#d69a2e}.crn{color:#e06060}.okn{color:#4fb071}
+.pri{background:#5e79e6;color:#f5f3ed;font-weight:700}
+.chip{background:rgba(94,121,230,0.20);color:#b5c2ee;font-weight:700}
+.sel{background:#272725;color:#f5f3ed;font-weight:700}
+.fld{background:#272725;color:#f5f3ed}
+.hl{background:rgba(94,121,230,0.22);color:#f5f3ed;font-weight:700}
+.k:hover{color:#f5f3ed}
+.k:focus-visible{outline:1px solid #5e79e6}
+</style>
+</helmet>
+<div style="width: 1022px; height: 578px; box-sizing: border-box; background: #151514; padding: 24px; overflow: hidden;">
+<div class="t" style="color: #7d7b76; margin-bottom: 20px; font-size: 12px; line-height: 18px;">REVIEW — phase dropdown shown OPEN (f). Items are 3-line: badge + id + title / dim context / the human action. Focused item boxed with actions; checks carry their own t / c keys right under them. 3 per page.</div>
+<div class="t" style="width: 974px;">
+<div class="r"><span class="bd">╭─</span><span class="sg">◆ </span><span class="fs">TASKMASTER · </span><span class="fb">REVIEW</span><span class="fd"> </span><span class="bd">──────────────────────────────────────────────────────────────────────────────────</span><span class="fd"> </span><span class="okn">● </span><span class="fs">tm ok</span><span class="bd">─╮</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">‹ </span><button class="k fld" type="button"> Patch 1.9 · active  3 ▴ </button><span class="fs"> ›</span><span class="fd">                                                              </span><span class="fs">‹ 1 / 2 ›</span><span class="fd">   </span><span class="fs">u </span><span class="fx">refresh</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">╭────────────────────────────────────────╮</span><span class="cr">KED</span><span class="crn"> 1</span><span class="fd">   </span><span class="wa">◆ ACTION</span><span class="wan"> 4</span><span class="fd">   </span><span class="fz">● IN REVIEW 0</span><span class="fd">                                    </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fx ov">0  </span><span class="fd ov">All                               </span><span class="fs ov">5</span><span class="bs ov"> │</span><button class="k fz" type="button">ent</button><span class="fd">                                                         </span><button class="k fs" type="button">all</button><span class="fz"> · </span><button class="k fs" type="button">none</button><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><button class="k hl ov" type="button">1  Patch 1.9 · active                3</button><span class="bs ov"> │</span><span class="fd">                                                                      </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fx ov">2  </span><span class="fd ov">Release 2.0                       </span><span class="fs ov">2</span><span class="bs ov"> │</span><span class="sg">─────────────────────────────────────────────────────────────────────╮</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fx ov">3  </span><span class="fz ov">Patch 1.8 ✓</span><span class="fd ov">                       </span><span class="fz ov">0</span><span class="bs ov"> │</span><span class="fd">ed chat pre-build gets the full supervisor toolset; cookbook…  </span><span class="fs">   1h</span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fx ov">4  </span><span class="fz ov">Patch 1.7 ✓</span><span class="fd ov">                       </span><span class="fz ov">0</span><span class="bs ov"> │</span><span class="fs"> · </span><span class="okn">●</span><span class="fs"> review-gate pass</span><span class="fd">                                               </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fd ov">                                      </span><span class="bs ov"> │</span><span class="fd">dev — needs unifiedChatGenerate + unifiedChatBuild                  </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><button class="k svn ov" type="button">◐ show done phases</button><span class="fd ov">                  </span><span class="fs ov">on</span><span class="bs ov"> │</span><span class="fd">sage stays on intent/brief and does not build                       </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">│ </span><span class="fs ov">↑↓</span><span class="fx ov"> move</span><span class="fz ov"> · </span><span class="fs ov">enter</span><span class="fx ov"> pick</span><span class="fz ov"> · </span><span class="fs ov">esc</span><span class="fx ov"> close</span><span class="fd ov">      </span><span class="bs ov"> │</span><span class="fd">ilds with the full toolset                                          </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="bs ov">╰────────────────────────────────────────╯</span><button class="k sv" type="button">c</button><span class="fd"> copy live check                                                   </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">                                                                                                            </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">│ </span><span class="fd">  </span><button class="k pri" type="button"> d mark task done </button><span class="fd">   </span><button class="k sv" type="button">a</button><span class="fd"> send task to agent   </span><button class="k sv" type="button">o</button><span class="fd"> open task   </span><button class="k sv" type="button">v</button><span class="fd"> task in viewer   </span><button class="k sv" type="button">i</button><span class="fd"> task detail ▸              </span><span class="sg"> │</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="sg">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fx">□ </span><span class="wa">◆ ACTION       </span><span class="fb">tm-audit-031  </span><span class="fd">Handover auto-supersede keeps the newest per thread                         </span><span class="fs">   5h</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">patch-1-9 · lane full · in review for 5h</span><span class="fd">                                                     </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="svn">human  </span><span class="fd">Confirm the newest handover survives on a 3-thread repo                               </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fx">□ </span><span class="wa">◆ ACTION       </span><span class="fb">docs-012  </span><span class="fd">README mentions the review queue                                                </span><span class="fs">  30h</span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="fs">patch-1-9 · lane light · in review for 30h</span><span class="fd">                                                   </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                   </span><span class="svn">human  </span><span class="fd">Proof-read the review-queue paragraph                                                 </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fd">                                                                                                                </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">│ </span><span class="fs">j/k</span><span class="fx"> move</span><span class="fz"> · </span><span class="fs">s</span><span class="fx"> select</span><span class="fz"> · </span><span class="fs">t 1-9</span><span class="fx"> tick</span><span class="fz"> · </span><span class="fs">h/l</span><span class="fx"> phase</span><span class="fz"> · </span><span class="fs">f</span><span class="fx"> phases</span><span class="fz"> · </span><span class="fs">p/n</span><span class="fx"> page</span><span class="fz"> · </span><span class="fs">u</span><span class="fx"> refresh</span><span class="fz"> · </span><span class="fs">m</span><span class="fx"> sidebar</span><span class="fz"> · </span><span class="fs">esc</span><span class="fx"> close</span><span class="fd">          </span><span class="bd"> │</span></div>
+<div class="r"><span class="bd">╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯</span></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1022,"height":578}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

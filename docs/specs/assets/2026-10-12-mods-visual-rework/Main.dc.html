@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Band and components</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap">
+<style>
+body{margin:0}
+.t{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:18px;letter-spacing:0;font-variant-ligatures:none}
+.r{white-space:pre;height:18px;overflow:hidden}
+.k{all:unset;white-space:pre;cursor:pointer;font:inherit}
+.band{background:#1d1d1b}.ov{background:#272725}
+.fb{color:#f5f3ed;font-weight:700}.fd{color:#d2cfc8}.fs{color:#a09c95}.fh{color:#7d7b76}.fx{color:#66645f}.fz{color:#4d4c48}
+.bd{color:#343331}.bs{color:#4d4c48}
+.sg{color:#5e79e6}.sv{color:#8a9eeb;font-weight:700}.svn{color:#8a9eeb}
+.cr{color:#e06060;font-weight:700}.wa{color:#d69a2e;font-weight:700}.in{color:#7aa6d6;font-weight:700}.ok{color:#4fb071;font-weight:700}
+.wan{color:#d69a2e}.crn{color:#e06060}.okn{color:#4fb071}
+.pri{background:#5e79e6;color:#f5f3ed;font-weight:700}
+.chip{background:rgba(94,121,230,0.20);color:#b5c2ee;font-weight:700}
+.sel{background:#272725;color:#f5f3ed;font-weight:700}
+.fld{background:#272725;color:#f5f3ed}
+.hl{background:rgba(94,121,230,0.22);color:#f5f3ed;font-weight:700}
+.k:hover{color:#f5f3ed}
+.k:focus-visible{outline:1px solid #5e79e6}
+</style>
+</helmet>
+<div style="width: 1022px; height: 1442px; box-sizing: border-box; background: #151514; padding: 24px; overflow: hidden;">
+<div class="t" style="color: #7d7b76; margin-bottom: 20px; font-size: 12px; line-height: 18px;">BAND (direction C, navigation removed: one m key opens the sidebar) and its states; the SIDEBAR open over a terminal; the COMPONENT SHEET with the 3-line list item and the verb + object labelling rule.</div>
+<div class="t" style="width: 974px;">
+<div class="r"><span class="fb">BAND</span><span class="fs">   subject left, keys in one right column · waiting counts live in the sidebar, not here</span><span class="fd">                        </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fd band"> </span><button class="k chip band" type="button"> ◆ TASKMASTER </button><span class="fd band">  </span><span class="in band">● IN REVIEW</span><span class="fd band">  </span><span class="fh band">unified-chat-022  </span><span class="fb band">Unified chat pre-build gets t…</span><span class="band">   </span><button class="k sv band" type="button">d</button><span class="fd band"> mark task done   </span><button class="k sv band" type="button">m</button><span class="fd band"> open sidebar  </span></div>
+<div class="r"><span class="fd band">   </span><span class="fs band">↳ resumed from </span><span class="svn band">2026-10-04-audit-fixes-landed</span><span class="fs band"> · 20h · </span><span class="fd band">Audit fixes landed…</span><span class="band">      </span><button class="k sv band" type="button">c</button><span class="fd band"> copy handover                    </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="bs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fs">❯ </span><span class="sv">▏</span><span class="fd">                                                                                                                 </span></div>
+<div class="r"><span class="bs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fb">BAND · STATES</span><span class="fs">   no handover · nothing bound (one line) · tm offline</span><span class="fd">                                                 </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fd band"> </span><button class="k chip band" type="button"> ◆ TASKMASTER </button><span class="fd band">  </span><span class="in band">● IN PROGRESS</span><span class="fd band">  </span><span class="fh band">tm-audit-031  </span><span class="fb band">Handover auto-supersede keeps t…</span><span class="band">   </span><button class="k sv band" type="button">m</button><span class="fd band"> open sidebar                     </span></div>
+<div class="r"><span class="fd band">   </span><span class="fx band">↳ no handover yet for this task</span><span class="band">                                               </span><span class="fd band">                                   </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fd band"> </span><button class="k chip band" type="button"> ◆ TASKMASTER </button><span class="fd band">  </span><span class="fx band">no task bound to this session</span><span class="band">                                   </span><button class="k sv band" type="button">m</button><span class="fd band"> open sidebar                     </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fd band"> </span><button class="k chip band" type="button"> ◆ TASKMASTER </button><span class="fd band">  </span><span class="cr band">▲ tm offline</span><span class="fs band"> · last ok 2m ago · counts paused</span><span class="band">                   </span><button class="k sv band" type="button">r</button><span class="fd band"> retry tm connection              </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="bd">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fb">SIDEBAR · open (m)</span><span class="fs">   docked left, overlays the conversation; the only navigation surface for all panes</span><span class="fd">              </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="bs ov">╭─</span><span class="sg ov">◆ </span><span class="fb ov">TASKMASTER</span><span class="fd ov"> </span><span class="bs ov">────────────────╮</span><span class="fx">    ● Read hooks/handovers.tsx</span><span class="fd">                                                      </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fd ov">                            </span><span class="bs ov"> │</span><span class="fs">    ● Handovers now group by linked-task phase; wiring the close toast.</span><span class="fd">             </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fx ov">1  </span><span class="fd ov">Review           </span><span class="fx ov">▲1 ◆4 </span><span class="fs ov"> 5</span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fx ov">2  </span><span class="fd ov">Handovers    </span><span class="fx ov">newest 2h </span><span class="fs ov"> 6</span><span class="bs ov"> │</span><span class="fx">    ● Update(hooks/handovers.tsx)</span><span class="fd">                                                   </span></div>
+<div class="r"><span class="bs ov">│ </span><button class="k hl ov" type="button">3  Session                  </button><span class="bs ov"> │</span><span class="fz">      ⎿  Updated with 14 additions and 3 removals</span><span class="fd">                                   </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fx ov">4  </span><span class="fd ov">Restore    </span><span class="fx ov">burst 16:14 </span><span class="fs ov"> 3</span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fd ov">                            </span><span class="bs ov"> │</span><span class="fs">    ● Ran the mods test suite: 212 passed.</span><span class="fd">                                          </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fx ov">unified-chat-022 · in review</span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fd ov">                            </span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fs ov">↑↓</span><span class="fx ov"> move</span><span class="fz ov"> · </span><span class="fs ov">enter</span><span class="fx ov"> open</span><span class="fd ov">        </span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">│ </span><span class="fs ov">1-4</span><span class="fx ov"> jump</span><span class="fz ov"> · </span><span class="fs ov">esc</span><span class="fx ov"> close</span><span class="fd ov">        </span><span class="bs ov"> │</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="bs ov">╰──────────────────────────────╯</span><span class="fd">                                                                                    </span></div>
+<div class="r"><span class="fd band"> </span><button class="k chip band" type="button"> ◆ TASKMASTER </button><span class="fd band">  </span><span class="in band">● IN REVIEW</span><span class="fd band">  </span><span class="fh band">unified-chat-022  </span><span class="fb band">Unified chat pre-build gets t…</span><span class="band">   </span><button class="k sv band" type="button">d</button><span class="fd band"> mark task done   </span><button class="k sv band" type="button">m</button><span class="fd band"> open sidebar  </span></div>
+<div class="r"><span class="fd band">   </span><span class="fs band">↳ resumed from </span><span class="svn band">2026-10-04-audit-fixes-landed</span><span class="fs band"> · 20h · </span><span class="fd band">Audit fixes landed…</span><span class="band">      </span><button class="k sv band" type="button">c</button><span class="fd band"> copy handover                    </span></div>
+<div class="r"><span class="bs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fs">❯ </span><span class="sv">▏</span><span class="fd">                                                                                                                 </span></div>
+<div class="r"><span class="bs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="bd">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span></div>
+<div class="r"><span class="fb">COMPONENT SHEET</span><span class="fs">   each element once, in the only form a screen may use</span><span class="fd">                                              </span></div>
+<div class="r"><span class="fd">                                                                                                                    </span></div>
+<div class="r"><span class="fb">FRAME       </span><span class="bd">╭─ </span><span class="sg">◆ </span><span class="fs">TASKMASTER · </span><span class="fb">REVIEW</span><span class="bd"> ─────────── </span><span class="okn">● </span><span class="fs">tm ok</span><span class="bd"> ─╮</span><span class="fd">                   </span><span class="fs">no tab row; pane named in title</span><span class="fd">       </span></div>
+<div class="r"><span class="fb">BAND        </span><button class="k chip" type="button"> ◆ TASKMASTER </button><span class="fb"> ● uc-022 Unified chat…</span><button class="k sv" type="button">d</button><span class="fd"> mark task done  </span><button class="k sv" type="button">m</button><span class="fd"> sidebar  </span><span class="fs">subject left; keys in a right column</span><span class="fd">  </span></div>
+<div class="r"><span class="fb">            </span><span class="fd">  </span><span class="svn">↳ </span><span class="fs">audit-fixes-landed · 20h</span><span class="fd">         </span><button class="k sv" type="button">c</button><span class="fd"> copy handover                                                    </span></div>
+<div class="r"><span class="fb">SIDEBAR     </span><span class="fx">1  </span><span class="fd">Review           </span><span class="fx">▲1 ◆4 </span><span class="fs"> 5</span><span class="fd">                                      </span><span class="fs">m opens; key · pane · note · count</span><span class="fd">    </span></div>
+<div class="r"><span class="fb">            </span><button class="k hl" type="button">3  Session                  </button><span class="fd">                                                                            </span></div>
+<div class="r"><span class="fb">TOOLBAR     </span><span class="fs">‹ </span><button class="k fld" type="button"> Patch 1.9 · active  3 ▾ </button><span class="fs"> ›</span><span class="fd">        </span><button class="k fx" type="button">◐ show closed</button><span class="fd">  </span><span class="fs">‹ 1 / 2 ›</span><span class="fd">  </span><span class="fs">u</span><span class="fd">  </span><span class="fs">row 1: phase left; toggle, pager, u</span><span class="fd">   </span></div>
+<div class="r"><span class="fb">SUMMARY     </span><span class="fs">5 waiting on you · newest 1h ago</span><span class="fd">   </span><span class="cr">▲ BLOCKED</span><span class="crn"> 1</span><span class="fd">                    </span><span class="fs">row 2: sentence, then tallies</span><span class="fd">         </span></div>
+<div class="r"><span class="fb">BULK        </span><button class="k fz" type="button">b mark 0 tasks done</button><span class="fd">   </span><button class="k sv" type="button">g</button><span class="fd"> send 2 tasks to agent         </span><button class="k fs" type="button">all</button><span class="fz"> · </span><button class="k fs" type="button">none</button><span class="fd">  </span><span class="fs">row 3: count in the label; dim at 0</span><span class="fd">   </span></div>
+<div class="r"><span class="fb">SECTION     </span><span class="fd">  </span><span class="fs">HANDED OFF</span><span class="fx">  1 · open handover</span><span class="fd">                                   </span><span class="fs">label column, dim note</span><span class="fd">                </span></div>
+<div class="r"><span class="fb">BADGE       </span><span class="cr">▲ BLOCKED</span><span class="fd">  </span><span class="wa">◆ ACTION</span><span class="fd">  </span><span class="in">● IN REVIEW</span><span class="fd">                                  </span><span class="fs">symbol + word, semantic fg</span><span class="fd">            </span></div>
+<div class="r"><span class="fb">ITEM        </span><span class="fx">□ </span><span class="wa">◆ ACTION       </span><span class="fb">docs-012  </span><span class="fd">README mentions the review qu…  </span><span class="fs">  30h</span><span class="fd">  </span><span class="fs">title / context / detail; ┄; no keys</span><span class="fd">  </span></div>
+<div class="r"><span class="fb">            </span><span class="fd">                   </span><span class="fs">patch-1-9 · lane light</span><span class="fd">                                                               </span></div>
+<div class="r"><span class="fb">            </span><span class="fd">                   </span><span class="svn">human  </span><span class="fd">Proof-read the paragraph                                                      </span></div>
+<div class="r"><span class="fb">            </span><span class="fd">  </span><span class="bd">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄</span><span class="fd">                                        </span></div>
+<div class="r"><span class="fb">CARD        </span><span class="sg">╭──────────────────────────────────────────────────────────╮</span><span class="fd">      </span><span class="fs">focused only: box + action row</span><span class="fd">        </span></div>
+<div class="r"><span class="fb">            </span><span class="sg">│ </span><span class="fx">□ </span><span class="cr">▲ BLOCKED      </span><span class="fb">uc-022  </span><span class="fd">Unified chat pre-build    </span><span class="fs">   1h</span><span class="sg"> │</span><span class="fd">                                            </span></div>
+<div class="r"><span class="fb">            </span><span class="sg">│ </span><span class="fd">                   </span><span class="fs">patch-1-9 · lane full</span><span class="fd">                </span><span class="sg"> │</span><span class="fd">                                            </span></div>
+<div class="r"><span class="fb">            </span><span class="sg">│ </span><span class="fd">                                                        </span><span class="sg"> │</span><span class="fd">                                            </span></div>
+<div class="r"><span class="fb">            </span><span class="sg">│ </span><span class="fd">  </span><button class="k pri" type="button"> d mark task done </button><span class="fd">   </span><button class="k sv" type="button">a</button><span class="fd"> send to agent                  </span><span class="sg"> │</span><span class="fd">                                            </span></div>
+<div class="r"><span class="fb">            </span><span class="sg">╰──────────────────────────────────────────────────────────╯</span><span class="fd">                                            </span></div>
+<div class="r"><span class="fb">FIELD       </span><span class="fd">                   </span><span class="svn">next  </span><span class="fd">Record the merge                         </span><span class="fs">lowercase label beside its value</span><span class="fd">      </span></div>
+<div class="r"><span class="fb">SELECTION   </span><span class="sg">■ </span><span class="fd">picked   </span><span class="fx">□ </span><span class="fs">not</span><span class="fd">                                                  </span><span class="fs">mark column only</span><span class="fd">                      </span></div>
+<div class="r"><span class="fb">KEY 1       </span><button class="k pri" type="button"> d mark task done </button><span class="fd">                                                </span><span class="fs">primary: one fill per context</span><span class="fd">         </span></div>
+<div class="r"><span class="fb">KEY 2       </span><button class="k sv" type="button">c</button><span class="fd"> copy handover                                                   </span><span class="fs">secondary: lit letter, plain label</span><span class="fd">    </span></div>
+<div class="r"><span class="fb">KEY 3       </span><span class="fs">j/k</span><span class="fx"> move</span><span class="fz"> · </span><span class="fs">p/n</span><span class="fx"> page</span><span class="fd">                                               </span><span class="fs">nav/meta: footer only, never capped</span><span class="fd">   </span></div>
+<div class="r"><span class="fb">KEY 4       </span><button class="k fz" type="button">b close 0 handovers</button><span class="fd">                                               </span><span class="fs">disabled: whole cap dim</span><span class="fd">               </span></div>
+<div class="r"><span class="fb">KEY 5       </span><button class="k wa" type="button">x</button><span class="fd"> close handover                                                  </span><span class="fs">destructive: warning letter, y/n, last</span></div>
+<div class="r"><span class="fb">LABELS      </span><button class="k sv" type="button">c</button><span class="fd"> copy handover</span><span class="fx">  not  </span><span class="fz">c copy</span><span class="fd">                                      </span><span class="fs">verb + object, beside its subject</span><span class="fd">     </span></div>
+<div class="r"><span class="fb">FOOTER      </span><span class="fs">j/k</span><span class="fx"> move</span><span class="fz"> · </span><span class="fs">s</span><span class="fx"> select</span><span class="fz"> · </span><span class="fs">h/l</span><span class="fx"> phase</span><span class="fz"> · </span><span class="fs">m</span><span class="fx"> sidebar</span><span class="fd">                       </span><span class="fs">last row; same order everywhere</span><span class="fd">       </span></div>
+<div class="r"><span class="fb">EMPTY       </span><span class="fs">Nothing waiting in Patch 1.8 · done 10-01   </span><button class="k sv" type="button">0</button><span class="fd"> show all phases     </span><span class="fs">sentence + one way out</span><span class="fd">                </span></div>
+<div class="r"><span class="fb">OFFLINE     </span><span class="cr">▲ tm offline</span><span class="fs"> · last ok 2m ago   </span><button class="k sv" type="button">r</button><span class="fd"> retry tm connection             </span><span class="fs">critical word + retry</span><span class="fd">                 </span></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1022,"height":1442}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
