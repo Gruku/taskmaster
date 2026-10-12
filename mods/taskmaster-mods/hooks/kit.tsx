@@ -64,6 +64,15 @@ export async function kitOf(ui: Ui, rr: KitRr, surface: RenderSurface, say: (tex
   return { ui, t, surface, badges, say }
 }
 
+/** What a pane or the band says when rr-tui is too old for the kit (it lacks badgeProps or tint, so kitOf would throw and the draw go blank). */
+export const RR_OUTDATED = 'rr-tui is outdated — reinstall rr-tui 0.2.0+'
+
+/** The plain notice a pane or the band draws in place of itself when rr-tui is too old. */
+export function outdatedNotice(ui: Pick<Ui, 'Text'>): RenderNode {
+  const { Text } = ui
+  return <Text>{RR_OUTDATED}</Text>
+}
+
 /** The ladder a card and a hover climb: page, raised, overlay, then the signature tints above overlay (surface stepping). */
 function rung(t: RrTokens, at: number): string {
   const ladder = [t.surface.page, t.surface.raised, t.surface.overlay, t.tint12.overlay.signature, t.tint24.overlay.signature]

@@ -7,7 +7,7 @@ import type { EngineInterface, On, PluginOptions } from 'claude-code'
 import type { TmNav, TmPhasePane, TmPhaseView, TmRestorePending, TmSessionBurst, TmSnapshot } from '../../types'
 import { demoPhases, demoRestore } from '../demo'
 import type { TmFlows } from '../flows'
-import { kitOf, type KitRr, type Ui } from '../kit'
+import { kitOf, type KitRr, outdatedNotice, type Ui } from '../kit'
 import { platformOf } from '../launch'
 import { RESTORE, restoreHiddenKey } from '../model'
 import { FRESH_NAV, shownRestore, shownSnapshot, type SidebarView, sidebarView } from '../nav'
@@ -137,6 +137,17 @@ function kitRrOf($: EngineInterface): KitRr {
   return { tokens: () => $.rr.tokens(), badgeProps: a => $.rr.badgeProps(a) }
 }
 
+/** False when rr-tui lacks badgeProps or tint (before 0.2.0): the call throws, and the render says so instead of drawing blank. */
+async function rrReady($: EngineInterface): Promise<boolean> {
+  try {
+    await $.rr.badgeProps({ tone: 'info', strength: 24, on: 'page' })
+    await $.rr.tint({ fg: '#000000', bg: '#000000', alpha: 0 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function sayOf($: EngineInterface): (text: string) => void {
   return text => $.ui.toast(text)
 }
@@ -203,6 +214,7 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
     const { Box, Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the restore pane in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const now = await $.clock.now()
     const stored = await read($, DATA)
     // Demo draws its sessions before the first scan lands, as the other panes draw their seed (a render writes nothing).

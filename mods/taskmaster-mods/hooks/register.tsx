@@ -35,7 +35,7 @@ import { onRestore, refreshRestore } from './restore/hooks'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
-import { kitOf, type Ui } from './kit'
+import { kitOf, outdatedNotice, type Ui } from './kit'
 import { escLayer, FRESH_NAV, paneOf, shownRestore, shownSnapshot, type SidebarView, sidebarView } from './nav'
 import { SIDEBAR_ESC, withSidebar } from './vocab'
 import { KIT, kitGalleryTree } from './kit-gallery'
@@ -170,6 +170,17 @@ function rrOf($: EngineInterface): Rr {
     chip: a => $.rr.chip(a),
     badgeProps: a => $.rr.badgeProps(a),
     tint: a => $.rr.tint(a),
+  }
+}
+
+/** False when rr-tui lacks badgeProps or tint (before 0.2.0): the call throws, and the render says so instead of drawing blank. */
+async function rrReady($: EngineInterface): Promise<boolean> {
+  try {
+    await $.rr.badgeProps({ tone: 'info', strength: 24, on: 'page' })
+    await $.rr.tint({ fg: '#000000', bg: '#000000', alpha: 0 })
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -736,6 +747,7 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     if (e.surface === 'mobile') return below
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const { snapshot } = await dataOf($)
     const pending = await restoreShown($)
     const handover = withNotice(await read($, SESSION_HANDOVER), await read($, NOTICE), snapshot)
@@ -770,6 +782,7 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the review queue in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const { snapshot, details } = await dataOf($)
     const cursor = await read($, CURSOR)
     const list = await read($, REVIEW_LIST)
@@ -851,6 +864,7 @@ export const register: Register = (on, options) => {
     const { Box, Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the handovers in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const { snapshot, summaries } = await dataOf($)
     const now = await $.clock.now()
     const stored = await read($, HANDOVER_LIST)
@@ -937,6 +951,7 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the Session tab in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const { snapshot, summaries } = await dataOf($)
     const handover = withNotice(await read($, SESSION_HANDOVER), await read($, NOTICE), snapshot)
     const open = handover !== null && (await read($, SUMMARY_OPEN)) === handover.id
@@ -996,6 +1011,7 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     if (e.surface === 'mobile') return <Text>Open the kit gallery in the terminal or the desktop app.</Text>
     await $.state.get(RR_POLARITY)
+    if (!(await rrReady($))) return outdatedNotice($.ui.resolve(e))
     const ui = $.ui.resolve(e) as unknown as Ui
     const say = (text: string) => mod.host?.toast(text)
     const k = await kitOf(ui, rrOf($), e.surface, say)
