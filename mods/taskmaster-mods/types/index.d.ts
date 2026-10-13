@@ -152,7 +152,12 @@ export type TmReviewList = {
 /** `refusalId` names the task `refusal` was given for; the band shows a refusal only on that task (absent: shown nowhere). */
 export type TmBandMode = { readonly confirmingId: string; readonly refusal: string; readonly refusalId?: string }
 /** The cache-cold handover guard: when the main loop last ended a turn (null: none yet), and whether this session is spent. */
-export type TmHandoverGuard = { readonly lastTurnEnd: number | null; readonly latch: 'none' | 'fired' | 'handover' }
+export type TmHandoverGuard = {
+  readonly lastTurnEnd: number | null
+  readonly latch: 'none' | 'fired' | 'handover'
+  /** A `/goal` is set in this session: the guard never compacts under it. Absent: none seen. */
+  readonly goal?: boolean
+}
 /** A handover a scanned session wrote: its backlog_handover_create input and the server's receipt (spec §10.1). */
 export type TmScannedHandover = { readonly id: string; readonly path: string; readonly tldr: string; readonly next: string }
 /** One of this repo's sessions as scanner/scan.py reports it: transcript facts only (spec §10.1). */

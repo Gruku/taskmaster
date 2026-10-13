@@ -10,6 +10,8 @@ import {
   compactInstructions,
   GUARD_DEFAULTS,
   guardConfigOf,
+  goalAfterCommand,
+  goalEndedAtStop,
   guardVerdict,
   handoverArgs,
   isHandoverWritten,
@@ -569,5 +571,124 @@ describe('handover guard: busy, not idle', () => {
     await $.turn.complete(TURN_END)
     await clock.advance(55 * MIN)
     expect(refreshes(g)).toHaveLength(2)
+  })
+})
+
+describe('handover guard: a running /goal', () => {
+  const goalRun = (args: string) => ({ command: 'goal', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 180 } })
+  /** Beneath the plugins: `/goal` answers as the engine's does; the Stop chain answers `stop` (the evaluator's verdict). */
+  function goalWorld(on: On): { stop: { block?: string; stopReason?: string } } {
+    const w: { stop: { block?: string; stopReason?: string } } = { stop: {} }
+    on('command.run', { command: 'goal' }, ($, e) => {
+      const a = e.args.trim()
+      if (a === '') return { text: 'No goal set' }
+      if (a === 'clear') return { text: 'Goal cleared: tests pass' }
+      return { text: `Goal set: ${a}` }
+    })
+    on('classic.Stop', () => w.stop)
+    return w
+  }
+  const STOP = { hook_event_name: 'Stop', stop_hook_active: false, session_id: 's', transcript_path: 't', cwd: '.' } as never
+
+  test('reads set, clear and status runs; a too-long condition changes nothing', () => {
+    expect(goalAfterCommand('all tests pass', 'Goal set: all tests pass')).toBe(true)
+    expect(goalAfterCommand('all tests pass', undefined)).toBe(true)
+    expect(goalAfterCommand('clear', 'Goal cleared: x')).toBe(false)
+    expect(goalAfterCommand(' Cancel ', undefined)).toBe(false)
+    expect(goalAfterCommand('', 'Goal active: x (3 turns)')).toBe(true)
+    expect(goalAfterCommand('', 'No goal set')).toBe(false)
+    expect(goalAfterCommand('', undefined)).toBeNull()
+    expect(goalAfterCommand('x'.repeat(5000), 'Goal condition is limited to 4000 characters (got 5000)')).toBeNull()
+  })
+
+  test('a Stop ends the goal only on the evaluator verdict of met: a reason and no block', () => {
+    expect(goalEndedAtStop({ stopReason: 'the file exists' })).toBe(true)
+    expect(goalEndedAtStop({ block: 'not yet: tests fail' })).toBe(false)
+    expect(goalEndedAtStop({ block: 'x', stopReason: 'y' })).toBe(false)
+    expect(goalEndedAtStop({})).toBe(false)
+  })
+
+  test('with a goal set, the fork still writes the handover but nothing is compacted', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const state = stateOf(on)
+    goalWorld(on)
+    const g = guardWorld(on, world, 300_000)
+    await $.command.run(goalRun('all tests pass'))
+    expect(state.get(`${PLUGIN}.handoverGuard`)).toMatchObject({ goal: true })
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(created(world)).toHaveLength(1)
+    expect(g.compacts).toEqual([])
+    expect(world.toasts.some(t => t.includes('compacting'))).toBe(false)
+    expect(world.logs.some(l => l.text.includes('/goal is running'))).toBe(true)
+  })
+
+  test('no fork: the prompt does not promise a compaction, and the turn is not compacted', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    goalWorld(on)
+    const g = guardWorld(on, world, 300_000)
+    await $.command.run(goalRun('all tests pass'))
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.submits).toHaveLength(1)
+    expect(g.submits[0]).not.toContain('compacted')
+    await $.tool.call({ tool: CREATE, tldr: 'wrap up' } as never)
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+  })
+
+  test('a goal set while the guard turn runs holds its compaction off', PROMPT_COMPACT, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    goalWorld(on)
+    const g = guardWorld(on, world, 300_000)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    await $.tool.call({ tool: CREATE, tldr: 'wrap up' } as never)
+    await $.command.run({ ...goalRun('ship it'), origin: { kind: 'plugin', name: 'x' } } as never)
+    await $.turn.complete(TURN_END)
+    await clock.advance(2_000)
+    expect(g.compacts).toEqual([])
+    expect(world.logs.some(l => l.text.includes('did not compact: a /goal is running'))).toBe(true)
+  })
+
+  test('a goal cleared, or met at a Stop, lets the compaction run again; a blocked or plain Stop does not', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const state = stateOf(on)
+    const w = goalWorld(on)
+    const g = guardWorld(on, world, 300_000)
+    const goal = () => (state.get(`${PLUGIN}.handoverGuard`) as { goal?: boolean } | undefined)?.goal
+    await $.command.run(goalRun('all tests pass'))
+    await $.command.run(goalRun('clear'))
+    expect(goal()).toBe(false)
+    await $.command.run(goalRun('all tests pass'))
+    w.stop = { block: 'not yet' }
+    await $.classic.Stop(STOP)
+    w.stop = {}
+    await $.classic.Stop(STOP)
+    expect(goal()).toBe(true)
+    w.stop = { stopReason: 'they pass' }
+    await $.classic.Stop(STOP)
+    expect(goal()).toBe(false)
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(g.compacts).toHaveLength(1)
+  })
+
+  test('a status run that finds no goal lets it go; a session end forgets it', ON, async ($, on) => {
+    const state = stateOf(on)
+    goalWorld(on)
+    on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+    const goal = () => (state.get(`${PLUGIN}.handoverGuard`) as { goal?: boolean } | undefined)?.goal
+    await $.command.run(goalRun('all tests pass'))
+    await $.command.run(goalRun(''))
+    expect(goal()).toBe(false)
+    await $.command.run(goalRun('all tests pass'))
+    await $.session.end({ reason: 'clear', sessionId: 'sess-A' } as never)
+    expect(goal()).toBe(false)
   })
 })
