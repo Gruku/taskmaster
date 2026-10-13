@@ -7,6 +7,13 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.3.1
+
+**The handover guard leaves a running `/goal` alone.** taskmaster-mods 0.2.1.
+
+- While a `/goal` is set, the idle guard still writes its handover but never compacts the conversation. This holds in both modes (fork and prompt), and for a goal set after the guard has already fired. A goal ends when it is cleared (`/goal clear`), when the goal check reports it met, or when the session ends. A goal waiting on background work still counts as running.
+- rr-tui 0.2.0: the version bump that lets reinstalls pick up `badgeProps`/`tint`. taskmaster-mods now requires rr-tui >=0.2.0 and says "rr-tui is outdated" instead of drawing blank panes.
+
 ## 7.3.0
 
 **The Claude Code mods get a new look and a Restore pane.** The Taskmaster mods (taskmaster-mods 0.2.0) ship inside this plugin and were left out of 7.2.0. This release covers the whole UX overhaul: its first three stages, which were already merged, and the visual rework and Restore pane on top of them.

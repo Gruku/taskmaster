@@ -2,6 +2,7 @@
 // get a handover written (by a fork of the conversation, or by the conversation itself) and optionally compact, as the
 // person configures; at most one per session, never a loop, never a compaction without its handover. While subagents
 // still work, the session is not idle: keep the cache warm instead (capped), never hand over or compact under them.
+// While a /goal is running, never compact: the handover is still written.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, PluginOptions, Timer, ToolCallResult } from 'claude-code'
 
@@ -77,6 +78,32 @@ export function busyReason(
   }
   return null
 }
+
+/** `/goal` arguments that clear the goal, as the engine reads them (lowercased). */
+const GOAL_CLEAR_WORDS: ReadonlySet<string> = new Set(['clear', 'stop', 'off', 'reset', 'none', 'cancel'])
+
+/** Whether a goal is set after a `/goal` run, or null when the run says nothing new. */
+export function goalAfterCommand(args: string, text: string | undefined): boolean | null {
+  const a = args.trim()
+  if (a === '') {
+    if (text?.startsWith('Goal active') === true) return true
+    if (text?.startsWith('No goal set') === true) return false
+    return null
+  }
+  if (GOAL_CLEAR_WORDS.has(a.toLowerCase())) return false
+  // "Goal set: <condition>"; a refusal (too long, no evaluator) prints its reason instead. A run that printed nothing
+  // reads as set: that errs toward not compacting.
+  if (text === undefined || text.startsWith('Goal set')) return true
+  return null
+}
+
+/**
+ * The goal's evaluator runs in the Stop chain: once the condition holds (or never can), the turn ends on its reason as
+ * `stopReason`, with no block. Not met, it blocks and the loop goes on. An evaluator that fails says neither: the goal
+ * then reads as still set, which errs toward not compacting.
+ */
+export const goalEndedAtStop = (result: { readonly block?: string; readonly stopReason?: string }): boolean =>
+  result.block === undefined && result.stopReason !== undefined
 
 /** The one message a refresh fork answers: a cache read of the whole prefix, which restarts the cache's hour. */
 export const REFRESH_PROMPT = '<cache_refresh>Reply with the single word OK.</cache_refresh>'
@@ -197,7 +224,8 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
     tokens = undefined
   }
   const now = await $.clock.now()
-  const verdict = guardVerdict(cfg, await read($, GUARD), now, tokens)
+  const state = await read($, GUARD)
+  const verdict = guardVerdict(cfg, state, now, tokens)
   if (epoch !== guard.epoch) return
   if (!verdict.fire) {
     if (verdict.reason !== 'disabled') $.ui.log(`taskmaster-mods: handover guard skipped: ${verdict.reason}`, { to: 'debug' })
@@ -221,15 +249,17 @@ async function check($: EngineInterface, epoch: number): Promise<void> {
   if (!won) return
   const minutes = Math.round(cfg.idleMs / MIN)
   $.ui.log(`taskmaster-mods: handover guard fired at ${verdict.tokens} tokens after ${minutes} idle min`, { to: 'debug' })
-  const how = `${cfg.fork ? 'writing a handover from a fork' : 'asking for a handover'}${cfg.compact ? ', then compacting' : ''}`
+  const compact = cfg.compact && state.goal !== true
+  if (cfg.compact && !compact) $.ui.log('taskmaster-mods: handover guard will not compact: a /goal is running', { to: 'debug' })
+  const how = `${cfg.fork ? 'writing a handover from a fork' : 'asking for a handover'}${compact ? ', then compacting' : ''}`
   $.ui.toast(`Idle ${minutes} min at ${Math.round(verdict.tokens / 1000)}k tokens: ${how}`)
   if (epoch !== guard.epoch) {
     $.ui.log('taskmaster-mods: handover guard latched but not run: the session moved on meanwhile', { to: 'debug' })
     return
   }
   try {
-    if (cfg.fork) await forkAndCompact($, epoch, minutes, verdict.tokens, cfg.compact)
-    else await promptForHandover($, minutes, verdict.tokens, cfg.compact)
+    if (cfg.fork) await forkAndCompact($, epoch, minutes, verdict.tokens, compact)
+    else await promptForHandover($, minutes, verdict.tokens, compact)
   } catch (error) {
     $.ui.log(`taskmaster-mods: handover guard stopped: ${error instanceof Error ? error.message : String(error)}`, { to: 'debug' })
   }
@@ -303,6 +333,11 @@ async function forkAndCompact($: EngineInterface, epoch: number, minutes: number
 }
 
 async function compactFor($: EngineInterface, id: string, h: Pick<ForkHandover, 'tldr' | 'nextAction'>): Promise<void> {
+  // A goal set since the guard fired (its own prompt turn can set one) still holds the compaction off.
+  if ((await read($, GUARD)).goal === true) {
+    $.ui.log(`taskmaster-mods: handover guard wrote ${id} but did not compact: a /goal is running`, { to: 'debug' })
+    return
+  }
   const compacted = await $.session.compact({ instructions: compactInstructions(id, h) })
   if (compacted.skip !== undefined) $.ui.log(`taskmaster-mods: handover guard did not compact: ${compacted.skip}`, { to: 'debug' })
 }
@@ -357,6 +392,10 @@ function owe(input: Readonly<Record<string, unknown>>, text: string): void {
   guard.owed = { id, tldr: field('tldr'), nextAction: field('next_action') }
 }
 
+async function noteGoal($: EngineInterface, goal: boolean): Promise<void> {
+  await update($, GUARD, (g): TmHandoverGuard => (g.goal === goal ? g : { ...g, goal }))
+}
+
 async function noteHandover($: EngineInterface): Promise<void> {
   disarm()
   await update($, GUARD, (g): TmHandoverGuard => (g.latch === 'handover' ? g : { ...g, latch: 'handover' }))
@@ -396,7 +435,36 @@ export function onHandoverGuard(on: On, options: PluginOptions): void {
   on('session.end', async ($, e, next) => {
     interrupt()
     guard.owed = null
+    try {
+      await noteGoal($, false)
+    } catch {
+      // a goal the engine restores on a resume is not seen until `/goal` runs again: a known gap
+    }
     return next(e)
+  })
+
+  // Goals are tracked whether or not the guard is on, as handovers are. `/goal` runs cover a ProposeGoal too: it sets
+  // its goal by queueing `/goal <condition>`.
+  on('command.run', { command: 'goal' }, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const goal = goalAfterCommand(e.args, result.text)
+      if (goal !== null) await noteGoal($, goal)
+    } catch {
+      // an unwritten goal leaves the last one standing
+    }
+    return result
+  })
+
+  // The only sign a goal ended without `/goal clear`: its evaluator's verdict in the Stop chain.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (goalEndedAtStop(result)) await noteGoal($, false)
+    } catch {
+      // as above
+    }
+    return result
   })
 
   // Any loop but the main one at work (a subagent, a workflow's agent): the session is not idle while it lasts. The matcher
