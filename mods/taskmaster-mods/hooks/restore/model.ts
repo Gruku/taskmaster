@@ -2,6 +2,9 @@
 // facts read safely, the one backlog_query that resolves their task and handover ids, and the status Taskmaster gives
 // them — so a session is called unfinished by tm's word, never by a regex.
 import type {
+  TmHistoryHandover,
+  TmHistoryTask,
+  TmSessionScan,
   TmRefs,
   TmRefTask,
   TmRestoreData,
@@ -124,6 +127,19 @@ export function scanOf(value: unknown): TmScan | null {
   return { scannedAt: num(value.scannedAt), root: str(value.root), sessions }
 }
 
+/**
+ * The scanner's `session` JSON (the current session's own transcript), field by field; null when it is no such answer.
+ * A task or handover without an id is dropped, a missing time reads 0.
+ */
+export function sessionScanOf(value: unknown): TmSessionScan | null {
+  if (!isObject(value) || !Array.isArray(value.tasks)) return null
+  const tasks = value.tasks.flatMap((t): TmHistoryTask[] => (isObject(t) && str(t.id) !== '' ? [{ id: str(t.id), at: num(t.at), wrote: t.wrote === true }] : []))
+  const handovers = Array.isArray(value.handovers)
+    ? value.handovers.flatMap((h): TmHistoryHandover[] => (isObject(h) && str(h.id) !== '' ? [{ id: str(h.id), path: str(h.path), tldr: str(h.tldr), next: str(h.next), at: num(h.at) }] : []))
+    : []
+  return { scannedAt: num(value.scannedAt), found: value.found === true, tasks, handovers }
+}
+
 // Ids go into SQL as literals: only what a tm id can look like is sent, so a transcript can never shape the query.
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,120}$/
 const literals = (ids: readonly string[]): string => [...new Set(ids.filter(id => SAFE_ID.test(id)))].map(id => `'${id}'`).join(',')
@@ -134,8 +150,16 @@ const literals = (ids: readonly string[]): string => [...new Set(ids.filter(id =
  * to ask.
  */
 export function refsSql(scan: TmScan): string | null {
-  const tasks = literals(scan.sessions.flatMap(s => s.taskIds))
-  const handovers = literals(scan.sessions.flatMap(s => s.handovers.map(h => h.id)))
+  return refsSqlFor(
+    scan.sessions.flatMap(s => s.taskIds),
+    scan.sessions.flatMap(s => s.handovers.map(h => h.id)),
+  )
+}
+
+/** refsSql for bare id lists (the Session tab asks only for its tasks). */
+export function refsSqlFor(taskIds: readonly string[], handoverIds: readonly string[]): string | null {
+  const tasks = literals(taskIds)
+  const handovers = literals(handoverIds)
   const parts = [
     ...(tasks === ''
       ? []

@@ -607,6 +607,11 @@ function quietButton(k: Kit, id: string, text: string, color: string, onPress: (
   )
 }
 
+/** A quiet clickable word in a row (a handover id that opens in the handovers pane): colour and hover step, no hotkey. */
+export function linkPiece(k: Kit, a: { readonly id: string; readonly text: string; readonly color: string; readonly onPress: () => void }): Piece {
+  return { el: quietButton(k, a.id, a.text, a.color, a.onPress), width: a.text.length }
+}
+
 /** `‹ 1 / 2 ›`: the arrows are quiet Buttons (`p` / `n` live in the footer); at an end the arrow dims and says why. */
 export function pagerPiece(k: Kit, a: { readonly page: number; readonly pages: number; readonly onTurn: (page: number) => void }): Piece {
   const { Box, Text } = k.ui

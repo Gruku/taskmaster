@@ -45,7 +45,7 @@ const rs: { source: 'tm' | 'demo'; briefModel: string; link: RestoreLink | null;
   flows: null,
 }
 
-function restoreHostOf($: EngineInterface): RestoreHost {
+export function restoreHostOf($: EngineInterface): RestoreHost {
   return {
     run: async (argv, timeoutMs) => {
       const r = await $.process.run(argv, { timeoutMs })

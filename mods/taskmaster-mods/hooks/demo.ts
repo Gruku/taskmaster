@@ -10,6 +10,7 @@ import type {
   TmRefs,
   TmScan,
   TmScannedSession,
+  TmSessionHistory,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
@@ -297,5 +298,46 @@ export function demoRestore(now: number): { readonly scan: TmScan; readonly refs
         base('demo-old-2', 'Store read hang', 30 * 60, { cwd: 'C:\\Users\\demo\\gone', cwdExists: false, taskIds: ['tm-audit-031'] }),
       ],
     },
+  }
+}
+
+/**
+ * The demo session's own history (a long /goal run): 11 touched tasks, newest first by `at`, some only read, and three
+ * handovers written. Drawn instead of a scan, so the Session tab can be checked with no transcript.
+ */
+export function demoSessionHistory(now: number): TmSessionHistory {
+  const ago = (hours: number) => (now - hours * HOUR) / 1000
+  const task = (id: string, status: string, title: string, hours: number, wrote: boolean) => ({ at: { id, hours, wrote }, ref: { id, status, lane: 'full', phase: 'patch-1-9', title } })
+  const rows = [
+    task('unified-chat-022', 'in-review', DEMO_DETAILS['unified-chat-022']?.title ?? '', 0.2, true),
+    task('tm-audit-031', 'in-review', 'Handover auto-supersede keeps the newest per thread', 1, true),
+    task('tm-audit-030', 'done', 'Agent tool-use audit fixes', 2, true),
+    task('docs-012', 'in-review', 'README mentions the review queue', 3, false),
+    task('tm-audit-029', 'done', 'Bulk done refuses a task with outstanding gates', 5, true),
+    task('tm-audit-028', 'done', 'Session scan survives a truncated last line', 8, true),
+    task('store-014', 'in-progress', 'Quarantined rows no longer force a projection scan', 11, true),
+    task('store-013', 'todo', 'Measure reads on a CodeMaestro-sized store', 14, false),
+    task('viewer-031', 'done', 'Board re-skin: detail drawer', 18, true),
+    task('viewer-030', 'done', 'Board re-skin: lanes', 21, true),
+    task('rel-007', 'blocked', 'Release notes wait on the audit merge', 26, false),
+  ]
+  const ho = (id: string, hours: number, tldr: string, next: string) => ({ id, path: handoverPath(DEMO_ROOT, id), tldr, next, at: ago(hours) })
+  return {
+    sessionId: 'demo',
+    scan: {
+      scannedAt: now / 1000,
+      found: true,
+      tasks: rows.map(r => ({ id: r.at.id, at: ago(r.at.hours), wrote: r.at.wrote })),
+      handovers: [
+        ho('2026-10-13-store-hang-fix', 16, 'Store read hang fixed behind the quarantine flag', 'Run the CodeMaestro-sized read benchmark'),
+        ho('2026-10-13-viewer-lanes', 9, 'Viewer lanes re-skinned; drawer next', 'Re-skin the detail drawer'),
+        ho('2026-10-14-audit-wrap', 1.5, 'Audit fixes 028-031 landed; one review pending', 'Record the merge for tm-audit-030'),
+      ],
+    },
+    refs: { tasks: Object.fromEntries(rows.map(r => [r.ref.id, r.ref])), handovers: {} },
+    pending: false,
+    error: '',
+    finishedAt: now,
+    page: 0,
   }
 }
