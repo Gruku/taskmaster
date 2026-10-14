@@ -1,9 +1,9 @@
 // User intent: the restore pane's two outside readers — scanner/scan.py run as its own process (transcripts outgrow the mod
 // runtime's 4 MiB read) and the one backlog_query that resolves what it found — each failing to a reason, never a crash.
-import type { TmRefs, TmScan } from '../../types'
+import type { TmRefs, TmScan, TmSessionScan } from '../../types'
 import type { TmHost } from '../host'
 import { callTm } from '../tm'
-import { parseRefs, refsSql, scanOf } from './model'
+import { parseRefs, refsSql, refsSqlFor, scanOf, sessionScanOf } from './model'
 
 export type RunOut = { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
 /** Where the scanner lives and what it reads: the config folder, its cache file, the script. */
@@ -17,6 +17,7 @@ export type Digest = { readonly first: string; readonly tail: string }
 
 export const SCAN_TIMEOUT_MS = 120_000
 export const DIGEST_TIMEOUT_MS = 60_000
+export const SESSION_SCAN_TIMEOUT_MS = 60_000
 /** Tried in order: the first that runs the script answers. */
 export const PYTHONS: readonly string[] = ['python', 'python3', 'py']
 
@@ -63,12 +64,31 @@ export async function runDigest(rh: RestoreHost, sessionId: string, root: string
   return { first: typeof v.first === 'string' ? v.first : '', tail: typeof v.tail === 'string' ? v.tail : '' }
 }
 
+/** The current session's own transcript: every task it touched and handover it wrote (its own cache file, beside restore's). */
+export async function runSessionScan(rh: RestoreHost, a: { readonly root: string; readonly sessionId: string }): Promise<TmSessionScan> {
+  const { configDir, cache } = await rh.paths()
+  const args = ['session', '--config-dir', configDir, '--root', a.root, '--session', a.sessionId, '--cache', cache.replace(/\.json$/, '-session.json')]
+  const out = await runPython(rh, args, SESSION_SCAN_TIMEOUT_MS)
+  if (typeof out === 'object' && out !== null && typeof (out as Record<string, unknown>).error === 'string') throw new Error(String((out as Record<string, unknown>).error))
+  const scan = sessionScanOf(out)
+  if (scan === null) throw new Error('the scanner answered no session history')
+  return scan
+}
+
 /**
  * The scan's task and handover ids as tm holds them, from one backlog_query (spec §10.2). Nothing to ask resolves empty
  * without a call; a refusal, a timeout or an unreadable reply is null (statuses then read `?`), its reason logged.
  */
 export async function resolveRefs(tm: Pick<TmHost, 'call' | 'sleep' | 'log'>, scan: TmScan): Promise<TmRefs | null> {
-  const sql = refsSql(scan)
+  return resolveRefsSql(tm, refsSql(scan))
+}
+
+/** The Session tab's task ids as tm holds them (same query, same degrade-to-null). */
+export async function resolveTaskRefs(tm: Pick<TmHost, 'call' | 'sleep' | 'log'>, taskIds: readonly string[]): Promise<TmRefs | null> {
+  return resolveRefsSql(tm, refsSqlFor(taskIds, []))
+}
+
+async function resolveRefsSql(tm: Pick<TmHost, 'call' | 'sleep' | 'log'>, sql: string | null): Promise<TmRefs | null> {
   if (sql === null) return { tasks: {}, handovers: {} }
   try {
     const text = (await callTm(tm, 'backlog_query', { sql, limit: 500 })).text

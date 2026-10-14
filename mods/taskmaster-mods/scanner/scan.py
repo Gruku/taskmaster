@@ -4,6 +4,7 @@
 
   scan.py scan   --config-dir DIR --root DIR [--days N] [--exclude ID] [--cache FILE]
   scan.py digest --config-dir DIR --session ID [--max-chars N]
+  scan.py session --config-dir DIR --session ID --root DIR [--cache FILE]
 
 Prints one JSON document on stdout. Transcripts are streamed line by line (they run past the mod runtime's 4 MiB read
 cap) and per-file facts are cached by mtime + size. Only sessions whose working directory lies under --root are read.
@@ -28,6 +29,13 @@ INTERRUPT_MARK = "[Request interrupted by user"
 HANDOVER_WRITTEN = re.compile(r"Handover written: (\S+)")
 HANDOVER_PATH = re.compile(r"^- Path: (.+?)\s*$", re.MULTILINE)
 MAX_TASK_IDS = 8
+# The Session tab's history reads one transcript and wants every task it touched, not just the bound few.
+SESSION_TASK_IDS = 400
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+# A tm tool that changes something; every other tm call only reads (get, list, query, search, status, ...).
+WRITE_TOOL = re.compile(
+    r"_(create|update|add|claim|complete|pick|record|set|skip|clear|archive|supersede|resync|link|note|sync|init|advance|promote|migrate|backfill|canonicalize|resolve|import)(_|$)"
+)
 # A closed session's last event: anything but the agent's own finished reply means it was cut off mid-turn.
 MID_TURN = ("interrupt", "prompt", "tool_use", "tool_result")
 
@@ -98,22 +106,30 @@ def is_human_prompt(rec: dict) -> bool:
     return not text.startswith(("<", "Caveat:", "Another Claude session sent a message", INTERRUPT_MARK))
 
 
-def touch(task_ids: list[str], value) -> None:
-    """Keeps the ids in last-touched order: the last one is the session's bound task (spec §10.2)."""
+def is_write_tool(name: str) -> bool:
+    return bool(WRITE_TOOL.search(name[len(TM_TOOL):] if name.startswith(TM_TOOL) else name))
+
+
+def touch(task_ids: list[str], value, seen: dict | None = None, at: float | None = None, wrote: bool = False) -> None:
+    """Keeps the ids in last-touched order: the last one is the session's bound task (spec §10.2). `seen` also keeps each id's last-touched time and whether any touching call wrote."""
     for tid in value if isinstance(value, list) else [value]:
         if isinstance(tid, str) and tid.strip():
             tid = tid.strip()
             if tid in task_ids:
                 task_ids.remove(tid)
             task_ids.append(tid)
+            if seen is not None:
+                rec = seen.setdefault(tid, {"at": at, "wrote": False})
+                rec["at"] = at if at is not None else rec["at"]
+                rec["wrote"] = rec["wrote"] or wrote
 
 
-def scan_file(path: Path) -> dict:
+def scan_file(path: Path, cap: int = MAX_TASK_IDS) -> dict:
     s: dict = {
         "id": path.stem, "cwd": None, "branch": None, "entrypoint": None, "aiTitle": None, "customTitle": None,
         "firstPrompt": None, "lastPrompt": None, "lastReply": None, "lastEvent": None, "prompts": 0,
         "ctx": 0, "cost": 0.0, "start": None, "end": None, "costEnd": None,
-        "taskIds": [], "handovers": [], "endedSession": False, "promptsAfterEnd": 0,
+        "taskIds": [], "taskTouch": {}, "handovers": [], "endedSession": False, "promptsAfterEnd": 0,
     }
     pending: dict[str, dict] = {}
     with path.open(encoding="utf-8", errors="replace") as fh:
@@ -197,13 +213,15 @@ def scan_file(path: Path) -> dict:
                         s["endedSession"] = True
                         s["promptsAfterEnd"] = 0
                     if name.startswith(TM_TOOL):
-                        touch(s["taskIds"], inp.get("task_id"))
-                        touch(s["taskIds"], inp.get("task_ids"))
+                        at, wrote = iso_to_epoch(ts), is_write_tool(name)
+                        touch(s["taskIds"], inp.get("task_id"), s["taskTouch"], at, wrote)
+                        touch(s["taskIds"], inp.get("task_ids"), s["taskTouch"], at, wrote)
                     if name == HANDOVER_TOOL:
-                        pending[b.get("id")] = {"tldr": clip(inp.get("tldr"), 200), "next": clip(inp.get("next_action"), 300)}
+                        pending[b.get("id")] = {"tldr": clip(inp.get("tldr"), 200), "next": clip(inp.get("next_action"), 300), "at": iso_to_epoch(ts)}
             if msg.get("stop_reason") == "end_turn" and s["lastEvent"] == "text":
                 s["lastEvent"] = "end_turn"
-    s["taskIds"] = s["taskIds"][-MAX_TASK_IDS:]
+    s["taskIds"] = s["taskIds"][-cap:]
+    s["taskTouch"] = {tid: s["taskTouch"][tid] for tid in s["taskIds"] if tid in s["taskTouch"]}
     return s
 
 
@@ -280,7 +298,8 @@ def facts(s: dict, mtime: float, live: set[str]) -> dict:
         "running": s["id"] in live,
         "resumedAfterClose": s["costEnd"] is not None and end > s["costEnd"] + 60,
         "taskIds": s["taskIds"],
-        "handovers": s["handovers"],
+        # The write time stays out of the restore pane's rows: only the Session tab reads it.
+        "handovers": [{k: v for k, v in h.items() if k != "at"} for h in s["handovers"]],
         "endedSession": s["endedSession"],
         "promptsAfterEnd": s["promptsAfterEnd"],
     }
@@ -376,9 +395,50 @@ def digest(args) -> dict:
     return {"first": head, "tail": "\n".join(reversed(text))}
 
 
+def find_transcript(args) -> Path | None:
+    prefix = encode_dir(os.path.normpath(args.root)).lower() if args.root else ""
+    return next(
+        (p for p in (Path(args.config_dir) / "projects").glob(f"*/{args.session}.jsonl") if p.parent.name.lower().startswith(prefix)),
+        None,
+    )
+
+
+def session(args) -> dict:
+    """One session's own transcript for the Session tab's history: every tm task it touched (oldest first, with when and whether it wrote) and every handover it wrote."""
+    empty = {"v": CACHE_VERSION, "scannedAt": time.time(), "id": args.session, "found": False, "branch": "", "tasks": [], "handovers": []}
+    if not SESSION_ID.fullmatch(args.session):
+        return {"error": "unusable session id"}
+    path = find_transcript(args)
+    if path is None:
+        return empty
+    cache_path = Path(args.cache) if args.cache else None
+    try:
+        st = path.stat()
+        key, sig = str(path), f"{st.st_mtime_ns}:{st.st_size}:session"
+        hit = load_cache(cache_path).get(key)
+        s = hit["s"] if isinstance(hit, dict) and hit.get("sig") == sig else scan_file(path, SESSION_TASK_IDS)
+    except SKIPPABLE:
+        return {"error": "transcript unreadable"}
+    if cache_path:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps({"v": CACHE_VERSION, "files": {key: {"sig": sig, "s": s}}}), encoding="utf-8")
+        except OSError:
+            pass
+    # The folder prefix also matches siblings (repo-x for repo); the recorded cwd decides.
+    if args.root and s["cwd"] and not is_under(s["cwd"], args.root):
+        return empty
+    touch_of = s.get("taskTouch") or {}
+    tasks = [
+        {"id": tid, "at": (touch_of.get(tid) or {}).get("at"), "wrote": bool((touch_of.get(tid) or {}).get("wrote"))}
+        for tid in s["taskIds"]
+    ]
+    return {**empty, "found": True, "branch": s["branch"] or "", "tasks": tasks, "handovers": s["handovers"]}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["scan", "digest"])
+    ap.add_argument("mode", choices=["scan", "digest", "session"])
     ap.add_argument("--config-dir", required=True)
     ap.add_argument("--root", default="")
     ap.add_argument("--days", type=float, default=4)
@@ -389,7 +449,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.mode == "scan" and not args.root:
         ap.error("scan needs --root")
-    result = scan(args) if args.mode == "scan" else digest(args)
+    if args.mode == "session" and not args.session:
+        ap.error("session needs --session")
+    result = {"scan": scan, "digest": digest, "session": session}[args.mode](args)
     sys.stdout.reconfigure(encoding="utf-8")
     json.dump(result, sys.stdout, ensure_ascii=False)
     return 0

@@ -224,3 +224,100 @@ def test_digest_only_reads_sessions_under_the_given_root(world, capsys):
     assert json.loads(capsys.readouterr().out) == {"error": "session not found"}
     assert scan.main(["digest", "--config-dir", str(world.cfg), "--session", "ended", "--root", str(world.root)]) == 0
     assert json.loads(capsys.readouterr().out)["first"] == "USER: Pick up beta-002"
+
+
+def write_session(world: World, name: str, events: list[dict]) -> Path:
+    """A transcript of this repo's own (the current session): `events` are (kind, ...) dicts, one second apart."""
+    base = scan.iso_to_epoch("2026-10-14T09:00:00.000Z")
+    folder = world.cfg / "projects" / scan.encode_dir(str(world.root))
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for i, ev in enumerate(events):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(base + i))
+        common = {"isSidechain": False, "timestamp": stamp, "cwd": str(world.root), "gitBranch": "feat/long", "entrypoint": "cli", "sessionId": name}
+        if ev["kind"] == "prompt":
+            lines.append({"type": "user", **common, "message": {"role": "user", "content": ev["text"]}})
+        elif ev["kind"] == "tool":
+            use = {"type": "tool_use", "id": f"tu-{i}", "name": scan.TM_TOOL + ev["name"], "input": ev["input"]}
+            lines.append({"type": "assistant", **common, "message": {"role": "assistant", "content": [use], "stop_reason": "tool_use"}})
+        elif ev["kind"] == "result":
+            body = json.dumps({"result": ev["text"]})
+            lines.append({"type": "user", **common, "toolUseResult": {"result": "x"}, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"tu-{i - 1}", "content": body}]}})
+    out = folder / f"{name}.jsonl"
+    out.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return out
+
+
+def tool(name: str, **inp) -> dict:
+    return {"kind": "tool", "name": name, "input": inp}
+
+
+def session_facts(world: World, capsys, name: str, *extra: str) -> dict:
+    assert scan.main(["session", "--config-dir", str(world.cfg), "--session", name, "--root", str(world.root), *extra]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_session_mode_lists_every_task_with_when_and_whether_it_wrote(world, capsys):
+    events = [{"kind": "prompt", "text": "Work through the batch"}]
+    events += [tool("backlog_get_task", task_id=f"t-{n:03d}") for n in range(1, 13)]  # 12 reads: past restore's cap of 8
+    events += [tool("backlog_update_task", task_id="t-002", field="status", value="done"), tool("backlog_get_task", task_id="t-002")]
+    events += [tool("backlog_batch_update", task_ids=["t-020", "t-021"])]
+    write_session(world, "long", events)
+    out = session_facts(world, capsys, "long")
+    assert out["found"] is True and out["branch"] == "feat/long"
+    ids = [t["id"] for t in out["tasks"]]
+    assert len(ids) == 14 and ids[-3:] == ["t-002", "t-020", "t-021"]  # last-touched last, t-002 moved up by its re-read
+    by_id = {t["id"]: t for t in out["tasks"]}
+    assert by_id["t-001"]["wrote"] is False
+    assert by_id["t-002"]["wrote"] is True  # one write among its touches is enough
+    assert by_id["t-021"]["wrote"] is True
+    assert by_id["t-002"]["at"] == scan.iso_to_epoch("2026-10-14T09:00:14.000Z")
+    # Restore keeps its cap of 8 and its rows carry no times.
+    capped = scan.scan_file(world.transcript("long"))
+    assert len(capped["taskIds"]) == scan.MAX_TASK_IDS and set(capped["taskTouch"]) == set(capped["taskIds"])
+
+
+def test_session_mode_returns_every_handover_in_write_order_with_its_time(world, capsys):
+    events = [{"kind": "prompt", "text": "go"}]
+    for n in (1, 2, 3):
+        events.append(tool("backlog_handover_create", tldr=f"Part {n} done", next_action=f"Start part {n + 1}", task_ids=["t-001"]))
+        events.append({"kind": "result", "text": f"Handover written: 2026-10-14-part-{n}\n- Path: C:/x/part-{n}.md"})
+    write_session(world, "long", events)
+    out = session_facts(world, capsys, "long")
+    assert [h["id"] for h in out["handovers"]] == [f"2026-10-14-part-{n}" for n in (1, 2, 3)]
+    assert out["handovers"][2] == {"id": "2026-10-14-part-3", "path": "C:/x/part-3.md", "tldr": "Part 3 done", "next": "Start part 4", "at": scan.iso_to_epoch("2026-10-14T09:00:05.000Z")}
+    # The restore scan's rows stay as they were: no write time.
+    assert "at" not in scan.facts(scan.scan_file(world.transcript("long")), 0.0, set())["handovers"][0]
+
+
+def test_session_mode_unknown_foreign_and_unsafe_sessions(world, capsys):
+    assert session_facts(world, capsys, "nope")["found"] is False
+    assert session_facts(world, capsys, "elsewhere")["found"] is False  # a sibling repo's folder shares the prefix
+    assert session_facts(world, capsys, "../x") == {"error": "unusable session id"}
+    assert session_facts(world, capsys, "ended")["found"] is True
+
+
+def test_session_mode_caches_by_size_and_mtime(world, capsys, monkeypatch):
+    write_session(world, "long", [{"kind": "prompt", "text": "go"}, tool("backlog_get_task", task_id="t-001")])
+    calls: list[int] = []
+    real = scan.scan_file
+
+    def counting(path: Path, cap: int = scan.MAX_TASK_IDS) -> dict:
+        calls.append(cap)
+        return real(path, cap)
+
+    monkeypatch.setattr(scan, "scan_file", counting)
+    first = session_facts(world, capsys, "long", "--cache", str(world.cache))
+    again = session_facts(world, capsys, "long", "--cache", str(world.cache))
+    assert calls == [scan.SESSION_TASK_IDS] and [t["id"] for t in again["tasks"]] == ["t-001"] and first["tasks"] == again["tasks"]
+    with world.transcript("long").open("a", encoding="utf-8") as fh:
+        fh.write("\n")
+    session_facts(world, capsys, "long", "--cache", str(world.cache))
+    assert len(calls) == 2
+
+
+def test_write_tools_are_told_from_reads():
+    for name in ("backlog_update_task", "backlog_claim", "backlog_pick_task", "backlog_complete_task", "backlog_handover_update_status", "backlog_batch_update"):
+        assert scan.is_write_tool(scan.TM_TOOL + name), name
+    for name in ("backlog_get_task", "backlog_list_tasks", "backlog_query", "backlog_search", "backlog_context", "backlog_task_pipeline", "backlog_handover_get", "backlog_batch_preview"):
+        assert not scan.is_write_tool(scan.TM_TOOL + name), name

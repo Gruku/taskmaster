@@ -21,17 +21,18 @@ import type {
   TmReviewList,
   TmSessionBurst,
   TmSessionHandover,
+  TmSessionHistory,
   TmSessionInfo,
   TmSnapshot,
   TmTaskDetail,
 } from '../types'
 import { demoActions, demoCloseHandover, tmActions, tmCloseHandover } from './actions'
 import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBindings, ranText, type TmRan } from './binding'
-import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSnapshot, isCurrentDemo } from './demo'
+import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSessionHistory, demoSnapshot, isCurrentDemo } from './demo'
 import { bandTree } from './band'
 import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
-import { onRestore, refreshRestore } from './restore/hooks'
+import { onRestore, refreshRestore, restoreHostOf } from './restore/hooks'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
 import type { TmHost } from './host'
@@ -62,6 +63,7 @@ import { reviewPaneTree } from './review'
 import { FRESH_REVIEW_LIST, listView, reviewItems } from './review-list'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import { sessionTree } from './session'
+import { createHistoryFlows, FRESH_SESSION_HISTORY, sessionHistoryView } from './session-history'
 import type { Rr } from './rr'
 import { FAULT_LINE, loadDetail, readHandover, readHandoverList, readPhases, readSummary, refreshOnce, type TmIo, type TmScope, writeTm } from './tm'
 
@@ -89,6 +91,7 @@ const RESTORE_HIDDEN = atom({ plugin: 'taskmaster-mods', key: 'restoreHidden' } 
 const SESSION_BURST = atom({ plugin: 'taskmaster-mods', key: 'sessionBurst' } as const, null as TmSessionBurst | null)
 const NAV = atom({ plugin: 'taskmaster-mods', key: 'nav' } as const, FRESH_NAV as TmNav)
 const SESSION_INFO = atom({ plugin: 'taskmaster-mods', key: 'sessionInfo' } as const, null as TmSessionInfo | null)
+const SESSION_HISTORY = atom({ plugin: 'taskmaster-mods', key: 'sessionHistory' } as const, FRESH_SESSION_HISTORY as TmSessionHistory)
 const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
@@ -281,6 +284,7 @@ const mod: {
   resumedAsked: Set<string>
   resumedCache: Map<string, TmHandover | null>
   resolve: (() => Promise<void>) | null
+  history: ReturnType<typeof createHistoryFlows> | null
 } = {
   source: 'tm',
   scope: { waitingOnly: true, phase: '' },
@@ -297,6 +301,7 @@ const mod: {
   resumedAsked: new Set(),
   resumedCache: new Map(),
   resolve: null,
+  history: null,
 }
 
 function ensureFlows($: EngineInterface): TmFlows {
@@ -304,6 +309,18 @@ function ensureFlows($: EngineInterface): TmFlows {
   const write = (mod.write ??= writerOf($))
   mod.io ??= ioOf($)
   mod.resolve ??= () => resolveHandover($)
+  mod.history ??= createHistoryFlows({
+    source: mod.source,
+    rh: restoreHostOf($),
+    tm: host,
+    sessionId: async () => mod.sessionId || (await $.session.id()),
+    repoRoot: () => host.repoRoot(),
+    now: () => $.clock.now(),
+    read: () => read($, SESSION_HISTORY),
+    write: async change => {
+      await update($, SESSION_HISTORY, change)
+    },
+  })
   // One refresh at a time, scheduled off the calling hook: a turn never waits on tm.
   if (mod.source === 'tm') mod.refresher ??= singleFlight(refreshRun, (fn, delayMs) => host.after(delayMs, fn))
   mod.flows ??= createFlows({
@@ -567,6 +584,15 @@ function askDetail(taskId: string): void {
   })
 }
 
+/** This session's own history, read off the draw (and again past its TTL, or at once when forced by `u`). */
+function askHistory(force: boolean): void {
+  const { host, history } = mod
+  if (host === null || history === null) return
+  host.after(0, () => {
+    void history.ask(force).catch(() => undefined)
+  })
+}
+
 function askSummary(handoverId: string): void {
   const { host, flows } = mod
   if (host === null || flows === null) return
@@ -599,6 +625,7 @@ export const register: Register = (on, options) => {
   mod.resumedAsked = new Set()
   mod.resumedCache = new Map()
   mod.resolve = null
+  mod.history = null
   onHandoverGuard(on, options)
   onRestore(on, options, { flows: () => mod.flows })
 
@@ -959,6 +986,15 @@ export const register: Register = (on, options) => {
     // Read when open and missing, or stale after a refresh (the stale one stays drawn meanwhile), as the handovers pane does.
     if (mod.source === 'tm' && handover !== null && open && (held === undefined || held.stale === true)) askSummary(handover.id)
     const cwd = await $.session.cwd()
+    const now = await $.clock.now()
+    if (mod.source === 'tm') askHistory(false)
+    const stored = await read($, SESSION_HISTORY)
+    const history = sessionHistoryView({
+      history: mod.source === 'demo' ? { ...demoSessionHistory(now), page: stored.page } : stored,
+      snapshot,
+      primaryId: handover?.id ?? '',
+      nowSeconds: now / 1000,
+    })
     const ui = $.ui.resolve(e) as unknown as Ui
     const k = await kitOf(ui, rrOf($), e.surface, text => mod.host?.toast(text))
     const tree = sessionTree(
@@ -973,13 +1009,20 @@ export const register: Register = (on, options) => {
         summaryOpen: open,
         connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
         demo: mod.source === 'demo',
-        now: await $.clock.now(),
+        now,
         info: await read($, SESSION_INFO),
         tabs: await tabsFor($, 'session'),
+        history,
       },
       {
         goTo: pane => act(f => f.goTo(pane)),
-        refresh: () => act(f => f.retry()),
+        refresh: () => {
+          act(f => f.retry())
+          askHistory(true)
+        },
+        turnHistory: page => {
+          void mod.history?.turnPage(page)
+        },
         toggleSidebar: () => act(f => f.toggleSidebar()),
         askDone: id => act(f => f.bandAskDone(id)),
         confirmDone: id => act(f => f.bandConfirmDone(id)),

@@ -1,5 +1,5 @@
-// User intent: the Session tab (spec §7, §15.7; band `m`, /tm-session) — this session's task, its handover and where it came
-// from in the round-1 label column, each action named for its subject and drawn under what it acts on, one filled key, one
+// User intent: the Session tab (spec §7, §15.7; band `m`, /tm-session) — this session's task, every task it touched, every
+// handover it wrote and where it came from in the round-1 label column, each action named for its subject and drawn under what it acts on, one filled key, one
 // dim footer — and every row inside the pane, so nothing is clipped at the right edge.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderNode, RenderSurface } from 'claude-code'
@@ -8,6 +8,7 @@ import type { TmBandMode, TmHandoverSummary, TmSessionBurst, TmSessionHandover, 
 import { HANDOVER_TAG } from './band'
 import type { TmPane } from './flows'
 import type { Kit } from './kit'
+import { HANDOVER_ROWS, type HistoryRow, type SessionHistoryView, HISTORY_PAGE_SIZE } from './session-history'
 import type { SidebarView } from './nav'
 import { ageLabel, gateSignal, isReady, oneLine, wrapText } from './model'
 import {
@@ -17,12 +18,15 @@ import {
   badgeSeg,
   CONTENT_COL,
   fieldSegs,
+  type FooterItem,
   footer,
   type Health,
   itemRule,
   labelRow,
   line,
+  linkPiece,
   paneFrame,
+  pagerPiece,
   paneToolbar,
   refreshPiece,
   type Seg,
@@ -48,6 +52,8 @@ export type SessionView = {
   readonly info: TmSessionInfo | null
   /** The tab row's panes and counts (absent: no tab row). */
   readonly tabs?: SidebarView
+  /** Every task this session touched and every handover it wrote (absent: the tab draws its one task and handover). */
+  readonly history?: SessionHistoryView
 }
 
 export type SessionHandlers = {
@@ -62,6 +68,7 @@ export type SessionHandlers = {
   readonly toggleSummary: (handoverId: string, open: boolean) => void
   readonly refresh: () => void
   readonly toggleSidebar: () => void
+  readonly turnHistory?: (page: number) => void
 }
 
 /** Why `d` (and `a`) cannot act on the bound task, or '' when they can. */
@@ -149,11 +156,77 @@ function taskSection(k: Kit, v: SessionView, on: SessionHandlers, inner: number)
   return rows
 }
 
+/** `3h` as `3h ago`; '' when the time is unknown. */
+const agoOf = (seconds: number, now: number): string => (seconds <= 0 ? '' : ageLabel(new Date(seconds * 1000).toISOString(), now))
+
+function historyRow(k: Kit, r: HistoryRow, now: number, inner: number, label: string): RenderNode {
+  const { t } = k
+  const ago = agoOf(r.at, now)
+  const meta = [ago === '' ? '' : `${ago} ago`, r.wrote ? 'worked on' : 'read only'].filter(Boolean).join(' · ')
+  return labelRow(
+    k,
+    label,
+    [
+      badgeSeg(k, statusBadgeWord(r.status)),
+      { text: '  ', color: t.fg.default },
+      { text: r.id, color: t.fg.bold, bold: true },
+      { text: ` · ${meta}`, color: t.fg.subtle },
+      ...(r.title === '' ? [] : [{ text: `  ${oneLine(r.title)}`, color: r.wrote ? t.fg.default : t.fg.subtle }]),
+    ],
+    inner,
+  )
+}
+
+/** HISTORY: every task this session touched, newest first, a page at a time (the current one is the TASK above). */
+function historySection(k: Kit, v: SessionView, inner: number): RenderNode[] {
+  const { t } = k
+  const hv = v.history
+  if (hv === undefined) return []
+  if (hv.rows.length === 0) {
+    const word = hv.state === 'loading' ? 'loading history…' : hv.state === 'failed' ? hv.error : 'No task touched by this session yet'
+    return [labelRow(k, 'HISTORY', [{ text: oneLine(word), color: t.fg.subtle }], inner)]
+  }
+  const worked = hv.rows.filter(r => r.wrote).length
+  const head = `${hv.rows.length} ${hv.rows.length === 1 ? 'task' : 'tasks'} · ${worked} worked on${hv.state === 'loading' ? ' · loading history…' : ''}${hv.state === 'failed' ? ` · ${hv.error}` : ''}`
+  const shown = hv.rows.slice(hv.page * HISTORY_PAGE_SIZE, (hv.page + 1) * HISTORY_PAGE_SIZE)
+  return [labelRow(k, 'HISTORY', [{ text: head, color: t.fg.subtle }], inner), ...shown.map(r => historyRow(k, r, v.now, inner, ''))]
+}
+
+/** The handovers this session wrote besides the latest one: each id opens in the handovers pane, then its tldr and next. */
+function otherHandovers(k: Kit, v: SessionView, on: SessionHandlers, inner: number): RenderNode[] {
+  const { t } = k
+  const { Box, Text } = k.ui
+  const hv = v.history
+  if (hv === undefined || hv.others.length === 0) return []
+  const rows: RenderNode[] = [
+    labelRow(k, '', [{ text: `this session ${v.handover === null ? '' : 'also '}wrote ${hv.others.length}`, color: t.signatureText }], inner),
+  ]
+  for (const ho of hv.others.slice(0, HANDOVER_ROWS)) {
+    const ago = agoOf(ho.at, v.now)
+    const id = oneLine(ho.id).slice(0, Math.max(8, inner - CONTENT_COL - 12))
+    const link = linkPiece(k, { id: `session-ho-${ho.id}`, text: id, color: t.fg.bold, onPress: () => on.openHandover(ho.id) })
+    rows.push(
+      <Box flexDirection="row">
+        <Text color={t.fg.subtle}>{`  ${''.padEnd(CONTENT_COL - 2)}`}</Text>
+        {link.el}
+        <Text color={t.fg.subtle}>{ago === '' ? '' : ` · ${ago} ago`}</Text>
+      </Box>,
+    )
+    if (ho.tldr !== '') rows.push(labelRow(k, '', [{ text: oneLine(ho.tldr), color: t.fg.default }], inner))
+    if (ho.next !== '') rows.push(labelRow(k, '', fieldSegs(k, 'next', oneLine(ho.next)), inner))
+  }
+  if (hv.others.length > HANDOVER_ROWS) rows.push(labelRow(k, '', [{ text: `${hv.others.length - HANDOVER_ROWS} more in the handovers pane`, color: t.fg.disabled }], inner))
+  return rows
+}
+
 function handoverSection(k: Kit, v: SessionView, on: SessionHandlers, inner: number): RenderNode[] {
   const { t } = k
   const room = inner - CONTENT_COL
   const ho = v.handover
-  if (ho === null) return [labelRow(k, 'HANDOVER', [{ text: 'No handover for this session yet', color: t.fg.disabled }], inner)]
+  if (ho === null) {
+    const others = otherHandovers(k, v, on, inner)
+    return [labelRow(k, 'HANDOVER', [{ text: others.length > 0 ? 'No current handover' : 'No handover for this session yet', color: t.fg.disabled }], inner), ...others]
+  }
   const age = ageLabel(ho.created, v.now)
   const rows: RenderNode[] = [
     labelRow(
@@ -186,6 +259,7 @@ function handoverSection(k: Kit, v: SessionView, on: SessionHandlers, inner: num
       ),
     ),
   )
+  rows.push(...otherHandovers(k, v, on, inner))
   if (v.summaryOpen) {
     const sum = v.summary
     if (sum === undefined) rows.push(labelRow(k, '', [{ text: 'loading decisions and blockers…', color: t.fg.subtle }], inner))
@@ -227,7 +301,7 @@ function healthOf(v: SessionView): Health {
   return v.demo ? { kind: 'info', word: 'demo' } : { kind: 'success', word: 'tm ok' }
 }
 
-/** The Session tab (spec §15.7): the frame, `this session · <branch> · started <age> ago`, TASK / HANDOVER / SESSION, the footer. */
+/** The Session tab (spec §15.7): the frame, `this session · <branch> · started <age> ago`, TASK / HISTORY / HANDOVER / SESSION, the footer. */
 export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: number): RenderNode {
   const { t } = k
   const inner = Math.max(CONTENT_COL + 12, width - 4)
@@ -240,10 +314,27 @@ export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: 
     ],
     Math.max(12, inner - 14),
   )
-  const top = paneToolbar(k, { left: words, right: [refreshPiece(k, { label: 'refresh', onPress: on.refresh })], width: inner })
+  const hist = v.history
+  const turn = on.turnHistory
+  const paged = hist !== undefined && hist.pages > 1 && turn !== undefined
+  const pager = paged ? [pagerPiece(k, { page: hist.page, pages: hist.pages, onTurn: page => turn(page) })] : []
+  const top = paneToolbar(k, { left: words, right: [...pager, refreshPiece(k, { label: 'refresh', onPress: on.refresh })], width: inner })
+  const pageKeys: FooterItem[] = paged
+    ? [
+        {
+          keys: 'p/n',
+          word: 'page',
+          press: [
+            { key: 'p', onPress: () => (hist.page === 0 ? k.say('Already on the first page') : turn(hist.page - 1)) },
+            { key: 'n', onPress: () => (hist.page >= hist.pages - 1 ? k.say('Already on the last page') : turn(hist.page + 1)) },
+          ],
+        },
+      ]
+    : []
   const keys = footer(
     k,
     [
+      ...pageKeys,
       { keys: 'u', word: 'refresh', press: [{ key: 'u', onPress: on.refresh }] },
       { keys: 'm', word: 'sidebar', press: [{ key: 'm', onPress: on.toggleSidebar }] },
       { keys: 'esc', word: 'close' },
@@ -257,6 +348,7 @@ export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: 
     blank(k),
     ...taskSection(k, v, on, inner),
     itemRule(k, inner),
+    ...(v.history === undefined ? [] : [...historySection(k, v, inner), itemRule(k, inner)]),
     ...handoverSection(k, v, on, inner),
     itemRule(k, inner),
     ...sessionSection(k, v, on, inner),

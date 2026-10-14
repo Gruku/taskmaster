@@ -237,6 +237,31 @@ export type TmNav = { readonly sidebar: boolean; readonly last: 'review' | 'hand
 export type TmRestorePending = { readonly epoch: number; readonly unfinished: number }
 /** This session's place in the last restore scan's burst (Stage 5 writes it): the Session tab's "part of <at> burst". */
 export type TmSessionBurst = { readonly at: string; readonly others: number }
+/** A task this session's own tm calls named: when it was last touched (epoch seconds, 0 unknown) and whether any such call wrote. */
+export type TmHistoryTask = { readonly id: string; readonly at: number; readonly wrote: boolean }
+/** A handover this session wrote, with when (epoch seconds, 0 unknown). */
+export type TmHistoryHandover = { readonly id: string; readonly path: string; readonly tldr: string; readonly next: string; readonly at: number }
+/** The current session's own transcript as scanner/scan.py `session` reports it: tasks oldest-touched first, handovers in write order. */
+export type TmSessionScan = {
+  readonly scannedAt: number
+  readonly found: boolean
+  readonly tasks: readonly TmHistoryTask[]
+  readonly handovers: readonly TmHistoryHandover[]
+}
+/**
+ * What the Session tab's HISTORY and HANDOVERS read: the last scan of this session (null before the first lands), what tm said
+ * of its tasks (null: not resolved, statuses read `?`), a scan in flight, why the last one failed ('' when it did not), when
+ * the last one ended (epoch ms, -1 never) and the history page shown.
+ */
+export type TmSessionHistory = {
+  readonly sessionId: string
+  readonly scan: TmSessionScan | null
+  readonly refs: TmRefs | null
+  readonly pending: boolean
+  readonly error: string
+  readonly finishedAt: number
+  readonly page: number
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -287,6 +312,8 @@ declare module 'claude-code' {
       nav: TmNav
       /** This session's branch and start time (null until session.start ran in this instance). */
       sessionInfo: TmSessionInfo | null
+      /** This session's own task history and handovers, scanned from its transcript when the Session tab opens or refreshes. */
+      sessionHistory: TmSessionHistory
     }
   }
 }

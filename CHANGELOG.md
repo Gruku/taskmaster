@@ -7,6 +7,14 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.3.2
+
+**The Session tab shows everything the session did.** taskmaster-mods 0.2.2.
+
+- Below the current task, a HISTORY lists every task the session touched, newest first: status, id, age, "worked on" or "read only", and title. It pages 8 at a time (`p`/`n`); `u` rescans. It is read from the session's own transcript, so a long `/goal` session shows its full history without anything having been recorded along the way.
+- The tab lists every handover the session wrote, not only the latest. The latest keeps `c` `h` `w` `i`; the others open from their id.
+- Demo mode carries sample history.
+
 ## 7.3.1
 
 **The handover guard leaves a running `/goal` alone.** taskmaster-mods 0.2.1.
