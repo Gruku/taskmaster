@@ -1,68 +1,55 @@
-# Bug — Full Entry-Point Flows
+# Bug: entry-point flows
 
 ## log-bug
 
-Trigger: explicit user request — "log a bug", "file a bug", "I found a bug", "track this defect", "this is a bug", or "log this as an issue" when no evidence is present (router falls back here).
+Trigger: the user asks to log a defect ("log a bug", "I found a bug", "track this defect", "this is a bug"), or says "issue" when no recurring or systemic evidence is present (see `bug-vs-issue.md`).
 
-1. **Auto-extract fields** from conversation:
-   - `title` — first sentence describing the defect, ≤80 chars
-   - `found_in` — active in-progress task ID if any, else null
-   - `discovered_by` — `user` (default for this entry point)
-   - `components` — infer from epic/folder; from file paths if cited
-   - `location` — `file:line` if mentioned
-   - `severity` — leave null unless user volunteers
-   - `body` — draft `## Repro` + `## Expected` skeleton from conversation
+The user asked for the Bug, so write it first and let them adjust afterwards.
 
-2. **Present the draft** — show title + found_in + components + body. Ask:
-   > "Looks good? Severity is optional (P0–P3) if you want a sort hint. Disposition: should I (a) fix it now in this task, (b) spawn a follow-up task, (c) shelve it for later, or (d) just leave it open?"
-
-3. **Write via `backlog_bug_create`**, then run the chosen disposition subflow (`disposition` entry point).
-
-4. **Echo**: "Bug logged: `B-NNN` — Short title. Disposition: <chosen>."
+1. Draft the fields from the conversation:
+   - `title`: the first sentence describing the defect, up to 80 characters
+   - `found_in`: the in-progress task id if there is one, else empty
+   - `discovered_by`: `user` for this entry point
+   - `components`: from the epic or folder, or from file paths if cited
+   - `location`: `file:line` if mentioned
+   - `severity`: leave empty unless the user volunteers one
+   - `body`: a `## Repro` and `## Expected` skeleton from the conversation (`../templates/bug-body.md`)
+2. Call `backlog_bug_create` with those fields.
+3. Reply in one line: `Logged B-NNN — <title>. Leave it open, fix it now, spawn a task, or shelve it?` If the user already said what they want ("shelve this for later"), apply that disposition straight away and skip the question.
 
 ## offer-on-explicit-finding
 
-AI may offer to log a Bug ONLY when a substantive finding surfaces mid-session AND the user is likely to want it tracked. Replaces the deleted `flag-from-conversation` heuristic from the old `taskmaster:issue` skill.
+Offer when the defect is outside this task's scope and the user would plausibly want it kept: a test failure in unrelated code, a second defect found while root-causing, or the user remarking that something is wrong without asking you to fix it. In-scope defects get fixed as part of the work. Unrelated ones noticed while reading get one mention and no offer. Offer once per finding, because repeat offers interrupt the user.
 
-**Permitted to offer (any one):**
-- User says "wait that's wrong" or "that shouldn't happen" without instructing AI to fix
-- A test failure exposes a defect outside the current task's scope
-- A root-cause investigation surfaces a separate defect from the one being worked on
+Offer in one inline line and wait for the answer, since the user owns what goes into their backlog:
 
-**NOT permitted to offer:**
-- AI noticed a defect within the current task's scope — just fix it inline as part of the work, mention in commit
-- AI noticed a defect during code reading that isn't relevant to the current task — mention once in chat, no offer
-- Anything previously offered and declined in this session
+> I noticed <one-line symptom>. Want me to log it as a Bug (found_in: T-XXX)?
 
-Offer pattern (inline, non-blocking, one-shot):
-> "I noticed [one-line symptom]. Want me to log it as a Bug? It would be `found_in: T-XXX`. (default: don't log)"
-
-If user confirms, run `log-bug`. If declined, do not re-offer the same finding in the same session.
+On yes, run `log-bug`. On no, drop it for the rest of the session.
 
 ## disposition
 
-Selector run at Bug creation and at task-close. Choices:
+Run at Bug creation and when a task with open Bugs is closing.
 
-| Choice | Action | Side effects |
+| Choice | Action | Bug state |
 |---|---|---|
-| **fix-now** | Apply the fix as part of the current task | status remains `open` until the commit lands; user comes back and sets `status=fixed, fix_commit=<sha>` |
-| **spawn-task** | Create a follow-up task | `backlog_add_task` returns T-XXX; set bug `adopted_into=T-XXX` then `status=adopted` |
-| **shelve** | Park for later | `status=shelved`; surfaces in start-session "shelved bugs to revisit" |
-| **promote** | Cleared the Issue bar | Walk evidence citation; call `backlog_bug_promote(bug_ids=[B-XXX], evidence_text=...)`; bug → `promoted` |
+| fix-now | Fix it as part of the current task. After the fix commit lands, set `fix_commit=<sha>`, then `status=fixed`. | `open` until the commit exists |
+| spawn-task | `backlog_add_task` returns `T-XXX`. Set `adopted_into=T-XXX`, then `status=adopted`. | `adopted` |
+| shelve | `status=shelved`. | `shelved` |
+| promote | The Bug clears the Issue bar. Collect the evidence citation, then call `backlog_bug_promote(bug_ids=["B-XXX"], title=..., severity=..., evidence_text=...)`. | `promoted` |
 
 ## update-status
 
-Trigger: `mark B-XXX fixed`, `shelve B-XXX`, `promote B-XXX`, `close B-XXX`, `fixed B-XXX in commit`.
+Trigger: "mark B-XXX fixed", "shelve B-XXX", "promote B-XXX", "close B-XXX", "fixed B-XXX in commit".
 
-1. Identify Bug ID from user message or ask: "Which bug? (B-NNN)"
-2. Confirm target status + required fields per state machine.
-3. `backlog_bug_update` takes one `field`/`value` per call. Set the companion field first, then the status: e.g. `backlog_bug_update(bug_id, "fix_commit", "<sha>")` then `backlog_bug_update(bug_id, "status", "fixed")` (likewise `adopted_into`→`adopted`, `promoted_to`→`promoted`). Validation reads the merged on-disk state, so the two-call order satisfies the lifecycle constraint.
+1. Take the Bug id from the user's message, or ask "Which bug? (B-NNN)".
+2. Check the target status's required field against the state machine in `../playbook.md`.
+3. `backlog_bug_update` takes one `field`/`value` per call. Set the companion field first, then the status, for example `backlog_bug_update(bug_id, "fix_commit", "<sha>")` then `backlog_bug_update(bug_id, "status", "fixed")`. The same pattern applies to `adopted_into` → `adopted` and `promoted_to` → `promoted`.
 
 ## triage-review
 
-Trigger: `list open bugs`, `what bugs are open`, `triage bugs`, `show me shelved bugs`.
+Trigger: "list open bugs", "triage bugs", "show me shelved bugs".
 
-1. `backlog_bug_list(status="open")` and `backlog_bug_list(status="shelved")` — show two grouped sections.
-2. For each open Bug attached to a not-yet-done task, mark it as gating that task.
-3. Offer actions: pick a disposition for any item.
-4. If start-session: surface the shelved list as "Pick anything back up?" with one-click adopt/promote options.
+1. `backlog_bug_list(status="open")` and `backlog_bug_list(status="shelved")`; show two grouped sections.
+2. For each open Bug attached to a task that isn't done yet, mark it as gating that task.
+3. Offer to adopt or promote any of them, and apply the disposition the user picks.

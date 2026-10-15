@@ -1,11 +1,11 @@
 ---
 name: add-idea
-description: "Log a lightweight idea into .taskmaster/ideas/. Triggers: '/add-idea', 'save this as an idea', 'remember this idea', 'log this idea', or something worth keeping, not yet a task. Only way - not backlog_idea_create directly."
+description: "Record an idea, parking-lot item or future-work thought in the backlog without turning it into a task. Use for '/add-idea', 'save this as an idea', 'remember this idea', 'log this idea', 'park this for later'. Defects go to taskmaster:bug; work the user wants scheduled becomes a task."
 ---
 
 # Add Idea
 
 Follow the playbook at `../../playbooks/add-idea/playbook.md` (relative to
-this skill's base directory). Read it in full and execute it exactly.
-`references/` and `templates/` paths inside the playbook resolve relative
-to the playbook's own directory.
+this skill's base directory); it holds the tool calls, store rules and
+user checkpoints for this workflow. `references/` and `templates/` paths
+inside it resolve relative to the playbook's own directory.

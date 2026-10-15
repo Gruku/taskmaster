@@ -1,63 +1,22 @@
 # Add Idea
 
-A lightweight place to record thoughts, parking-lot items, half-baked observations, and "future work" ideas without spawning a task and adding noise to the backlog.
+Ideas are a parking lot: thoughts, half-formed observations and future work that shouldn't become tasks yet. Keep friction low, because the user asked to save something, not to start a conversation about it.
 
-## When to invoke
+## Logging an idea
 
-- User typed `/add-idea ...` (slash form)
-- User said: "save this as an idea", "remember this idea", "log this idea", "let's note this", "park this for later"
-- User described an idea explicitly: "I want to try X", "we should explore Y", "future work: Z"
-- You auto-detected a sharp idea mid-conversation per the heuristics in `taskmaster:start-session` (path C — confidence-threshold auto-log)
+Take the title from the first sentence or clause (about 60 characters at most) and use the user's full text, minus flags, as the body. Don't expand or edit it. The slash form `/add-idea <text> [--tags a,b] [--status s] [--related-task T-1] [--related-issue ISS-1]` follows the parse rules in `references/slash-form.md`; "save this as an idea: <text>" is the same call without flags.
 
-## Slash form
+Before creating, check for an existing idea on the same subject with `backlog_search(query, kinds=["idea"])`. If one exists, tell the user and offer to update it with `backlog_idea_update(idea_id, field, value)` instead of making a duplicate.
 
-```
-/add-idea Per-task spike budgets — track effort vs estimate to flag scope drift early
-/add-idea Auto-tag from git diff --tags automation,perf --status exploring --related-task v3-release-007
-```
+Then call `backlog_idea_create(title, body, tags, status, related_tasks, related_issues, created_by="user")` without asking for confirmation (`status` defaults to `candidate`; see `references/slash-form.md`), and reply in one line: _Logged as IDEA-NNN — "<title>"_.
 
-Optional flags (`--tags`, `--status`, `--related-task`, `--related-issue`) and full parse rules in `references/slash-form.md`.
+## Ideas you notice yourself
 
-## Natural-language form
+When you spot an idea worth keeping mid-conversation, don't interrupt the user's flow:
 
-The user can also say "save this as an idea: <text>" — treat it the same as a slash call. The full `<text>` becomes the body. Derive the **title** from the first sentence/clause of `<text>` (truncate to ~60 chars if it runs long); the same `<text>` (verbatim) is the body. Pass the derived title to the required `title` parameter of `backlog_idea_create`.
+- A fuzzy or ambient idea goes into an inline `<idea-candidate title="...">text</idea-candidate>` tag in your reply (optional attributes: `tags`, `status`, `related-task`, `related-issue`). end-session sweeps these tags into ideas, so nothing is lost.
+- A concrete idea is created right away with `backlog_idea_create(..., created_by="Claude")` and announced with the same one-line reply.
 
-## Procedure
+## Store facts
 
-1. **Parse the input.** Title is the first sentence/clause if not separately specified. Body is the full text. Pull any optional flags out of the input.
-2. **Search for duplicates.** Call `backlog_idea_list(limit=20)` and check the returned summaries for an existing idea covering the same ground. If you find one, don't create a duplicate — tell the user and offer to update the existing idea via `backlog_idea_update` (field/value) instead.
-3. **Commit.** Call:
-   ```
-   backlog_idea_create(
-       title="<derived or given>",
-       body="<full text minus flags>",
-       tags=[...],
-       status="<freeform>",
-       related_tasks=[...],
-       related_issues=[...],
-       created_by="user",   # this skill is user-initiated
-   )
-   ```
-4. **Announce.** Reply with the format:
-   > _Logged as IDEA-NNN — "<title>"_
-
-   Optionally include the file path. Do NOT also include a long summary — the announcement is one line.
-
-## Auto-log path (agent-initiated)
-
-This skill governs **user-initiated** idea logging. For agent-initiated auto-log — when you detect a sharp idea mid-conversation per the heuristics in the start-session playbook (`../start-session/playbook.md`) — call `backlog_idea_create` directly with `created_by="Claude"` instead of invoking this skill. Then announce inline:
-
-> _Logged as IDEA-NNN — "<title>"_
-
-Both paths go through the same MCP tool. The frontmatter `description` "only correct way to write an idea" applies to user-initiated writes; the auto-log direct call is the agent-driven complement, not a violation.
-
-## Template
-
-For ideas where the user gives only a one-liner title with no body, you may optionally use `templates/idea-body.md` as a starting structure. Do not force it — freeform is fine.
-
-## What NOT to do
-
-- Don't ask the user to confirm before logging — log it, announce, move on. The whole point is low friction.
-- Don't make ideas into tasks. If the user wants a task, they'll ask.
-- Don't add detail beyond what the user said. The body is freeform; resist the urge to expand it.
-- Don't link `promoted_to`. That field is set when an idea is promoted to a task (via `backlog_idea_update(idea_id, "promoted_to", "T-XYZ")`), not at creation.
+`promoted_to` is set only when an idea becomes a task (`backlog_idea_update(idea_id, "promoted_to", "T-NNN")`), never at creation. For a bare one-line idea, `templates/idea-body.md` is an optional starting structure.

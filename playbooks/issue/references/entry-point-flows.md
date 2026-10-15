@@ -1,143 +1,84 @@
-# Issue — Full Entry-Point Flows
-
-This file contains the full per-entry-point subflow prose. The SKILL.md body carries
-only the entry-point names and a condensed decision tree.
+# Issue: entry-point flows
 
 ## log-issue
 
-Explicit user request: `log an issue`, `file an issue`, `this is an issue`.
+Trigger: "log an issue", "file an issue", "this is an issue".
 
-1. **Walk the bar** — does the description cite recurring / systemic / outstanding? Use `references/issue-bar.md`.
-   - **No evidence** → route to `taskmaster:bug` (log-bug entry point). Use the routing-echo from `references/bug-vs-issue.md`.
-   - **Evidence present** → continue to step 2.
-
-2. **Auto-extract fields** from the conversation. Walk `references/auto-extraction.md` per-field rules:
-   - `title` — first sentence describing the bug, ≤80 chars
-   - `severity` — infer from impact language; ask if no signal
-   - `evidence` — the criterion + citation in one sentence (mandatory)
-   - `impact` — what breaks; follow up "what breaks?" if blank
-   - `components` — epic or folder; infer from file path if cited
-   - `location` — `file:line` if mentioned; leave empty otherwise
-   - `discovered_by` — `"Claude"` if found mid-session; `"user"` if user-reported
-   - `related_tasks` — in-progress task ID + any IDs the user mentioned
-   - `body` — draft `## Repro` + `## Expected` from the conversation
-
-3. **Present the draft** to the user — show all fields including the evidence sentence. Ask:
-   > "Looks good? I can adjust severity, add repro steps, change components, or link additional tasks."
-   Iterate until the user approves.
-
-4. **Write through `backlog_issue_create`**:
+1. Walk the bar (`issue-bar.md`). With no evidence, route to `taskmaster:bug` and use the routing echo in `../../bug/references/bug-vs-issue.md`.
+2. Draft the fields from the conversation, using `auto-extraction.md`: `title`, `severity`, `evidence` (the criterion plus its citation, one sentence), `impact`, `components`, `location`, `discovered_by`, `related_tasks`, `body`.
+3. Show the draft with the evidence sentence and write it once the user agrees. Severity and evidence carry weight on an Issue, so the user sees them first. When the user already supplied severity and evidence themselves, write it and show the result instead.
+4. Write it:
    ```
    backlog_issue_create(
-       title=...,
-       severity="P0"|"P1"|"P2"|"P3",
-       evidence="<criterion + citation>",
-       impact=...,
-       components=[...],
-       location=[...],
-       related_tasks=[...],
-       discovered_by="Claude"|"user",
-       body=<approved markdown body>,
+       title=..., severity="P0"|"P1"|"P2"|"P3", evidence="<criterion + citation>",
+       impact=..., components=[...], location=[...], related_tasks=[...],
+       discovered_by=..., body=<markdown body>,
    )
    ```
-
-5. **Echo back**: "Issue logged: `ISS-NNN` (P1) — Short title. Criterion: <recurring|systemic|outstanding>."
-
-6. **Offer a follow-up task** if the issue has no `related_tasks`:
-   > "Want me to add a task to investigate this? I can link `ISS-NNN` in `related_issues`."
-   On confirm, call `backlog_add_task` with `related_issues=["ISS-NNN"]`.
+5. Reply: `Logged ISS-NNN (P1) — <title>. Criterion: <recurring|systemic|outstanding>.`
+6. When the Issue has no `related_tasks`, offer a follow-up task. On yes, call `backlog_add_task` with `related_issues=["ISS-NNN"]`.
 
 ## update-status
 
-Transitioning an existing issue: open -> investigating, investigating -> fixed, open/investigating -> wontfix, open/investigating -> duplicate.
+Trigger: "mark issue fixed", "close ISS-XX", "investigating ISS-XX".
 
-Trigger: `mark issue fixed`, `close ISS-XX`, `investigating ISS-XX`, explicit status mention.
+1. Take the Issue id from the user's message, or ask "Which issue? (ISS-NNN)".
+2. Check the target status and its required field:
 
-1. **Identify the issue ID** from the user's message or ask: "Which issue? (ISS-NNN)"
-
-2. **Confirm the target status and required fields**:
-
-   | Target status | Required field | When to use |
+   | Target | Required field | Use when |
    |---|---|---|
-   | `investigating` | none | You've started root-cause analysis |
-   | `fixed` | `fixed_in_task` (task ID) | The fix is in a committed task |
-   | `wontfix` | none (add a note in body) | Triaged out — not worth fixing |
-   | `duplicate` | `duplicate_of` (ISS-NNN) | Same defect filed under another ID |
+   | `investigating` | none | root-cause analysis has started |
+   | `fixed` | `fixed_in_task` | the fix is in a committed task |
+   | `wontfix` | none (note the reason in the body) | triaged out |
+   | `duplicate` | `duplicate_of` (ISS-NNN) | same defect filed under another id |
 
-   See `references/lifecycle.md` for full state machine and `_validate_issue` rules.
-
-3. **Call `backlog_issue_update`** — one `field`/`value` per call. Set the
-   companion field first, then the status (validation reads merged on-disk state):
+3. `backlog_issue_update` takes one `field`/`value` per call. Set the companion field first, then the status:
    ```
-   backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")   # required for fixed
+   backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")
    backlog_issue_update("ISS-NNN", "status", "fixed")
-   # for duplicate: backlog_issue_update("ISS-NNN", "duplicate_of", "ISS-MMM") then status="duplicate"
    ```
-   The backend auto-fills `resolved` date when `status=fixed`. The index rebuilds automatically.
-
-4. **Echo back**: "ISS-NNN marked fixed (T-NNN)."
+   The store fills `resolved` when `status=fixed`.
+4. Reply: `ISS-NNN marked fixed (T-NNN).`
 
 ## promote-from-bug
 
-Invoked when:
-- The user says "promote B-XX to an issue" (with optional sibling bug IDs)
-- `backlog_bug_pattern_scan` surfaces a candidate group during start-session or end-of-task, AND the user confirms promotion
+Trigger: "promote B-XX to an issue" (optionally with sibling Bug ids), or a `backlog_bug_pattern_scan` group the user confirms.
 
-1. **Collect bug IDs** to promote (single or multiple from a pattern group).
-
-2. **Walk evidence citation** — ask the user (or auto-fill from the matched signature) which criterion is being met. Show the bug titles and their signatures.
-
-3. **Confirm Issue title + severity** — usually a generalization of the matched bug titles.
-
-4. **Call `backlog_bug_promote`:**
+1. Collect the Bug ids.
+2. Get the evidence citation from the user, or fill it from the matched signature and show the Bug titles beside it.
+3. Settle the Issue title (usually a generalization of the Bug titles) and severity.
+4. Call:
    ```
    backlog_bug_promote(
        bug_ids=["B-018", "B-031"],
        title="Path-resolver mismatch across v3 readers",
        severity="P1",
-       evidence_text="Recurring: B-018 (handover reader) + B-031 (idea reader). Same root cause.",
+       evidence_text="Recurring: B-018 (handover reader) + B-031 (idea reader), same root cause.",
    )
    ```
-
-5. **Echo**: "Promoted to `ISS-NNN`. Source Bugs marked promoted_to: ISS-NNN."
+5. Reply: `Promoted to ISS-NNN; source Bugs are marked promoted.`
 
 ## close-on-task-complete
 
-Auto-offered by end-session when a task being closed has one or more open `related_issues`.
+end-session raises this when a finished task has open `related_issues`. For each one, ask: "T-NNN is done. ISS-XXX (P1 — <title>) is still open. Mark it fixed, linked to T-NNN?" On yes:
 
-End-session detects this via the task's `related_issues` list. For each open issue, it surfaces:
-> "Task T-NNN is done. ISS-XXX (P1 — Short title) is still open. Mark it fixed? It would link to T-NNN."
-
-On confirm for each:
 ```
 backlog_issue_update("ISS-XXX", "fixed_in_task", "T-NNN")
 backlog_issue_update("ISS-XXX", "status", "fixed")
 ```
 
-On decline: leave the issue open, no action. The user may close it in a future session or mark it `wontfix`.
-
-Do not batch-close without per-issue confirmation — a task may only partially address a related issue.
+On no, leave the Issue open. Confirm each Issue separately, because one task may only partly address a related Issue.
 
 ## triage-review
 
-List and prioritize open issues by severity.
+Trigger: "list open issues", "triage issues".
 
-Trigger: `list open issues`, `what bugs are open`, `triage issues`.
-
-1. **Fetch the open list**: `backlog_issue_list(status="open")`
-
-2. **Summarize by severity group**:
+1. `backlog_issue_list(status="open")`.
+2. Summarize by severity, for example:
    ```
    P0 (1): ISS-003 — Crash on startup when config missing
    P1 (2): ISS-007 — Multi-tab fanout drops pending dispatch
-            ISS-012 — Orphan route silently swallows welcome dispatch
-   P2 (1): ISS-009 — Parallel tool-call orphans on Init Project
-   P3 (0):
+           ISS-012 — Orphan route silently swallows welcome dispatch
    ```
-
-3. **Surface aging issues** — call attention to any issue past its severity window's 60% mark (Aging) or 100% (Stale). See `references/issue-bar.md` for window lengths.
-
-4. **Offer actions**:
-   - Start investigating a specific issue -> `update-status` flow
-   - Add a task to fix the top-priority issue -> `backlog_add_task` with `related_issues`
-   - Close a duplicate -> `update-status` with `status=duplicate`
+3. Flag Issues past 60% of their window (aging) or 100% (stale); window lengths are in `issue-bar.md`.
+4. Offer next steps: start investigating one (`update-status`), add a fix task with `backlog_add_task(related_issues=[...])`, or close a duplicate.

@@ -1,49 +1,31 @@
 # Bug
 
-Lightweight, project-wide defect tracking in `.taskmaster/bugs/`. Bugs are the user-flagged sink — every defect the user wants tracked but that doesn't clear the Issue bar (recurring / systemic / outstanding). No aging window, no fix-by date — Bugs are a sink, not a commitment.
+Bugs are the light defect tier: anything the user wants tracked that doesn't meet the Issue bar (recurring, systemic, or outstanding P0/P1; the bar lives in `../issue/references/issue-bar.md`). They have no aging window or fix-by date. When unsure, file a Bug: promoting to an Issue later is one `backlog_bug_promote` call, and demoting has no tool.
 
-## Why this skill exists
+Write Bugs through this playbook rather than calling `backlog_bug_create` / `backlog_bug_update` cold. The playbook adds the disposition choice and keeps defects you noticed yourself from being logged without the user's say-so.
 
-The backend (`backlog_bug_create`, `backlog_bug_list`, `backlog_bug_get`, `backlog_bug_update`, `backlog_bug_archive`, `backlog_bug_pattern_scan`, `backlog_bug_promote`) is the storage layer; this skill is the authoring + lifecycle layer. Calling `backlog_bug_create` directly skips the disposition prompt and the user-confirmation gate on AI-detected findings.
+A defect you can fix in a moment inside the current task needs no Bug: fix it and mention it in the commit.
 
-This is the ONLY correct way to write or transition a project Bug — do not call `backlog_bug_create` or `backlog_bug_update` directly.
+## What to do
 
-## Five entry points
+Per-entry-point steps are in `references/entry-point-flows.md`; routing between Bug and Issue is in `references/bug-vs-issue.md`.
 
-1. **`log-bug`** — explicit user request to log
-2. **`offer-on-explicit-finding`** — AI may offer ONLY when a substantive finding surfaces and the user might want to track it; one-shot per session
-3. **`disposition`** — fix-now / spawn-task / shelve / promote selector, used at create time and at the task-close gate
-4. **`update-status`** — open ↔ shelved; transitions to adopted, promoted, fixed
-5. **`triage-review`** — list open / shelved Bugs, surface aging shelved candidates
+- **`log-bug`**: the user asks to log a defect (or says "issue" with no recurring or systemic evidence). Draft the fields from the conversation, create the Bug, and reply with the id plus a one-line disposition offer.
+- **`offer-on-explicit-finding`**: you hit a real defect outside the current task's scope. Offer once, in one line, to log it; log it only if the user agrees.
+- **`disposition`**: fix-now, spawn-task, shelve, or promote. Offered at creation and when a task with open Bugs is closing.
+- **`update-status`**: shelve, reopen, adopt, promote, or mark fixed.
+- **`triage-review`**: list open and shelved Bugs, and say which open ones are blocking a task from closing.
 
-Full per-entry-point subflows in `references/entry-point-flows.md`. Boundary with Issue in `references/bug-vs-issue.md`.
-
-## Bug-vs-Issue at a glance
-
-| Symptom | Bug | Issue |
-|---|---|---|
-| One-off cosmetic | ✅ | ❌ |
-| Single-component defect with workaround | ✅ | ❌ |
-| Recurring across ≥2 prior occurrences | ❌ | ✅ |
-| Systemic (≥2 components / class-of-defect) | ❌ | ✅ |
-| P0 with prod outage / data loss / security | ❌ | ✅ |
-| Found and fixed in 30 seconds during a task | ❌ (just fix it) | ❌ (just fix it) |
-
-When in doubt, file a Bug — promotion to Issue is one cheap step (`backlog_bug_promote`), demotion is not.
-
-## State machine
+## Store rules the tools enforce
 
 ```
-open ─► fixed     (+fix_commit; archived on parent-task close)
-     ─► adopted   (+adopted_into: T-NNN)
-     ─► promoted  (+promoted_to: ISS-NNN)
-     ─► shelved   (revisit via start-session)
-
+open ─► fixed (needs fix_commit) | adopted (needs adopted_into: T-NNN)
+     ─► promoted (needs promoted_to: ISS-NNN) | shelved
 shelved ─► open | adopted | promoted
 ```
 
-Task close-gate: a task cannot transition to `done` while any linked Bug has `status: open`.
+- `backlog_bug_update` sets one field per call. Set the companion field first, then `status`, because validation reads the stored row.
+- A task can't move to `done` while a Bug found in it is still `open`.
+- `backlog_bug_promote` needs `bug_ids`, `title`, `severity` and `evidence_text`.
 
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
+Writes: a result ending in `[seq N]` is committed; `(export pending: …)` means committed with the file export still queued; `No change … already …` without `[seq]` means the value was already stored. `backlog_store_status` shows dirty or quarantined files.
