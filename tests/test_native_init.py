@@ -294,6 +294,7 @@ def test_escape_hatch_after_a_failed_warm_up(tmp_path, monkeypatch):
     result = bs.backlog_init(project_name="p")
     assert "on the native store" in result and "coordinator did not start" in result
     assert "backlog_init(legacy_store=True)" in result and "store.db" in result
+    assert "taskmaster_cli.py coordinator stop" in result and "control_cli stop" in result
     close_owned()
     store.reset_for_tests()
     for suffix in ("", "-wal", "-shm"):
@@ -355,3 +356,64 @@ def test_concurrent_inits_write_once(tmp_path, monkeypatch):
     winner = "alpha" if "**alpha**" in winners[0] else "beta"
     assert f"project: {winner}" in (root / ".taskmaster" / "backlog.yaml").read_text(encoding="utf-8")
     assert is_native(root)
+    # Every reply matches the final state: nothing claims a legacy store for this native one.
+    assert not any("legacy store" in answer for answer in answers), answers
+
+
+def test_a_failed_activation_waits_for_a_racing_owner_before_reporting(tmp_path, monkeypatch):
+    # The losing activation fails while the winner still holds the ownership lock and has not
+    # committed yet; the reply must follow the winner's commit, not the state before it.
+    root = tmp_path / "wait"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    from taskmaster.coordinator.ownership import Ownership
+    real = fresh.activate_fresh
+
+    class Held:  # the "winner" already holds the lock for the whole activation
+        def close(self):
+            pass
+    monkeypatch.setattr(cutover, "_ownership", lambda root_: Held())
+
+    def lose_while_winner_commits(root_, backlog):
+        owner = Ownership(root_).acquire()
+
+        def winner():
+            import time
+            try:
+                time.sleep(1.0)
+                real(root_, backlog)
+            finally:
+                owner.close()
+        thread = threading.Thread(target=winner)
+        thread.start()
+        lose_while_winner_commits.thread = thread
+        raise RuntimeError("lost the race")
+    monkeypatch.setattr(fresh, "activate_fresh", lose_while_winner_commits)
+    result = bs.backlog_init(project_name="p")
+    lose_while_winner_commits.thread.join(60)
+    assert is_native(root)
+    assert "on the native store" in result and "legacy" not in result, result
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_missing_store_is_not_rebuilt_under_a_live_coordinator(tmp_path, monkeypatch, legacy):
+    from taskmaster.coordinator.ownership import Ownership
+    root = tmp_path / "owned"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    _fail_once(monkeypatch, bs, "_write_local_meta_cache")  # leaves the files, intent native, no store
+    bs.backlog_init(project_name="p")
+    assert not _database(root).exists()
+    owner = Ownership(root).acquire()
+    try:
+        point_server_at(monkeypatch, root)
+        refused = bs.backlog_init(project_name="p", legacy_store=legacy)
+        assert refused.startswith("Error:") and "coordinator still owns" in refused, refused
+        assert "control_cli stop" in refused and "taskmaster_cli.py coordinator stop" in refused
+        assert not _database(root).exists()
+    finally:
+        owner.close()
+    point_server_at(monkeypatch, root)
+    finished = bs.backlog_init(project_name="p", legacy_store=legacy)
+    assert finished.startswith("Finished initializing"), finished
+    assert is_native(root) is (not legacy)

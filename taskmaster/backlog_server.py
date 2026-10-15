@@ -3826,6 +3826,9 @@ def _activate_born_native(backlog_abs: Path) -> tuple[bool, str]:
         _write_local_meta_cache(backlog_abs, {"updated": _today()})
         fresh.activate_fresh(ROOT, backlog_abs)
     except Exception as exc:  # noqa: BLE001 -- reported; the project stays a working legacy one
+        # A racing init may be mid-activation and hold the ownership lock; its commit decides
+        # what this project is, so let it finish before reading the marker.
+        _wait_for_ownership_free(10.0)
         if fresh.state(database) != "native":
             return False, (
                 f"\nNote: started on the legacy store, because native activation failed ({exc}). "
@@ -3838,10 +3841,30 @@ def _activate_born_native(backlog_abs: Path) -> tuple[bool, str]:
     return True, (
         f"\nNote: the store is native, but its coordinator did not start yet ({failure}). The next "
         "write starts it; retry a write that reports `coordinator startup unavailable`. If writes keep "
-        "failing on this host before any has succeeded, end every session on this project, delete "
-        "`.taskmaster/local/store.db` (with its `-wal` and `-shm` files), and run "
+        f"failing on this host before any has succeeded, stop the coordinator ({_STOP_COORDINATOR}), "
+        "delete `.taskmaster/local/store.db` (with its `-wal` and `-shm` files), and run "
         "`backlog_init(legacy_store=True)`: the store holds only the scaffold, so nothing is lost."
     )
+
+
+_STOP_COORDINATOR = (
+    "`uv run <plugin>/taskmaster_cli.py coordinator stop` from the project directory; from a "
+    "source checkout, `python -m taskmaster.coordinator.control_cli stop`"
+)
+
+
+def _wait_for_ownership_free(timeout: float) -> bool:
+    """Wait up to `timeout` s for no process to hold this project's ownership lock."""
+    import time  # noqa: PLC0415
+
+    from taskmaster.coordinator.ownership import ownership_held  # noqa: PLC0415
+
+    deadline = time.monotonic() + timeout
+    while ownership_held(ROOT):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
 
 
 def _resume_init(project_name: str, legacy_store: bool) -> str | None:
@@ -3864,6 +3887,16 @@ def _resume_init(project_name: str, legacy_store: bool) -> str | None:
     current = fresh.state(database)
     if current == "native":
         return None
+    if current == "missing":
+        from taskmaster.coordinator.ownership import ownership_held  # noqa: PLC0415
+
+        if ownership_held(ROOT):
+            # A coordinator outlives sessions and may still hold the deleted store open (on
+            # POSIX its writes would go to the unlinked file); never build a store under it.
+            return (
+                "Error: a coordinator still owns this project, so the store cannot be rebuilt under it. "
+                f"Stop it ({_STOP_COORDINATOR}), then run `backlog_init` again. Nothing was written."
+            )
     if legacy_store:
         if current != "missing":
             return None  # a store exists; it is never converted back
