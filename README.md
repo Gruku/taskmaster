@@ -203,11 +203,12 @@ entity kind through the store's FTS, and `backlog_index_status` reports the
 derived tables and rebuilds them on demand (on a native store, `verify=True`
 checks the graph tables against the full oracle without changing them).
 
-### Native store (opt-in)
+### Native store
 
-7.0.0 adds a second storage mode, the **native authority**, which a project gets only when an
-operator runs the explicit cutover (`python -m taskmaster.native.cutover`). Nothing migrates
-automatically, and the legacy store above stays the default. On a native store one repository
+7.0.0 adds a second storage mode, the **native authority**. A project created by `backlog_init`
+starts on it (`backlog_init(legacy_store=True)` opts out); an existing legacy project gets it
+only when an operator runs the explicit cutover (`python -m taskmaster.native.cutover`), and
+nothing migrates automatically. On a native store one repository
 coordinator process owns all writes, files are exported after each commit, hand edits are
 imported only at an explicit sync, and `.taskmaster/` is committed with the managed Git command
 (`python -m taskmaster.coordinator.git_cli commit`). Replies can also say

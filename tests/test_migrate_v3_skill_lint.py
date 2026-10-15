@@ -57,7 +57,12 @@ def test_description_contains_trigger_phrases():
 def test_playbook_names_the_tool_and_the_confirm():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     assert "backlog_migrate_v3" in text
-    assert "backlog_status" in text
+    # The probe before the Adopt/Cancel question must be read-only: backlog_status errors on
+    # `.claude/`/root layouts and adopts a pre-store `.taskmaster/backlog.yaml`.
+    step_one = text.split("1. ", 1)[1].split("\n2. ", 1)[0]
+    assert step_one.startswith("Call `backlog_store_status`"), step_one
+    for token in ("no backlog found at", "backlog lives at", "no store yet"):
+        assert token in step_one, token
     assert "Adopt" in text and "Cancel" in text, "playbook must keep the adopt/cancel confirm"
     assert "Adopted into the store" in text and "adoption refused" in text
 

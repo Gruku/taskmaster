@@ -5,10 +5,11 @@
 
 # The native store
 
-This release adds a second storage mode, the **native authority**. A project uses it only after
-an operator runs the cutover described in the [native cutover runbook](runbooks/native-cutover.md).
-Every existing project stays on the **legacy** store (the 6.0.x SQLite store) until then, and
-this build keeps serving legacy stores as before. Nothing migrates a project automatically.
+This release adds a second storage mode, the **native authority**. A new project created by
+`backlog_init` starts on it. An existing project uses it only after an operator runs the cutover
+described in the [native cutover runbook](runbooks/native-cutover.md); every existing project
+stays on the **legacy** store (the 6.0.x SQLite store) until then, and this build keeps serving
+legacy stores as before. Nothing migrates an existing project automatically.
 
 > **Rehearse on a copy first.** Run the cutover on a disposable copy of the project before the
 > real one, and keep that copy until the real cutover is verified. After activation the only way

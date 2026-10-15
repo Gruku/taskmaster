@@ -2674,7 +2674,7 @@
     },
     "backlog_init": {
       "category": "maintenance",
-      "documentation": "Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.\n\nArgs:\n    project_name: Name for the project. Defaults to the directory name.\n    location: Only \"tracked\" is accepted (files always go in `.taskmaster/`); kept for compatibility.\n    schema_version: Leave at 0, which picks the current schema. 2 and 3 are legacy schemas\n              kept for migration tooling.",
+      "documentation": "Initialize taskmaster in the current project on the native store.\n\nCreates `.taskmaster/` with `taskmaster.json`, `backlog.yaml` and the `tasks/`, `areas/`,\n`handovers/` and `issues/` directories (all meant to be committed), plus the machine-local\n`.taskmaster/local/` (store.db, PROGRESS.md, caches; it carries its own .gitignore). The\nstore is created as a native authority, so every later call is served natively. Refuses\nwhen the project already has a backlog or a store.\n\nArgs:\n    project_name: Name for the project. Defaults to the directory name.\n    location: Only \"tracked\" is accepted (files always go in `.taskmaster/`); kept for compatibility.\n    schema_version: Leave at 0, which picks the current schema. 2 and 3 are legacy schemas\n              kept for migration tooling; they write files only and never a native store.\n    legacy_store: True opts out of the native store and creates the legacy SQLite store\n              instead, for a host that cannot run the native coordinator service. It can\n              be cut over to native later.",
       "parameters": [
         {
           "default_expression": "''",
@@ -2699,6 +2699,14 @@
           "name": "schema_version",
           "required": false,
           "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "legacy_store",
+          "required": false,
+          "type": "bool"
         }
       ],
       "returns": "str",

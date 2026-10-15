@@ -84,6 +84,19 @@ def test_playbook_says_what_to_commit_and_leaves_commit_to_user():
     assert "user's call" in text
 
 
+def test_playbook_describes_the_native_store_init_creates():
+    # backlog_init creates a native store; its files are committed with managed Git, and the
+    # legacy store is an explicit opt-out or a reported fallback.
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "native store" in text and "backlog_sync()" in text
+    assert "legacy_store=true" in text and "`Note:`" in text
+    assert "managed Git command" in text and "../end-session/references/edge-cases.md" in text
+    assert (PLAYBOOK_DIR.parent / "end-session" / "references" / "edge-cases.md").exists()
+    # The managed commit carries only projection files; the config needs plain Git.
+    assert "`taskmaster.json`, which it leaves out, with plain Git" in text
+    assert "overwritten or quarantined" not in text, "legacy-store wording for hand edits"
+
+
 def test_analysis_mode_names_verified_call_signatures():
     text = (PLAYBOOK_DIR / "references" / "analysis-mode.md").read_text(encoding="utf-8")
     for call in ("backlog_area_create(area_id, name)", "backlog_add_epic(epic_id, name, done_when",
