@@ -1,49 +1,37 @@
-# End-Session — Summary Modes and Status Decision
+# End-Session: summary mode, status and related issues
 
-## Step 0: Determine Summary Mode
+Read this when filling the close summary (playbook Close steps 2-3) and after `backlog_complete_task` succeeds (step 5).
 
-Check the session weight:
+## Summary mode
 
-- Count commits this session and files changed.
-- If the session was **light** (1-2 commits, single-topic work, or user says "quick wrap"):
-  - Use **auto-summary mode**: skip the structured Done/Decisions/Issues template.
-  - Generate a one-line summary from git: `git diff --stat HEAD~N` and commit messages.
-  - Call `backlog_complete_task` with `auto_summary=true` and pass the git stats as the `done` field.
-  - Format: "Files changed: N | +X -Y\nCommits: \"msg1\", \"msg2\""
-- If the session was **substantial** (3+ commits, multiple topics, design decisions made):
-  - Use **structured mode** (the existing steps 1-9 flow).
-- The user can always override: "give me the full summary" forces structured mode.
+Judge the session's weight from the commits made and files changed:
 
-## Step 2: Draft Patchnote
+- **Light** (1-2 commits, single-topic work, or the user says "quick wrap"): pass `auto_summary=true` to `backlog_complete_task` and the git stats as `done`, taken from `git diff --stat HEAD~N` and the commit messages. Format: "Files changed: N | +X -Y" then a line of the commit messages.
+- **Substantial** (3+ commits, multiple topics, design decisions made): fill `done`, `decisions`, `issues` and `tasks_touched` yourself.
+- "Give me the full summary" from the user forces the substantial form.
 
-If the task has meaningful user impact (new feature, visible UX change, fixed bug a user would notice), draft a 1-2 sentence patchnote in the user's voice. Skip for internal/infra/cleanup/refactor tasks (leave blank).
+## Patchnote and release
 
-Examples:
-- "Interactive clarification overlay - multi-question queue with option chips and a single SUBMIT ALL action."
-- "Release-notes pipeline now aggregates patchnotes per release bucket."
-- (skip) Refactor of _load() helper, CI config tweak, dependency bump.
+When the task has user impact (a new feature, a visible UX change, a fixed bug a user would notice), draft a 1-2 sentence `patchnote` in the user's voice. Leave it blank for internal, infra, cleanup and refactor tasks.
 
-Also pick a **release bucket** (pre-alpha, alpha-1.0, ...) if the project uses them - ask the user if unclear.
+- "Interactive clarification overlay - multi-question queue with option chips and a single SUBMIT ALL action." (patchnote)
+- A refactor of a helper, a CI tweak, a dependency bump: no patchnote.
 
-## Step 4: Target Status Decision Rules
+Pass a `release` bucket (pre-alpha, alpha-1.0, ...) if the project uses them; when it is unclear which, ask.
 
-**Default:** silently target `done` — Claude finished and the lane's gates passed. Nothing to ask.
+## Target status
 
-**Target `in-review` ONLY when a human-only action blocks the task** — something Claude cannot do itself: add an API key, set LLM config, grant account access, a physical-world step. Pass it as `human_action` (short imperative: "add OPENAI_API_KEY to .env"). `backlog_complete_task` rejects in-review without it.
+Default `done`: the work is finished and the lane's gates passed, so there is nothing to ask. Target `in-review` only when a human-only action blocks the task: add an API key, set LLM config, grant account access, a physical-world step. Pass it as `human_action` (a short imperative: "add OPENAI_API_KEY to .env"); `backlog_complete_task` rejects in-review without one. "The user should look at this" is not in-review, because done work gets reviewed off the board and the user can reopen it with a one-liner.
 
-Do not target in-review for "the user should look at this" — done work gets reviewed downstream, off the board. Do not ask "is this done?" — the default already handles it; the user can reopen with a one-liner if something's wrong.
+## Related issues
 
-## v3-post-complete-1: Issue-Close-on-Task-Complete Hook
-
-After `backlog_complete_task` succeeds, check whether the just-completed task has any `related_issues`. For each issue whose current `status` is `open` or `investigating`, prompt:
+After `backlog_complete_task` succeeds, look at the task's `related_issues`. For each one whose `status` is `open` or `investigating`, ask:
 
 > "ISS-XXX is still open - close it as fixed in task_id, or leave for follow-up?"
 
 | Choice | Action |
 |---|---|
 | Close as fixed | `backlog_issue_update("ISS-XXX", "fixed_in_task", "<task_id>")` then `backlog_issue_update("ISS-XXX", "status", "fixed")` |
-| Leave for follow-up | No tool call - issue remains open |
+| Leave for follow-up | No tool call; the issue stays open |
 
-If the task has no `related_issues`, or all related issues are already fixed/closed/wont-fix, skip this sub-step silently.
-
-If multiple issues are open, prompt for each in sequence.
+The question guards a state the user owns, so it stays. With no `related_issues`, or all of them already fixed, closed or wont-fix, skip this. With several open, ask for each in turn.

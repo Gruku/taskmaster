@@ -19,7 +19,7 @@ The result names what was superseded:
 
 Exceptions, all automatic:
 
-- A handover whose status was set by hand (`backlog_handover_update_status`) is never auto-transitioned. It stays open and the result carries `- WARNING: <id> not auto-superseded — its status was set by hand; …`. **Surface that line to the user**; they can close it with `backlog_handover_update_status` or chain it with `backlog_handover_supersede`. Once it carries a `superseded_by` pointer the warning stops.
+- A handover whose status was set by hand (`backlog_handover_update_status`) is never auto-transitioned. It stays open and the result carries `- WARNING: <id> not auto-superseded — its status was set by hand; …`. surface that line to the user; they can close it with `backlog_handover_update_status` or chain it with `backlog_handover_supersede`. Once it carries a `superseded_by` pointer the warning stops.
 - A handover born closed (`auto-stage`) supersedes nothing.
 - A handover dated before an open one (backdated) does not supersede the newer one.
 
@@ -32,7 +32,7 @@ Set `supersedes = <prior_id>` only when the prior handover is **not** covered ab
 1. It is in a different thread (the line of work was renamed, or moved between a derived and a named thread), or
 2. the thread is derived and the two handovers share no task id, but this session did take over that work.
 
-The playbook's step 4 case — a `milestone` handover replacing the previous `milestone` for the same `task_ids` — is now covered automatically; passing `supersedes=` there is harmless (it is never applied twice) and additionally records `supersedes:` on the new handover.
+A `milestone` handover replacing the previous `milestone` for the same `task_ids` is covered automatically; passing `supersedes=` there is harmless (it is never applied twice) and additionally records `supersedes:` on the new handover.
 
 ## How to find the prior
 

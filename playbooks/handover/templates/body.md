@@ -1,12 +1,6 @@
-<!-- Reference decisions with [[DEC-NNN]] anywhere in the body.
-     The "Open decisions" / "Resolved this session" sections below are the
-     durable carrier — `backlog_handover_create` has no separate kwargs for
-     these; the viewer resolves cross-entity links from [[DEC-NNN]] tokens. -->
-
-<!--
-HANDOVER BODY TEMPLATE — target ~60–130 lines.
-Drop any section with no content. Never leave {placeholders}.
--->
+<!-- HANDOVER BODY TEMPLATE, target ~60-130 lines. Drop any section with no content and leave no {placeholders}.
+     Reference decisions with [[DEC-NNN]]: the "Open decisions" / "Resolved this session" sections are the durable
+     carrier (backlog_handover_create has no separate parameters for them), and the viewer resolves the links. -->
 
 ## Resume prompt
 
@@ -48,5 +42,5 @@ Drop any section with no content. Never leave {placeholders}.
 
 ## Important non-obvious things
 
-1. {Numbered gotcha, hidden invariant, environment quirk the next session WILL hit.}
+1. {Numbered gotcha, hidden invariant, environment quirk the next session will hit.}
 2. {Same.}
