@@ -11,8 +11,8 @@ your taskmaster checkout.
 This project tracks work in a `.taskmaster/` backlog (tasks, epics, bugs,
 issues, handovers, ideas) served by the `taskmaster` MCP server
 (`backlog_*` tools). Workflow discipline lives in assistant-neutral
-playbooks — when a request matches an intent below, read the playbook in
-full and execute it exactly. `references/` and `templates/` paths inside a
+playbooks — when a request matches an intent below, read and follow the
+playbook. `references/` and `templates/` paths inside a
 playbook resolve relative to the playbook's own directory.
 
 Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
@@ -20,8 +20,8 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | Intent | Playbook |
 |---|---|
 | Any task-related request you can't route precisely | `playbooks/taskmaster/playbook.md` (router) |
-| New conversation, "orient me", "show the backlog" | `playbooks/start-session/playbook.md` |
-| "Pick task X", names a task ID, "what should I work on", "continue where we left off" | `playbooks/pick-task/playbook.md` |
+| "Orient me", "what should I work on", "show the backlog" | `playbooks/start-session/playbook.md` |
+| "Pick task X", names a task ID, "continue where we left off" | `playbooks/pick-task/playbook.md` |
 | "Is this ready?", "check my work", "review gate" | `playbooks/review-gate/playbook.md` |
 | "Review this spec", "challenge this design" | `playbooks/spec-review/playbook.md` |
 | "Review this plan", "is this plan solid" | `playbooks/plan-review/playbook.md` |
@@ -30,15 +30,14 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | "Log a bug", "this is a bug", one-off defect | `playbooks/bug/playbook.md` |
 | "File an issue" with recurring/systemic evidence | `playbooks/issue/playbook.md` |
 | "Save this as an idea" | `playbooks/add-idea/playbook.md` |
-| About to present ≥2 mutually exclusive options | `playbooks/decision/playbook.md` |
+| A choice left open between options | `playbooks/decision/playbook.md` |
 | "Set up taskmaster", "initialize backlog" | `playbooks/init-taskmaster/playbook.md` |
 | "Upgrade to v3", "migrate to v3" | `playbooks/migrate-v3/playbook.md` |
-| "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `playbooks/migrate-lessons/playbook.md` |
 | "Check TODOs", "todo audit" | `playbooks/check-todos/playbook.md` |
 | "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
 | Status, search | direct `backlog_*` tool call |
 
-Each playbook is also installable as a slash prompt (`/start-session`, …) —
+Each playbook is also installable as a slash prompt (`/review-gate`, …) —
 see the adapter README.
 
 **Epics vs. areas.** Epics are finite — `backlog_add_epic` requires `done_when`
@@ -47,8 +46,17 @@ are long-lived subsystems with no status lifecycle: `backlog_area_create` /
 `backlog_area_get` / `backlog_area_list` / `backlog_area_update`. Tasks and
 epics can both carry an optional `area`.
 
+**Direct or tracked.** Make the change directly, with no playbook and no
+backlog writes, when the user asked for this specific change, it fits in one
+sitting, it has no open design decision, and it touches roughly three files or
+fewer. Everything else is tracked: find the matching task with
+`backlog_search` or add one with `backlog_add_task` (put when it is done in
+`tldr`), say which epic and id in one line, pick it, and start. If a direct
+change grows, say so in one line and continue in the tracked lane.
+
 **Gate discipline (advisory).** Codex has no enforcement hooks (that layer is
 Claude-Code-class only). Follow the discipline the playbooks describe anyway:
-pick a task before implementing, run the review-gate before declaring work
-done, record gates and merges via the `backlog_*` tools, and never mark a
-task done without a session record (end-session playbook).
+in the tracked lane, work against a picked task; run the review-gate before
+declaring tracked work done; record gates and merges via the `backlog_*`
+tools; and don't mark a task done without a session record (end-session
+playbook).
