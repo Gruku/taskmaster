@@ -30,5 +30,5 @@ Use intent to resolve, not the surface phrase.
 
 ## When Overlap Is Fine
 
-Some phrases belong to multiple skills by design. "wrap up" triggers end-session (which auto-writes a handover). "context handoff" triggers handover directly (which does NOT transition task status). These are intentional; the user's phrasing determines which dimension they care about more.
+Some phrases belong to multiple skills by design. "wrap up" triggers end-session (which auto-writes a handover). "context handoff" triggers handover directly (which doesn't transition task status). These are intentional; the user's phrasing determines which dimension they care about more.
 When in doubt: pick the skill that satisfies the most urgent user need.

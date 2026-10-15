@@ -13,7 +13,7 @@ open --(resolve N)--> resolved   (terminal)
 open --(drop reason)--> dropped  (terminal)
 ```
 
-Terminal states do **not** transition back to `open`. A "reopened" decision is a new decision — link to the prior in the body if relevant.
+Terminal states don't transition back to `open`. A "reopened" decision is a new decision — link to the prior in the body if relevant.
 
 ## Pre-resolution mutability
 

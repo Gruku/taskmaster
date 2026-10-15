@@ -2,7 +2,7 @@
 
 A decision is a choice between two or more mutually exclusive paths that is waiting on the user. Recording it as a DEC entity means it survives context loss and shows on the dashboard; an option menu left in chat scrollback is gone once the context dies, and the user had to message themselves to remember open choices.
 
-Write one when a choice blocks work and may not be answered this turn, or should outlive the session. A choice the user answers right away (brainstorming options, a structured question answered in the same exchange) doesn't become a record. After writing, say `DEC-NNN written: decide on the dashboard or reply with the option number`, and don't repeat the menu in chat. Go through this playbook rather than calling `backlog_decision_create` cold, so the authoring rules below get applied.
+Ask a choice in chat as usual. Write a record when the choice is left open: the user defers it ("later", "let me think"), the work moves on without an answer, or the session is ending with it unanswered. A choice the user answers in the next message (brainstorming options, a structured question) doesn't become a record. After writing, say `DEC-NNN written: decide on the dashboard or reply with the option number`, and don't repeat the menu in chat. Go through this playbook rather than calling `backlog_decision_create` cold, so the authoring rules below get applied.
 
 ## Writing
 

@@ -26,7 +26,7 @@ When the shared worktree path is missing but the branch exists, run `git worktre
 
 ## Path B: no bundle slug, check for overlap
 
-Run this after the solo worktree exists, only in the cases the playbook names (critical or high task, overlapping todo siblings in the context answer, or the user asked to cluster).
+Run this after the solo worktree exists, only in the cases the playbook names (critical or high task, a task with `anchors` whose context answer lists other todo `siblings` in the same epic, or the user asked to cluster; `siblings` only says which tasks share the epic, and the blast-radius call below is what finds real file overlap).
 
 1. `backlog_blast_radius(<task_id>, mode="predictive", structured=True)` returns `overlapping_tasks: [{task_id, title, status, shared_paths}]`.
 2. Keep the tasks with `status == "todo"` and strong overlap: two or more shared paths, or a single shared path that is a core module (not a test fixture or config leaf).
@@ -35,7 +35,7 @@ Run this after the solo worktree exists, only in the cases the playbook names (c
    backlog_update_task(<candidate_id>, "bundle", "<slug>")
    backlog_update_task(<task_id>, "bundle", "<slug>")
    ```
-4. Announce each swept task in one line, because that line is the user's chance to veto it: `also sweeping <candidate_id> in, same files (<shared_paths summary>)`. When the user objects, clear it with `backlog_update_task(<candidate_id>, "bundle", null)`; if only the picked task remains, clear its slug too.
+4. Announce each swept task in one line, because that line is the user's chance to veto it: `also sweeping <candidate_id> in, same files (<shared_paths summary>)`. When the user objects, clear it with `backlog_update_task(<candidate_id>, "bundle", "")`; if only the picked task remains, clear its slug too.
 5. A swept task picked later carries the slug, so Path A applies.
 
 No overlapping tasks: say nothing; the solo worktree stands.

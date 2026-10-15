@@ -140,7 +140,7 @@ def test_glance_does_not_repeat_what_context_answers():
 def test_context_selects_handovers_and_issues():
     """Steps 5a/5b read the open handovers and issues from the one context call."""
     body = _body_without_frontmatter(PLAYBOOK_MD)
-    assert 'include=["handovers", "issues"]' in body
+    assert 'include=["handovers", "issues", "siblings"]' in body
 
 
 def test_blast_radius_not_in_glance_body():
