@@ -43,10 +43,52 @@ def test_description_within_word_budget():
     assert count <= 60, f"description is {count} words (budget: 60)"
 
 
-def test_playbook_states_tool_only_writes_and_probes_with_status():
+def test_playbook_states_tool_only_writes():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
-    assert "backlog_init" in text and "backlog_status" in text
-    assert "directly" in text, "playbook must say the backlog is written only through the tools"
+    assert "backlog_init" in text and "backlog_*" in text
+    assert "hand edits" in text, "playbook must say the backlog is written only through the tools"
+
+
+def test_playbook_checks_root_before_first_write():
+    # The server roots at its start directory and the first write creates the store there.
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    probe = text.index("backlog_store_status")
+    assert probe < text.index("backlog_init(project_name)")
+    for token in ("no backlog found at", "TASKMASTER_ROOT", "linked worktree", "git worktree list"):
+        assert token in text, token
+
+
+def test_playbook_routes_legacy_backlogs_to_adoption():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    for token in ("taskmaster:migrate-v3", "backlog_canonicalize_layout", "no store yet"):
+        assert token in text, token
+
+
+def test_playbook_keeps_user_checkpoints():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "Analyze project" in text and "Clean start" in text
+    assert "backlog_project_init(name)" in text
+    assert "only after the user approves" in text
+
+
+def test_playbook_names_verified_call_signatures():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    for call in ("backlog_area_create(area_id, name)", "backlog_add_epic(epic_id, name, done_when",
+                 "backlog_add_phase(phase_id, name)", "backlog_add_task(title, epic, phase"):
+        assert call in text, call
+
+
+def test_playbook_says_what_to_commit_and_leaves_commit_to_user():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert ".taskmaster/local/" in text and ".gitignore" in text
+    assert "user's call" in text
+
+
+def test_analysis_mode_names_verified_call_signatures():
+    text = (PLAYBOOK_DIR / "references" / "analysis-mode.md").read_text(encoding="utf-8")
+    for call in ("backlog_area_create(area_id, name)", "backlog_add_epic(epic_id, name, done_when",
+                 "backlog_add_phase(phase_id, name)", "backlog_add_task(title, epic, phase"):
+        assert call in text, call
 
 
 def test_references_exist():
