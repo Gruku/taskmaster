@@ -97,20 +97,8 @@ def block(reason: str, approve_file: Path) -> int:
     if check_approval(approve_file):
         return 0
     sys.stderr.write(
-        f"""⛔ merge-gate: {reason}
-
-ACTION REQUIRED: Use the AskUserQuestion tool with EXACTLY this shape:
-  question: one short sentence describing why the merge is gated
-  options (use these labels verbatim — do not rename, translate, or add more):
-    - label: "Approve"  description: "Merge anyway (approval valid for 60 s)"
-    - label: "Deny"     description: "Cancel; do not merge"
-
-After the user responds:
-  - "Approve" → rerun the ORIGINAL git merge command unchanged
-  - "Deny" or no response → do NOT run the command
-
-Run /taskmaster:review-gate to pass the gate properly.
-Do NOT create the approval file yourself.
+        f"""merge-gate blocked this merge: {reason}
+This project requires a passing review-gate at the branch tip before a tracked task branch merges. Either run the taskmaster:review-gate skill and merge once it passes, or ask the user whether to merge anyway: call AskUserQuestion with one short question saying why the merge is gated and two options labelled "Approve" (merge anyway; the approval lasts 60 s) and "Deny" (don't merge). The approval hook matches those two labels literally, so keep them as written. On Approve, rerun the same git merge command unchanged; on Deny or no answer, don't merge. The approval has to come from the user's answer, so don't write the approval file or change the task's merge-gate settings yourself.
 """
     )
     return 2

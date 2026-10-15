@@ -13,7 +13,7 @@ hook from a different directory can point the resolver at the project root.
 
 Prints one of:
     ALLOW
-    BLOCK:<task-id>: <reason>. Run /taskmaster:review-gate.
+    BLOCK:<task-id>: <reason>.
 
 The root is `taskmaster.root.resolve_root` — the same rule the server uses —
 so a merge run inside a linked worktree is judged against the main checkout's
@@ -213,15 +213,13 @@ def _verdict(task_id: str, task: dict, src: str, cwd: Path) -> str:
     rg = gates.get("review-gate") if isinstance(gates, dict) else None
     if not rg:
         return (
-            f"BLOCK:{task_id}: no review-gate has been run on this branch. "
-            "Run /taskmaster:review-gate."
+            f"BLOCK:{task_id}: no review-gate has been recorded for this branch."
         )
 
     verdict = rg.get("verdict", "")
     if verdict != "pass":
         return (
-            f"BLOCK:{task_id}: review-gate verdict is '{verdict}' (not pass). "
-            "Run /taskmaster:review-gate."
+            f"BLOCK:{task_id}: the review-gate verdict is '{verdict}', not pass."
         )
 
     # Gate passed — check freshness.
@@ -236,11 +234,9 @@ def _verdict(task_id: str, task: dict, src: str, cwd: Path) -> str:
     if gate_sha == branch_tip:
         return "ALLOW"
     return (
-        f"BLOCK:{task_id}: review-gate was run on "
-        f"{gate_sha[:12] if gate_sha else '(unknown)'} "
-        f"but branch tip is now {branch_tip[:12]}. "
-        "Run /taskmaster:review-gate to re-validate. "
-        "Set merge_gate_freshness: any to skip the SHA check."
+        f"BLOCK:{task_id}: the review-gate passed at "
+        f"{gate_sha[:12] if gate_sha else '(unknown)'}, "
+        f"but the branch tip is now {branch_tip[:12]}, so it needs re-running."
     )
 
 
