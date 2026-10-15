@@ -44,7 +44,6 @@ DEFAULT_DESC_WORDS = 60
 # Per-skill overrides for skills whose trigger phrases genuinely cannot fit in 60 words.
 DESCRIPTION_WORD_OVERRIDES: dict[str, int] = {
     "issue": 120,  # bar-tier (recurring/systemic/outstanding) explanation + triggers + bug-routing fallback
-    "bug": 70,  # U4 description: tier + eight trigger phrases + issue-wording fallback + "no skill to diagnose" boundary
 }
 
 

@@ -1,6 +1,6 @@
 ---
 name: bug
-description: "Log, update, list or close project Bugs, the light tier for one-off defects the user wants tracked. Use for 'log a bug', 'this is a bug', 'track this defect', 'I found a bug' (to record it), 'shelve this for later', 'list open bugs', 'promote B-XX', 'close B-XX', and 'issue' wording with no recurring or systemic evidence. Diagnosing or fixing a defect needs no skill."
+description: "Log, update, list or close project Bugs (one-off defects to track). Use for 'log a bug', 'this is a bug', 'track this defect', 'I found a bug', 'shelve this for later', 'list open bugs', 'promote B-XX', 'close B-XX', and 'issue' wording with no recurring or systemic evidence. Diagnosing or fixing a defect needs no skill."
 ---
 
 # Bug
