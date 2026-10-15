@@ -1,7 +1,6 @@
 # Check-TODOs — Full Scan Flow
 
-This file contains the detailed scan and cross-reference logic. The SKILL.md body carries only
-the purpose, markers to scan for, and the output format summary.
+Detailed scan and cross-reference logic behind the playbook. Init's analysis mode reuses this scan.
 
 ## Step 1: Scan for Task Files
 
@@ -73,21 +72,15 @@ Structure the output:
 - `api-002` references src/api/old-handler.ts:15 — but no TODO found there anymore
 ```
 
-Priority suggestions: FIXME/HACK/XXX -> high; TODO -> medium.
+Priority suggestions (the one mapping, reused by init's analysis mode): FIXME/HACK/XXX -> high; TODO -> medium.
 
 ## Step 6: Offer Actions
 
-After the report, offer:
-1. Create tasks for all untracked TODOs (group by area into epics)
-2. Create tasks selectively
-3. Review stale candidates
-4. Just the report — no changes
+Ask one question that covers the whole choice: create tasks for all untracked TODOs (state the phase they would go into, the active phase if there is one), create selectively, review stale candidates, or stop at the report.
 
-If creating tasks:
-- Group TODOs by directory/domain into epics
-- `backlog_add_task` with source `file:line` in notes: "Source: {file}:{line} — {original TODO comment}"
-- Ask if new tasks should be assigned to the active phase
-- Assign priorities: FIXME/HACK/XXX -> high; TODO -> medium
+When creating tasks:
+- Group TODOs by directory/domain into epics.
+- `backlog_add_task` with `notes` = "Source: {file}:{line} — {original TODO comment}" and priorities from the mapping above.
 
 ## Edge Cases
 
@@ -97,9 +90,3 @@ If creating tasks:
 - Multiple TODO.md files: find all, group results by location. Directory name hints at which epic.
 - TODO.md items that are already tasks: add "Source: TODO.md line N" in task notes for future scans.
 - Hundreds of TODOs: don't create individual tasks for everything. Group by area, create epic-level tasks like "Address TODOs in src/api/ (23 items)".
-
-## Running as a Health Check
-
-- Run at the start of a new phase to catch untracked work
-- Run before ending a session to make sure new TODOs got captured
-- Run after a big refactor to find stale task references
