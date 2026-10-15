@@ -1,55 +1,28 @@
 # Plan Review
 
-Pre-test adversarial gate for the `full` lane. The task has a written implementation plan and the goal is to challenge it before a single line of test or production code is written.
+Full-lane gate between the implementation plan and writing tests: challenge the plan before any test or production code exists. The spec was already reviewed by `taskmaster:spec-review` (the gate order per lane is stated there); code is reviewed later by `taskmaster:review-gate`.
 
-This skill does NOT review code. For post-implementation code review, use `taskmaster:review-gate`. For spec/approach review before the plan exists, use `taskmaster:spec-review`.
+Arguments: `task_id` (defaults to the task in scope); `--codex` / `--no-codex` to force the Codex pass on or off (default: critical = suggest, high = offer, else off).
 
-## Lane context
+## Review
 
-This gate sits between **PLAN** and **WRITE_TESTS** in the `full` lane:
+`backlog_get_task(task_id)`. This gate applies only to `lane: full`. On any other lane, say the gate doesn't apply (a standard-lane task has `design-review`, run by `taskmaster:spec-review`) and stop.
 
-```
-spec → spec-review → plan → plan-review → tests → impl → review-gate
-```
+Find the plan in `task.docs.plan`, then `docs/plans/`, then the task's `## Spec / Plan` section. None found: say a plan has to be written first and stop.
 
-`standard`-lane tasks skip this gate (their single design gate is `design-review`, run and recorded by `taskmaster:spec-review`). Only proceed with plan-review when `task.lane == "full"`.
+Report each check as a gate row and keep going; questions go in the closing message.
+- **Gate A, plan sanity:** goal recap, step-by-step approach, files touched, risks, rollback. Each missing item is a WARN row.
+- **Gate B, adversarial review (you):** assumptions that must hold for the plan to work; steps that will be discovered mid-implementation; ordering (does test-first expose a circular dependency?); what fails silently if a step is wrong; unexpected blast radius onto other tasks or components; steps that can't be undone without data loss. Cite plan sections or files; group Critical / Important / Minor.
+- **Gate C, Codex pass (opt-in):** same defaults and dispatch as `../spec-review/references/codex-integration.md`, aimed at what Gate B didn't flag. Tag findings `(codex)`.
 
-## Arguments
+## Verdict, record, next step
 
-- `task_id` (optional) — specific task ID; defaults to current task in scope.
-- `--codex` / `--no-codex` (optional) — force enable/skip Codex adversarial pass.
+Show the verdict first, then the rows: A PASS/WARN, B PASS/FAIL (N issues), C PASS/FAIL/SKIP.
 
-## Steps
+- `pass`: no open Critical; Important findings fixed or acknowledged. Record the honest counts either way.
+- `warn`: Important findings neither fixed nor acknowledged. The gate stays pending, so don't proceed to tests.
+- `fail`: a Critical flaw in the plan.
 
-**1. Get task details.** `backlog_get_task(task_id)`. Resolve plan path: check `task.docs.plan`, then search `docs/plans/`, `tasks/<id>.md` `## Spec / Plan` section. If no plan found: stop. Tell the user "No implementation plan found — write one first."
+Record with `backlog_record_gate(task_id, "plan-review", verdict, critical_count=<n>, important_count=<n>, codex_used=<bool>)`.
 
-**2. Gate A: Plan sanity.** Verify the plan covers: Goal recap, Implementation approach (step-by-step), Files/modules touched, Risk / open questions, Rollback / reversibility. WARN on each missing element. Do not block on warnings — ask if user wants to fill or proceed.
-
-**3. Gate B: Adversarial Plan Review (Claude).** Challenge across:
-- **Assumptions** — what must be true for this plan to work?
-- **Scope gaps** — steps missing that will be discovered mid-impl?
-- **Ordering** — will the test-first order expose circular dependencies?
-- **Failure modes** — what breaks silently if a step is wrong?
-- **Blast radius** — which other tasks/components does this plan touch unexpectedly?
-- **Reversibility** — can each step be undone without data loss?
-
-Group findings: Critical / Important / Minor. Cite specific plan sections or file names.
-
-**4. Gate C: Codex Adversarial Pass (opt-in).** Skip if Codex not detected. Dispatch focused on blind spots Gate B didn't flag. Tag findings `(codex)`.
-
-**5. Present results — lead with verdict.**
-```
-Gate A — Plan Sanity:           PASS / WARN
-Gate B — Adversarial (Claude):  PASS / FAIL (N issues)
-Gate C — Adversarial (Codex):   PASS / FAIL / SKIP
-```
-Blocking: Critical blocks; Important requires acknowledgment; Minor/WARN/Skip never block.
-
-**6. Record the review.** Call `backlog_record_gate(task_id, "plan-review", verdict=<verdict>, critical_count=<n>, important_count=<n>)`. Pass `codex_used=True` if Gate C ran.
-
-**7. Next step.** PASS/WARN: "Ready to `write-tests` for `{task_id}`." FAIL: "Revise the plan and re-run plan-review."
-
-## Related
-
-- `taskmaster:spec-review` — adversarial review of the spec/approach (runs before plan-review in full lane).
-- `taskmaster:review-gate` — post-implementation code review.
+Next: pass means write the tests. warn means address or acknowledge the findings and re-run, or skip with `backlog_skip_gate(task_id, "plan-review", reason)`. fail means revise the plan and re-run.

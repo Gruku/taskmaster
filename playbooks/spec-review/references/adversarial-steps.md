@@ -1,83 +1,54 @@
-# Spec Review — Adversarial Steps Detail
+# Spec Review: Gate Detail
 
-This file contains the full step prose for Gates A-D and post-gate recording steps.
+The axes for Gates A, B and D, and the task summary written after the gate is recorded. Verdict rules and the recording call are in the playbook.
 
-## Gate A: Spec Sanity (always runs)
+## Gate A: spec sanity
 
-Read the spec/plan. Check it covers, at minimum:
-- **Goal** — what problem this solves and why now.
-- **Approach** — the chosen design, not just "we'll add X."
-- **Scope** — what's in and what's explicitly out.
-- **Risk / open questions** — at least one.
-- **Target files or modules** — even a rough list helps blast radius.
+Read the spec. At minimum it should cover:
+- **Goal**: what problem this solves and why now.
+- **Approach**: the chosen design, not just "we'll add X".
+- **Scope**: what is in and what is explicitly out.
+- **Risk / open questions**: at least one.
+- **Target files or modules**: even a rough list helps blast radius.
 
-For each missing item: WARN, list what's missing, ask if the user wants to fill it in or proceed anyway.
+List each missing item as a WARN row. Don't stop to ask; the closing message asks whether the user wants to fill them in.
 
-## Gate B: Adversarial Design Review (Claude)
+## Gate B: adversarial design review
 
-Read the spec and enough of the codebase to ground the critique. Challenge the design across these axes — be specific, cite files/lines:
+Read the spec and enough of the codebase to ground the critique. Be specific and cite files and lines.
 
-- **Assumptions** — what does this spec assume that may not hold? (existing data shape, API contracts, user behavior, performance budget)
-- **Scope creep / scope gaps** — does the spec do too much? Too little? Are there obvious sibling cases excluded?
-- **Alternative approaches** — is there a simpler / smaller / safer way? Name one or two and say why the spec's approach is or isn't preferable.
-- **Failure modes** — where will this break first under load, partial failure, concurrent writes, malformed input?
-- **Reversibility** — if this ships and is wrong, how hard is it to undo?
-- **Dependencies & coupling** — does this entangle modules that should stay separate?
+- **Assumptions**: what does the spec assume that may not hold (data shape, API contracts, user behavior, performance budget)?
+- **Scope creep / gaps**: does it do too much or too little? Are obvious sibling cases excluded?
+- **Alternative approaches**: is there a simpler, smaller or safer way? Name one or two and say why the spec's approach is or isn't better.
+- **Failure modes**: where does it break first under load, partial failure, concurrent writes, malformed input?
+- **Reversibility**: if it ships and is wrong, how hard is it to undo?
+- **Dependencies and coupling**: does it entangle modules that should stay separate?
 
-Group findings by severity:
-- **Critical** — design has a fundamental flaw; should not proceed without rework.
-- **Important** — should be addressed in spec before implementation, may proceed with explicit acknowledgment.
-- **Minor** — worth considering, not blocking.
+Severity:
+- **Critical**: a fundamental design flaw; don't proceed without rework.
+- **Important**: address in the spec before implementing, or proceed with explicit acknowledgment.
+- **Minor**: worth considering, not blocking.
 
-## Gate D: Predicted Blast Radius
+## Gate D: predicted blast radius
 
-Call `backlog_blast_radius(task_id, mode="predictive")`. Interpret the result:
-- Modules and subsystems likely affected.
-- Overlapping in-progress tasks — call out conflicts loudly: "task X is in-progress in the same area."
-- Existing features that may need updating.
-- 2-4 specific suggested follow-ups or additional tasks the spec implies but doesn't cover.
+`backlog_blast_radius(task_id, mode="predictive")`. Read the result for:
+- modules and subsystems likely affected;
+- overlapping in-progress tasks, which go at the top: "task X is in-progress in the same area";
+- existing features that may need updating;
+- 2-4 follow-ups or extra tasks the spec implies but doesn't cover.
 
-Verdict (advisory only — never blocks):
-- **PASS** — low fan-out, no overlaps, well-contained.
-- **WARN** — moderate fan-out, or shared modules.
-- **WARN (loud)** — overlapping in-progress task on the same files.
+Advisory verdict, never blocking: PASS (low fan-out, no overlap), WARN (moderate fan-out or shared modules), WARN with the overlap called out (an in-progress task on the same files).
 
-## Step 7: Record the Review
+## Task summary
 
-Save a record on the task so it's visible to `pick-task`, `review-gate`, and the dashboard. Use the lane-resolved gate name: `spec-review` for `full`-lane tasks, `design-review` for `standard`-lane tasks. Express/laneless tasks record nothing.
+After `backlog_record_gate`, leave a short trace on the task so `pick-task` and the dashboard show the review. The spec stays in its own doc; don't copy it into the task. Task `notes` are replaced whole by `backlog_update_task`, so read first: `backlog_get_task(task_id, sections=["notes"])`, append this block to what is there, and write it back with `backlog_update_task(task_id, "notes", <existing notes + block>)`.
 
 ```
-backlog_record_gate(
-  task_id,
-  gate="spec-review" | "design-review",
-  verdict="pass" | "warn" | "fail",
-  spec_path="<path that was reviewed>",
-  codex_used=true | false,
-  critical_count=N,
-  important_count=N,
-)
+### Spec Review
+- Verdict: pass | warn | fail
+- Date: YYYY-MM-DD
+- Spec: <path>
+- Findings: critical=N, important=N (codex: yes|no)
 ```
 
-Verdict semantics (server-enforced): only `pass` — or an explicit `backlog_skip_gate` — satisfies the gate. A `warn` verdict is recorded but leaves the gate pending: later verdict gates cannot be recorded past it and the task cannot reach `done`. A `fail` marks the pipeline `blocked@<gate>`.
-
-`backlog_set_spec_review` remains as a thin alias but hardcodes the `spec-review` gate — never use it for standard-lane tasks.
-
-If the spec is revised later, re-running the review overwrites the record automatically. To explicitly invalidate a prior review, call `backlog_clear_gate(task_id, gate)` (`backlog_clear_spec_review` is the spec-review-only legacy alias).
-
-## Step 7a: Persist Spec into Task Body (v3 only)
-
-If `backlog_status` shows `schema_version >= 3`:
-
-- Read the spec content (the file at `spec_path`, or inline plan if no external file).
-- Read the current task body via the per-task file (`tasks/<task_id>.md`).
-- Update the body's `## Spec / Plan` section with the spec content, then append a `### Spec Review` block:
-  ```
-  ### Spec Review
-  - Verdict: pass | warn | fail
-  - Date: YYYY-MM-DD
-  - Source: spec at <path>
-  - Findings: critical=N, important=N (codex: yes|no)
-  ```
-- Write the updated body back via `backlog_update_task(task_id, body=<new body>)`.
-
-This makes the spec discoverable from the task body in `pick-task` — no need to chase a separate `docs.spec` file. On v2 backlogs: skip this step entirely.
+Skip this on the express lane, where nothing is recorded.

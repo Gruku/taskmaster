@@ -1,11 +1,11 @@
 ---
 name: spec-review
-description: "Pre-implementation design review of a task's spec. Triggers: 'review this spec', 'challenge this design', 'is this the right approach?', 'spec review', 'design review'. Records the spec-review (full) or design-review (standard) gate. Code review uses taskmaster:review-gate."
+description: "Pre-implementation adversarial review of a backlog task's spec or design; records the spec-review (full lane) or design-review (standard lane) gate. Use for 'review this spec', 'spec review', 'design review', 'challenge this design', 'is this the right approach?' about a tracked task. Plans go to taskmaster:plan-review, finished code to taskmaster:review-gate."
 ---
 
 # Spec Review
 
 Follow the playbook at `../../playbooks/spec-review/playbook.md` (relative to
-this skill's base directory). Read it in full and execute it exactly.
-`references/` paths inside the playbook resolve relative to the playbook's
-own directory.
+this skill's base directory); it holds the tool calls, store rules and
+user checkpoints for this workflow. `references/` and `templates/` paths
+inside it resolve relative to the playbook's own directory.

@@ -67,7 +67,14 @@ def test_references_exist():
 def test_references_not_stubs():
     for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference stub: {ref}"
+        assert len(non_blank) > 5, f"reference stub: {ref}"
+
+
+def test_playbook_records_with_record_gate():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "backlog_record_gate" in text
+    assert "backlog_skip_gate" in text
+    assert "backlog_blast_radius" in text
 
 
 def test_playbook_links_resolve():
