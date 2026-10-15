@@ -46,5 +46,11 @@ def test_body_documents_three_lifecycle_states():
 
 def test_references_exist():
     assert (PLAYBOOK_DIR / "references" / "lifecycle.md").exists()
-    assert (PLAYBOOK_DIR / "references" / "auto-resolution.md").exists()
+    assert not (PLAYBOOK_DIR / "references" / "auto-resolution.md").exists()
+
+
+def test_playbook_names_the_decision_calls():
+    body = PLAYBOOK.read_text(encoding="utf-8")
+    for token in ("backlog_decision_create", 'action="resolve"', 'action="drop"', "resolved_with"):
+        assert token in body, f"playbook missing {token}"
     assert (PLAYBOOK_DIR / "templates" / "decision-body.md").exists()

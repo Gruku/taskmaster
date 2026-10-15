@@ -1,42 +1,20 @@
-# Init Taskmaster -- Analysis Mode Detail
+# Init Taskmaster: analysis mode
 
-## Step 3b: Analyze Project (Full Flow)
+Used when the user chose "Analyze project". The backlog is proposed first and created only after approval, so a wrong guess costs nothing.
 
-If the user chose analyze:
+1. Call `backlog_init(project_name)` to create the backlog (the playbook asks for the mode before this point).
+2. Gather existing work:
+   - Run the scan in `../check-todos/references/scan-flow.md` (task files and inline TODO/FIXME/HACK/XXX markers). Its priority mapping is the one to use here.
+   - Read README.md for a roadmap, planned features or task lists.
+   - Run `git log --oneline -20` to see where work has been active.
+3. Synthesize a proposed backlog:
+   - Group related markers into candidate areas by directory or domain; these become `backlog_area_create` calls for long-lived subsystems, not epics.
+   - Within each area, propose finite epics that carry a `done_when` (a real completion condition, not "ongoing work on X").
+   - Convert markers into tasks using scan-flow's priorities, and README roadmap items into tasks. Put the source `file:line` in each task's notes.
+4. Show the proposal as a short text summary and ask: Create it / Adjust first / Cancel (structured-question tool if you have one). On Create, use `backlog_area_create`, `backlog_add_epic` (with `done_when`), `backlog_add_task` (a phase is required) and `backlog_add_phase`.
 
-1. Call backlog_init(project_name) first to create the files.
-2. Scan for existing work items:
-   - Search for TODO, FIXME, HACK, XXX comments across the codebase using Grep
-   - Read README.md for any roadmap, planned features, or task lists
-   - Check for existing issue trackers: TODO.md, ROADMAP.md, .github/ISSUES_TEMPLATE
-   - Look at recent git log for active areas of work: git log --oneline -20
-3. Synthesize findings into a proposed backlog:
-   - Group related TODOs into candidate areas first (by directory/domain) — these become `backlog_area_create` calls for the long-lived subsystems, not epics
-   - Within each area, propose finite epics that carry a `done_when` (a real completion condition, not "ongoing work on X")
-   - Convert individual TODOs into tasks with priorities:
-     - FIXME -> high (should fix)
-     - HACK -> medium (tech debt)
-     - TODO -> medium (planned work)
-     - XXX -> high (needs attention)
-   - Extract roadmap items from README as tasks
-4. Present the proposed backlog to the user with text summary then ask for approval
-   (use your structured-question tool if available; otherwise list the options).
-   Options: Create it / Adjust first / Cancel.
-   On Create it: use backlog_area_create, backlog_add_epic (with `done_when`), backlog_add_task, backlog_add_phase. Include source file:line in task notes.
+## Edge cases
 
-## Edge Cases
-
-- Huge codebase with hundreds of TODOs: group into areas by directory/domain, then create finite epics (with `done_when`) for the top areas' near-term goals.
-- No TODOs found: proceed like a clean start.
-- Monorepo: project root should be the top-level directory. Tasks can reference sub-repos via the sub_repo field.
-
-## v3 Upgrade Later
-
-If the user picked v2 now and wants to upgrade later, they can run taskmaster:migrate-v3 at any point.
-The migration is idempotent and preserves all existing data.
-
-## Post-v3 Setup Tour
-
-If v3 was chosen, tell the user what they just unlocked:
-- Handovers -- taskmaster:handover skill captures session continuity.
-- Issues -- taskmaster:issue skill for bug tracking separate from work tasks.
+- Hundreds of markers: group into areas by directory or domain, then create finite epics for the top areas' near-term goals rather than one task per marker.
+- No markers found: proceed like a clean start.
+- Monorepo: the project root is the top-level directory; tasks can point at sub-repos with the `sub_repo` option of `backlog_add_task`.

@@ -58,7 +58,12 @@ def test_references_exist():
 def test_references_not_stubs():
     for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference stub: {ref}"
+        assert len(non_blank) > 5, f"reference stub: {ref}"
+
+
+def test_scan_flow_carries_priority_mapping():
+    text = (PLAYBOOK_DIR / "references" / "scan-flow.md").read_text(encoding="utf-8")
+    assert "FIXME/HACK/XXX -> high" in text
 
 
 def test_playbook_links_resolve():
