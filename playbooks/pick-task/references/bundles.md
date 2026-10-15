@@ -1,101 +1,46 @@
-# pick-task — Bundle Protocol
+# pick-task: bundle protocol
 
-Reference for the bundle pickup and detection-fallback logic introduced in taskmaster 3.18+.
+A bundle groups related tasks that touch heavily overlapping files into one shared worktree and branch. Instead of N `feature/<task-id>` worktrees, the members share `.worktrees/<slug>` on `feature/<slug>`, which avoids merge conflicts and split context when the implementation is tightly coupled.
 
----
+What you see of a bundle: the pick response starts `Picking bundle <slug>: <ids>`; `backlog_get_task` shows a `bundle` field with the slug; `backlog_claim(action="status", task_id=<id>)` returns the `members`.
 
-## What is a bundle?
+## Path A: the picked task already has a bundle slug
 
-A **bundle** groups related tasks that touch heavily overlapping files into a single shared worktree and branch. Instead of N separate `feature/<task-id>` worktrees, a bundle uses one `feature/<slug>` worktree for all members. This prevents merge conflicts and context fragmentation when implementation is tightly coupled.
-
-A task has a bundle when `backlog_pick_task` returns a `_session_bundle` key (or the slim task body includes a `bundle` field with a non-null slug).
-
----
-
-## Path A — Bundle pickup (bundle slug already set)
-
-When `backlog_pick_task` returns a response that includes bundle membership:
-
-1. **Do not** run `git worktree add .worktrees/<task-id>`. The backend already provisioned (or will provision) `.worktrees/<slug>` on the shared branch `feature/<slug>`.
-2. **Follow the returned `worktree_instruction` verbatim.** The backend message is the canonical source — it reflects whether the worktree already exists for a prior member or needs creating now.
-3. Announce membership in one block:
+1. Skip `git worktree add .worktrees/<task-id>`. The pick response ends with the worktree command for the shared worktree; run that, because it knows whether an earlier member already created it.
+2. Announce the membership in one block:
    ```
    Bundle: <slug> — <N> tasks sharing this worktree
      • <task-id-1>: <title-1>  ← (this task, now in-progress)
      • <task-id-2>: <title-2>  (also in-progress)
-     • <task-id-3>: <title-3>  (also in-progress)
    Worktree: .worktrees/<slug>  Branch: feature/<slug>
    ```
-4. Record branch and worktree on this task:
+3. Record branch and worktree on this task:
    ```
    backlog_update_task(<task_id>, "branch", "feature/<slug>")
    backlog_update_task(<task_id>, "worktree", ".worktrees/<slug>")
    ```
-   The backend sets all bundle members to in-progress in a single `backlog_pick_task` call — no need to call `backlog_pick_task` again for sibling tasks.
-5. Lane: if bundle members have mixed lanes, apply the strictest (full > standard > express) to the entire shared worktree session.
+   The single pick already put every member in progress; don't pick the siblings again.
+4. Members with mixed lanes: apply the strictest lane (full, then standard, then express) to the whole shared worktree session.
 
-**Orphaned shared worktree:** If the worktree path is missing but the branch exists, run `git worktree add .worktrees/<slug> feature/<slug>` (not `-b`, branch already exists). If the branch is also missing, run `git worktree add .worktrees/<slug> -b feature/<slug>` from repo root.
+When the shared worktree path is missing but the branch exists, run `git worktree add .worktrees/<slug> feature/<slug>` (no `-b`). When the branch is gone too, run `git worktree add .worktrees/<slug> -b feature/<slug>` from the repo root.
 
----
+## Path B: no bundle slug, check for overlap
 
-## Path B — Detection fallback (no bundle slug set)
+Run this after the solo worktree exists, only in the cases the playbook names (critical or high task, overlapping todo siblings in the context answer, or the user asked to cluster).
 
-When the picked task has no bundle slug, run the detection fallback **after** the solo worktree is created (Step 8 solo path complete).
-
-### B1. Run blast radius
-
-```
-backlog_blast_radius(<task_id>, mode="predictive", structured=True)
-```
-
-Returns `overlapping_tasks: [{task_id, title, status, shared_paths}]`.
-
-### B2. Filter candidates
-
-Keep tasks where:
-- `status == "todo"` (not in-progress, not done, not archived)
-- `shared_paths` overlap is **strong** — defined as ≥2 shared paths OR the single shared path is a core module (not a test fixture or config leaf)
-
-### B3. Act on authority
-
-Generate **one slug for the entire sweep** (not one per candidate): `<epic-prefix>-bundle-<NNNN>` (use the picked task's epic prefix if available, else `tm`). Apply this single slug to all filtered candidates AND the picked task.
-
-For each candidate that passes the filter:
-1. Set the bundle slug on the candidate: `backlog_update_task(<candidate_id>, "bundle", "<slug>")`.
-2. Also set it on the picked task if not already set: `backlog_update_task(<task_id>, "bundle", "<slug>")`.
-3. Announce in one line per swept task — this is the **veto window**:
+1. `backlog_blast_radius(<task_id>, mode="predictive", structured=True)` returns `overlapping_tasks: [{task_id, title, status, shared_paths}]`.
+2. Keep the tasks with `status == "todo"` and strong overlap: two or more shared paths, or a single shared path that is a core module (not a test fixture or config leaf).
+3. Generate one slug for the whole sweep, `<epic-prefix>-bundle-<NNNN>` (the picked task's epic prefix, else `tm`), and set it on every kept task and on the picked task:
    ```
-   also sweeping <candidate_id> in, same files (<shared_paths summary>)
+   backlog_update_task(<candidate_id>, "bundle", "<slug>")
+   backlog_update_task(<task_id>, "bundle", "<slug>")
    ```
-4. If the user objects ("don't include that one"), call `backlog_update_task(<candidate_id>, "bundle", null)` to clear it, and if only the picked task remains, clear its slug too.
+4. Announce each swept task in one line, because that line is the user's chance to veto it: `also sweeping <candidate_id> in, same files (<shared_paths summary>)`. When the user objects, clear it with `backlog_update_task(<candidate_id>, "bundle", null)`; if only the picked task remains, clear its slug too.
+5. A swept task picked later carries the slug, so Path A applies.
 
-**Do not ask before acting.** The announcement IS the veto window. Claude acts; user vetoes if needed.
-
-### B4. Subsequent picks of swept tasks
-
-When a swept candidate is later picked via `backlog_pick_task`, it will have the bundle slug set — Path A applies automatically.
-
----
-
-## Description-trigger mapping
-
-Bundle/cluster phrasing that routes to pick-task:
-
-| User says | Trigger | Action |
-|---|---|---|
-| "pick this bundle" | description (direct) | pick the named or most-recent bundle's first pending task |
-| "work on the bundle" | description (direct) | same — resolve bundle from context |
-| "cluster these tasks" | description (direct) | detection fallback on named tasks if IDs provided |
-| "start the cluster" | via taskmaster universal router | routes to pick-task via the router; not a direct description trigger — handled the same as "cluster these tasks" once routed |
-
----
+No overlapping tasks: say nothing; the solo worktree stands.
 
 ## Edge cases
 
-**Bundle with all members already in-progress:** `backlog_pick_task` returns the task normally; the `_session_bundle` block will still include member IDs. Announce but skip re-transitioning.
-
-**Mixed-status bundle (some done, some todo):** Only in-progress + todo members are included in the active announcement. Done/archived members are noted as "previously completed."
-
-**Bundle slug collision:** If two unrelated tasks already have the same bundle slug (should not happen, but defensive), warn: "Bundle slug <slug> already in use by <task_id>. Generating a new slug." Generate a new one with a `-2` suffix.
-
-**No overlapping tasks found in fallback:** Skip silently. Do not announce "no bundle found" — the solo worktree stands.
+- All members already in progress: the pick returns the task normally and lists the members; announce them and don't transition again.
+- A mixed-status bundle (some done, some todo): announce the in-progress and todo members, and note the done ones as previously completed.
