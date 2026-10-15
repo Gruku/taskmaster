@@ -53,7 +53,3 @@ The playbook carries the common routes. This file holds the rest, for when the p
 | Intent Signal | Route To |
 |---|---|
 | "auto this task", "autopilot", "auto-epic X" | Auto mode is gone; suggest ultracode (Workflow orchestration) |
-
-## Implementation work without a task
-
-Look for a matching task (`backlog_search`). If one fits, pick it. If none does, add one under the closest epic with `backlog_add_task`, tell the user which epic and id, and pick it. Tracking it is what lets the next session find the work.
