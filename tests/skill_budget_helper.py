@@ -21,7 +21,10 @@ SKILL_BUDGETS: dict[str, int] = {
     "migrate-v3":      1_200,
     "check-todos":     1_200,
     "add-idea":        1_200,
-    "migrate-lessons": 1_000,
+    "bug":             600,
+    "decision":        700,
+    "linear":          1_000,
+    "plan-review":     600,
 }
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
@@ -41,6 +44,7 @@ DEFAULT_DESC_WORDS = 60
 # Per-skill overrides for skills whose trigger phrases genuinely cannot fit in 60 words.
 DESCRIPTION_WORD_OVERRIDES: dict[str, int] = {
     "issue": 120,  # bar-tier (recurring/systemic/outstanding) explanation + triggers + bug-routing fallback
+    "bug": 70,  # U4 description: tier + eight trigger phrases + issue-wording fallback + "no skill to diagnose" boundary
 }
 
 
