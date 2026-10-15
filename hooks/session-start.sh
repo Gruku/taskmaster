@@ -25,9 +25,23 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-CONTEXT="Taskmaster tracks this project's tasks, bugs, issues, decisions and handovers (tm MCP tools, taskmaster:* skills).
+# Walk up from the working directory looking for a .taskmaster/ directory.
+has_taskmaster=0
+dir="$PWD"
+while :; do
+  if [ -d "$dir/.taskmaster" ]; then has_taskmaster=1; break; fi
+  parent=$(dirname "$dir")
+  [ "$parent" = "$dir" ] && break
+  dir="$parent"
+done
+
+if [ "$has_taskmaster" = 1 ]; then
+  CONTEXT="Taskmaster tracks this project's tasks, bugs, issues, decisions and handovers (tm MCP tools, taskmaster:* skills).
 A change the user asks for directly that fits in one sitting, has no open design question and touches about three files or fewer needs no backlog entry: just do it. Anything larger or multi-session, or a direct change that grows past that, goes through the taskmaster:taskmaster skill; say so in one line when you switch.
-Use taskmaster:start-session when the user asks what to work on or to be oriented, taskmaster:end-session to wrap up, taskmaster:init-taskmaster to set taskmaster up."
+Use taskmaster:start-session when the user asks what to work on or to be oriented, taskmaster:end-session to wrap up."
+else
+  CONTEXT="Taskmaster is installed but this project has no .taskmaster/ directory, so nothing is tracked here yet. Use taskmaster:init-taskmaster only when the user wants to set taskmaster up."
+fi
 if ! command -v uv &>/dev/null; then
   CONTEXT="${CONTEXT}
 The tm MCP server cannot start because \`uv\` is not installed; tell the user."

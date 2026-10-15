@@ -191,14 +191,14 @@ def main() -> int:
     # Build status message
     if failures:
         if init_exit != 0:
-            status = f"❌ SUBMODULE INIT FAILED (exit {init_exit}): {init_output}"
+            status = f"Submodule init failed (exit {init_exit}): {init_output}"
         else:
-            status = "⚠ PARTIAL FAILURE — some submodules failed validation"
+            status = "Some submodules failed validation."
         detail = (
-            f"{status}\nSucceeded:\n{results or '  (none)'}Failed:\n{failures}"
+            f"{status}\nSucceeded:\n{results or '  (none)' + chr(10)}Failed:\n{failures}"
             "Recover by running in the worktree:\n"
             "  git submodule update --init\n"
-            "  git -C <submodule> fetch <main-checkout>/<submodule>"
+            f"  git -C <submodule> fetch {main_checkout or '<main-checkout>'}/<submodule>"
         )
     else:
         status = "✓ All submodules initialized and validated"
@@ -217,7 +217,7 @@ def main() -> int:
         f"""{{
   "hookSpecificOutput": {{
     "hookEventName": "PostToolUse",
-    "additionalContext": "taskmaster initialised the submodules in worktree {wt_escaped}. {detail_escaped}\\nCommits made inside these submodules exist only in the worktree's submodule clones and are lost when the worktree is removed. Before removing or merging the worktree, fetch each submodule's commits back: git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>"
+    "additionalContext": "taskmaster ran submodule init in worktree {wt_escaped}. {detail_escaped}\\nCommits made inside these submodules exist only in the worktree's submodule clones and are lost when the worktree is removed. Before removing or merging the worktree, fetch each submodule's commits back: git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>"
   }}
 }}
 """

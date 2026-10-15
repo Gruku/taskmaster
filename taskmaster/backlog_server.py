@@ -228,7 +228,8 @@ _SERVER_INSTRUCTIONS = (
     "committed with only the file export queued; `No change … already …` without a seq means "
     "the value was already stored. On a native store the database is the authority: a hand edit "
     "to a .taskmaster/ file takes effect only after backlog_sync(). backlog_store_status shows "
-    "dirty or quarantined files."
+    "dirty or quarantined files. JSON results carry the same receipt as \"seq\" and "
+    "\"export_pending\" fields; a result starting \"Error:\" wrote nothing."
 )
 
 mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION, instructions=_SERVER_INSTRUCTIONS))
@@ -4848,7 +4849,7 @@ def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
     Args:
         name: The thread name, as shown by `backlog_thread_list()`.
         status: `open`, `parked` or `closed`.
-        reason: Optional note on why, echoed in the result.
+        reason: Optional note on why; stored with the status.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -6539,7 +6540,7 @@ def backlog_changes_since(
 
     With no arguments it returns a cursor and nothing else ("start watching from now");
     pass the cursor back to learn what moved. When a cursor can no longer be used,
-    the answer is not an error: `resync_required` is true, `reason` says which, and a
+    the answer is not an error: `resync_required` is true, `reason` says why, and a
     fresh cursor comes back. That is not a quiet period, so re-read what you care about.
 
     Authored values are never returned. Each change names the fields that moved;
@@ -6825,17 +6826,21 @@ def backlog_context(
     `clear` is true only when nothing blocks and every producer answered. One that
     could not answer (an unreadable row, a dependency id that resolves to nothing,
     no task in focus) appears as a blocker of kind `unknown`. `clear: false` means
-    something blocks or could not be checked, so resolve that before proceeding.
+    something blocks or could not be checked; don't read it as clear. Tell the user
+    what blocks before you go on. Stop only for a peer's live claim, a human action in
+    review or a failed spec review; when the user asked for this task, report the
+    other blockers and proceed.
 
     `selected` is the bounded convenience part, with a count of what was left out;
-    pass `cursor` back to continue it.
+    pass `cursor` back to continue it (no `cursor` means nothing remains).
 
     Args:
         focus: Task id. Empty takes the task this session picked, unless scope is project.
         scope: task, session or project — what the question is about.
         budget_bytes: UTF-8 bytes the whole answer may use. Only selection is trimmed.
         include: Sections to select: spec, plan, body, links, handovers, bugs,
-            issues, notes, dependencies, siblings, recent. Empty uses the scope's default.
+            issues, notes, dependencies, siblings, recent. Omitted uses the scope's default; an empty list
+            returns blockers only.
         cursor: A cursor from an earlier call, to continue its selection.
     """
     from taskmaster.native import context as context_shape
@@ -7755,6 +7760,7 @@ def backlog_add_task(
         options: Rarely-set fields as a dict: `docs` ("key:path;key:path", keys plan/spec/roadmap/design/analysis),
             `sub_repo`, `stage` (int), `estimate` (S/M/L), `anchors` (comma-separated globs/URLs),
             `task_id` (override the generated id), `area` (an existing Area id).
+            Other keys, and doc keys outside the list, are ignored.
     """
     options = options or {}
     docs = options.get("docs", "") or ""
@@ -7959,12 +7965,12 @@ def _build_worktree_instruction(
         cmd = f"git worktree add .worktrees/{key} -b {branch_name}"
 
     return (
-        f"\n\n**REQUIRED — Create a worktree before writing any code:**\n"
+        f"\n\n**Create a worktree before writing any code:**\n"
         f"```\n{cmd}\n```\n"
         f"Then record it:\n"
         f"```\nbacklog_update_task({task_id}, branch, {branch_name})\n"
         f"backlog_update_task({task_id}, worktree, .worktrees/{key})\n```\n"
-        f"All work for this task MUST happen in the worktree, not on the main branch."
+        f"Do this task's work in the worktree, not on the main branch."
     )
 
 
@@ -9104,7 +9110,9 @@ def backlog_record_gate(
         gate: One of spec|plan|tests|impl|spec-review|plan-review|design-review|review-gate.
         verdict: pass|warn|fail (for review gates).
         status: done (for status gates).
-        commit_sha: The commit the gate was run against (the merge gate compares it with the branch tip).
+        commit_sha: Full 40-character SHA of the commit the gate was run against (git rev-parse HEAD
+            in the task's worktree). The merge gate compares it exactly with the branch tip, so a
+            short SHA never matches.
         spec_path: Path of the spec or plan that was reviewed, if any.
         codex_used: True if the optional Codex adversarial pass was run.
         critical_count: Number of critical findings.
