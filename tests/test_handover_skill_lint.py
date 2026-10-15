@@ -117,7 +117,10 @@ def test_playbook_step2_points_at_reverse_lookup():
 
 def test_auto_extraction_has_reverse_lookup_source():
     text = (PLAYBOOK_DIR / "references" / "auto-extraction.md").read_text(encoding="utf-8")
-    assert "7. **Index reverse lookup**" in text and "backlog_query" in text
+    assert "Index reverse lookup" in text and "backlog_query" in text
+    # Columns must match the store schema (entity_paths has no entity_id; titles live in doc).
+    assert "entity_paths" in text and "json_extract(e.doc" in text
+    assert "e.entity_id" not in text and "p.entity_id" not in text
 
 
 def test_reverse_lookup_covers_issues_and_quote_escaping():

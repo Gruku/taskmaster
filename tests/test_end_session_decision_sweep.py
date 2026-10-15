@@ -7,8 +7,12 @@ def test_end_session_mentions_decision_sweep():
     body = PLAYBOOK.read_text(encoding="utf-8")
     # tm-audit-020: decision reads route through the action-dispatched tool.
     assert 'backlog_decision(action="list"' in body
-    assert "carry forward" in body.lower()
-    assert "drop" in body.lower()
+    low = body.lower()
+    assert "carried forward" in low or "carry forward" in low
+    ref = (PLAYBOOK.parent / "references" / "v3-pre-steps.md").read_text(encoding="utf-8").lower()
+    assert "carry forward" in ref and "drop" in ref
+    # One combined question, with carry-forward as the default for unanswered decisions.
+    assert "ask once" in ref and "carried forward" in ref
 
 
 def test_end_session_folds_decisions_into_handover_body():

@@ -10,8 +10,4 @@ Three values; pick one. The kind drives how much a resuming session loads and ho
 
 The server also accepts the older names `end-of-day`, `exploration`, `pivot`, `context-handoff` and `milestone-complete` on write and maps them to the three above; write the new names.
 
-## Choosing
-
-1. The user said "near compaction" or "save before compact": `deep-context`.
-2. A chunk shipped, direction changed, the plan switched, or "ready for next plan": `milestone`.
-3. Otherwise: `continuity`.
+Cues: "near compaction", "save before compact" or "context handoff" mean `deep-context`; a shipped chunk, a changed direction or "ready for next plan" means `milestone`; anything else is `continuity`.
