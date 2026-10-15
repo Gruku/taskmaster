@@ -25,13 +25,13 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-CONTEXT="Taskmaster active. DIRECT — user asked directly, one sitting, no design questions, ~≤3 files: do it and commit, no skill/backlog. TRACKED (everything else, or a direct change that grows — say so, then route): invoke taskmaster:taskmaster. Highest-ambiguity routes:
-
-| User Intent | Routed To |
-|-------------|-----------|
-| New conversation, 'what should I work on', 'orient me' | taskmaster:start-session |
-| 'End session', 'I'm done', 'wrap up' | taskmaster:end-session |
-| 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |"
+CONTEXT="Taskmaster tracks this project's tasks, bugs, issues, decisions and handovers (tm MCP tools, taskmaster:* skills).
+A change the user asks for directly that fits in one sitting, has no open design question and touches about three files or fewer needs no backlog entry: just do it. Anything larger or multi-session, or a direct change that grows past that, goes through the taskmaster:taskmaster skill; say so in one line when you switch.
+Use taskmaster:start-session when the user asks what to work on or to be oriented, taskmaster:end-session to wrap up, taskmaster:init-taskmaster to set taskmaster up."
+if ! command -v uv &>/dev/null; then
+  CONTEXT="${CONTEXT}
+The tm MCP server cannot start because \`uv\` is not installed; tell the user."
+fi
 
 context_escaped=$(escape_for_json "$CONTEXT")
 
