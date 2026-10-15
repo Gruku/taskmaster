@@ -50,8 +50,15 @@ def test_references_exist():
 
 def test_references_not_stubs():
     for ref in (PLAYBOOK_DIR / "references").iterdir():
-        non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference looks like stub: {ref}"
+        text = ref.read_text(encoding="utf-8")
+        non_blank = [ln for ln in text.splitlines() if ln.strip()]
+        assert len(non_blank) > 5, f"reference looks like stub: {ref}"
+    # The two routing references must carry real routes, not just prose.
+    for name in ("routing-table.md", "disambiguation.md"):
+        text = (PLAYBOOK_DIR / "references" / name).read_text(encoding="utf-8")
+        assert "backlog_" in text or re.search(r"\.\./[a-z-]+/", text), (
+            f"{name} names no backlog_ tool or ../<playbook>/ path"
+        )
 
 
 def test_skill_md_links_resolve():

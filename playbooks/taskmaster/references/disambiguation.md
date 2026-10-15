@@ -1,18 +1,18 @@
 # Taskmaster Router — Disambiguation Guide
 
-When two routes could both fire, pick correctly. This file covers the four most common
+When two routes could both fire, pick correctly. This file covers the most common
 ambiguous pairs. The test for "which one fires" is the user's stated intent, not the
 technical trigger words — multiple trigger phrases can overlap.
 Use intent to resolve, not the surface phrase.
 
 ## handover vs end-session
 
-- **end-session** is a task transition — status → done/in-review with changelog. Route there when user says "wrap up" (end-session itself offers handover write).
+- **end-session** is a task transition — status → done/in-review with changelog. Route there when user says "wrap up" (end-session auto-writes a handover).
 - **handover** is a narrative continuity artifact — can be written without ending a task. Route directly to `taskmaster:handover` when user says "context handoff" or "for tomorrow".
 
-## issue vs task
+## bug/issue record vs task
 
-- **issue** = a bug record (`taskmaster:issue`). "Track this bug."
+- **bug or issue** = a defect record (`taskmaster:bug`, `taskmaster:issue`). "Track this bug."
 - **task** = a unit of work (`backlog_add_task`). "Add a task to fix this bug."
 - Both can coexist for the same defect.
 
