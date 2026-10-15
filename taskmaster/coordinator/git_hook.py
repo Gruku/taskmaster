@@ -30,6 +30,7 @@ GUIDANCE = ('Taskmaster projections (.taskmaster/) may only be committed as one 
             '  Or leave them out: git restore --staged .taskmaster\n'
             f'  If a managed operation was interrupted: {_CLI} git status')
 _KEPT = 20
+NOT_PROJECTIONS = frozenset({'.taskmaster/taskmaster.json'})
 
 
 def _git(root, *args, stdin=None):
@@ -88,7 +89,9 @@ def check(root) -> tuple[bool, str]:
     staged = [path.decode('utf-8', 'surrogateescape') for path in
               _git(root, 'diff', '--cached', '--name-only', '-z', '--no-renames', '--', '.taskmaster').split(b'\0')
               if path]
-    staged = [path for path in staged if not path.startswith('.taskmaster/local/')]
+    # `taskmaster.json` is the server's config, not a projection: the managed commit never
+    # carries it, so it is committed with plain Git and has no generation to check against.
+    staged = [path for path in staged if not path.startswith('.taskmaster/local/') and path not in NOT_PROJECTIONS]
     if not staged:
         return True, 'no projection files staged'
     # The main checkout (git dir == common dir; also submodules and --separate-git-dir)

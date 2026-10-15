@@ -5,8 +5,11 @@ store, a legacy layout, an orphaned store) behaves exactly as before and writes 
 from __future__ import annotations
 
 from contextlib import closing
+import json
 import re
 import sqlite3
+import subprocess
+import threading
 
 import pytest
 
@@ -16,9 +19,10 @@ from taskmaster.native import cutover, fresh
 from native_twins import activate_native, is_native, point_server_at, scaffold
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def coordinator(monkeypatch):
-    """Native writes go to an in-process coordinator, as the routed-tool tests run them."""
+    """Native writes (and init's warm-up) go to an in-process coordinator, as the routed-tool
+    tests run them, so no test leaves a detached service process behind."""
     from taskmaster.coordinator import adapter
     from tests.native_coordinator_helpers import compatibility_client
     monkeypatch.setattr(adapter, "Client", compatibility_client)
@@ -123,17 +127,41 @@ def test_failed_activation_leaves_a_working_legacy_project(tmp_path, monkeypatch
     assert not is_native(root)
 
 
-def test_linked_worktree_resolution_refuses_before_writing(tmp_path, monkeypatch):
-    root = tmp_path / "wt"
-    root.mkdir()
-    point_server_at(monkeypatch, root)
-    main = tmp_path / "main"
-    resolution = store.RootResolution(root=main, backlog_path=main / ".taskmaster", source="git-common-dir",
-                                      filesystem_warning=None)
-    monkeypatch.setattr(store, "resolve_location", lambda *a, **k: resolution)
-    result = bs.backlog_init(project_name="p")
-    assert result.startswith("Error:") and "linked worktree" in result
-    assert not (root / ".taskmaster").exists()
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always",
+                    *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _repo(path):
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    _git(path, "commit", "-q", "--allow-empty", "-m", "initial")
+    return path
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_real_linked_worktree_refuses_before_writing(tmp_path, monkeypatch, legacy):
+    main = _repo(tmp_path / "main")
+    worktree = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", str(worktree))
+    point_server_at(monkeypatch, worktree)
+    result = bs.backlog_init(project_name="p", legacy_store=legacy)
+    assert result.startswith("Error:") and "linked Git worktree" in result and str(main.name) in result, result
+    assert not (worktree / ".taskmaster").exists() and not (main / ".taskmaster").exists()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_real_submodule_refuses_before_writing(tmp_path, monkeypatch, legacy):
+    _repo(tmp_path / "sub")
+    super_ = _repo(tmp_path / "super")
+    _git(super_, "submodule", "add", "-q", str(tmp_path / "sub"), "mod")
+    module = super_ / "mod"
+    before = sorted(p.as_posix() for p in (super_ / ".git").rglob("*"))
+    point_server_at(monkeypatch, module)
+    result = bs.backlog_init(project_name="p", legacy_store=legacy)
+    assert result.startswith("Error:") and "submodule" in result and "linked" not in result, result
+    assert not (module / ".taskmaster").exists()
+    assert sorted(p.as_posix() for p in (super_ / ".git").rglob("*")) == before
 
 
 def test_init_on_existing_legacy_project_changes_nothing(tmp_path, monkeypatch):
@@ -188,3 +216,142 @@ def test_orphaned_store_without_backlog_is_left_alone(tmp_path, monkeypatch):
     assert result.startswith("Already initialized") and "backlog_store_status" in result
     assert not (root / ".taskmaster" / "backlog.yaml").exists()
     assert _digest(root) == before and not is_native(root)
+
+
+def _fail_once(monkeypatch, module, name):
+    real = getattr(module, name)
+
+    def failing(*args, **kwargs):
+        monkeypatch.setattr(module, name, real)
+        raise RuntimeError("simulated interruption")
+    monkeypatch.setattr(module, name, failing)
+
+
+@pytest.mark.parametrize("point", ["cache-write", "backfill", "activate"])
+def test_rerun_finishes_an_interrupted_init(tmp_path, monkeypatch, point):
+    root = tmp_path / "proj"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    from taskmaster.native import migrate
+    # Each point leaves a different store behind: none, a schema-1 store with verified staging,
+    # and a schema-1 store whose activation transaction rolled back.
+    _fail_once(monkeypatch, *{"cache-write": (bs, "_write_local_meta_cache"), "backfill": (migrate, "backfill"),
+                              "activate": (cutover, "activate")}[point])
+    first = bs.backlog_init(project_name="p")
+    assert "on the legacy store" in first and "Run `backlog_init` again" in first, first
+    assert not _database(root).exists() or not is_native(root)
+    store.reset_for_tests()
+    point_server_at(monkeypatch, root)
+    second = bs.backlog_init(project_name="p")
+    assert second.startswith("Finished initializing") and "on the native store" in second, second
+    assert is_native(root)
+    assert "[seq" in bs.backlog_area_create(area_id="core", name="Core")
+
+
+def test_rerun_never_converts_an_opted_out_or_used_store(tmp_path, monkeypatch):
+    root = tmp_path / "out"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    bs.backlog_init(project_name="p", legacy_store=True)
+    assert json.loads((root / ".taskmaster" / "taskmaster.json").read_text(encoding="utf-8"))["store"] == "legacy"
+    store.reset_for_tests()
+    point_server_at(monkeypatch, root)
+    assert bs.backlog_init(project_name="p").startswith("Already initialized")
+    assert not is_native(root)
+
+    used = tmp_path / "used"
+    used.mkdir()
+    point_server_at(monkeypatch, used)
+    _fail_once(monkeypatch, cutover, "activate")
+    bs.backlog_init(project_name="p")
+    bs.backlog_add_epic(epic_id="e", name="E", done_when="x")
+    before = _digest(used)
+    point_server_at(monkeypatch, used)
+    answer = bs.backlog_init(project_name="p")
+    assert "has been used since" in answer and "cutover" in answer, answer
+    assert _digest(used) == before and not is_native(used)
+
+
+def test_held_files_keep_a_store_from_counting_as_fresh(tmp_path, monkeypatch):
+    root = tmp_path / "held"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    bs.backlog_init(project_name="p", legacy_store=True)
+    store.reset_for_tests()
+    assert fresh.state(_database(root)) == "fresh"
+    with closing(sqlite3.connect(_database(root))) as connection:
+        connection.execute("UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'")
+        connection.commit()
+    assert fresh.state(_database(root)) == "used"
+
+
+def test_escape_hatch_after_a_failed_warm_up(tmp_path, monkeypatch):
+    from tests.native_coordinator_helpers import close_owned
+    root = tmp_path / "hatch"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    monkeypatch.setattr(fresh, "warm_up", lambda *a, **k: "coordinator startup unavailable")
+    result = bs.backlog_init(project_name="p")
+    assert "on the native store" in result and "coordinator did not start" in result
+    assert "backlog_init(legacy_store=True)" in result and "store.db" in result
+    close_owned()
+    store.reset_for_tests()
+    for suffix in ("", "-wal", "-shm"):
+        (root / ".taskmaster" / "local" / f"store.db{suffix}").unlink(missing_ok=True)
+    point_server_at(monkeypatch, root)
+    answer = bs.backlog_init(project_name="p", legacy_store=True)
+    assert answer.startswith("Finished initializing") and "legacy store" in answer, answer
+    assert not is_native(root)
+    assert json.loads((root / ".taskmaster" / "taskmaster.json").read_text(encoding="utf-8"))["store"] == "legacy"
+    assert "Created epic" in bs.backlog_add_epic(epic_id="e", name="E", done_when="x")
+
+
+def test_a_failure_after_activation_still_reports_native(tmp_path, monkeypatch):
+    root = tmp_path / "late"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    real = fresh.activate_fresh
+
+    def late(*args, **kwargs):
+        real(*args, **kwargs)
+        raise RuntimeError("failed after commit")
+    monkeypatch.setattr(fresh, "activate_fresh", late)
+    result = bs.backlog_init(project_name="p")
+    assert "on the native store" in result and "legacy" not in result, result
+    assert is_native(root)
+
+
+# The loser's exclusive `open('x')` of backlog.yaml fails with FileExistsError and writes
+# nothing, but the bypass guard judges the attempt before the open and would refuse it.
+@pytest.mark.allow_projection_bypass
+def test_concurrent_inits_write_once(tmp_path, monkeypatch):
+    root = tmp_path / "race"
+    root.mkdir()
+    point_server_at(monkeypatch, root)
+    gate = threading.Barrier(2, timeout=30)
+    real = fresh.runtime_refusal
+
+    def both_past_the_checks():
+        gate.wait()
+        return real()
+    monkeypatch.setattr(fresh, "runtime_refusal", both_past_the_checks)
+    answers = []
+
+    def init(name):
+        try:
+            answers.append(bs.backlog_init(project_name=name))
+        except Exception as exc:  # noqa: BLE001 -- surfaced in the assertion
+            answers.append(f"raised {exc!r}")
+    threads = [threading.Thread(target=init, args=(name,)) for name in ("alpha", "beta")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(120)
+    assert len(answers) == 2, answers
+    winners = [a for a in answers if a.startswith("Initialized")]
+    losers = [a for a in answers if "another init created" in a]
+    assert len(winners) == 1 and len(losers) == 1, answers
+    assert "on the native store" in winners[0]
+    winner = "alpha" if "**alpha**" in winners[0] else "beta"
+    assert f"project: {winner}" in (root / ".taskmaster" / "backlog.yaml").read_text(encoding="utf-8")
+    assert is_native(root)

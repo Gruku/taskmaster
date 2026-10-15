@@ -29,7 +29,7 @@ AskUserQuestion({ questions: [
 ```
 <!-- cc-only:end -->
 
-Call `backlog_init(project_name)` with only the name; it creates the files and a native store. A `Note:` in its reply says why it fell back to the legacy store; pass it on. Pass `legacy_store=true` only on the user's request, for a host that cannot run the coordinator. If the manifest was wanted, call `backlog_project_init(name)` (it refuses to overwrite); the user fills in repos and branches later.
+Call `backlog_init(project_name)` with only the name; it creates the files and a native store. A `Note:` in its reply (a legacy fallback, or a coordinator not started yet) says what to do; pass it on. Pass `legacy_store=true` only on the user's request, for a host that cannot run the coordinator. If the manifest was wanted, call `backlog_project_init(name)` (it refuses to overwrite); the user fills in repos and branches later.
 
 - **Clean start:** suggest 3-6 areas for long-lived subsystems, `backlog_area_create(area_id, name)` (areas never close); then the first finite epic, `backlog_add_epic(epic_id, name, done_when, area=...)` (anything that never finishes is an area); then a phase, `backlog_add_phase(phase_id, name)` (the first one becomes active); then its tasks, `backlog_add_task(title, epic, phase, tldr=..., options={"area": ...})` with the finish condition in `tldr`. Create in that order, because each call names the ones before it. Aim for 5-8 tasks per epic; link a long plan with `options={"docs": "plan:<path>"}`.
 - **Analyze:** follow `references/analysis-mode.md`. Propose the whole backlog and create it only after the user approves.

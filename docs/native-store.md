@@ -11,6 +11,14 @@ described in the [native cutover runbook](runbooks/native-cutover.md); every exi
 stays on the **legacy** store (the 6.0.x SQLite store) until then, and this build keeps serving
 legacy stores as before. Nothing migrates an existing project automatically.
 
+A born-native store lives only on the machine that ran `backlog_init`: a teammate who clones the
+project gets the committed files without `.taskmaster/local/store.db`, and their first call adopts
+those files into a legacy store. If this host cannot run the coordinator and no write has succeeded
+since init, end every session on the project, delete `.taskmaster/local/store.db` (with its `-wal`
+and `-shm` files) and run `backlog_init(legacy_store=True)`; the store held only the scaffold, so
+nothing is lost. After the first write the store holds state the files do not (receipts, ID high
+water marks, pending exports), so use the runbook's post-activation escape hatch instead.
+
 > **Rehearse on a copy first.** Run the cutover on a disposable copy of the project before the
 > real one, and keep that copy until the real cutover is verified. After activation the only way
 > back is the manual escape hatch.
