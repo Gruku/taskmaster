@@ -92,3 +92,9 @@ def test_playbook_links_resolve():
     assert refs, "playbook.md must reference at least one references/ file"
     missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
     assert not missing, f"unresolved: {missing}"
+
+
+def test_gate_record_names_verdict_and_full_sha():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "important_count" in text
+    assert "40-character" in text and "git rev-parse" in text

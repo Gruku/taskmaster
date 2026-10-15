@@ -139,3 +139,11 @@ def test_description_within_word_budget():
     count = description_word_count("issue")
     budget = DESCRIPTION_WORD_OVERRIDES.get("issue", DEFAULT_DESC_WORDS)
     assert count <= budget, f"description is {count} words (budget: {budget})"
+
+
+def test_task_issue_link_uses_a_tool_that_can_store_it():
+    # backlog_add_task has no related_issues argument; the link is a `fixes` backlog_link.
+    refs = PLAYBOOK_DIR / "references"
+    flows = (refs / "entry-point-flows.md").read_text(encoding="utf-8")
+    assert 'type="fixes"' in flows and "backlog_link" in flows
+    assert "related_issues" not in flows

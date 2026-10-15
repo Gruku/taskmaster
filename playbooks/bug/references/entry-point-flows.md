@@ -9,7 +9,7 @@ The user asked for the Bug, so write it first and let them adjust afterwards.
 1. Draft the fields from the conversation:
    - `title`: the first sentence describing the defect, up to 80 characters
    - `found_in`: the in-progress task id if there is one, else empty
-   - `discovered_by`: `user` for this entry point
+   - `discovered_by`: `user` when the user reported it; `claude` when you noticed it yourself and they agreed to log it (the offer below)
    - `components`: from the epic or folder, or from file paths if cited
    - `location`: `file:line` if mentioned
    - `severity`: leave empty unless the user volunteers one
@@ -25,7 +25,7 @@ Offer in one inline line and wait for the answer, since the user owns what goes 
 
 > I noticed <one-line symptom>. Want me to log it as a Bug (found_in: T-XXX)?
 
-On yes, run `log-bug`. On no, drop it for the rest of the session.
+On yes, run `log-bug` with `discovered_by="claude"`. On no, drop it for the rest of the session.
 
 ## disposition
 

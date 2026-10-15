@@ -8,7 +8,7 @@ Draft every field of `backlog_issue_create` from the conversation, then show the
 |---|---|---|
 | `title` | First sentence describing the defect, up to 80 characters, active voice ("X fails when Y"). | Ask. |
 | `severity` | From impact language: crash, data loss, outage → P0; blocks, regression, no workaround → P1; wrong result with a workaround → P2; cosmetic → P3. | Ask when there is no signal; a silent P0 guess does damage. |
-| `evidence` | Required. The criterion (recurring, systemic, outstanding) plus its citation, in one sentence. | Without it the item is a Bug (`taskmaster:bug`). |
+| `evidence` | Required. The criterion (recurring, systemic, outstanding) plus its citation, in one sentence. | Without it the item is a Bug (`taskmaster:bug`, `../../bug/playbook.md`). |
 | `impact` | What breaks, in the user's words. | Ask "What breaks when this happens?" |
 | `components` | The epic or folder where the defect lives; infer from a cited file path. | The in-progress task's epic; empty if genuinely cross-cutting. |
 | `location` | A `file:line` cited in the conversation; never invent one. | Empty list. |

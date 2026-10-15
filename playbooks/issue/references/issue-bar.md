@@ -1,6 +1,6 @@
 # Issue bar: criteria, evidence, anti-example
 
-This is the single home of the bar. An Issue is the elevated tier; the bar keeps one-off defects (which belong in `taskmaster:bug`) out of it. Any one criterion is enough.
+This is the single home of the bar. An Issue is the elevated tier; the bar keeps one-off defects (which belong in `taskmaster:bug`, `../../bug/playbook.md`) out of it. Any one criterion is enough.
 
 ## The three criteria
 

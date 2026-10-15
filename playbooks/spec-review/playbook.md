@@ -1,6 +1,6 @@
 # Spec Review
 
-Pre-implementation design gate: the task has a written spec, and the question is whether the approach is sound before any code exists. Challenge the design rather than rubber-stamping it. This reviews the spec; code is reviewed by `taskmaster:review-gate` and the implementation plan by `taskmaster:plan-review`.
+Pre-implementation design gate: the task has a written spec, and the question is whether the approach is sound before any code exists. Challenge the design rather than rubber-stamping it. This reviews the spec; code is reviewed by `taskmaster:review-gate` (`../review-gate/playbook.md`) and the implementation plan by `taskmaster:plan-review` (`../plan-review/playbook.md`).
 
 Arguments: `task_id` (defaults to the task in scope); `--codex` / `--no-codex` to force the Codex pass on or off (default: critical = suggest, high = offer, else off).
 
@@ -36,7 +36,7 @@ The server satisfies a gate only on `pass` or an audited skip:
 On full and standard lanes, record with `backlog_record_gate(task_id, gate, verdict, spec_path=<path>, codex_used=<bool>, critical_count=<n>, important_count=<n>)`, using the lane-resolved gate name. Use this rather than `backlog_set_spec_review`, which always writes the `spec-review` gate and so records the wrong one on a standard-lane task. Then append the short summary (`references/adversarial-steps.md`, "Task summary").
 
 Close with the next step, and put any questions (fill the missing sections? acknowledge the Importants?) in this one closing message:
-- pass: ready for `taskmaster:pick-task` (full lane: plan, then `taskmaster:plan-review`, comes before tests).
+- pass: ready for `taskmaster:pick-task` (`../pick-task/playbook.md`; full lane: plan, then `taskmaster:plan-review`, comes before tests).
 - warn: address or acknowledge the Important findings and re-run, or skip with a reason.
 - fail: revise the spec and re-run.
 

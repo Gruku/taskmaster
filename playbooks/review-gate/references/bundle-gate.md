@@ -21,7 +21,7 @@ T-003    | PASS    | -
 ```
 
 4. Record each member's gate with the shared spec path (or the member's own when there is no shared spec):
-   `backlog_record_gate(member, "review-gate", verdict="pass"|"fail", spec_path=<spec>, commit_sha=<HEAD>)`.
+   `backlog_record_gate(member, "review-gate", verdict="pass"|"fail", spec_path=<spec>, commit_sha=<full 40-character SHA of the shared branch tip, from `git rev-parse <branch>`>)`. The merge gate compares it exactly with that tip.
 
 Members stay `in-progress`; end-session closes them to `done`.
 

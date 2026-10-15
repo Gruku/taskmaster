@@ -50,3 +50,8 @@ def test_playbook_lists_five_entry_points():
     txt = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     for ep in ("log-bug", "offer-on-explicit-finding", "disposition", "update-status", "triage-review"):
         assert ep in txt, f"missing entry point: {ep}"
+
+
+def test_self_noticed_bug_records_claude_as_discoverer():
+    txt = (PLAYBOOK_DIR / "references" / "entry-point-flows.md").read_text(encoding="utf-8")
+    assert 'discovered_by="claude"' in txt

@@ -4,7 +4,7 @@
 
 Trigger: "log an issue", "file an issue", "this is an issue".
 
-1. Walk the bar (`issue-bar.md`). With no evidence, route to `taskmaster:bug` and use the routing echo in `../../bug/references/bug-vs-issue.md`.
+1. Walk the bar (`issue-bar.md`). With no evidence, route to `taskmaster:bug` (`../../bug/playbook.md`) and use the routing echo in `../../bug/references/bug-vs-issue.md`.
 2. Draft the fields from the conversation, using `auto-extraction.md`: `title`, `severity`, `evidence` (the criterion plus its citation, one sentence), `impact`, `components`, `location`, `discovered_by`, `related_tasks`, `body`.
 3. Show the draft with the evidence sentence and write it once the user agrees. Severity and evidence carry weight on an Issue, so the user sees them first. When the user already supplied severity and evidence themselves, write it and show the result instead.
 4. Write it:
@@ -16,7 +16,7 @@ Trigger: "log an issue", "file an issue", "this is an issue".
    )
    ```
 5. Reply: `Logged ISS-NNN (P1) — <title>. Criterion: <recurring|systemic|outstanding>.`
-6. When the Issue has no `related_tasks`, offer a follow-up task. On yes, call `backlog_add_task` with `related_issues=["ISS-NNN"]`.
+6. When the Issue has no `related_tasks`, offer a follow-up task. On yes, add it with `backlog_add_task` (the finish condition goes in `tldr`), then record the link with `backlog_link(action="create", source="T-NNN", target="ISS-NNN", type="fixes")`. That link shows on the task and on the Issue; `backlog_add_task` has no argument for it.
 
 ## update-status
 
@@ -60,7 +60,7 @@ Trigger: "promote B-XX to an issue" (optionally with sibling Bug ids), or a `bac
 
 ## close-on-task-complete
 
-end-session raises this when a finished task has open `related_issues`. For each one, ask: "T-NNN is done. ISS-XXX (P1 — <title>) is still open. Mark it fixed, linked to T-NNN?" On yes:
+end-session raises this when a finished task fixes an unresolved Issue. The Issues come from the `fixes` entries under `links` in `backlog_get_task(T-NNN)`, plus any unresolved Issue that lists the task in `related_tasks` (`backlog_issue_get` shows that field; the task side doesn't). For each one, ask: "T-NNN is done. ISS-XXX (P1 — <title>) is still open. Mark it fixed, linked to T-NNN?" On yes:
 
 ```
 backlog_issue_update("ISS-XXX", "fixed_in_task", "T-NNN")
@@ -81,4 +81,4 @@ Trigger: "list open issues", "triage issues".
            ISS-012 — Orphan route silently swallows welcome dispatch
    ```
 3. Flag Issues past 60% of their window (aging) or 100% (stale); window lengths are in `issue-bar.md`.
-4. Offer next steps: start investigating one (`update-status`), add a fix task with `backlog_add_task(related_issues=[...])`, or close a duplicate.
+4. Offer next steps: start investigating one (`update-status`), add a fix task (`log-issue` step 6 links it), or close a duplicate.

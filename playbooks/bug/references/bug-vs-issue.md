@@ -4,7 +4,7 @@ The Issue bar (recurring, systemic, or outstanding) is defined once, in `../../i
 
 ## Word-agnostic intake
 
-Users say "issue" colloquially when they mean "bug". Treat the word as a hint and route on the evidence: when the defect cites recurrence, systemic scope or an outstanding P0/P1, it's an Issue (`taskmaster:issue`); otherwise it's a Bug. Severity alone doesn't qualify a defect as an Issue.
+Users say "issue" colloquially when they mean "bug". Treat the word as a hint and route on the evidence: when the defect cites recurrence, systemic scope or an outstanding P0/P1, it's an Issue (`../../issue/playbook.md`, `taskmaster:issue`); otherwise it's a Bug. Severity alone doesn't qualify a defect as an Issue.
 
 When you file a Bug for someone who said "issue", tell them why, so the override isn't a surprise:
 

@@ -1,6 +1,6 @@
 ---
 name: plan-review
-description: "Review a task's implementation plan before tests are written and record the plan-review gate (full lane, between PLAN and WRITE_TESTS). Use for 'review this plan', 'plan review', 'challenge my plan', 'is this plan solid'. Spec or design review is taskmaster:spec-review; finished code is taskmaster:review-gate."
+description: "Review a task's implementation plan before tests are written and record the plan-review gate (full lane, between writing the plan and writing tests). Use for 'review this plan', 'plan review', 'challenge my plan', 'is this plan solid'. Spec or design review is taskmaster:spec-review; finished code is taskmaster:review-gate."
 ---
 
 # Plan Review
