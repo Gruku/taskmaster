@@ -51,6 +51,24 @@ def test_unmanaged_projection_staging_is_refused_with_guidance(repo):
         assert commit_count(repo) == before + 2
 
 
+def test_plain_commit_of_the_config_file_passes_the_hook(repo):
+    # The managed commit never carries `taskmaster.json`, so a plain commit of it must pass;
+    # a projection file staged next to it is still refused.
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        receipt = client.execute(request(client, 'cfg', 'Config title'))['receipt']
+        assert owner.flush(receipt['commit_seq'])['state'] == 'exported'
+        config = repo / '.taskmaster' / 'taskmaster.json'
+        config.write_text('{"backlog_path": ".taskmaster/backlog.yaml"}\n', encoding='utf-8')
+        before = commit_count(repo)
+        git(repo, 'add', '.taskmaster/taskmaster.json', REL)
+        git(repo, 'commit', '-q', '-m', 'mixed', check=False)
+        assert commit_count(repo) == before
+        git(repo, 'restore', '--staged', REL)
+        git(repo, 'commit', '-q', '-m', 'chore: taskmaster config')
+        assert commit_count(repo) == before + 1
+
+
 def test_stale_staging_under_a_managed_token_is_refused(repo, monkeypatch):
     with Coordinator(repo) as owner:
         token = 'a' * 64

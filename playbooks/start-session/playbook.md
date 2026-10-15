@@ -6,7 +6,7 @@ Orient the user at the start of a session: where work stands, what waits on them
 
 These reads don't depend on each other; call them together.
 
-- `backlog_status()`: dashboard, in-progress and in-review counts, active phase, stale tasks. If it fails, check whether `.taskmaster/backlog.yaml` exists: when it doesn't, offer `../init-taskmaster/playbook.md`; when it does, the MCP server is probably not registered (`.mcp.json`).
+- `backlog_status()`: dashboard, in-progress and in-review counts, active phase, stale tasks. If it fails with `backlog lives at <dir>` (a pre-6.0 backlog in `.claude/` or the project root), offer `../migrate-v3/playbook.md` to adopt it. Otherwise check whether `.taskmaster/backlog.yaml` exists: when it doesn't, offer `../init-taskmaster/playbook.md`; when it does, the MCP server is probably not registered (`.mcp.json`).
 - `backlog_thread_list()`: the open lines of work (the name is the resume token, plus tldr and next action). Fetch a thread's newest handover only when the user picks it, with `backlog_thread_resume("<name>")`. When the user already named a thread or pasted a handover id, resume it directly instead of showing the board.
 - `backlog_note(action="list")`: the user's notes-to-self. Show them; change or archive one only when the user asks.
 - `backlog_list_tasks(status="in-review")`, only when status shows in-review tasks: each row's `waiting-on-human:` is what the user has to do.

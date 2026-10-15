@@ -1,7 +1,8 @@
 """User intent: prove routed tools are compatible by running the same public call
 against a legacy project and a byte-identical copy activated as a native authority,
 then comparing the text answers, the committed entities and the projected files.
-Test-only activation: no runtime entry point makes a project native.
+Fixture activation: an existing legacy project is made native here without the operator
+cutover's fence and backup (at runtime only `backlog_init` and the cutover activate a store).
 """
 from __future__ import annotations
 

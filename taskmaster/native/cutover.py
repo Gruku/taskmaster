@@ -683,7 +683,8 @@ def activate(connection, root: Path, *, token: str | None = None, before: dict |
     projection merge bases from files it hashed (`seed_projection_bases`) and, after commit,
     the sync fingerprint cache from the same reads.
 
-    `token=None` is the unfenced fast path for test fixtures; it requires an unfenced store.
+    `token=None` is the unfenced fast path for test fixtures and for a store `backlog_init` has
+    just created (`native.fresh`); it requires an unfenced store.
     `record(connection, detail)` runs inside the transaction, before commit (the journal row;
     `detail["seeded_bases"]` names the seeded paths for the post-activation oracle).
     `trial=True` does all of it but the seeding and rolls back: the cutover's compare stage.

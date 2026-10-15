@@ -3781,15 +3781,175 @@ def _validate_text(data: dict, trackers: dict, tracker_issues: list[str], missin
 # ── Mutating Tools ───────────────────────────────────────────
 
 
+def _init_location_refusal() -> str | None:
+    """Why a v4 init must not write here: the store would resolve away from ROOT/.taskmaster."""
+    from taskmaster.root import _git_rev_parse  # noqa: PLC0415
+
+    target = ROOT / ".taskmaster"
+    resolved = store.resolve_location(target / "backlog.yaml")
+    if resolved.backlog_path.resolve() == target.resolve():
+        return None
+
+    def absolute(value):
+        path = Path(value)
+        return (path if path.is_absolute() else ROOT / path).resolve()
+
+    git_dir, common = _git_rev_parse(ROOT, "--git-dir"), _git_rev_parse(ROOT, "--git-common-dir")
+    if git_dir and common and absolute(git_dir) != absolute(common):
+        case = (f"`{ROOT}` is a linked Git worktree, and its store belongs to the main checkout "
+                f"`{resolved.root}`. Initialize from the main checkout instead.")
+    else:
+        case = (f"`{ROOT}` keeps its Git directory elsewhere (a submodule or a `--separate-git-dir` "
+                f"checkout), and the store would resolve to `{resolved.backlog_path}`, which Taskmaster "
+                "does not support. Initialize from a checkout with its own `.git` directory.")
+    return f"Error: {case} Nothing was written."
+
+
+def _native_fallback_reason() -> str | None:
+    """Why this host cannot run a native store (network storage, SQLite build), or None."""
+    from taskmaster.native import fresh  # noqa: PLC0415
+
+    return store.unsafe_storage_reason(ROOT) or fresh.runtime_refusal()
+
+
+def _activate_born_native(backlog_abs: Path) -> tuple[bool, str]:
+    """Open the store on the scaffold and activate it as native; `(native, note)`.
+
+    Whatever fails, the authority marker on disk decides what the reply says: a failure
+    after activation committed still leaves a native project, and saying "legacy" would
+    send the user to a cutover that refuses.
+    """
+    from taskmaster.native import fresh  # noqa: PLC0415
+
+    database = ROOT / ".taskmaster" / "local" / "store.db"
+    try:
+        # Opens the store, which adopts the files already written; activation follows.
+        _write_local_meta_cache(backlog_abs, {"updated": _today()})
+        fresh.activate_fresh(ROOT, backlog_abs)
+    except Exception as exc:  # noqa: BLE001 -- reported; the project stays a working legacy one
+        # A racing init may be mid-activation and hold the ownership lock; its commit decides
+        # what this project is, so let it finish before reading the marker.
+        _wait_for_ownership_free(10.0)
+        if fresh.state(database) != "native":
+            return False, (
+                f"\nNote: started on the legacy store, because native activation failed ({exc}). "
+                "The project works as is. Run `backlog_init` again to finish the activation before "
+                "anything is added, or later use the operator cutover (docs/runbooks/native-cutover.md)."
+            )
+    failure = fresh.warm_up(ROOT)
+    if failure is None:
+        return True, ""
+    return True, (
+        f"\nNote: the store is native, but its coordinator did not start yet ({failure}). The next "
+        "write starts it; retry a write that reports `coordinator startup unavailable`. If writes keep "
+        f"failing on this host before any has succeeded, stop the coordinator ({_STOP_COORDINATOR}), "
+        "delete `.taskmaster/local/store.db` (with its `-wal` and `-shm` files), and run "
+        "`backlog_init(legacy_store=True)`: the store holds only the scaffold, so nothing is lost."
+    )
+
+
+_STOP_COORDINATOR = (
+    "`uv run <plugin>/taskmaster_cli.py coordinator stop` from the project directory; from a "
+    "source checkout, `python -m taskmaster.coordinator.control_cli stop`"
+)
+
+
+def _wait_for_ownership_free(timeout: float) -> bool:
+    """Wait up to `timeout` s for no process to hold this project's ownership lock."""
+    import time  # noqa: PLC0415
+
+    from taskmaster.coordinator.ownership import ownership_held  # noqa: PLC0415
+
+    deadline = time.monotonic() + timeout
+    while ownership_held(ROOT):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
+def _resume_init(project_name: str, legacy_store: bool) -> str | None:
+    """Finish an init that wrote `.taskmaster/` but did not leave the store it recorded.
+
+    Only a project whose `taskmaster.json` records this init's intent (`store`) is touched,
+    so a project made by an older init, or one that opted out, is never converted. None
+    means the ordinary "Already initialized" answer applies.
+    """
+    from taskmaster.native import fresh  # noqa: PLC0415
+
+    try:
+        intent = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("store")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if intent != "native":
+        return None
+    database = ROOT / ".taskmaster" / "local" / "store.db"
+    backlog_abs = ROOT / ".taskmaster" / "backlog.yaml"
+    current = fresh.state(database)
+    if current == "native":
+        return None
+    if current == "missing":
+        from taskmaster.coordinator.ownership import ownership_held  # noqa: PLC0415
+
+        if ownership_held(ROOT):
+            # A coordinator outlives sessions and may still hold the deleted store open (on
+            # POSIX its writes would go to the unlinked file); never build a store under it.
+            return (
+                "Error: a coordinator still owns this project, so the store cannot be rebuilt under it. "
+                f"Stop it ({_STOP_COORDINATOR}), then run `backlog_init` again. Nothing was written."
+            )
+    if legacy_store:
+        if current != "missing":
+            return None  # a store exists; it is never converted back
+        # The escape hatch: the native store was deleted before anything was written.
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        config["store"] = "legacy"
+        CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        _write_local_meta_cache(backlog_abs, {"updated": _today()})
+        return (
+            f"Finished initializing **{project_name}** on the legacy store, as asked: the earlier "
+            "init's native store is gone, and the files were adopted into a legacy store."
+        )
+    if current == "used":
+        return (
+            "Already initialized — on the legacy store: an earlier init did not finish native activation, "
+            "and the store has been used since, so init leaves it as it is. The operator cutover "
+            "(docs/runbooks/native-cutover.md) converts it to native."
+        )
+    fallback = _native_fallback_reason()
+    if fallback:
+        return (
+            f"Already initialized — on the legacy store, because the native store cannot run here: {fallback}."
+        )
+    native, note = _activate_born_native(backlog_abs)
+    store_label = "the native store" if native else "the legacy store"
+    return (
+        f"Finished initializing **{project_name}** on {store_label}: an earlier init was interrupted "
+        f"before its store was activated.{note}"
+    )
+
+
 @mcp.tool()
-def backlog_init(project_name: str = "", location: str = "tracked", schema_version: int = 0) -> str:
-    """Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.
+def backlog_init(
+    project_name: str = "", location: str = "tracked", schema_version: int = 0, legacy_store: bool = False
+) -> str:
+    """Initialize taskmaster in the current project on the native store.
+
+    Creates `.taskmaster/` with `taskmaster.json`, `backlog.yaml` and the `tasks/`, `areas/`,
+    `handovers/` and `issues/` directories (all meant to be committed), plus the machine-local
+    `.taskmaster/local/` (store.db, PROGRESS.md, caches; it carries its own .gitignore). The
+    store is created as a native authority, so every later call is served natively. Refuses
+    when the project already has a backlog or a store, and in a linked worktree or submodule;
+    run again, it finishes an init that was interrupted before its store was activated.
 
     Args:
         project_name: Name for the project. Defaults to the directory name.
         location: Only "tracked" is accepted (files always go in `.taskmaster/`); kept for compatibility.
         schema_version: Leave at 0, which picks the current schema. 2 and 3 are legacy schemas
-                  kept for migration tooling.
+                  kept for migration tooling; they write files only and never a native store.
+        legacy_store: True opts out of the native store and creates the legacy SQLite store
+                  instead, for a host that cannot run the native coordinator service. It is
+                  recorded in taskmaster.json, and the operator cutover can convert it later.
     """
     if location == "hidden":
         return (
@@ -3807,9 +3967,19 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 
     if not project_name:
         project_name = ROOT.name
+    v4 = schema_version >= SCHEMA_V4
+    canonical = ROOT / ".taskmaster" / "backlog.yaml"
+    existing_db = ROOT / ".taskmaster" / "local" / "store.db"
+
+    # A v4 init opens a store, which must land next to the files it writes (checked before
+    # any write: here for a resumed init, below for a new one).
+    if v4 and canonical.exists() and _init_location_refusal() is None:
+        resumed = _resume_init(project_name, legacy_store)
+        if resumed:
+            return resumed
 
     # Check if already initialized (check all locations, including legacy .claude/)
-    for check_path in [ROOT / ".taskmaster" / "backlog.yaml", ROOT / ".claude" / "backlog.yaml", ROOT / "backlog.yaml"]:
+    for check_path in [canonical, ROOT / ".claude" / "backlog.yaml", ROOT / "backlog.yaml"]:
         if check_path.exists():
             rel = check_path.relative_to(ROOT)
             hint = ""
@@ -3821,6 +3991,27 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
             return (
                 f"Already initialized — `backlog.yaml` exists at `{rel}`.\n"
                 f"Use `backlog_status` to see the current state.{hint}"
+            )
+    if existing_db.exists():
+        # A store without its backlog.yaml still holds the project's data; a fresh
+        # scaffold over it would be adopted as an edit. Never write next to it.
+        return (
+            "Already initialized — a store exists at `.taskmaster/local/store.db` but "
+            "`backlog.yaml` is missing. Nothing was written. Use `backlog_store_status` to inspect it."
+        )
+    if v4:
+        refusal = _init_location_refusal()
+        if refusal:
+            return refusal
+
+    native = not legacy_store and v4
+    native_note = ""
+    if native:
+        fallback = _native_fallback_reason()
+        if fallback:
+            native = False
+            native_note = (
+                f"\nNote: started on the legacy store, because the native store cannot run here: {fallback}."
             )
 
     backlog_rel = ".taskmaster/backlog.yaml"
@@ -3834,14 +4025,6 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
     progress_abs = ROOT / progress_rel
 
     created = []
-
-    # Write config so the server knows where to find files
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    config = {"backlog_path": backlog_rel, "progress_path": progress_rel}
-    CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    created.append(".taskmaster/taskmaster.json")
-
-    # Create backlog.yaml
     backlog_abs.parent.mkdir(parents=True, exist_ok=True)
     initial_data = {
         "meta": {
@@ -3872,12 +4055,25 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 
     if schema_version >= SCHEMA_V4:
         initial_data["meta"].pop("updated", None)
-        _write_local_meta_cache(backlog_abs, {"updated": _today()})
 
-    backlog_abs.write_text(
-        yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    # Created exclusively: of two inits racing on one project, only one writes anything.
+    try:
+        with backlog_abs.open("x", encoding="utf-8") as stream:
+            stream.write(yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True))
+    except FileExistsError:
+        return (
+            "Already initialized — another init created `.taskmaster/backlog.yaml` at the same time.\n"
+            "Use `backlog_status` to see the current state."
+        )
+
+    # Write config so the server knows where to find files. On v4 it also records which
+    # store this init meant to create, so a re-run can finish an interrupted activation and
+    # never converts a project that opted out.
+    config = {"backlog_path": backlog_rel, "progress_path": progress_rel}
+    if v4:
+        config["store"] = "legacy" if legacy_store else "native"
+    CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    created.append(".taskmaster/taskmaster.json")
     created.append(backlog_rel)
 
     # Create PROGRESS.md
@@ -3886,14 +4082,25 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
     progress_abs.write_text(progress_content, encoding="utf-8")
     created.append(progress_rel)
 
+    if native:
+        native, native_note = _activate_born_native(backlog_abs)
+    elif v4:
+        # The cache write opens the store, which adopts the files written above; it comes
+        # after them so the store is built from the whole scaffold, never from an empty one.
+        _write_local_meta_cache(backlog_abs, {"updated": _today()})
+    if existing_db.exists():
+        created.append(".taskmaster/local/store.db")
+
     schema_label = (
         "v4 (sharded per-task storage)"
         if schema_version >= SCHEMA_V4
         else "v3 (narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
     )
+    store_label = "the native store" if native else "the legacy store"
     return (
-        f"Initialized taskmaster for **{project_name}** in `.taskmaster/` (trackable in git) on schema {schema_label}.\n"
-        f"Created: {', '.join(created)}"
+        f"Initialized taskmaster for **{project_name}** in `.taskmaster/` (trackable in git) on "
+        f"{store_label}, schema {schema_label}.\n"
+        f"Created: {', '.join(created)}{native_note}"
     )
 
 
