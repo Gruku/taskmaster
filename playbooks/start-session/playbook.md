@@ -28,7 +28,7 @@ An empty backlog (no epics, no tasks): skip the dashboard, ask what the main wor
 
 ## Legacy in-review tasks
 
-An in-review task with no human action predates the human-gate semantics (before 4.6.0, in-review meant "user tests"). When any exist, list them (id, title) once and offer to close them all to `done` with `backlog_batch_update` (op `complete`); a task the user says is genuinely blocked gets `backlog_update_task(id, "human_action", "...")` instead. Report any close a gate refuses and leave that task as it is.
+An in-review task with no human action predates the human-gate semantics (in-review once meant "user tests"). When any exist, list them (id, title) once and offer to close them all to `done` with `backlog_batch_update` (op `complete`); a task the user says is genuinely blocked gets `backlog_update_task(id, "human_action", "...")` instead. Report any close a gate refuses and leave that task as it is.
 
 ## Deep mode (`--deep`)
 

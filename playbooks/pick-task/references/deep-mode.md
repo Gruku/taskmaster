@@ -12,5 +12,5 @@ Related issues stay in the briefing at every depth, because they are what stops 
 
 ## Notes
 
-- A critical or high task without a spec-review: suggest `taskmaster:spec-review` before implementation; the user decides.
+- A critical or high task without a spec-review: suggest `taskmaster:spec-review` (`../../spec-review/playbook.md`) before implementation; the user decides.
 - `anchors`: show them prominently and add "if you find yourself editing files outside these anchors, double-check you're on the right target."

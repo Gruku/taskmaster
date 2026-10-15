@@ -97,5 +97,7 @@ def test_unfinished_work_stays_in_progress():
 def test_playbook_close_blocker_read_and_bundle_members():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     assert 'backlog_context(focus=<task_id>, scope="task", include=[])' in text
-    assert 'backlog_claim(action="status"' in text and "members" in text
+    assert "references/edge-cases.md" in text and "bundle" in text
+    edge = (PLAYBOOK_DIR / "references" / "edge-cases.md").read_text(encoding="utf-8")
+    assert 'backlog_claim(action="status"' in edge and "members" in edge
     assert "_get_session_bundle" not in text

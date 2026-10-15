@@ -15,7 +15,7 @@ Subflows are in `references/entry-point-flows.md`.
 - **`log-issue`**: the user asks to log an Issue. Run the bar check, draft the fields, confirm, and write it.
 - **`promote-from-bug`**: the user says "promote B-XX to an issue", or a `backlog_bug_pattern_scan` group is confirmed for promotion.
 - **`update-status`**: open, investigating, fixed, wontfix or duplicate; states and required fields are in `references/lifecycle.md`.
-- **`close-on-task-complete`**: end-session offers to close the unresolved Issues a finished task fixes (its `fixes` links).
+- **`close-on-task-complete`**: end-session offers to close the unresolved Issues a finished task fixes (found by the query in `../end-session/references/summary-modes.md`).
 - **`triage-review`**: list open Issues by severity and flag the aging ones.
 
 "Issue" wording with no evidence of the bar goes to `taskmaster:bug` (`../bug/playbook.md`).
