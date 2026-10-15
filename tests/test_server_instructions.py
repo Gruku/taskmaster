@@ -18,3 +18,4 @@ def test_initialize_result_carries_instructions():
     assert "[seq N]" in result.instructions
     assert "backlog_sync" in result.instructions
     assert "backlog_store_status" in result.instructions
+    assert "export_pending" in result.instructions
