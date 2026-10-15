@@ -1,47 +1,23 @@
-# Bug vs Issue — Routing Reference
+# Bug vs Issue: routing at intake
 
-This page is canonical. When in doubt, file a Bug.
-
-## The bar for Issue
-
-An Issue requires **at least one** of:
-
-1. **Recurring** — cite ≥2 prior occurrences (Bug IDs, task IDs, or session/handover references).
-2. **Systemic** — cite ≥2 affected components OR a class-of-defect ("path mismatch across all v3 readers", "every parallel tool-call collapse").
-3. **Outstanding** — P0/P1 with concrete blast-radius: data loss, security exposure, prod outage, complete user-flow block.
-
-Severity alone is NOT a path. A "P3 because cosmetic" is a Bug, period. A P2 only qualifies if it's also recurring or systemic.
+The Issue bar (recurring, systemic, or outstanding) is defined once, in `../../issue/references/issue-bar.md`. When in doubt, file a Bug.
 
 ## Word-agnostic intake
 
-Users say "issue" colloquially when they mean "bug". The router treats the word as a hint, not an instruction. Routing is decided by the evidence.
+Users say "issue" colloquially when they mean "bug". Treat the word as a hint and route on the evidence: when the defect cites recurrence, systemic scope or an outstanding P0/P1, it's an Issue (`taskmaster:issue`); otherwise it's a Bug. Severity alone doesn't qualify a defect as an Issue.
 
-**Algorithm:**
-1. Parse the finding.
-2. Check for cited evidence of the bar.
-3. If evidence present → Issue. If not → Bug + the explainer echo:
+When you file a Bug for someone who said "issue", tell them why, so the override isn't a surprise:
 
-> "Logged as **B-NNN**. You said 'issue' but I filed it as a Bug — it reads as a single defect, not a recurring/systemic pattern. If it's actually been showing up elsewhere or you want it tracked at the Issue tier, tell me what's recurring/systemic about it and I'll promote B-NNN → ISS-NNN."
+> Logged as **B-NNN**: it reads as a single defect. If it's been recurring or spans components, tell me where and I'll promote it to an Issue.
 
 ## Examples
 
 | Finding | Verdict | Reason |
 |---|---|---|
-| "Modal close button is 1px off" | Bug | Cosmetic, single-location, no recurrence. |
-| "Login fails for users on Safari 17 only" | Bug | Single-platform, workaround exists, no recurrence claim. |
-| "Migration drops all rows when run on stage" | Issue | Outstanding — concrete data-loss blast radius. |
-| "Path mismatch broke handovers AND ideas AND issues — same root cause" | Issue | Systemic — class-of-defect, ≥3 components. |
-| "Tool-call orphaning happened in T-001, T-007, and now T-018" | Issue | Recurring — ≥2 prior occurrences cited concretely. |
+| "Modal close button is 1px off" | Bug | Cosmetic, single location, no recurrence. |
+| "Login fails for users on Safari 17 only" | Bug | Single platform, workaround exists, no recurrence claim. |
+| "Migration drops all rows when run on stage" | Issue | Outstanding: concrete data-loss blast radius. |
+| "Path mismatch broke handovers AND ideas AND issues, same root cause" | Issue | Systemic: one class of defect across 3 components. |
+| "Tool-call orphaning happened in T-001, T-007, and now T-018" | Issue | Recurring: 2+ prior occurrences cited concretely. |
 
-## Anti-example — `ISS-015`
-
-Before the redesign, this was filed as a P3 Issue:
-
-> Handover status defaults to "open" but viewer expects "todo". Viewer has `|| 'todo'` fallback so filter still works; visual defect is the unstyled status pill.
-
-This is the **canonical anti-example**. Under the new bar:
-- Not recurring (single location).
-- Not systemic (one file, one default).
-- Not outstanding (cosmetic only, no functional impact).
-
-Under the new model, this is a Bug — `B-NNN` with severity P3 if any. Not a tracked Issue with an aging window.
+A cosmetic defect with a working fallback is a Bug even at P3; `issue-bar.md` walks a real example.

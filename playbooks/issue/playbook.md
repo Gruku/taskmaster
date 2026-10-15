@@ -1,58 +1,27 @@
 # Issue
 
-Structured defect tracking in `.taskmaster/issues/` — the **elevated tier**. Issues are persistent artifacts with lifecycle state and an aging window. A logged `ISS-NNN` survives sessions, links to tasks, and appears in the dashboard severity-sorted.
+Issues are the elevated defect tier: persistent records with lifecycle state and an aging window, linked to tasks and sorted by severity on the dashboard. Write and transition them through this playbook rather than calling `backlog_issue_create` / `backlog_issue_update` cold, because it runs the bar check and gets the evidence citation the store requires.
 
-## The bar (new — 2026-05-20 redesign)
+## The bar
 
-An Issue requires **at least one** of:
+An Issue needs at least one of: recurring (2+ prior occurrences cited), systemic (2+ components or a defect class), or outstanding (P0/P1 with concrete blast radius). Severity alone doesn't qualify. The criteria, evidence examples and aging windows are in `references/issue-bar.md`.
 
-- **Recurring** — ≥2 prior occurrences cited (Bug IDs, task IDs, sessions)
-- **Systemic** — ≥2 affected components OR class-of-defect
-- **Outstanding** — P0/P1 with concrete blast-radius (data loss / security / prod block)
+`backlog_issue_create` rejects empty `evidence`, so cite the criterion in one sentence. If you can't, file a Bug with `taskmaster:bug`; promoting a Bug later is one `backlog_bug_promote` call.
 
-Severity alone is no longer a path. P2/P3 only qualify if recurring or systemic.
+## Entry points
 
-The mandatory `evidence:` frontmatter field must cite the criterion. `backlog_issue_create` rejects empty evidence.
+Subflows are in `references/entry-point-flows.md`.
 
-If you can't cite evidence, **file a Bug** (`taskmaster:bug`) — Bugs are the sink. Promotion B → ISS is one cheap step (`backlog_bug_promote`).
+- **`log-issue`**: the user asks to log an Issue. Run the bar check, draft the fields, confirm, and write it.
+- **`promote-from-bug`**: the user says "promote B-XX to an issue", or a `backlog_bug_pattern_scan` group is confirmed for promotion.
+- **`update-status`**: open, investigating, fixed, wontfix or duplicate; states and required fields are in `references/lifecycle.md`.
+- **`close-on-task-complete`**: end-session offers to close open `related_issues` of a finished task.
+- **`triage-review`**: list open Issues by severity and flag the aging ones.
 
-See `references/issue-bar.md` for the bar criteria, evidence examples, and the canonical anti-example (`ISS-015`-shaped).
+"Issue" wording with no evidence of the bar goes to `taskmaster:bug`.
 
-## Why this skill exists
+Per-field sources for drafting are in `references/auto-extraction.md`; the body skeleton is `templates/issue-body.md`.
 
-The backend (`backlog_issue_create`, `backlog_issue_update`, `backlog_issue_list`, `backlog_issue_get`) is the storage layer; this skill is the authoring + lifecycle layer. Calling `backlog_issue_create` directly skips the bar-check + evidence-citation step.
+## Writes
 
-This is the ONLY correct way to write or transition a project Issue — do not call `backlog_issue_create` or `backlog_issue_update` directly.
-
-## Five entry points
-
-1. **`log-issue`** — explicit user request to log; walks bar-check + evidence prompt
-2. **`update-status`** — open → investigating → fixed / wontfix / duplicate
-3. **`close-on-task-complete`** — auto-offered from end-session when a finished task has open `related_issues`
-4. **`promote-from-bug`** — invoked by pattern scanner or by user saying "promote B-XX to an issue"
-5. **`triage-review`** — list open issues by severity, surface aging items
-
-Full per-entry-point subflows in `references/entry-point-flows.md`. Bar criteria + anti-examples in `references/issue-bar.md`.
-
-## Entry point decision tree
-
-| Trigger | Entry |
-|---|---|
-| `log an issue`, `file an issue`, `this is an issue` (with evidence) | `log-issue` |
-| `promote B-XX to an issue`, scanner finding | `promote-from-bug` |
-| `mark issue fixed`, `close ISS-XX`, `investigating ISS-XX` | `update-status` |
-| End-session with open `related_issues` | `close-on-task-complete` |
-| `list open issues`, `triage issues` | `triage-review` |
-| `log a bug`, no evidence on "issue" wording | **route to `taskmaster:bug`** |
-
-## References
-
-- `references/issue-bar.md` — bar criteria, evidence-shape examples, ISS-015 anti-example
-- `references/lifecycle.md` — state machine, transition rules, `_validate_issue` constraints
-- `references/auto-extraction.md` — per-field extraction sources and fallbacks
-- `references/entry-point-flows.md` — full subflow per entry point
-- `templates/issue-body.md` — Repro / Expected / Investigation notes skeleton
-
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
+A mutating result ending in `[seq N]` is committed; `(export pending: …)` means committed with the file export still queued; `No change … already …` without `[seq]` means the value was already stored. `backlog_store_status` shows dirty or quarantined files.
