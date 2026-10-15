@@ -1,7 +1,7 @@
 {
   "name": "taskmaster",
-  "description": "Latest channel \u2014 v4 sharded storage (default). Universal AI-powered task and backlog management plus narrative continuity: handovers, issues. Per-task files (.taskmaster/tasks/<id>.md) with a slim YAML index and dirty-scoped, merge-aware saves. v2/v3 backlogs keep working unchanged; migrate with `backlog_migrate_v4`. Requires: uv (https://docs.astral.sh/uv/)",
-  "version": "7.3.2",
+  "description": "Latest channel \u2014 task and backlog management for coding agents, plus narrative continuity: handovers, bugs, issues, ideas, decisions, review gates and worktrees. New projects start on the native SQLite store; .taskmaster/ files stay readable and committable. Older backlogs adopt with migrate-v3. Requires: uv (https://docs.astral.sh/uv/)",
+  "version": "7.4.0",
   "channel": "latest",
   "author": {
     "name": "gruku"

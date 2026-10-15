@@ -1,6 +1,6 @@
 {
   "name": "taskmaster-mods",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Taskmaster in the terminal: review queue, this session's current task above the prompt, handovers pane, faults-only status line.",
   "author": { "name": "gruku" },
   "types": "./types/index.d.ts",
