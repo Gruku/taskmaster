@@ -223,7 +223,15 @@ VERSION = _plugin_version(SCRIPT_DIR)
 
 # `version` is what the MCP handshake reports as serverInfo.version; without it FastMCP
 # reports its own version.
-mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION))
+_SERVER_INSTRUCTIONS = (
+    "Write tools end with a receipt: `[seq N]` means committed; `(export pending: …)` means "
+    "committed with only the file export queued; `No change … already …` without a seq means "
+    "the value was already stored. On a native store the database is the authority: a hand edit "
+    "to a .taskmaster/ file takes effect only after backlog_sync(). backlog_store_status shows "
+    "dirty or quarantined files."
+)
+
+mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION, instructions=_SERVER_INSTRUCTIONS))
 
 # Priority mapping: canonical names ↔ legacy P-codes. The names, the table
 # and every task/epic/phase rule below come from the one shared domain layer
@@ -2226,7 +2234,7 @@ def _status_text(data: dict, verbose: bool) -> str:
 
     lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
     if _effective_schema_version(data) < SCHEMA_V4:
-        lines.append("Migration available: run `backlog_migrate_v4` for sharded, merge-aware storage.\n")
+        lines.append("Migration available: run `backlog_migrate_v3` for sharded, merge-aware storage.\n")
     lines.append("## Dashboard\n")
     # "Epic", not "Workstream": callers read that label as the open lines of
     # work, which are threads, and answered with epics.
@@ -2279,7 +2287,7 @@ def _status_text(data: dict, verbose: bool) -> str:
             lines.append("**In Progress:** —")
 
         if actual_ir:
-            lines.append("**In Review (needs your testing):**")
+            lines.append("**In Review (waiting on a human action):**")
             for item, result in actual_ir:
                 started = result[0].get("started") if result else None
                 lines.append(f"- `{item['id']}` — {item['title']} ({_days_since(started)})")
@@ -2525,12 +2533,8 @@ def backlog_get_task(
     For what blocks it or whether it can close now, `backlog_context(focus=<id>,
     scope="task")` answers in one call.
 
-    By default returns a slim view (tldr, status, priority, key links) to
-    minimise token cost. Use verbose=True for the full body (notes, review
-    instructions, docs, spec-review record, epic context). Use sections to
-    pull specific named body sections (e.g. ["notes", "spec"]). Use
-    expand_links=True to swap dependency/issue IDs for {id, tldr} pills —
-    honored in both slim and verbose modes (uniform across all _get tools).
+    Slim (tldr, status, priority, key links) by default; verbose adds the body fields, sections
+    picks named sections, expand_links adds tldrs to linked ids.
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
@@ -2909,10 +2913,8 @@ def backlog_store_status() -> str:
     the last 24 hours, databases an earlier recovery moved aside, and the
     pending Linear push count.
 
-    Genuinely read-only: it will not create a store that does not exist yet, and
-    it will not move a damaged one aside. Either is reported on the `Warning:`
-    line and left for you to act on, because a diagnostic that repairs the
-    evidence is worse than one that says nothing.
+    Read-only: a missing or damaged store is reported on the `Warning:` line,
+    not created or moved aside.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2926,11 +2928,9 @@ def backlog_store_status() -> str:
 def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     """List, compare or resolve files flagged because they and the store both changed.
 
-    A projection file (a task, epic or phase file, `backlog.yaml`,
-    `project.yaml`, ...) edited or repaired while the store held a change it
-    had not yet written there is flagged: nothing is merged, the store keeps
-    its version, the file is left exactly as written, and exports to it pause.
-    Every tool result names flagged files until they are resolved.
+    A file is flagged when it and the store both changed: nothing is merged,
+    the file is left as written, and exports to it pause until it is resolved.
+    Every tool result names flagged files until then.
 
     - no `file`: list flagged files.
     - `file` only: show both versions -- the file as last seen and as on disk
@@ -2946,7 +2946,11 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     compare the two versions first and edit the side you keep if it needs
     pieces of the other.
 
-    Whoever resolves decides; the store never picks a side on its own.
+    Args:
+        file: Flagged file path relative to `.taskmaster/` (e.g. `tasks/core-001.md`, `backlog.yaml`).
+            Empty lists the flagged files.
+        take: `"file"` keeps the file as it is on disk; `"store"` writes the store's version over it.
+            Empty with `file` set shows both versions without changing anything.
     """
     _configure_store_derivers()
     st = _store()
@@ -3012,29 +3016,23 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
 
 @mcp.tool()
 def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
-    """Import hand edits to `.taskmaster/` files into a native store, on request.
+    """Import hand edits to `.taskmaster/` files into a native store.
 
-    A native store never scans its projection files during normal commands, so an
-    edit made by hand (or by another tool) to a task, epic, handover, `backlog.yaml`
-    or other projection file takes effect only through an explicit sync. Call this
-    when such an edit has not taken effect. It never runs automatically.
+    A native store never re-reads its projection files on its own, so a hand edit
+    to a task, epic, handover, `backlog.yaml` or `project.yaml` takes effect only
+    after this call.
 
-    - no arguments: start a sync of every projection file. The coordinator runs it
-      to the end on its own; if another sync is already running, this attaches to it.
-    - `files`: sync only these paths, relative to `.taskmaster/`
-      (e.g. `["tasks/core-001.md"]`; a leading `.taskmaster/` is accepted).
-    - `sync_id`: check on (and wait for) the sync with this id, as issued by an
-      earlier answer. A finished sync answers its stored result, labelled with the
-      time it finished; edits made after that need a fresh `backlog_sync()`.
+    No arguments syncs every file; `files` syncs only those; `sync_id` checks on a
+    sync an earlier call started. Each call returns within ~15 s with "Sync running"
+    (call again with the sync_id), "Sync complete" with counts, or the conflicts and
+    quarantined files to settle with `backlog_resolve_conflict`. On a legacy store
+    it does nothing (hand edits import on every call).
 
-    Each call returns within ~15 s. The answer is "Sync running" with progress and
-    the `backlog_sync(sync_id=...)` call to check again, "Sync complete" with counts
-    for the whole sync (imported, repaired, unchanged, conflicts), or "Sync finished
-    without synchronizing every file" naming the conflicts and quarantined files to
-    settle with `backlog_resolve_conflict` and any other reason.
-
-    On a legacy store this is a no-op: the legacy store imports hand edits on
-    every call already.
+    Args:
+        files: Paths relative to `.taskmaster/` to sync, e.g. `["tasks/core-001.md"]`
+            (a leading `.taskmaster/` is accepted). Omit to sync every file.
+        sync_id: The id from a "Sync running" answer. A finished sync returns its stored
+            result; edits made after it need a fresh `backlog_sync()`.
     """
     if not _backlog_path().exists():
         return "No backlog found."
@@ -3788,16 +3786,9 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 
     Args:
         project_name: Name for the project. Defaults to the directory name.
-        location: Retained for backwards-compatibility. Only "tracked" is accepted —
-                  taskmaster always writes to `.taskmaster/` now. Existing
-                  `.claude/`-layout projects keep working via the resolver shim;
-                  run `backlog_canonicalize_layout` to migrate them.
-        schema_version: 0 → use SCHEMA_DEFAULT (v4, sharded per-task storage) —
-                  the default for new projects. 2 (single backlog.yaml) and 3
-                  (slim index + per-task files) are legacy schemas retained only
-                  for migration tooling and tests; do not pick them for a fresh
-                  project. v3/v4 init creates the directory layout up front
-                  (tasks/, handovers/, issues/, auto/).
+        location: Only "tracked" is accepted (files always go in `.taskmaster/`); kept for compatibility.
+        schema_version: Leave at 0, which picks the current schema. 2 and 3 are legacy schemas
+                  kept for migration tooling.
     """
     if location == "hidden":
         return (
@@ -3995,20 +3986,17 @@ def _adopt_project_into_store(tool: str) -> str:
 def backlog_migrate_v3() -> str:
     """Adopt this project's backlog into the SQLite store.
 
-    Kept under its historical name so existing skills and docs keep working.
-    There is no longer a v2/v3/v4 file rewrite step: the store adopts whatever
-    schema it finds when it first opens the project, so this tool moves a
-    legacy `.claude/` or root layout into `.taskmaster/` (the only place a store
-    may live) and then opens it. Idempotent — running it on an adopted project
-    just reports the counts.
+    The store adopts whatever schema it finds when it first opens the project,
+    so there is no file-rewrite step: this moves a legacy `.claude/` or root
+    layout into `.taskmaster/` and opens the store. Running it on an adopted
+    project just reports the counts.
     """
     return _adopt_project_into_store("backlog_migrate_v3")
 
 
 @mcp.tool()
 def backlog_migrate_v4() -> str:
-    """Adopt this project's backlog into the SQLite store (alias of
-    `backlog_migrate_v3` — one adoption path, two historical names)."""
+    """Alias of backlog_migrate_v3."""
     return _adopt_project_into_store("backlog_migrate_v4")
 
 
@@ -4053,10 +4041,6 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     if a destination file already holds different content, nothing moves and the
     conflicts are reported. After a successful `.claude/` migration, the redundant
     `.claude/taskmaster.json` config is deleted.
-
-    Use this once per project to fix ISS-004 silent divergence between the v3
-    handover writer (which uses `bp.parent / "handovers"`) and readers that
-    historically hard-coded `.taskmaster/`.
 
     Args:
         dry_run: When true, returns the move plan without modifying anything.
@@ -4286,26 +4270,22 @@ def backlog_handover_create(
     flag_for_review: bool = False,
     options: dict | None = None,
 ) -> str:
-    """Write a session handover — a committed markdown artifact for cross-session
-    continuity. Capture end-of-session context: decisions, blockers, where to
-    start next. body is freeform markdown (Decisions / Blockers / Where I'd
-    start / Open threads).
+    """Write a session handover so a later session can resume: decisions, blockers, where to
+    start next. `body` is freeform markdown (Decisions / Blockers / Where I'd start / Open threads).
 
-    A line of work keeps one open resume point: older open handovers in the
-    same thread, archived ones included, are superseded by this one
-    automatically (as `supersedes=` does) and listed in the result as
-    "Auto-superseded". With an explicit `thread` that is the whole thread; with
-    a derived one (a whole epic or bundle) only handovers sharing a task id
-    with this one, or both naming none — a sibling task's handover stays open.
-    One whose status was set by hand is left open and reported as a WARNING
-    line. A handover born closed (auto-stage) supersedes nothing.
+    A line of work keeps one open resume point: older open handovers in the same thread are
+    superseded automatically and listed in the result as "Auto-superseded". With a derived
+    thread (no `thread` given), only open handovers that share a task id, or that both name
+    no task, are superseded.
 
     Args:
         tldr: One-line summary. Required.
         next_action: One-line "where to start next session."
         body: Markdown body (the four-section narrative).
         task_ids: Tasks this handover relates to (surfaces in pick-task).
-        session_kind: One of {", ".join(HANDOVER_KINDS)}.
+        session_kind: `continuity` for a normal wrap-up, `deep-context` (long session, lots to
+            carry over) or `milestone`. `auto-stage` (bookkeeping checkpoint, born closed) and
+            `task-complete` (short wrap-up) also exist. The default `end-of-day` is accepted as `continuity`.
         thread: Thread this handover belongs to (stable resume token). Auto-derived from bundle/epic/task/tldr when empty.
         supersedes: Optional id of an older handover this one supersedes; the old
             one gets a `superseded_by:` field and a SUPERSEDED callout. Only
@@ -4605,16 +4585,14 @@ def backlog_handover_get(
     sections: list[str] | None = None,
     expand_links: bool = False,
 ) -> str:
-    """Read a handover's content.
+    """Read handover <id>: slim frontmatter by default; verbose adds the body, sections picks named
+    sections (decisions, notes, blockers, where_id_start), expand_links adds tldrs to linked ids.
 
-    By default returns a slim view (frontmatter fields only, no body) to
-    minimise token cost. Use verbose=True to include the full markdown body.
-    Use sections to pull specific named body sections (decisions, notes,
-    blockers, where_id_start). Use expand_links=True to expand task_ids to
-    `id (tldr)` — honored in both slim and verbose modes.
-
-    Use when start-session shows a handover tldr that you want to read in full,
-    or when picking a task that has linked handovers.
+    Args:
+        handover_id: The handover id, as shown by a list or search.
+        verbose: Include the full markdown body.
+        sections: Named body sections to return instead of the slim view.
+        expand_links: Show task_ids as `id (tldr)`.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -4672,11 +4650,7 @@ def _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, l
 @mcp.tool()
 @_transactional("backlog_handover_resync")
 def backlog_handover_resync() -> str:
-    """Rebuild the handover index in backlog.yaml from disk.
-
-    Useful after manual edits to the handovers/ directory (deletes, renames),
-    or to enforce the 30-entry cap and archive overflow.
-    """
+    """Import hand edits to handover files (a handover-only `backlog_sync`) and rebuild the 30-entry handover index."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -4779,9 +4753,11 @@ def _thread_list_text(data: dict, include_closed: bool, include_archived: bool =
 @mcp.tool()
 def backlog_thread_resume(ref: str) -> str:
     """Where a line of work left off: its thread's newest open handover (its
-    newest when none is open) in full, frontmatter + body, in one call. `ref`
-    is a thread name OR any handover id of the thread, however stale; a miss
+    newest when none is open) in full, frontmatter + body, in one call. A miss
     answers the closest thread names.
+
+    Args:
+        ref: A thread name, or any handover id in the thread (however stale).
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -4867,8 +4843,13 @@ def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> s
 @mcp.tool()
 @_transactional("backlog_thread_update")
 def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
-    """Set a thread's status: open / parked / closed. Writing a new handover
-    into the thread later auto-reopens it (override expires)."""
+    """Set a thread's status. Writing a new handover into the thread later reopens it.
+
+    Args:
+        name: The thread name, as shown by `backlog_thread_list()`.
+        status: `open`, `parked` or `closed`.
+        reason: Optional note on why, echoed in the result.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -5293,7 +5274,7 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     supersession chain after the fact (e.g., a handover was written without
     `supersedes=`, but should chain off a prior one).
 
-    Both ids must exist on disk. Idempotent on the same `old_id` — calling it
+    Both handovers must exist. Idempotent on the same `old_id` — calling it
     again with a newer `new_id` updates the pointer instead of stacking
     callouts.
     """
@@ -5528,14 +5509,14 @@ def backlog_issue_get(
     sections: list[str] | None = None,
     expand_links: bool = False,
 ) -> str:
-    """Read an issue's content.
+    """Read issue <id>: slim frontmatter by default; verbose adds the body, sections picks named
+    sections (repro, investigation, notes), expand_links adds tldrs to linked ids.
 
-    By default returns a slim view (frontmatter fields only, no body) to
-    minimise token cost. Use verbose=True for the full body (repro steps,
-    investigation notes). Use sections to pull specific named body sections
-    (repro, investigation, notes). Use expand_links=True to expand
-    related_tasks/fixed_in_task to `id (tldr)` — honored in both slim and
-    verbose modes.
+    Args:
+        issue_id: The issue id, e.g. "ISS-003".
+        verbose: Include the full body (repro steps, investigation notes).
+        sections: Named body sections to return instead of the slim view.
+        expand_links: Show related_tasks / fixed_in_task as `id (tldr)`.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -5652,7 +5633,7 @@ def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
 @mcp.tool()
 @_transactional("backlog_issue_resync")
 def backlog_issue_resync() -> str:
-    """Rebuild the issue index in backlog.yaml from disk."""
+    """Import hand edits to issue files (an issue-only `backlog_sync`) and rebuild the issue index."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -5686,9 +5667,8 @@ def backlog_bug_create(
     Args:
         title: Required. Short summary.
         found_in: Optional task ID where the bug was flagged.
-        discovered_by: 'user' (default) or 'claude'. claude is only valid for
-            the offer-on-explicit-finding entry point, never for proactive
-            AI sightings.
+        discovered_by: 'user' (default) when the user flagged the bug; 'claude' when you found it
+            and the user agreed to log it.
         severity: Optional. P0|P1|P2|P3 if you want a sort hint.
         components: Affected component tags.
         location: file:line refs.
@@ -5937,10 +5917,8 @@ def _bug_update_in_tx(bug_id: str, updates: dict):
 @mcp.tool()
 @_transactional("backlog_bug_archive")
 def backlog_bug_archive(bug_id: str) -> str:
-    """Move bugs/B-NNN.md to bugs/archive/B-NNN.md.
-
-    Refuses if status is open or shelved. Called automatically by task-close
-    for fixed bugs; rarely called directly.
+    """Archive a fixed, adopted or promoted bug (refused while it is open or shelved).
+    Closing a task archives its fixed bugs already.
 
     Args:
         bug_id: Bug ID (e.g. B-001).
@@ -6187,7 +6165,8 @@ def backlog_decision(
     body: str = "",
 ) -> str:
     """Read and transition existing decisions (DEC-NNN). To CREATE a decision use
-    backlog_decision_create. Route through the taskmaster:decision skill.
+    backlog_decision_create. The taskmaster:decision skill presents the options to
+    the user and records the outcome.
 
     Params by action: list(status — default "open"; "all" for every state —,
     task_id, limit); get(decision_id);
@@ -6557,21 +6536,14 @@ def backlog_changes_since(
     since: str = "",
 ) -> str:
     """What changed in the backlog since a cursor, a time or an entity's creation, as JSON.
-    Resume, don't re-read.
 
-    Call it with no arguments to get a cursor and nothing else ("start watching
-    from now"), then pass that cursor back to learn what moved. A cursor survives
-    every write; it stops being usable only if the store was rebuilt or restored
-    to an earlier state, the scope of the question changed, or the history it
-    points at was retired. In that case the
-    answer is not an error: `resync_required` is true, `reason` says which, and a
-    fresh cursor comes back, so recovery costs one call. Do not treat a resync as
-    a quiet period — re-read what you care about.
+    With no arguments it returns a cursor and nothing else ("start watching from now");
+    pass the cursor back to learn what moved. When a cursor can no longer be used,
+    the answer is not an error: `resync_required` is true, `reason` says which, and a
+    fresh cursor comes back. That is not a quiet period, so re-read what you care about.
 
     Authored values are never returned. Each change names the fields that moved;
-    read the current value with `backlog_get_task` or `backlog_get_*` if you need
-    it. On a legacy store each change is reported as its own commit, because the
-    legacy change log has no commit rows to group by.
+    read the current value with `backlog_get_task` or `backlog_get_*`.
 
     Args:
         cursor: A cursor from an earlier call. Empty starts from now.
@@ -6579,7 +6551,8 @@ def backlog_changes_since(
         ids: Entity ids to report. Empty means all.
         epic: Report only this epic and its tasks, including a task leaving it.
         limit: Commits (or changes, when ungrouped) per answer, 1-500.
-        group_commits: Group each transaction's changes into one commit entry.
+        group_commits: Group each transaction's changes into one commit entry. A legacy store
+            has no commit rows, so each change is its own commit there.
         since_seq: Start from this sequence instead of a cursor. 0 is all history.
         since: Start from a date (YYYY-MM-DD) or ISO timestamp, or from an entity
             id — "since handover X was written" is since="<X's id>": everything
@@ -6841,28 +6814,21 @@ def backlog_context(
     to know before working on it, as JSON, bounded by bytes.
 
     One call in place of status + next_available + get_task + task_pipeline +
-    dependencies + bug and handover reads: `focus=<task id>, scope="task"`. `mandatory` is what blocks the task — unsatisfied review gates,
-    unmet or unresolvable dependencies, open bugs filed against it, open handovers
-    asking for an action, a human action it waits on, and a live peer's claim. It
-    is never trimmed to fit: when the budget cannot hold it, `over_budget` is true,
+    dependencies + bug and handover reads: `focus=<task id>, scope="task"`.
+    `mandatory` is what blocks the task: unsatisfied review gates, unmet or
+    unresolvable dependencies, open bugs filed against it, open handovers asking
+    for an action, a human action it waits on, and a live peer's claim. It is never
+    trimmed to fit: when the budget cannot hold it, `over_budget` is true,
     `selected` is empty and the blockers still come back whole, so raise the
     budget rather than trusting a short answer.
 
-    `clear` is a safety claim and is true only when nothing blocks *and* every
-    producer answered. A producer that could not answer — an unreadable row, a
-    dependency id that resolves to nothing, no task in focus at all — appears as a
-    blocker of kind `unknown`. Treat `clear: false` as "do not proceed", never as
-    "probably fine".
+    `clear` is true only when nothing blocks and every producer answered. One that
+    could not answer (an unreadable row, a dependency id that resolves to nothing,
+    no task in focus) appears as a blocker of kind `unknown`. `clear: false` means
+    something blocks or could not be checked, so resolve that before proceeding.
 
-    `selected` is the convenience half: bounded, ordered, and reported with an
-    exact count of what was left out. When rows remain, `cursor` continues the
-    same question; a cursor is refused once the store or the question moves on.
-
-    Only facts are spelled out. An absent `cursor` means nothing remains; an
-    absent `provenance` entry means the section was delivered whole from its
-    fixed source; an absent `omitted` means nothing was left out; `over_budget`
-    appears only when no answer fits the budget, blockers included. A blocker
-    leaves out a state or source its kind fixes (bugs and handovers are open).
+    `selected` is the bounded convenience part, with a count of what was left out;
+    pass `cursor` back to continue it.
 
     Args:
         focus: Task id. Empty takes the task this session picked, unless scope is project.
@@ -7146,13 +7112,14 @@ def backlog_idea_get(
     sections: list[str] | None = None,
     expand_links: bool = False,
 ) -> str:
-    """Read an idea's content.
+    """Read idea <id>: slim frontmatter by default; verbose adds the body, expand_links adds tldrs to
+    linked ids. Ideas have no named sections, so `sections` returns an error.
 
-    By default returns a slim view (frontmatter fields only, no body) to
-    minimise token cost. Use verbose=True for the full body. Ideas do not
-    have canonical body sections, so sections= is not supported (returns
-    an error if provided). Use expand_links=True to expand related_tasks
-    and related_issues to `id (tldr)` — honored in both slim and verbose modes.
+    Args:
+        idea_id: The idea id, e.g. "IDEA-004".
+        verbose: Include the full body.
+        sections: Not supported for ideas.
+        expand_links: Show related_tasks / related_issues as `id (tldr)`.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -7265,11 +7232,10 @@ def backlog_note(
     include_archived: bool = False,
     limit: int = DEFAULT_LIST_LIMIT,
 ) -> str:
-    """Manage sticky notes on the user's Desk. Notes are the lightest continuity
-    surface: freeform, situational, NOT attached to tasks. Write at most one
-    consolidated note per session, only for loose thoughts that fit no other
-    entity (task/idea/issue/handover). Never archive or edit user-authored notes
-    unless the user explicitly asks.
+    """Manage sticky notes on the user's Desk: the lightest continuity surface, freeform and
+    not attached to tasks. For loose thoughts that fit no task, idea, issue or handover; one
+    consolidated note per session is usually enough. Leave user-authored notes as they are
+    unless the user asks you to change them.
 
     Params by action: create(text, pinned); list(include_archived, limit);
     get(note_id); update(note_id, text, pinned); archive(note_id).
@@ -7771,11 +7737,24 @@ def backlog_add_task(
 ) -> str:
     """Create a new task under an epic. `phase` is required.
 
-    Common fields are top-level. Rarely-set fields go in `options`:
-    docs ("key:path;key:path"), sub_repo, stage (int), estimate (S/M/L),
-    anchors (comma-separated globs/URLs), task_id (override the auto id),
-    area (existing Area id). depends_on/anchors are comma-separated;
-    tldr auto-generates from notes/title when omitted.
+    Common fields are top-level; rarely-set ones go in `options`. `tldr` is generated
+    from notes/title when omitted. `lane`, `component`, `design_change` and
+    `blast_radius_depth` are not create-time arguments; set them afterwards with
+    backlog_update_task.
+
+    Args:
+        title: Short task title.
+        epic: Epic id (see `backlog_epic_status`).
+        phase: Phase id or name (see `backlog_phase_status`). Required.
+        priority: `critical`, `high`, `medium` (default) or `low`; `P0`-`P3` are accepted as aliases.
+        tldr: One-line summary. Generated from notes/title when empty.
+        notes: Free-form task notes.
+        next_step: The concrete first action.
+        depends_on: Comma-separated task ids that must be done first.
+        bundle: Bundle slug (lowercase kebab, 2-41 chars) to group this task with its siblings.
+        options: Rarely-set fields as a dict: `docs` ("key:path;key:path", keys plan/spec/roadmap/design/analysis),
+            `sub_repo`, `stage` (int), `estimate` (S/M/L), `anchors` (comma-separated globs/URLs),
+            `task_id` (override the generated id), `area` (an existing Area id).
     """
     options = options or {}
     docs = options.get("docs", "") or ""
@@ -8424,9 +8403,9 @@ def backlog_complete_task(
     When session summary fields are provided, a changelog entry is appended automatically.
     This combines the status transition and session logging into one atomic operation.
 
-    Use target_status="done" (default) when Claude's work is complete and gates passed.
-    Use target_status="in-review" ONLY when an action that only the human can perform
-    blocks the task (API key, LLM config, account access) — pass it as human_action.
+    Use target_status="done" (default) when the work is complete and the gates passed.
+    Use "in-review" when only the human can unblock the task (API key, account access, a
+    config only they hold), and pass that as human_action.
 
     Accepts tasks that are in-progress, in-review, or blocked.
 
@@ -8830,13 +8809,19 @@ def backlog_update_task(
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
-        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,
+        field: Field to update, one of: title, status, priority, notes, branch, worktree, blockers,
             docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,
+            anchors, area, lane, component, design_change, bundle, blast_radius_depth,
             patchnote, release, tldr, next_step, human_action
         value: New value. Format varies by field:
-            - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
+            - status: todo, in-progress, in-review, done, blocked or archived (illegal transitions are
+              refused; `in-review` needs human_action set first)
+            - priority: critical, high, medium or low
+            - notes: replaces the whole notes text (it does not append)
+            - docs: "key:path" with key one of plan, spec, roadmap, design, analysis
+              (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003"),
-              which REPLACE the whole list; or ids each prefixed + or - ("+cpp-parser-004"),
+              which replace the whole list; or ids each prefixed + or - ("+cpp-parser-004"),
               which add to or remove from it
             - stage: integer
             - estimate: size string (e.g., "S", "M", "L")
@@ -8847,6 +8832,12 @@ def backlog_update_task(
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
             - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
             - area: area id (must match an existing Area from `backlog_area_list`), or "" to clear
+            - lane: full, standard or express (which gates the task needs)
+            - component: a component declared on the task's epic, or "" to clear
+            - design_change: true or false, flagging a task that changes its epic's locked design
+            - bundle: bundle slug (lowercase kebab, 2-41 chars), or "" to clear
+            - blast_radius_depth: shallow or deep, or "" to clear
+            - human_action: what only the human can do; required before status in-review
         tldr: One-sentence essence of the task (keyword style only).
         next_step: Concrete immediate action to take on this task (keyword style only).
     """
@@ -9101,20 +9092,23 @@ def backlog_record_gate(
     critical_count: int = 0,
     important_count: int = 0,
 ) -> str:
-    """Record the outcome of a pipeline gate on a task. Generalizes spec-review to
-    every gate (spec, plan, tests, impl, spec-review, plan-review, design-review,
-    review-gate). Status gates take status="done"; review gates take a verdict in
-    pass/warn/fail. Overwrites any prior record for that gate.
+    """Record the outcome of a pipeline gate on a task (spec, plan, tests, impl, spec-review,
+    plan-review, design-review, review-gate). Status gates take status="done"; review gates
+    take a verdict in pass/warn/fail. Overwrites any prior record for that gate.
 
-    Enforces ordering: for a task WITH a lane, an earlier required gate must be
-    satisfied (pass/done/skipped) before a later one is recorded.
+    On a task with a lane, an earlier required gate must be satisfied (pass/done/skipped)
+    before a later one is recorded.
 
     Args:
         task_id: Task id.
         gate: One of spec|plan|tests|impl|spec-review|plan-review|design-review|review-gate.
         verdict: pass|warn|fail (for review gates).
         status: done (for status gates).
-        commit_sha, spec_path, codex_used, critical_count, important_count: optional meta.
+        commit_sha: The commit the gate was run against (the merge gate compares it with the branch tip).
+        spec_path: Path of the spec or plan that was reviewed, if any.
+        codex_used: True if the optional Codex adversarial pass was run.
+        critical_count: Number of critical findings.
+        important_count: Number of important findings.
     """
     if gate not in _VALID_GATES:
         return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
@@ -9249,9 +9243,9 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
 @mcp.tool()
 @_transactional("backlog_skip_gate")
 def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") -> str:
-    """Record an explicit, audited skip of a pipeline gate — the ONLY way past a
-    required gate without satisfying it. Always succeeds (for a valid gate+reason)
-    and is flagged on the dashboard. No silent skips exist anywhere else.
+    """Record an explicit, audited skip of a pipeline gate: the way past a required gate
+    without satisfying it. It always succeeds for a valid gate and reason, is recorded
+    with that reason, and is flagged on the dashboard.
 
     Args:
         task_id: Task id.
@@ -9379,8 +9373,7 @@ def backlog_set_spec_review(
     critical_count: int = 0,
     important_count: int = 0,
 ) -> str:
-    """Record a spec-review pass on a task. Thin alias over backlog_record_gate(gate="spec-review");
-    also keeps the legacy `spec_review` dict for back-compat. Overwrites any prior record.
+    """Alias of backlog_record_gate(gate="spec-review"); also keeps the legacy `spec_review` dict.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
@@ -9425,8 +9418,8 @@ def backlog_set_spec_review(
 @mcp.tool()
 @_transactional("backlog_clear_spec_review")
 def backlog_clear_spec_review(task_id: str) -> str:
-    """Remove the spec-review gate (and legacy spec_review mirror) from a task.
-    Use when the spec was significantly revised and the prior review is no longer valid.
+    """Alias of backlog_clear_gate(gate="spec-review"); also removes the legacy `spec_review` dict.
+    Use when the spec was revised and the prior review no longer applies.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
@@ -12744,7 +12737,7 @@ def backlog_project_init(name: str, slug: str = "") -> str:
 def backlog_project_error_trace_ladder() -> list[dict]:
     """Return the observability error-trace ladder as a list of dicts.
 
-    Empty list if no manifest. Consumed by IDEA-006 Diagnose-Auth-Or-Not.
+    Empty list if no manifest.
     """
     m = load_project_manifest(_project_root_or_cwd())
     if m is None:
@@ -12778,7 +12771,9 @@ def backlog_linear(
     request_id: str = "",
     caller_scope: str = "",
 ) -> str:
-    """Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.
+    """Drive Taskmaster's Linear sync. First-time setup is probe (lists teams and statuses), then
+    bootstrap_apply with the status/priority mapping the user approved; the taskmaster:linear
+    skill walks through it.
 
     Params by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,
     token_env, status_mapping, priority_mapping, default_workspace);
