@@ -5,7 +5,7 @@ Put one task in progress for this session and set up its worktree, surfacing any
 ## Choose the task
 
 - **Task id given:** use it.
-- **"Continue" or "resume" with no id:** call `backlog_thread_list()`. With one open thread, resume it with `backlog_thread_resume(<name>)`, take the first id in its handover's `task_ids`, and check it with `backlog_get_task(<id>)`. With several, take the thread whose newest handover's first task is still in progress and name the others in one line; ask which only when none or more than one fits (a pasted thread name or handover id also works). Say which task and thread you're continuing and carry on; the user can redirect. A done or archived task, or no threads, falls through to the next bullet. v2 backlogs have no threads; skip this.
+- **"Continue" or "resume" with no id:** call `backlog_thread_list()`. With one open thread, resume it with `backlog_thread_resume(<name>)`, take the first id in its handover's `task_ids`, and check it with `backlog_get_task(<id>)`. With several, take the thread whose newest handover's first task is still in progress (one `backlog_list_tasks(status="in-progress")` answers which) and name the others in one line; ask which only when none or more than one fits (a pasted thread name or handover id also works). Say which task and thread you're continuing and carry on; the user can redirect. A done or archived task, or no threads, falls through to the next bullet. v2 backlogs have no threads; skip this.
 - **No id:** `backlog_next_available` (phase-filtered when a phase is active); present the top few and ask. When it's empty, suggest `backlog_advance_phase` or adding work.
 - **A task this session already holds**, resuming after a pause or compaction: `references/v3-context-loading.md`, no re-pick.
 
@@ -27,6 +27,7 @@ Build it from the context answer, without further calls: open handovers (count a
 ## Worktree
 
 The pick response ends with the worktree command. Run it, then record what it made with `backlog_update_task(<id>, "branch", ...)` and `backlog_update_task(<id>, "worktree", ...)`, because end-session cleanup and the merge hooks find the work through those fields. Write the task's code in that worktree, not on the main branch.
+- **Already on a branch** (a direct change that grew into a tracked task, see `../taskmaster/playbook.md`): record `branch` (and `worktree` if it is a separate one) before `backlog_pick_task`, skip the worktree command, and keep working where you are. The pick reply then says the branch is already recorded.
 
 - **Solo:** `git worktree add .worktrees/{task-id} -b feature/{task-id}`. A recorded worktree that is gone: `git worktree prune`, then recreate it.
 - **Bundle:** the response starts `Picking bundle <slug>: <ids>`. Every member shares `.worktrees/<slug>` on `feature/<slug>`, and that one pick put them all in progress. Announce the members; `references/bundles.md` (Path A) has the details. After a compaction, `backlog_claim(action="status", task_id=<id>)` lists the members, and `backlog_get_task` shows the `bundle` field.

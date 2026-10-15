@@ -76,7 +76,7 @@ Priority suggestions (the one mapping, reused by init's analysis mode): FIXME/HA
 
 ## Step 6: Offer Actions
 
-Ask one question that covers the whole choice: create tasks for all untracked TODOs (state the phase they would go into, the active phase if there is one), create selectively, review stale candidates, or stop at the report.
+Ask the one question in `../playbook.md`.
 
 When creating tasks:
 - Group TODOs by directory/domain into epics.

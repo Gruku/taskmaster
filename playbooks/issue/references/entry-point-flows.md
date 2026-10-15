@@ -60,7 +60,7 @@ Trigger: "promote B-XX to an issue" (optionally with sibling Bug ids), or a `bac
 
 ## close-on-task-complete
 
-end-session raises this when a finished task fixes an unresolved Issue. The Issues come from the `fixes` entries under `links` in `backlog_get_task(T-NNN)`, plus any unresolved Issue that lists the task in `related_tasks` (`backlog_issue_get` shows that field; the task side doesn't). For each one, ask: "T-NNN is done. ISS-XXX (P1 — <title>) is still open. Mark it fixed, linked to T-NNN?" On yes:
+end-session raises this when a finished task fixes an unresolved Issue. The Issues come from the `backlog_query` over `links` in `../../end-session/references/summary-modes.md`. For each one, ask: "T-NNN is done. ISS-XXX (P1 — <title>) is still open. Mark it fixed, linked to T-NNN?" On yes:
 
 ```
 backlog_issue_update("ISS-XXX", "fixed_in_task", "T-NNN")

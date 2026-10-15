@@ -21,7 +21,7 @@ Sweep the open decisions linked to the in-progress task, so the handover can car
    - **Drop**: take a one-line reason, `backlog_decision(action="drop", decision_id=id, reason=...)`, then record it under "Resolved this session" with a `(dropped)` suffix.
 
    A decision the user doesn't answer is carried forward.
-3. `taskmaster:handover` inserts the two lists into the handover body markdown. `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters: the body is the durable carrier, and the `[[DEC-NNN]]` links are what the viewer uses for cross-entity navigation.
+3. `taskmaster:handover` (`../../handover/playbook.md`) inserts the two lists into the handover body markdown. `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters: the body is the durable carrier, and the `[[DEC-NNN]]` links are what the viewer uses for cross-entity navigation.
 
 ## Handover index resync
 

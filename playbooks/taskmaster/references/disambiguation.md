@@ -7,7 +7,7 @@ Use intent to resolve, not the surface phrase.
 
 ## handover vs end-session
 
-- **end-session** is a task transition — status → done/in-review with changelog. Route there when user says "wrap up" (end-session auto-writes a handover).
+- **end-session** (`../../end-session/playbook.md`) is a task transition — status → done/in-review with changelog. Route there when user says "wrap up" (end-session auto-writes a handover).
 - **handover** is a narrative continuity artifact — can be written without ending a task. Route directly to `taskmaster:handover` when user says "context handoff" or "for tomorrow".
 
 ## bug/issue record vs task
@@ -18,8 +18,8 @@ Use intent to resolve, not the surface phrase.
 
 ## bug vs issue
 
-- **bug** — a one-off defect (`taskmaster:bug`). "I found a bug", "file a bug", "track this defect".
-- **issue** — the elevated tier for defects that are recurring (≥2 occurrences), systemic (≥2 components), or P0/P1 and outstanding (`taskmaster:issue`). "promote B-XX to an issue", "this keeps happening".
+- **bug** — a one-off defect (`taskmaster:bug`, `../../bug/playbook.md`). "I found a bug", "file a bug", "track this defect".
+- **issue** — the elevated tier for defects that are recurring (≥2 occurrences), systemic (≥2 components), or P0/P1 and outstanding (`taskmaster:issue`, `../../issue/playbook.md`). "promote B-XX to an issue", "this keeps happening".
 - Colloquial "issue" with no recurring/systemic/outstanding evidence routes to **bug**, not issue.
 
 ## idea vs note

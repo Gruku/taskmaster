@@ -229,7 +229,7 @@ _SERVER_INSTRUCTIONS = (
     "the value was already stored. On a native store the database is the authority: a hand edit "
     "to a .taskmaster/ file takes effect only after backlog_sync(). backlog_store_status shows "
     "dirty or quarantined files. JSON results carry the same receipt as \"seq\" and "
-    "\"export_pending\" fields; a result starting \"Error:\" wrote nothing."
+    "\"export_pending\" fields; a result starting \"Error:\" with no seq wrote nothing."
 )
 
 mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION, instructions=_SERVER_INSTRUCTIONS))
@@ -7964,8 +7964,16 @@ def _build_worktree_instruction(
         wt_path = f"<sub-repo>/.worktrees/{key}"
         cmd = f"git worktree add .worktrees/{key} -b {branch_name}"
 
+    if branch and not _path_key:
+        lead = (
+            f"\n\n**Branch already recorded as `{branch}`.** If this work is already happening on it, record "
+            f"`worktree` when it is a separate one and keep working where you are; no new worktree. "
+            f"Otherwise create one:"
+        )
+    else:
+        lead = "\n\n**Create a worktree before writing any code:**"
     return (
-        f"\n\n**Create a worktree before writing any code:**\n"
+        f"{lead}\n"
         f"```\n{cmd}\n```\n"
         f"Then record it:\n"
         f"```\nbacklog_update_task({task_id}, branch, {branch_name})\n"
