@@ -1,12 +1,12 @@
 # Chained Handover Supersession
 
-When a new handover replaces an older one for the same line of work, they are **chained**: the old one is edited in place to point at the new (`superseded_by:`), its status becomes `superseded`, and a `SUPERSEDED` callout is prepended to its body. A line of work then has one open resume point.
+When a new handover replaces an older one for the same line of work, they are chained: the old one is edited in place to point at the new (`superseded_by:`), its status becomes `superseded`, and a `SUPERSEDED` callout is prepended to its body. A line of work then has one open resume point.
 
 Most of this is automatic. `supersedes=` is only for the cases the server cannot infer.
 
 ## What `backlog_handover_create` does on its own
 
-Every create supersedes the older **open** handovers of the same line of work, archived ones (outside the 30-entry index) included:
+Every create supersedes the older open handovers of the same line of work, archived ones (outside the 30-entry index) included:
 
 - **`thread` passed explicitly** — every older open handover in that thread.
 - **`thread` left empty (derived: bundle → epic → task id → tldr)** — a derived thread is a whole epic or bundle, so only handovers that share a task id with the new one, or where both name no task. A sibling task's handover in the same epic stays open, silently: it is someone else's resume point.
@@ -27,7 +27,7 @@ The new handover gets no `supersedes:` field from this; the pointer lives on the
 
 ## When to pass `supersedes=` yourself
 
-Set `supersedes = <prior_id>` only when the prior handover is **not** covered above and the new one replaces it:
+Set `supersedes = <prior_id>` only when the prior handover is not covered above and the new one replaces it:
 
 1. It is in a different thread (the line of work was renamed, or moved between a derived and a named thread), or
 2. the thread is derived and the two handovers share no task id, but this session did take over that work.
@@ -58,7 +58,7 @@ Inside the same transaction as the create, the old handover:
    > The next session should read the newer handover instead. This file kept as a checkpoint reference.
    ```
 
-If a SUPERSEDED callout already starts the body, it is **replaced**, not stacked. Idempotent on the same `old_id`.
+If a SUPERSEDED callout already starts the body, it is replaced, not stacked. Idempotent on the same `old_id`.
 
 ## Warnings to surface
 

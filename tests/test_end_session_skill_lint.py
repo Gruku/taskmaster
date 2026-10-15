@@ -85,6 +85,15 @@ def test_playbook_contains_canonical_sentence():
     )
 
 
+def test_unfinished_work_stays_in_progress():
+    """"I'm done for today" mid-task must not mark unfinished work done."""
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "Unfinished work stays in progress" in text
+    assert "don't call `backlog_complete_task`" in text
+    summary = (PLAYBOOK_DIR / "references" / "summary-modes.md").read_text(encoding="utf-8")
+    assert "FROM links" in summary and "backlog_query" in summary
+
+
 def test_playbook_close_blocker_read_and_bundle_members():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     assert 'backlog_context(focus=<task_id>, scope="task", include=[])' in text

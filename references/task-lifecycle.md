@@ -8,7 +8,7 @@ todo → in-progress → done → archived
      in-review  blocked → todo | in-progress | in-review | archived
 ```
 
-`done` can also go back to `in-review`. Status moves go through the skills below; the server enforces the legal moves on tasks that have a lane, and a task with no lane is exempt except when leaving `archived`.
+`done` can also go back to `in-review`, an in-progress task can be unpicked back to `todo`, and an archived task can only go back to `todo`. Status moves go through the skills below; the server enforces the legal moves on tasks that have a lane, and a task with no lane is exempt except when leaving `archived`.
 
 ## What Each Status Means
 
@@ -39,7 +39,10 @@ Most tasks never touch in-review: they go `in-progress → done` once the lane's
 | todo / in-progress / in-review | blocked | `backlog_update_task(id, "status", "blocked")`, with the reason in `blockers` | Records that the task cannot proceed |
 | blocked | todo / in-progress | `backlog_update_task(id, "status", ...)` once the blocker clears (a blocked task is not directly pickable) | Work can resume |
 | blocked | done / in-review | `backlog_complete_task` | A blocked task can still be completed |
-| done / blocked / todo | archived | `backlog_archive_task` | Clears the task from the board; a task that is not done needs a non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
+| done / blocked / todo | archived | `backlog_archive_task` | Clears the task from the board; a `todo` task needs a non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
+| in-progress / in-review | archived | `backlog_update_task(id, "status", "archived")` | `backlog_archive_task` refuses these two statuses |
+| in-progress | todo | `backlog_update_task(id, "status", "todo")` | Unpick: the task goes back to waiting |
+| archived | todo | `backlog_update_task(id, "status", "todo")` | Unarchive; the only legal move out of archived |
 
 ## Phases
 

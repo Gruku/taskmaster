@@ -25,7 +25,13 @@ Default `done`: the work is finished and the lane's gates passed, so there is no
 
 ## Related issues
 
-After `backlog_complete_task` succeeds, look at the task's `related_issues`. For each one whose `status` is `open` or `investigating`, ask:
+After `backlog_complete_task` succeeds, find the open issues linked to the task. The link lives on the Issue side (`related_tasks`, or a `fixes` link made with `backlog_link`), and this query returns Issues linked by either:
+
+```
+backlog_query("SELECT i.id,i.status,json_extract(i.doc,'$.title') AS title FROM links l JOIN entities i ON i.kind=l.dst_kind AND i.id=l.dst_id WHERE l.src_kind='task' AND l.src_id='<task_id>' AND l.dst_kind='issue' AND i.deleted=0 AND i.status IN ('open','investigating')")
+```
+
+For each row, ask:
 
 > "ISS-XXX is still open - close it as fixed in task_id, or leave for follow-up?"
 
@@ -34,4 +40,4 @@ After `backlog_complete_task` succeeds, look at the task's `related_issues`. For
 | Close as fixed | `backlog_issue_update("ISS-XXX", "fixed_in_task", "<task_id>")` then `backlog_issue_update("ISS-XXX", "status", "fixed")` |
 | Leave for follow-up | No tool call; the issue stays open |
 
-The question guards a state the user owns, so it stays. With no `related_issues`, or all of them already fixed, closed or wont-fix, skip this. With several open, ask for each in turn.
+The question guards a state the user owns, so it stays. With no rows, skip this. With several open, ask for each in turn.

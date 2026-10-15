@@ -6,7 +6,7 @@ Write one when the user asks, when end-session calls for it, or before a compact
 
 ## Fields
 
-- **`session_kind`** (`references/session-kinds.md`): `continuity` by default; `milestone` when a chunk shipped or direction changed; `deep-context` for a pre-compaction capture.
+- **`session_kind`:** `continuity` by default; the other kinds and when to use them are in `references/session-kinds.md`.
 - **`task_ids`:** the in-progress task for milestone and deep-context; the last task touched for continuity; `[]` for exploration. Don't invent one.
 - **`thread`:** reuse the name if this session resumed from a thread; otherwise leave it empty and the server derives it. Set it only when the user names the line of work.
 - **`supersedes`:** normally empty, because the server supersedes older open handovers of the same thread itself. Set it only for the cases in `references/supersession.md` (a renamed thread, or taking over work that shares no task id).
@@ -17,7 +17,7 @@ Write one when the user asks, when end-session calls for it, or before a compact
 
 Fill `templates/body.md`; drop empty sections and leave no `{placeholders}`. Decisions from end-session's sweep go in its "Open decisions" / "Resolved this session" sections as `[[DEC-NNN]]` links; the body is what carries them.
 
-For "Files of interest", list what this session edited, what it read, and what the task's anchors and docs point to (`references/auto-extraction.md`), each with what it is and why the next session needs it; a bare path sends the next session back to re-explore. Then run source 7 in `references/auto-extraction.md`, the index reverse lookup: its open tasks are candidates for `task_ids`, and for open bugs and issues whose location you edited, ask in one line whether this session fixed them. Change a status only on the user's answer.
+For "Files of interest", list what this session edited, what it read, and what the task's anchors and docs point to (`references/auto-extraction.md`), each with what it is and why the next session needs it; a bare path sends the next session back to re-explore. Then run source 7 in `references/auto-extraction.md`, the index reverse lookup: its open tasks are candidates for `task_ids`, and for open bugs and issues whose location you edited, add one line above the paste block ("B-012, ISS-004 touch files you edited; say if this session fixed them"). Change a status only on the user's answer.
 
 ## Write and confirm
 

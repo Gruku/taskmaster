@@ -1,20 +1,12 @@
 # End-Session: pre-close sweeps
 
-Read this when the playbook's "Before closing" steps need detail: the handover cue table, the decision sweep, and the idea sweep.
+Read this when the playbook's "Before closing" steps need detail: the handover cues, the decision sweep, and the idea sweep.
 
 ## Handover
 
-Write a session handover without asking when the task is still in flight (`in-progress`), the session was long, or the user said anything like "for tomorrow", "remind me next time", "context handoff", "pick this up later". Skip it for a small one-touch session, or when the user said "no handover" or "skip handover".
+The write condition is in the playbook's "Before closing"; extra cues are "remind me next time" and "pick this up later". Skip it when the user said "no handover" or "skip handover".
 
-Infer `session_kind` from the conversation:
-
-| Cue | session_kind |
-|---|---|
-| "context handoff", "near compaction", "save before compact" | `deep-context` |
-| "milestone done", "chunk complete", "ready for next plan", direction changed | `milestone` |
-| Anything else | `continuity` |
-
-Then invoke the `taskmaster:handover` skill with that `session_kind`. It writes directly, so end-session does not draft the body itself or ask whether to write. The user can edit or replace the file afterwards. End-session continues whatever the handover's outcome.
+Pick `session_kind` from the conversation using the table in `../../handover/references/session-kinds.md`, then invoke the `taskmaster:handover` skill (`../../handover/playbook.md`) with it. It writes directly, so end-session does not draft the body itself or ask whether to write. The user can edit or replace the file afterwards. End-session continues whatever the handover's outcome.
 
 If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` and `review_reason=<buffered reason>` to the handover skill. If the handover is skipped, the flag is dropped.
 
@@ -23,10 +15,12 @@ If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` an
 Sweep the open decisions linked to the in-progress task, so the handover can carry them:
 
 1. `backlog_decision(action="list", status="open", task_id=<current>)`.
-2. For each decision, ask the user (use your structured-question tool if available):
+2. Ask once, listing every open decision with its options (use your structured-question tool if available). For each, the user can:
    - **Carry forward**: leave it open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
    - **Resolve now**: present the options; on a pick, `backlog_decision(action="resolve", decision_id=id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
    - **Drop**: take a one-line reason, `backlog_decision(action="drop", decision_id=id, reason=...)`, then record it under "Resolved this session" with a `(dropped)` suffix.
+
+   A decision the user doesn't answer is carried forward.
 3. `taskmaster:handover` inserts the two lists into the handover body markdown. `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters: the body is the durable carrier, and the `[[DEC-NNN]]` links are what the viewer uses for cross-entity navigation.
 
 ## Handover index resync
