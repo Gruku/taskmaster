@@ -1,12 +1,12 @@
 # Plan Review
 
-Full-lane gate between the implementation plan and writing tests: challenge the plan before any test or production code exists. The spec was already reviewed by `taskmaster:spec-review` (the gate order per lane is stated there); code is reviewed later by `taskmaster:review-gate`.
+Full-lane gate between the implementation plan and writing tests: challenge the plan before any test or production code exists. The spec was already reviewed by `taskmaster:spec-review` (`../spec-review/playbook.md`, which states the gate order per lane); code is reviewed later by `taskmaster:review-gate`.
 
 Arguments: `task_id` (defaults to the task in scope); `--codex` / `--no-codex` to force the Codex pass on or off (default: critical = suggest, high = offer, else off).
 
 ## Review
 
-`backlog_get_task(task_id)`. This gate applies only to `lane: full`. On any other lane, say the gate doesn't apply (a standard-lane task has `design-review`, run by `taskmaster:spec-review`) and stop.
+`backlog_get_task(task_id)`. This gate applies only to `lane: full`. On any other lane, say the gate doesn't apply (a standard-lane task has `design-review`, run by `taskmaster:spec-review`, `../spec-review/playbook.md`) and stop.
 
 Find the plan in `task.docs.plan`, then `docs/plans/`, then the task's `## Spec / Plan` section. None found: say a plan has to be written first and stop.
 
@@ -19,9 +19,7 @@ Report each check as a gate row and keep going; questions go in the closing mess
 
 Show the verdict first, then the rows: A PASS/WARN, B PASS/FAIL (N issues), C PASS/FAIL/SKIP.
 
-- `pass`: no open Critical; Important findings fixed or acknowledged. Record the honest counts either way.
-- `warn`: Important findings neither fixed nor acknowledged. The gate stays pending, so don't proceed to tests.
-- `fail`: a Critical flaw in the plan.
+Verdicts follow `../spec-review/playbook.md` ("Report, record, next step"): `pass` (no open Critical, Importants fixed or acknowledged), `warn` (Importants unaddressed; gate stays pending), `fail` (a Critical flaw in the plan).
 
 Record with `backlog_record_gate(task_id, "plan-review", verdict, critical_count=<n>, important_count=<n>, codex_used=<bool>)`.
 

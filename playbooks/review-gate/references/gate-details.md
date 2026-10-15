@@ -43,16 +43,16 @@ Lead with the overall verdict, then the matrix:
 
 ```
 Gate 1  — Spec/Plan:               PASS / WARN / SKIP
-Gate 2a — Code Review (Claude):    PASS / FAIL (N issues)
+Gate 2a — Code Review (own):       PASS / FAIL (N issues)
 Gate 2b — Codex Precision:         PASS / FAIL / SKIP (not installed | opt-out)
 Gate 2c — Spec Adherence:          PASS / WARN / SKIP
 Gate 3  — Tests:                   PASS / FAIL / SKIP
 Gate 3  — Build:                   PASS / FAIL / SKIP
 ```
 
-List issues grouped by severity, tagged with source (Claude / Codex) and gate. If Codex flagged Criticals that Gate 2a missed, say so, since the user will want to read those carefully.
+List issues grouped by severity, tagged with source (own / Codex) and gate. If Codex flagged Criticals that Gate 2a missed, say so, since the user will want to read those carefully.
 
-When gates failed, offer two paths: stay `in-progress` and address the issues, or proceed over them with `backlog_skip_gate` and the user's reason. Recording a `pass` over open Criticals would put a false verdict on the record.
+When gates failed, offer two paths: stay `in-progress` and address the issues, or proceed over them with `backlog_skip_gate` and the user's reason.
 
 ## Review instructions
 

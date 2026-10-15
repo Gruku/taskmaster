@@ -12,7 +12,7 @@ investigating ─────► fixed | wontfix | duplicate  (same requirements
 
 Valid statuses: `open`, `investigating`, `fixed`, `wontfix`, `duplicate`. There is no `closed` or `reopened` status; see the regression pattern below.
 
-`backlog_issue_update` takes one `field`/`value` per call and validates the stored row, so set the companion field first, then `status`. A missing required field comes back as a ValueError naming it.
+`backlog_issue_update` takes one `field`/`value` per call and validates the stored row, so set the companion field first, then `status`. A missing required field comes back as an `Error:` naming it.
 
 ## Transitions
 

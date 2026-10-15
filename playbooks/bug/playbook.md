@@ -4,7 +4,7 @@ Bugs are the light defect tier: anything the user wants tracked that doesn't mee
 
 Write Bugs through this playbook rather than calling `backlog_bug_create` / `backlog_bug_update` cold. The playbook adds the disposition choice and keeps defects you noticed yourself from being logged without the user's say-so.
 
-A defect you can fix in a moment inside the current task needs no Bug: fix it and mention it in the commit.
+A defect you can fix in a moment inside the current task needs no Bug: fix it and mention it in your reply.
 
 ## What to do
 
@@ -27,5 +27,3 @@ shelved ─► open | adopted | promoted
 - `backlog_bug_update` sets one field per call. Set the companion field first, then `status`, because validation reads the stored row.
 - A task can't move to `done` while a Bug found in it is still `open`.
 - `backlog_bug_promote` needs `bug_ids`, `title`, `severity` and `evidence_text`.
-
-Writes: a result ending in `[seq N]` is committed; `(export pending: …)` means committed with the file export still queued; `No change … already …` without `[seq]` means the value was already stored. `backlog_store_status` shows dirty or quarantined files.

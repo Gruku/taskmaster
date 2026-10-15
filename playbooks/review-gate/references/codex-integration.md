@@ -17,7 +17,7 @@ Run `/codex:review` against the branch diff:
 /codex:review --base <branch-base> --wait <focus text>
 ```
 
-Make the focus text reflect what Gate 2a covered, so Codex looks for blind spots. For example: "Claude's review flagged X and Y. Look for error path correctness, edge cases in <specific function>, and sibling occurrences of the same bug pattern elsewhere in the codebase."
+Make the focus text reflect what Gate 2a covered, so Codex looks for blind spots. For example: "The first review flagged X and Y. Look for error path correctness, edge cases in <specific function>, and sibling occurrences of the same bug pattern elsewhere in the codebase."
 
 ## Case B: repeated-bug verification
 

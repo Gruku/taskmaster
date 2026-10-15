@@ -1,6 +1,6 @@
 # Review Gate
 
-Post-implementation check of a task's code: is it solid enough to close? Lead the report with the verdict; the user wants a judgement, not a data dump. This reviews the diff. Design review of the spec is `taskmaster:spec-review`; plan review is `taskmaster:plan-review`.
+Post-implementation check of a task's code: is it solid enough to close? Lead the report with the verdict; the user wants a judgement, not a data dump. This reviews the diff. Design review of the spec is `taskmaster:spec-review` (`../spec-review/playbook.md`); plan review is `taskmaster:plan-review` (`../plan-review/playbook.md`).
 
 Arguments: `task_id` (defaults to the in-progress task); `--codex` / `--no-codex` to force the Codex pass on or off.
 
@@ -18,18 +18,15 @@ Severity decides what blocks: Critical blocks. Important needs the user's acknow
 
 ## Report and record
 
-Show the verdict first, then the gate matrix and the findings grouped by severity, tagged by source (Claude or Codex). Matrix format: `references/gate-details.md`. If the task has `review_instructions`, show them as manual test steps. If it has none, draft them from what was built, save them with `backlog_update_task(task_id, "review_instructions", <text>)`, and tell the user they can edit them.
+Show the verdict first, then the gate matrix and the findings grouped by severity, tagged by source (your own review or Codex). Matrix format: `references/gate-details.md`. If the task has `review_instructions`, show them as manual test steps. If it has none, draft them from what was built, save them with `backlog_update_task(task_id, "review_instructions", <text>)`, and tell the user they can edit them.
 
 Record the honest verdict, because the server lets a task reach `done` only on a recorded `pass` or an audited skip:
-`backlog_record_gate(task_id, "review-gate", verdict="pass"|"warn"|"fail", commit_sha=<HEAD>, critical_count=<n>)`.
+`backlog_record_gate(task_id, "review-gate", verdict="pass"|"warn"|"fail", commit_sha=<sha>, critical_count=<n>, important_count=<n>)`.
+`pass` means no open Critical and any Importants acknowledged by the user (record their count in `important_count`); `warn` means Importants not yet acknowledged; `fail` means an open Critical. `commit_sha` is the full 40-character SHA of the task branch's tip (`git rev-parse <branch>`; `git rev-parse HEAD` when the task has no branch). The merge gate compares it exactly with that tip, so a short SHA, or the HEAD of a different checkout, never matches.
 When the user wants to proceed over findings, use `backlog_skip_gate(task_id, "review-gate", reason)` with their reason; don't record a `pass` over open Criticals. The task stays `in-progress`; end-session closes it.
 
-If `backlog_context` listed open bugs, walk each through `taskmaster:bug` (fix now / spawn task / shelve / promote). `backlog_complete_task` refuses while any stay open, so resolving them here saves a failed close later.
+If `backlog_context` listed open bugs, walk each through `taskmaster:bug` (`../bug/playbook.md`: fix now / spawn task / shelve / promote). `backlog_complete_task` refuses while any stay open, so resolving them here saves a failed close later.
 
 ## Bundles
 
 A task whose `bundle` field is set (or whose pick said `Picking bundle <slug>`) shares one diff with its bundle mates. List the members with `backlog_claim(action="status", task_id=<id>)` (`members`), review the shared diff once, and give one verdict per member against that member's acceptance criteria, recording a gate per member. A failing member is either fixed in the same worktree and re-gated alone, or descoped explicitly. Details: `references/bundle-gate.md`.
-
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending. `No change … already …` without `[seq]` means the value was already stored. `backlog_store_status` shows dirty and quarantined files and live sessions.

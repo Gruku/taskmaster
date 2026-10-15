@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 CAPS_WORDS = re.compile(
-    r"\b(?:MUST|NEVER|ALWAYS|CRITICAL|MANDATORY|REQUIRED|IMPORTANT|EXTREMELY|ONLY)\b|\b[Dd]o NOT\b"
+    r"\b(?:MUST|NEVER|ALWAYS|CRITICAL|MANDATORY|REQUIRED|IMPORTANT|EXTREMELY|ONLY)\b|\bNOT\b"
 )
 ALARM = ("⛔",)  # no-entry emoji
 # Slash names must match as whole tokens so `/init-taskmaster` and `playbooks/init-taskmaster` don't trip `/init`.
