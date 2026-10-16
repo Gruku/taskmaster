@@ -1,16 +1,13 @@
 # Handover Session Kinds
 
-Four values. Pick exactly one. Kind drives resume-load behavior and archive policy.
+Three values; pick one. The kind drives how much a resuming session loads and how the handover is archived.
 
 | Kind | When | Resume load | Archive |
 |---|---|---|---|
-| `continuity` | Default. End-of-day, exploration, generic wrap-up. | Frontmatter only. | FIFO past cap-30. |
-| `deep-context` | Pre-compaction safety capture (≥200k tokens; user said "near compaction"). | **Body loaded** — current session about to die. | FIFO past cap-30. |
-| `milestone` | Chunk shipped OR direction changed. Body explains which. | **Body loaded.** | Chained supersession on same `task_ids`. |
-Legacy values `end-of-day`, `exploration`, `pivot`, `context-handoff`, `milestone-complete` still accepted on write — they map to the new names. Read code should always see the normalized value.
+| `continuity` | Default. End-of-day, exploration, generic wrap-up. | Frontmatter only. | FIFO past the 30-entry cap. |
+| `deep-context` | Pre-compaction safety capture; the user said "near compaction" or "save before compact". | Body loaded, because the current session is about to end. | FIFO past the 30-entry cap. |
+| `milestone` | A chunk shipped or direction changed; the body explains which. | Body loaded. | Chained supersession on the same `task_ids`. |
 
-## Choosing the right kind
+The server also accepts the older names `end-of-day`, `exploration`, `pivot`, `context-handoff` and `milestone-complete` on write and maps them to the three above; write the new names.
 
-1. User said "near compaction" / "300k" / "save before compact"? → `deep-context`.
-2. Chunk shipped, direction changed, plan switch, "ready for next plan"? → `milestone`.
-3. Otherwise → `continuity`.
+Cues: "near compaction", "save before compact" or "context handoff" mean `deep-context`; a shipped chunk, a changed direction or "ready for next plan" means `milestone`; anything else is `continuity`.

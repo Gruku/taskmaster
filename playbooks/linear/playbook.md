@@ -1,115 +1,31 @@
 # Linear
 
-Driver skill for Taskmaster's Linear sync. Linear is a **shared mirror** — TM is the source of truth, every TM mutation pushes outbound on the post-mutation hook, teammates running their own Taskmaster see each other through Linear.
-
-## Why this skill exists
-
-The `backlog_linear` MCP tool (one action-dispatched entry point; actions `probe`, `bootstrap_apply`, `link`, `unlink`, `list`, `show`, `status`, `retry`) is the storage / transport layer. This skill is the dialogue layer — bootstrap requires a multi-step probe → propose-mapping → apply flow that has to happen in conversation, not in a single tool call.
-
-Calling `backlog_linear(action="bootstrap_apply", ...)` directly skips the discovery + mapping proposal. Don't do that.
+Taskmaster's Linear sync is a shared mirror: taskmaster is the source of truth, every mutation pushes outbound after it commits, and teammates running their own taskmaster see each other through Linear. `backlog_linear` is the single tool (actions `probe`, `bootstrap_apply`, `link`, `unlink`, `list`, `show`, `status`, `retry`). Bootstrap is a conversation (probe, propose a mapping, apply), so run it through this playbook; a cold `bootstrap_apply` skips the discovery and the mapping the user should confirm.
 
 ## Entry points
 
-| Trigger | Entry |
+| Trigger | Action |
 |---|---|
-| `set up linear`, `connect linear`, `bootstrap linear` | `bootstrap` |
-| `link <task> to linear <KEY>`, `link this to linear` | `link` |
-| `unlink <task> from linear` | `unlink` |
-| `show linear status`, `what's failing in linear` | `status` |
-| `retry linear`, `retry linear pushes`, `drain linear queue` | `retry` |
-| `list linear trackers`, `show all linear issues` | `list` |
-| `show tracker <id>`, `show linear-cm-eng-42` | `show` |
+| `set up linear`, `connect linear`, `bootstrap linear` | Bootstrap (below) |
+| `link <task> to linear <KEY>` | `backlog_linear(action="link", task_id=<id>, external_key=<KEY>)`. Creates the tracker and stamps `tracker_id` on the task; its next mutation pushes. Pass `workspace_alias` when `linear.yaml` holds several. |
+| `unlink <task> from linear` | `backlog_linear(action="unlink", task_id=<id>)`. The tracker file stays as a record; the task no longer references it, so later mutations don't push. |
+| `show linear status`, `what's failing in linear` | `backlog_linear(action="status")`. Report queue depth, the oldest item's age, the permanent-failure count with the latest reason, and recent transient retries. |
+| `retry linear pushes` | `backlog_linear(action="retry", target_id="")` for all, or `target_id=<task id>` for one. Report the counts. A permanent failure re-fails with the same reason, which is useful for diagnosis. |
+| `list linear trackers` | `backlog_linear(action="list")`. Render as a table. |
+| `show tracker <id>` | `backlog_linear(action="show", tracker_id=<id>)`. Render plainly. |
 
-## bootstrap — the dialogue
+## Bootstrap
 
-Bootstrap is a 4-step flow. The user types "set up linear" and you walk them through it.
-
-### Step 1 — confirm the env var
-
-Pick a name following the convention `TASKMASTER_LINEAR_TOKEN_<ALIAS_UPPER>`. Ask: "What alias do you want for this workspace? Defaults to the lowercase team key after we probe."
-
-Confirm the env var is set:
-- Linux/Mac: `echo $TASKMASTER_LINEAR_TOKEN_CM`
-- Windows: `echo $env:TASKMASTER_LINEAR_TOKEN_CM`
-
-If the user hasn't created an API key: point them to `https://linear.app/settings/api`. **Wait for them to confirm before continuing** — never invent a token.
-
-### Step 2 — probe
-
-Call `backlog_linear(action="probe", token_env="TASKMASTER_LINEAR_TOKEN_<ALIAS>")`. Returns JSON: teams + their statuses + users.
-
-Present a summary:
-```
-Linear workspace has N teams: <team_a> (KEY=ENG, 7 statuses, 12 users), <team_b> (...)
-```
-
-Ask which team this Taskmaster project syncs to. **One team per project** in v1 (multi-team is v3).
-
-### Step 3 — propose mapping
-
-For the chosen team, propose:
-
-- **`workspace_alias`** — default to lowercase team key (e.g. `ENG` → `eng`). Confirm.
-- **`status_mapping`** — TM statuses are: `todo, in-progress, in-review, done, blocked`. Match to the team's Linear states by name similarity. If "In Review" isn't a state, **stop and tell the user** — they need to add it in Linear, or you fail-loud on the first push (the worker treats `status_mapping` errors as permanent failures).
-- **`priority_mapping`** — TM priorities `critical/high/medium/low` to Linear `0-4`. Default: `critical:1, high:2, medium:3, low:4` (Linear's priority 0 is "No priority" — reserved).
-
-Show the proposed mapping as a table and confirm with the user before writing.
-
-### Step 4 — apply
-
-Call `backlog_linear(action="bootstrap_apply", workspace_alias=..., team_id=..., token_env=..., status_mapping="todo:state-uuid,...", priority_mapping="critical:1,...", default_workspace=True)`.
-
-Read the response. On success: confirm with the user and offer the next move — "Want to link an existing task now (`/linear link <task_id> <KEY>`), or rely on auto-push for new mutations?"
-
-## link
-
-User: `link auth-003 to linear ENG-42`.
-
-Call `backlog_linear(action="link", task_id="auth-003", external_key="ENG-42")`. The tool creates the Tracker file and stamps `tracker_id` on the task. Confirm with the user; the next mutation on that task will push to Linear.
-
-If `workspace_alias` is ambiguous (multiple in `linear.yaml`), pass it explicitly.
-
-## unlink
-
-User: `unlink auth-003 from linear`.
-
-Call `backlog_linear(action="unlink", task_id="auth-003")`. The tracker file stays on disk as a historical record — the task just no longer references it. Subsequent mutations on that task are no-ops for Linear. Tell the user.
-
-## status
-
-User: `show linear status`.
-
-Call `backlog_linear(action="status")`. Read the JSON. Surface:
-- Queue depth and the oldest enqueued item's age
-- Count of permanent failures (and the most recent reason)
-- Recent transient retries
-
-If the queue has stuck permanent failures: surface the reason and offer `taskmaster:linear retry` (they'll be re-attempted; permanent ones will re-fail with the same reason, useful for diagnosing).
-
-## retry
-
-User: `retry linear pushes` or `retry linear for auth-003`.
-
-Call `backlog_linear(action="retry", target_id="")` for all, or `backlog_linear(action="retry", target_id="auth-003")` for one. Returns counts. Surface them.
-
-## list
-
-User: `list linear trackers`.
-
-Call `backlog_linear(action="list")`. Returns JSON of all linear trackers + their last-pushed state. Render as a table.
-
-## show
-
-User: `show tracker linear-cm-eng-42`.
-
-Call `backlog_linear(action="show", tracker_id="linear-cm-eng-42")`. Returns the full frontmatter + body. Render plainly.
+1. **Find the token variable.** The token lives in an env var named `TASKMASTER_LINEAR_TOKEN_<ALIAS>`. List such variables by name only; the value is a secret and must not reach the transcript. Bash: `env | cut -d= -f1 | grep '^TASKMASTER_LINEAR_TOKEN_'`. PowerShell: `Get-ChildItem env:TASKMASTER_LINEAR_TOKEN_* | Select-Object Name`. One match: use it. Several: ask which. None: send the user to https://linear.app/settings/api to create a key and set the variable, then wait; the token has to come from them.
+2. **Probe.** `backlog_linear(action="probe", token_env="TASKMASTER_LINEAR_TOKEN_<ALIAS>")` returns the workspace's teams, their statuses and users as JSON. Summarise it ("N teams: ENG (7 statuses, 12 users), ...") and ask which team this project syncs to. A project syncs to one team.
+3. **Propose the mapping** for the chosen team and show it as a table.
+   - `workspace_alias`: default is the lowercase team key (`ENG` becomes `eng`).
+   - `status_mapping`: taskmaster statuses are `todo, in-progress, in-review, done, blocked`; match each to a Linear state by name. If the team has no "In Review" state, stop and tell the user to add it in Linear. Without it the first push fails permanently, because the worker treats `status_mapping` errors as permanent.
+   - `priority_mapping`: `critical:1, high:2, medium:3, low:4` by default. Linear's 0 is "No priority" and stays unused.
+4. **Apply after the user confirms the table.** `backlog_linear(action="bootstrap_apply", workspace_alias=..., team_id=..., token_env=..., status_mapping="todo:<state-uuid>,...", priority_mapping="critical:1,...", default_workspace=True)`. On success, offer the next move: link an existing task, or rely on auto-push for new mutations.
 
 ## Notes
 
-- **Never** invoke `mcp__linear-server__*` tools as part of bootstrap or runtime. The whole point of the GraphQL pipeline is to avoid the token cost. `mcp__linear-server__*` is for ad-hoc dev/debug only.
-- Sync direction is push-only in v1 — local TM is authoritative. If a teammate edits the Linear issue, their change is overwritten on the next TM mutation. Tell the user this if they ask.
-- Sync failures never block local mutations — the local write always succeeds, the Linear push is best-effort. If `status` shows a backlog, it's a sync problem, not a local problem.
-
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
+- Don't use `mcp__linear-server__*` tools for bootstrap or sync. The GraphQL pipeline behind `backlog_linear` exists to avoid their token cost; they are for ad-hoc debugging only.
+- Sync is push-only and taskmaster is authoritative: a teammate's edit to a Linear issue is overwritten on the next push. Say so if the user asks.
+- A sync failure never blocks a local write. If `status` shows a backlog, it is a sync problem, not a local one.

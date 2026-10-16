@@ -1,106 +1,36 @@
 # Pick Task
 
-Select a task to work on and set it to in-progress. Default mode is a **glance briefing** (~600–800 tokens). Append `--deep` for full task body, blast radius, and handover context.
+Put one task in progress for this session and set up its worktree, surfacing anything that blocks it before code is written. The glance load is the default; `--deep` adds the full body, blast radius and handover bodies (`references/deep-mode.md`). The lifecycle and what each status means: `../../references/task-lifecycle.md`.
 
-## Arguments
+## Choose the task
 
-- `task_id` (optional) — specific task ID. If omitted, presents top priorities or auto-resolves via the thread board (`backlog_thread_list`) on v3 backlogs.
+- **Task id given:** use it.
+- **"Continue" or "resume" with no id:** call `backlog_thread_list()`. With one open thread, resume it with `backlog_thread_resume(<name>)`, take the first id in its handover's `task_ids`, and check it with `backlog_get_task(<id>)`. With several, take the thread whose newest handover's first task is still in progress (one `backlog_list_tasks(status="in-progress")` answers which) and name the others in one line; ask which only when none or more than one fits (a pasted thread name or handover id also works). Say which task and thread you're continuing and carry on; the user can redirect. A done or archived task, or no threads, falls through to the next bullet. v2 backlogs have no threads; skip this.
+- **No id:** `backlog_next_available` (phase-filtered when a phase is active); present the top few and ask. When it's empty, suggest `backlog_advance_phase` or adding work.
+- **A task this session already holds**, resuming after a pause or compaction: `references/v3-context-loading.md`, no re-pick.
 
-## Step 0 — (v3) "Continue" auto-resolve
+## Check, then pick
 
-If the user says "continue", "resume", or similar with no explicit `task_id` or thread name:
+Call `backlog_claim(action="status")` and `backlog_context(focus=<task_id>, scope="task", include=["handovers", "issues", "siblings"])` together.
 
-- Call `backlog_thread_list()`. If empty, fall through to Step 1.
-- If exactly one open thread, treat it as the resume target. If more than one, show the board and ask which (or accept a pasted thread name / handover id).
-- Call `backlog_thread_resume(<name>)` to load its latest handover. Take the first id in the handover's `task_ids`. Call `backlog_get_task(<id>)` slim.
-- If status is `done` or `archived`, fall through to Step 1.
-- Confirm: "Continuing `<task_id>` from thread `<name>` (`<tldr>`). Right task?" Default Yes → jump to Step 3.
+- Three or more claims already held: mention it in one line and continue.
+- `clear: false`: `mandatory.blockers` lists what stands in the way (dependencies, gates, open bugs, handovers asking for an action, a human action, a peer's claim; `unknown` counts as blocked). When the user asked for this task, report the blockers in one line and carry on with the work. Stop and ask when a blocker protects state the user owns: a peer session's live claim, an in-review task's human action, or a `spec_review` verdict of `fail`. When the pick came from "what should I work on", show the blockers and let the user choose.
 
-Same session resuming a task it holds: see `references/v3-context-loading.md`.
+Then `backlog_pick_task(<task_id>)`. It sets the task in-progress and locks it to this session, and it is idempotent for a task already in progress. Picking an in-review task moves it back to in-progress, which means its human action is handled, so confirm that first. A blocked task is refused. A task locked to another session takes `force=True`, and only when the user says so.
 
-v2 backlogs: skip silently.
+For a task with a lane whose spec or body is already written, record the spec gate: `backlog_record_gate(<task_id>, "spec", status="done")`.
 
-## Step 1 — If no task ID
+## Brief
 
-Call `backlog_next_available` to get ready tasks. Phase-filtered when a phase is active. Present and ask the user to pick. If empty, suggest `/advance-phase` or add work.
+Build it from the context answer, without further calls: open handovers (count and the latest `next_action`; read a substantial one with `backlog_handover_get`), open P0/P1 issues, and linkage such as `depends_on: T-002 · fixes: ISS-007` (add a Linear pill when `tracker_id` starts with `linear-`: the third hyphen-separated segment, uppercased). For critical and high tasks, summarise an existing `spec_review` verdict, suggest `../spec-review/playbook.md` when a spec or plan exists without one, and show `anchors` as the scope to stay inside. Read the files under the task's `docs` before writing code.
 
-## Step 2 — Parallel-task check
+## Worktree
 
-Call `backlog_claim(action="status")` (this session's claims). If 3+: "You have N tasks in-flight. Switch focus or pick this up in parallel?"
+The pick response ends with the worktree command. Run it, then record what it made with `backlog_update_task(<id>, "branch", ...)` and `backlog_update_task(<id>, "worktree", ...)`, because end-session cleanup and the merge hooks find the work through those fields. Write the task's code in that worktree, not on the main branch.
+- **Already on a branch** (a direct change that grew into a tracked task, see `../taskmaster/playbook.md`): record `branch` (and `worktree` if it is a separate one) before `backlog_pick_task`, skip the worktree command, and keep working where you are. The pick reply then says the branch is already recorded.
 
-## Step 3 — What blocks it
+- **Solo:** `git worktree add .worktrees/{task-id} -b feature/{task-id}`. A recorded worktree that is gone: `git worktree prune`, then recreate it.
+- **Bundle:** the response starts `Picking bundle <slug>: <ids>`. Every member shares `.worktrees/<slug>` on `feature/<slug>`, and that one pick put them all in progress. Announce the members; `references/bundles.md` (Path A) has the details. After a compaction, `backlog_claim(action="status", task_id=<id>)` lists the members, and `backlog_get_task` shows the `bundle` field.
+- **Overlap check** (`references/bundles.md`, Path B): run it after a solo pick only when the task is critical or high, it has `anchors` and the context answer's `siblings` lists other todo tasks in its epic (siblings share an epic, not necessarily files; Path B checks the files), or the user asked to cluster.
 
-Call `backlog_context(focus=<task_id>, scope="task", include=["handovers", "issues"])`. If `clear` is false, warn with `mandatory.blockers` (dependencies, gates, open bugs, handovers, human action, claims; `unknown` = treat as blocked) — let user decide; do not skip silently.
-
-## Step 4 — Pick the task
-
-Call `backlog_pick_task(<task_id>)` — sets status to in-progress, records started date. Note the `**Schema:** v<N>` line; v3 glance steps below activate only on v3 backlogs.
-
-Lane'd tasks: if spec/body present, call `backlog_record_gate(<task_id>, "spec", status="done")`.
-
-## Step 5 — Glance context load (v3)
-
-No new calls — from the Step 3 answer: **5a** `selected.handovers` ("N open handovers. Latest: `<next_action>`"; a non-trivial one → `backlog_handover_get <id>`); **5b** `selected.issues`, the open P0/P1 ones.
-
-**5c. Linkage pills**
-
-Surface bare ID linkage from slim response: `depends_on: T-002 · fixes: ISS-007`. If `tracker_id` starts with `linear-`, append tracker pill (third hyphen-split segment uppercased). No extra tool calls.
-
-## Step 6 — Spec-review + anchors (critical/high only)
-
-If `task.spec_review` present: summarize verdict; `fail` → warn and ask for override.
-If absent and task has `docs.spec` or `docs.plan`: suggest `taskmaster:spec-review`. Don't block.
-If `task.anchors`: display prominently; remind to stay within scope.
-
-Skip for medium/low tasks.
-
-## Step 7 — Read linked docs
-
-If the task has a `docs` field, read those files before writing code.
-
-## Step 8 — Git worktree creation (REQUIRED)
-
-The `backlog_pick_task` response includes worktree instructions. Follow them.
-
-**Bundle task** (response carries `bundle` / `_session_bundle`): use the returned shared-worktree instruction (`.worktrees/<slug>`, `feature/<slug>`); announce bundle members; record branch + worktree on this task. Required — do not skip. See `references/bundles.md`.
-
-**Solo task** (no bundle):
-1. `git worktree add .worktrees/{task-id} -b feature/{task-id}`
-2. `backlog_update_task(<task_id>, "branch", "feature/{task-id}")`
-3. `backlog_update_task(<task_id>, "worktree", ".worktrees/{task-id}")`
-
-Orphaned: `git worktree prune` then recreate.
-
-## Step 8.5 — Bundle detection fallback (solo picks only)
-
-After solo worktree creation, run the detection fallback: scan for overlapping `todo` tasks, assign them a shared bundle slug, and announce each sweep — that is the veto window. User objects → clear the slug. Full protocol in `references/bundles.md` (Path B).
-
-## Deep mode (`--deep`)
-
-Run glance steps above, then continue with `references/deep-mode.md`.
-
-## Task lifecycle
-
-```
-todo → in-progress → in-review → done → archived
-```
-
-`in-review` = blocked on a human-only action (the task's `human_action` says what).
-
-## Reclaiming a locked task
-
-`backlog_pick_task(task_id, force=True)`. Never manually edit `backlog.yaml`.
-
-## Notes
-
-- Idempotent for already in-progress tasks. Picking `in-review` demotes to `in-progress` (resume after the human action is handled) — confirm first. Picking `blocked` is rejected.
-
-## Additional resources
-
-- `references/bundles.md` — bundle pickup protocol + detection-fallback detail
-- `references/deep-mode.md` — full deep ceremony
-- `references/v3-context-loading.md` — token budget for glance steps
-
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
+Change the backlog only through `backlog_*` tools; a native store's coordinator owns the files, and a hand edit takes effect only after `backlog_sync()`.

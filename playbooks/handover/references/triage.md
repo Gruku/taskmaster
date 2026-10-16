@@ -1,43 +1,21 @@
-# Triage walkthrough
+# Handover triage
 
-A long-form description of the `taskmaster:handover triage` interaction. The
-"Manual status entry points" section of `playbook.md` is the authoritative
-spec; this file is the narrative companion you can read when you want context
-behind the choices.
+Triage walks open handovers older than 14 days and offers to close each one, so stale resume points stop competing with live ones. The playbook's "Status changes" section points here for the loop.
 
-## Why 14 days?
+## Loop
 
-A handover younger than two weeks is still potentially the active working
-context for an ongoing task. Anything older has either already been
-superseded by a newer handover in its thread, or should be explicitly closed
-once its work has shipped or moved on. 14 days catches stale stragglers
-without churning recently-written handovers.
+1. List open handovers older than 14 days, newest first, at most 20 per run (`backlog_handover_list(status="open", until=<date 14 days ago>, format="json")`).
+2. For each, offer `closed` (the work shipped or its thread moved on) or skip. Close with `backlog_handover_update_status(<id>, "closed", reason)`.
+3. To park a whole line of work rather than one handover, use `backlog_thread_update(<name>, "parked", reason)`.
 
-## Why cap at 20 per invocation?
+Skip `superseded` and `closed` handovers; they are already resolved.
 
-A user with 50 stale handovers will lose patience halfway through. 20 is
-roughly five minutes of decisions, which is the right granularity for a
-single attention span. The remaining stragglers surface on the next triage
-run.
+## Why these limits
 
-## When triage and supersession overlap
+- **14 days:** a younger handover may still be the live context for an ongoing task. An older one has either been superseded by a newer handover in its thread or should be closed once its work shipped or moved on. 14 days catches stale stragglers without churning recent ones.
+- **20 per run:** a user with 50 stale handovers loses patience halfway. 20 is about five minutes of decisions; the rest surface on the next run.
+- **Newest first:** recent context is the most likely to still matter, so if the user stops partway, the most valuable decisions are already made.
 
-If a handover is `milestone-complete` or `pivot` and you're triaging it, prefer
-the supersede path — it preserves the chain plus the SUPERSEDED callout in
-the old file. The auto-flip-to-done in `apply_supersession` makes this a
-single-step operation from the user's perspective.
+## Triage and supersession
 
-## Triage order
-
-Process newest handovers first. The most recent context is the most likely to
-still be relevant; stale ones at the bottom of the list are the safest to
-close automatically. This ordering also means that if the user aborts triage
-mid-session, the most valuable decisions have already been made.
-
-## Status semantics during triage
-
-- `open` → the handover has not been resolved. If it's older than 14 days,
-  offer `closed` (work shipped or its thread moved on) or skip.
-- `superseded` → already chained to a newer handover in the same thread. Never
-  surface these during triage.
-- `closed` → already resolved. Never surface these during triage.
+A `milestone` handover that a newer milestone replaces is chained automatically (`references/supersession.md`), so it never reaches triage. When you meet one that was not chained, prefer chaining it to the newer handover with `backlog_handover_supersede(old_id, new_id)` over closing it: that keeps the chain and the SUPERSEDED callout in the old file.

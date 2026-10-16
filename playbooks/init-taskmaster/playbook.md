@@ -1,88 +1,39 @@
 # Initialize Taskmaster
 
-Set up AI-powered task management in the current project. Offers two modes: clean start or analyze existing work.
+Set Taskmaster up, with no chores for the user, so the project ends with one native store at its repository root and a seeded or empty backlog. The database (`.taskmaster/local/store.db`) is the authority; a coordinator the tools start on demand owns its writes and exports the other `.taskmaster/` files. Write only through the `backlog_*` tools: hand edits to `backlog.yaml` or task files are read only at `backlog_sync()`.
 
-> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through `backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_phase`. The schema is owned by the server.
+## Check where the server points
 
-## Step 1: Check if already initialized
+The server takes its project root from the directory it was started in (or `TASKMASTER_ROOT`), and the first write creates the store there. Call `backlog_store_status` first; it is read-only and never creates anything. (`backlog_init` is not a probe: it creates the backlog and the store.)
 
-Call `backlog_init` with no arguments. If it reports "already initialized", call `backlog_status` and show the user what's there. Stop.
+- `no backlog found at <dir>/backlog.yaml`: `<dir>` must be the repository's top level in the main checkout (the first entry of `git worktree list`), not a subdirectory or a linked worktree. If it isn't, stop and ask the user to restart the session from that root or set `TASKMASTER_ROOT` to it, because initializing here puts the backlog in the wrong place. Outside Git, `<dir>` must be the directory the user means as the project.
+- A `Store:` / `Root:` report: Taskmaster is already set up. Show `backlog_status` and stop.
+- A legacy backlog, which gets adopted rather than initialized: `Error: backlog lives at <dir>; ... Run backlog_canonicalize_layout first` (a pre-6.0 backlog in `.claude/` or the project root), or a report whose `Warning:` says `no store yet` (a `.taskmaster/backlog.yaml` from before the store). Hand off to `taskmaster:migrate-v3`, which shows the user what adoption rewrites and asks first. Call nothing else first, since the first read already adopts the files.
 
-## Step 2: Ask how to start — MANDATORY, do NOT skip
+## Ask once, then create
 
-New projects always use the current schema (v4 — sharded per-task storage). Do not present schema as a choice; `backlog_init` uses the server default. Ask only how to seed the backlog:
+Ask before writing anything (use your structured-question tool if you have one):
 
-- "How do you want to start?" — options:
-  - "Analyze project (Recommended)": Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog.
-  - "Clean start": Empty backlog — you'll add epics and tasks as you go.
-
-Do NOT call `backlog_init` until you have the answer.
+- How to start: **Analyze project** (recommended; proposes a backlog from TODOs, README plans and recent history) or **Clean start** (empty backlog).
+- Whether to scaffold `.taskmaster/project.yaml` (recommended), the manifest of repos, branches, stacks, deploy targets and error-trace ladder that `backlog_project_ship_order` and the merge-gate hook read; `backlog_project_init` can add it later.
 
 <!-- cc-only:start -->
-On Claude Code, use `AskUserQuestion`:
-
 ```
-AskUserQuestion({
-  questions: [
-    {
-      question: "How do you want to start?",
-      header: "Init mode",
-      multiSelect: false,
-      options: [
-        { label: "Analyze project (Recommended)", description: "Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog" },
-        { label: "Clean start", description: "Empty backlog — you'll add epics and tasks as you go" }
-      ]
-    }
-  ]
-})
+AskUserQuestion({ questions: [
+  { question: "How do you want to start?", header: "Init mode", multiSelect: false, options: [
+    { label: "Analyze project (Recommended)", description: "Scan TODOs, README plans and recent history to propose a backlog" },
+    { label: "Clean start", description: "Empty backlog; add epics and tasks as you go" } ] },
+  { question: "Scaffold a project manifest now?", header: "Manifest", multiSelect: false, options: [
+    { label: "Yes (Recommended)", description: "Minimal .taskmaster/project.yaml; powers ship order, error-trace ladder, repo/branch awareness" },
+    { label: "Skip", description: "Add later with backlog_project_init" } ] } ] })
 ```
 <!-- cc-only:end -->
 
-## Step 2b: Offer project manifest
+Call `backlog_init(project_name)` with only the name; it creates the files and a native store. A `Note:` in its reply (a legacy fallback, or a coordinator not started yet) says what to do; pass it on. Pass `legacy_store=true` only on the user's request, for a host that cannot run the coordinator. If the manifest was wanted, call `backlog_project_init(name)` (it refuses to overwrite); the user fills in repos and branches later.
 
-After `backlog_init` succeeds, ask whether to also scaffold the Project manifest at `.taskmaster/project.yaml` — the structured truth about repos, submodules, branch protocol, stacks, deploy targets, and error-trace ladder. Pairs with `backlog.yaml` (work in flight).
+- **Clean start:** suggest 3-6 areas for long-lived subsystems, `backlog_area_create(area_id, name)` (areas never close); then the first finite epic, `backlog_add_epic(epic_id, name, done_when, area=...)` (anything that never finishes is an area); then a phase, `backlog_add_phase(phase_id, name)` (the first one becomes active); then its tasks, `backlog_add_task(title, epic, phase, tldr=..., options={"area": ...})` with the finish condition in `tldr`. Create in that order, because each call names the ones before it. Aim for 5-8 tasks per epic; link a long plan with `options={"docs": "plan:<path>"}`.
+- **Analyze:** follow `references/analysis-mode.md`. Propose the whole backlog and create it only after the user approves.
 
-Ask the user (use your structured-question tool if available; otherwise present the options):
+## Finish
 
-- "Scaffold a project manifest now?" — options:
-  - "Yes (Recommended)": Creates minimal .taskmaster/project.yaml. Powers ship_order, error_trace_ladder, repo/branch awareness in skills.
-  - "Skip": Can be added later with backlog_project_init.
-
-<!-- cc-only:start -->
-On Claude Code:
-
-```
-AskUserQuestion({
-  questions: [{
-    question: "Scaffold a project manifest now?",
-    header: "Project manifest",
-    multiSelect: false,
-    options: [
-      { label: "Yes (Recommended)", description: "Creates minimal .taskmaster/project.yaml. Powers ship_order, error_trace_ladder, repo/branch awareness in skills." },
-      { label: "Skip", description: "Can be added later with backlog_project_init." }
-    ]
-  }]
-})
-```
-<!-- cc-only:end -->
-
-On "Yes": call `backlog_project_init` (no args — it writes a minimal valid manifest, refuses to overwrite). Then point the user at it: "Edit `.taskmaster/project.yaml` to declare your repos, submodules, branch protocol, and error-trace ladder. Schema reference: `taskmaster/project.py` (plugin root)."
-
-## Step 3a: Clean start
-
-1. `backlog_init(project_name)`.
-2. Suggest 3-6 areas first (`backlog_area_create`) for long-lived subsystems (e.g. "backend", "viewer") — areas never close.
-3. Create their first epic ("What's the first finite goal?"). Epics require `done_when`; if it never finishes, it's an area.
-4. Add tasks under those epics, tagging each with `area` where relevant.
-5. Suggest creating a phase.
-6. Budget guidance: "Aim for 5-8 tasks per epic. Link long plans with `docs.plan`."
-
-## Step 3b: Analyze project
-
-Full analysis-mode flow (scan TODOs/README/git log, synthesize into proposed backlog, present for approval, create via MCP tools) in `references/analysis-mode.md`.
-
-## Step 4: Open the viewer and confirm
-
-1. `backlog_open_viewer` to open the dashboard.
-2. "Taskmaster is set up! Use `/start-session` to see your dashboard."
-3. If MCP tools stop responding, run `/mcp` to reconnect.
+Report in a few lines what was created and what it means for Git: `backlog.yaml`, `project.yaml`, `areas/` and `tasks/` are committed with the managed Git command, not `git add` (`../end-session/references/edge-cases.md`, *Native store*); `taskmaster.json`, which it leaves out, with plain Git. `.taskmaster/local/` (store, `PROGRESS.md`, caches, coordinator files) is machine-local with its own `.gitignore`. Committing is the user's call, so leave it to them. Then point to `taskmaster:start-session` for the first session, `backlog_open_viewer` for the board, and `taskmaster:linear` if they track work in Linear.

@@ -1,56 +1,33 @@
 # Taskmaster Router
 
-Two lanes: small direct changes stay lightweight; anything with scope, design, or continuity is tracked.
+Taskmaster keeps the backlog, handovers and gate records current so the next session can pick up where this one stopped. Route the request, do the bookkeeping that route needs, and get on with the work.
 
-Every playbook path below also exists as a native skill on Claude Code/ZCode:
-`taskmaster:<name>`, where `<name>` is the playbook directory name.
+Each playbook below is also a skill, `taskmaster:<directory name>`.
 
-## Direct-change lane
+## Direct or tracked
 
-When **all** hold, just make the change — no sub-skill, no backlog writes, commit normally: the user asked for **this specific change** directly (not "track it"/"make a task"); a **single sitting**; **no open design decisions**; **roughly ≤3 files**.
+Make the change directly (no playbook, no backlog writes) when the user asked for this specific change, it fits in one sitting, it has no open design decision, and it touches roughly three files or fewer. Everything else is tracked. If a direct change grows (a design question appears, follow-ups pile up, or it won't finish this session), say so in one line and continue tracked; the work so far carries over. Pick the task with its `branch` (and `worktree`, if you're in one) recorded as where you already are, not a new worktree; ask only when that is the default branch, whether to move the changes onto `feature/<id>` first.
 
-**Escalation.** The moment a direct change grows — design question, follow-ups, or won't finish this session — say so and route through the tracked lane.
+Git-only operations (commit, push, branch) and dedicated PR security reviews don't go through taskmaster. Process skills (brainstorming, TDD, debugging) still apply; this router only decides what gets recorded.
 
-## Intent Detection
+## Tracked routes
 
-| Intent Signal | Route To |
+| The user wants | Go to |
 |---|---|
-| "Let's get started", "orient me", "show the backlog" | `../start-session/playbook.md` |
-| "Pick task X", names a task ID, "what should I work on" | `../pick-task/playbook.md` |
-| Implementation request, in-progress task exists | Work in current task's worktree |
-| Implementation request, no in-progress task | `../pick-task/playbook.md` first |
-| "Review this spec", "challenge this design" | `../spec-review/playbook.md` |
-| "Is this ready?", "check my work", "review gate" | `../review-gate/playbook.md` |
-| "End session", "wrap up", "mark task done" | `../end-session/playbook.md` |
-| "Set up taskmaster", "initialize backlog" | `../init-taskmaster/playbook.md` |
-| "Write a handover", "for tomorrow" | `../handover/playbook.md` |
-| "Log an issue", "file an issue" | Word-agnostic intake — `../issue/playbook.md` if evidence cited, else `../bug/playbook.md` |
-| "Log a bug", "track this defect" | `../bug/playbook.md` |
-| "Save this as an idea", "/add-idea" | `../add-idea/playbook.md` |
-| "auto this task", "autopilot", "auto-epic/phase X" | Redirect to ultracode (auto removed) |
-| "Upgrade to v3", "migrate to v3" | `../migrate-v3/playbook.md` |
-| "Check TODOs", "todo audit" | `../check-todos/playbook.md` |
-| "Set up linear", "link to linear", "linear status" | `../linear/playbook.md` |
-| Status, search, phase | Direct `backlog_*` tool call |
+| Orientation: "orient me", "show the backlog", "what's going on", "what should I work on" | `../start-session/playbook.md` |
+| A specific task, or "continue" opening a session | `../pick-task/playbook.md` |
+| Tracked work while a task is in progress | Work in that task's worktree |
+| Tracked work with no task in progress | Find the matching task (`backlog_search`) and pick it. If none fits, add one with `backlog_add_task` (title, epic, phase, and a `tldr` that says when it is done), say which epic and id in one line, and pick it through `../pick-task/playbook.md` |
+| A spec or design challenged | `../spec-review/playbook.md` |
+| "Is this ready?", "review gate" | `../review-gate/playbook.md` |
+| To close a task or end the session | `../end-session/playbook.md` |
+| A handover, "for tomorrow", without closing anything | `../handover/playbook.md` |
+| To log a defect | `../bug/playbook.md`; `../issue/playbook.md` only when recurring, systemic or P0/P1-outstanding evidence is cited (`../bug/references/bug-vs-issue.md`) |
+| To save an idea | `../add-idea/playbook.md` |
+| A choice between options | `../decision/playbook.md` |
+| Setup, v3 migration, TODO audit, Linear | `../init-taskmaster/`, `../migrate-v3/`, `../check-todos/`, `../linear/` (each `playbook.md`) |
+| A status, search, phase or single-entity read | The `backlog_*` tool directly, e.g. `backlog_get_task("T-001", sections=["plan"])`, `backlog_handover_get("HND-012")`, `backlog_issue_get("ISS-014", verbose=True)` |
 
-Full routing table + word-agnostic intake algorithm: read `references/routing-table.md` and `references/word-agnostic-intake.md`.
+When the table doesn't settle it: rarer rows in `references/routing-table.md`, close calls (handover vs end-session, bug vs issue, idea vs note) in `references/disambiguation.md`. Several intents: handle them in order.
 
-## Do NOT Route Through Taskmaster
-
-- Pure git operations (commit, push, branch) — git directly
-- PR security reviews — dedicated review tools
-
-**Multiple intents:** handle them sequentially. **Ambiguous route** (handover vs end-session, issue vs task): read `references/disambiguation.md`.
-
-## Mid-session deepening
-
-Deepen specific entities directly — no skill re-invocation needed:
-
-| User asks for | Call |
-|---|---|
-| "show me HND-012" | `backlog_handover_get("HND-012")` |
-| "read the plan for T-001" | `backlog_get_task("T-001", sections=["plan"])` |
-| "full task details" | `backlog_get_task("T-001", verbose=True)` |
-| "details on ISS-014" | `backlog_issue_get("ISS-014", verbose=True)` |
-
-**Verifying writes.** `[seq N]` = committed; `(export pending: …)` = committed, file pending; `No change … already …` (no seq) = already stored. `backlog_store_status` shows dirty/quarantined files. Native store: hand edits need `backlog_sync()`.
+**Verifying writes.** `[seq N]` = committed; `(export pending: …)` = committed, file pending; `No change … already …` (no seq) = already stored. `backlog_store_status` shows dirty or quarantined files; hand edits need `backlog_sync()`.

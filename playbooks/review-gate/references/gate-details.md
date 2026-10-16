@@ -1,75 +1,59 @@
-# Review Gate — Gate Details
+# Review Gate: Gate Details
 
-This file contains detailed runner detection, gate formats, and step prose moved from SKILL.md.
+Detail for the review-gate playbook: the code-review brief, spec adherence, and the report format.
 
-## Gate 3: Test Runner Auto-Detection
+## Gate 2a: code review
 
-Auto-detect which directory to run in from the task's `sub_repo` field or worktree path.
+Work in the task's worktree when set, otherwise the project root. The base is the branch the task was cut from; the head is the task's `branch` field (the current branch when empty). Group findings Critical / Important / Minor, each with file:line and a one-line reason.
 
-**Tests:**
-- Node.js: `package.json` with `test` script -> `npm test`
-- Python: `pytest.ini` / `pyproject.toml` / `tests/` -> `pytest`
-- .NET: `.csproj` / `.sln` -> `dotnet test`
-- Rust: `Cargo.toml` -> `cargo test`
-- Go: `go.mod` -> `go test ./...`
-- Not found -> "No test runner detected — skipping" (not a failure)
+Review inline when your tool can't dispatch sub-agents. On Claude Code, a sub-agent keeps the diff out of your context:
 
-**Build:**
-- Node.js: `package.json` with `build` -> `npm run build`
-- .NET: `.csproj` -> `dotnet build`
-- Rust: `Cargo.toml` -> `cargo build`
-- Go: `go.mod` -> `go build ./...`
-- Not found -> "No build command detected — skipping"
+<!-- cc-only:start -->
+```
+Agent({
+  subagent_type: "general-purpose",   // or the superpowers code-reviewer if installed
+  model: "sonnet",                    // "opus" when the diff touches auth, data deletion, migrations or other destructive paths
+  description: "Review-gate code review",
+  prompt: `Review the changes for a task so the orchestrator can decide whether it may close.
+<task>
+<id>…</id>
+<title>…</title>
+<acceptance_criteria>…</acceptance_criteria>
+<spec>path, or "none"</spec>
+<diff>git diff <base>...<branch>, run in <worktree></diff>
+</task>
+Look for correctness bugs, missed edge cases, unhandled error paths, tests that don't exercise the change, and sibling occurrences of any bug you find.
+Run whatever you need (tests, the changed command), but don't edit files; changes are the user's call.
+Reply with <findings>: one entry per finding, as severity (Critical|Important|Minor), file:line, and a one-line reason. End with one sentence naming the checks you ran. When the review is done, stop and report; don't start extra review rounds or launch further sub-agents.`
+})
+```
+<!-- cc-only:end -->
 
-**Review instructions:** If the task has a `review_instructions` field, display it prominently: "**Manual test steps:** {review_instructions}"
+## Gate 2c: spec adherence
 
-## Gate 2a: Code Review Dispatch Detail
+For critical/high tasks with a spec or plan, read the spec and the diff side by side and answer in two or three sentences: does the diff implement what the spec describes, is anything missing or deferred without a follow-up task, and is anything in the diff that the spec doesn't cover? Mismatches are Important findings unless the user already accepted the deviation. No spec: SKIP.
 
-- Determine the working directory: the task's worktree path if set, otherwise the project root.
-- Determine the working branch from the task's `branch` field. If empty, check the current git branch.
-- If no branch: WARN for medium/low, **escalate to user** for critical/high.
-- Delegate the review to a sub-agent if your tool supports it (on Claude Code: the superpowers code-reviewer), scoped to changed files between the branch and its base. If not available, perform an inline review of the diff.
-- Group findings by severity: Critical / Important / Minor.
+## Gate 3: tests and build
 
-## Gate 2c: Spec Adherence Check
+Use the project's own commands (`package.json` scripts, `pytest`, `dotnet test`, `cargo test`, `go test ./...`, and their build equivalents), run from the task's `sub_repo` or worktree. No runner or build command found is SKIP.
 
-For critical/high tasks with a spec/plan: skim the spec and the diff side-by-side. Answer in 2-3 sentences:
-- Does the diff implement what the spec describes?
-- Anything in the spec that's missing or deferred without a follow-up task?
-- Anything in the diff that's *not* in the spec (scope creep)?
+## Report format
 
-Mark mismatches as Important findings unless the user already acknowledged the deviation.
+Lead with the overall verdict, then the matrix:
 
-Skip this gate if there is no spec.
-
-## Step 7: Gate Matrix Display Format
-
-Lead with the overall verdict. Then show the breakdown:
 ```
 Gate 1  — Spec/Plan:               PASS / WARN / SKIP
-Gate 2a — Code Review (Claude):    PASS / FAIL (N issues)
+Gate 2a — Code Review (own):       PASS / FAIL (N issues)
 Gate 2b — Codex Precision:         PASS / FAIL / SKIP (not installed | opt-out)
 Gate 2c — Spec Adherence:          PASS / WARN / SKIP
 Gate 3  — Tests:                   PASS / FAIL / SKIP
 Gate 3  — Build:                   PASS / FAIL / SKIP
 ```
 
-List issues grouped by severity, tagged with source (Claude / Codex) and gate.
+List issues grouped by severity, tagged with source (own / Codex) and gate. If Codex flagged Criticals that Gate 2a missed, say so, since the user will want to read those carefully.
 
-**Blocking rules:**
-- Critical findings (either source) block unconditionally.
-- Important findings require user acknowledgment before proceeding.
-- Minor findings and WARN/SKIP results never block.
+When gates failed, offer two paths: stay `in-progress` and address the issues, or proceed over them with `backlog_skip_gate` and the user's reason.
 
-If gates failed, offer: "Stay in-progress and address issues" or "Record a pass anyway (you'll need to justify the critical findings) — end-session will close it to done."
+## Review instructions
 
-If Codex flagged criticals that Claude missed: "Codex caught issues Claude's review didn't — worth reading carefully."
-
-## Step 8: Review Instructions
-
-If the task has no `review_instructions` (or they're empty):
-- Draft review instructions based on what was implemented: what to test, how to verify, specific steps.
-- Present: "**Proposed review instructions:**\n{drafted}\n\nWant to use these, edit them, or write your own?"
-- Save via `backlog_update_task(task_id, "review_instructions", "{final}")`
-
-If existing: show and ask "Keep these or update?"
+When the task has `review_instructions`, show them as "Manual test steps". When it has none, draft them from what was implemented (what to test, how to verify, specific steps), save them with `backlog_update_task(task_id, "review_instructions", <text>)`, and show them with a note that the user can edit them.

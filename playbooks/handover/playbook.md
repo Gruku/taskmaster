@@ -1,38 +1,27 @@
 # Handover
 
-Capture a session into `.taskmaster/handovers/{date}-{slug}.md` so the next Claude session can resume without re-exploration.
+Write a handover so the next session can resume without re-exploring: what shipped, where execution stands, what to do first, and which files matter and why. Write it through `backlog_handover_create`, which indexes it and supersedes older open handovers in the same line of work; this playbook adds the file annotations and fields that the bare tool call would miss.
 
-## Why this skill exists
+Write one when the user asks, when end-session calls for it, or before a compaction the user mentions. Write it straight away, without a draft-and-approve round, unless the user asked to see a draft or you found nothing to put in it (then ask what it should cover).
 
-A handover is the per-session full record — context-injection optimisation for the next AI session. The skill auto-extracts files of interest and writes through `backlog_handover_create`, which updates the index and (when `supersedes` is set) edits the prior handover in place. Calling `backlog_handover_create` directly skips auto-extraction and supersession chaining.
+## Fields
 
-## When to invoke
+- **`session_kind`:** `continuity` by default; the other kinds and when to use them are in `references/session-kinds.md`.
+- **`task_ids`:** the in-progress task for milestone and deep-context; the last task touched for continuity; `[]` for exploration. Don't invent one.
+- **`thread`:** reuse the name if this session resumed from a thread; otherwise leave it empty and the server derives it. Set it only when the user names the line of work.
+- **`supersedes`:** normally empty, because the server supersedes older open handovers of the same thread itself. Set it only for the cases in `references/supersession.md` (a renamed thread, or taking over work that shares no task id).
+- **`tldr`** (past tense: what shipped) and **`next_action`** (imperative: what the next session does first), each at most 100 characters.
+- Rarely-set fields go in `options`: `branch`, `tip_commit`, `context_size_at_write`, `review_reason`. A review flag buffered upstream: `flag_for_review=true` with `options={"review_reason": "..."}`.
 
-1. **Explicit user invocation** — phrases listed in the description above.
-2. **Auto-offer from end-session** — when v3-pre-2 heuristics fire.
-3. **Auto-offer mid-session** — at token-watch thresholds (>=200k or >=270k).
+## Body
 
-## Steps
+Fill `templates/body.md`; drop empty sections and leave no `{placeholders}`. Decisions from end-session's sweep go in its "Open decisions" / "Resolved this session" sections as `[[DEC-NNN]]` links; the body is what carries them.
 
-**1. Resolve `session_kind`.** Pick from `references/session-kinds.md`. Default: `continuity`. Override: "milestone done" / "chunk complete" -> `milestone`; "context handoff" / "300k" -> `deep-context`. Ask the user if unsure (use your structured-question tool if available).
+For "Files of interest", list what this session edited, what it read, and what the task's anchors and docs point to (`references/auto-extraction.md`), each with what it is and why the next session needs it; a bare path sends the next session back to re-explore. Then run source 7 in `references/auto-extraction.md`, the index reverse lookup: its open tasks are candidates for `task_ids`, and for open bugs and issues whose location you edited, add one line above the paste block ("B-012, ISS-004 touch files you edited; say if this session fixed them"). Change a status only on the user's answer.
 
-**2. Auto-extract draft inputs.** Walk the first six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose. Then run source 7 in `references/auto-extraction.md` — the index reverse lookup — and propose its open ids for `task_ids`; for open bugs and issues whose location you edited, ask in one line whether this session fixed them. Never change a status without the answer.
+## Write and confirm
 
-**3. Resolve `task_ids`.** In-progress task id for milestone/deep-context/auto-stage. Last-touched task id for continuity. Leave empty `[]` for exploration sessions — do not invent a task id.
-
-**3b. Resolve `thread`.** The stable resume token. If this session resumed from a thread (via `backlog_thread_resume` or a pasted name), reuse that name. Otherwise leave `thread` empty — the server derives it (bundle slug → epic → task id → tldr). Only set it explicitly when the user names the line of work.
-
-**4. Determine `supersedes`.** Set to prior id when: `session_kind == "milestone"` AND prior latest handover for same `task_ids` exists AND prior is also `milestone`. Algorithm in `references/supersession.md`.
-
-**5. Draft body from `templates/body.md`.** Fill every section with concrete content. Delete empty sections — never leave `{placeholder}`. If end-session's decision sweep produced open/resolved decisions, embed them in the body under "Open decisions" / "Resolved this session" sections using `[[DEC-NNN]]` references — the body is the durable carrier, not a separate kwarg.
-
-**6. Generate `tldr` and `next_action`.** Each <=100 chars. `tldr` = past-tense what shipped. `next_action` = imperative what next session does first.
-
-**7. Write directly — no draft-and-approve.** Write immediately via step 8. Exceptions: user asked "show draft first"; milestone supersession changes a prior milestone; auto-extraction returned zero files (ask scope).
-
-**8. Write through `backlog_handover_create`** with its top-level fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `supersedes`, `thread`, `flag_for_review`. Rarely-set fields go in the `options` dict: `branch`, `tip_commit`, `context_size_at_write`, `review_reason` (e.g. `options={"branch": ..., "tip_commit": ...}`). Decisions live inside `body` (step 5), not as separate kwargs. If a `pending_review_flag` was buffered upstream, forward `flag_for_review=true` + `options={"review_reason": "<reason>"}`.
-
-**9. Confirm with the paste block.** End your reply with exactly this fenced block and nothing after it — the user copies it into a chat as the durable pointer:
+Call `backlog_handover_create` with `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `supersedes`, `thread`, `flag_for_review` and `options`. Show any `WARNING` line from the result above the paste block (a hand-set status that blocked auto-supersession is the usual one). Then end the reply with this paste block and nothing after it; the user copies it into a chat as the durable pointer:
 
     ```
     <tldr>
@@ -40,21 +29,10 @@ A handover is the per-session full record — context-injection optimisation for
     Resume: <thread> — <next_action>
     ```
 
-The `Resume:` line is the server's final line verbatim; pasting the thread name into any future session resumes via `backlog_thread_resume`. Surface any WARNING line from the response above the block, never inside it.
+The `Resume:` line is the server's last line, verbatim. Pasting the thread name into a later session resumes it through `backlog_thread_resume`.
 
-## Manual status entry points
+## Status changes
 
-- `taskmaster:handover close <id>` — `backlog_handover_update_status(<id>, "closed", reason)`.
-- `taskmaster:handover reopen <id>` — same with `"open"`.
-- `taskmaster:handover triage` — walk open handovers older than 14 days (algorithm: `references/triage.md`); thread-level parking via `backlog_thread_update` replaces per-handover bulk moves.
-- Thread level: `backlog_thread_update(<name>, "parked" | "closed" | "open", reason)` — park a line of work without touching individual handovers.
-
-## References
-
-- `references/session-kinds.md` — the four kinds, resume-load behavior, archive policy
-- `references/auto-extraction.md` — seven sources, dedup grouping rules, regex specs
-- `references/supersession.md` — chained-supersession algorithm
-- `references/triage.md` — triage loop algorithm
-- `templates/body.md` — body skeleton
-
-**Verifying writes.** `[seq N]` = committed; `(export pending: …)` = committed, file pending; `No change … already …` (no seq) = already stored. `backlog_store_status` shows dirty/quarantined files.
+- Close or reopen one handover: `backlog_handover_update_status(<id>, "closed" | "open", reason)`.
+- Park, close or reopen a whole line of work: `backlog_thread_update(<name>, "parked" | "closed" | "open", reason)`.
+- Triage: walk open handovers older than 14 days, newest first, up to 20 per run, offering close or skip (`references/triage.md`).

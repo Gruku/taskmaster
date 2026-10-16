@@ -1,5 +1,5 @@
 <!--
-Optional template for the body of an IDEA-NNN.md file. The skill does NOT
+Optional template for the body of an IDEA-NNN.md file. The skill doesn't
 require this template — bodies are freeform. Use it only when the user
 gives you nothing but a one-line title and you want a starting structure.
 -->

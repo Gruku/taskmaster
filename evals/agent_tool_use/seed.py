@@ -191,7 +191,9 @@ def build() -> dict:
 
     # Two weeks ago: project set up, the work planned.
     at(-13, "07:05")
-    call("backlog_init", project_name="Kilnworks")
+    # The fake clock only reaches this process; a native store's writes run in the
+    # coordinator process on the real clock, so the seed stays on the legacy store.
+    call("backlog_init", project_name="Kilnworks", legacy_store=True)
     call("backlog_add_phase", phase_id="alpha", name="Alpha — internal content pipeline")
     call("backlog_add_phase", phase_id="beta", name="Beta — external studios")
     call("backlog_area_create", area_id="pipeline", name="Asset pipeline",

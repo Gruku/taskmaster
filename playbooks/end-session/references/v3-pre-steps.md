@@ -1,57 +1,38 @@
-# End-Session — v3 Pre-Steps Detail
+# End-Session: pre-close sweeps
 
-Read this file when any v3 pre-step condition fires. The SKILL.md body carries
-only the headline and condition; the full flow is here.
+Read this when the playbook's "Before closing" steps need detail: the handover cues, the decision sweep, and the idea sweep.
 
-## v3-pre-2: Handover Auto-Write
+## Handover
 
-Write a session handover automatically (no prompt) when ANY of:
-- Session length > 60 turns of conversation.
-- Conversation context estimate > 200k tokens.
-- A task is still in flight (status `in-progress` or `auto/state.json` cursor non-null).
-- User said anything like "for tomorrow", "remind me next time", "context handoff", "pick this up later".
+The write condition is in the playbook's "Before closing"; extra cues are "remind me next time" and "pick this up later". Skip it when the user said "no handover" or "skip handover".
 
-Infer `session_kind` from conversation cues:
+Pick `session_kind` from the conversation using the table in `../../handover/references/session-kinds.md`, then invoke the `taskmaster:handover` skill (`../../handover/playbook.md`) with it. It writes directly, so end-session does not draft the body itself or ask whether to write. The user can edit or replace the file afterwards. End-session continues whatever the handover's outcome.
 
-| Cue | session_kind |
-|---|---|
-| "context handoff", "near compaction", "300k", "save before compact" | `context-handoff` |
-| "milestone done", "chunk complete", "ready for next plan" | `milestone-complete` |
-| "we changed direction", "pivoting", "new approach" | `pivot` |
-| No in-flight task, no commits to a feature | `exploration` |
-| Otherwise | `end-of-day` |
+If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` and `review_reason=<buffered reason>` to the handover skill. If the handover is skipped, the flag is dropped.
 
-Then **invoke the `taskmaster:handover` skill** with the inferred `session_kind`. The handover skill writes directly (no draft-and-approve gate). End-session does NOT draft the body itself and does NOT ask the user whether to write — the heuristics already fired. The user can say "skip handover" upfront to opt out, or edit/replace the file after it's written.
+## Decision sweep (before the handover write)
 
-End-session continues regardless of the handover skill's outcome.
+Sweep the open decisions linked to the in-progress task, so the handover can carry them:
 
-**Skip the auto-write only if:** none of the four trigger conditions above are true (lightweight one-touch session) OR the user explicitly said "no handover" / "skip handover" this session.
+1. `backlog_decision(action="list", status="open", task_id=<current>)`.
+2. Ask once, listing every open decision with its options (use your structured-question tool if available). For each, the user can:
+   - **Carry forward**: leave it open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
+   - **Resolve now**: present the options; on a pick, `backlog_decision(action="resolve", decision_id=id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
+   - **Drop**: take a one-line reason, `backlog_decision(action="drop", decision_id=id, reason=...)`, then record it under "Resolved this session" with a `(dropped)` suffix.
 
-If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill. If the user skipped the handover write, the flag is dropped silently.
+   A decision the user doesn't answer is carried forward.
+3. `taskmaster:handover` (`../../handover/playbook.md`) inserts the two lists into the handover body markdown. `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters: the body is the durable carrier, and the `[[DEC-NNN]]` links are what the viewer uses for cross-entity navigation.
 
-## Decision Sweep (before handover write)
+## Handover index resync
 
-Before invoking `taskmaster:handover`, sweep open decisions linked to the in-progress task:
+`backlog_handover_resync()` re-applies the 30-entry index cap and moves overflow into `handovers/_archive/<year>/`. Run it only after hand edits to `handovers/` or after the cap was lowered; a normal session needs no call.
 
-1. Call `backlog_decision(action="list", status="open", task_id=<current>)`.
-2. If non-empty, for **each** decision ask the user (use your structured-question tool if available):
-   - **Carry forward** — leave the decision open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
-   - **Resolve now** — present options; on pick, call `backlog_decision(action="resolve", decision_id=id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
-   - **Drop** — capture one-line reason; call `backlog_decision(action="drop", decision_id=id, reason=...)`, then record it under "Resolved this session" with `(dropped)` suffix.
-3. Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — query `backlog_decision(action="list", status="resolved")` and append them to "Resolved this session" the same way.
-4. The two collected lists are inserted into the handover **body markdown** by `taskmaster:handover` (step 5 of that skill). `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters — the body is the durable carrier and the `[[DEC-NNN]]` link syntax is what powers cross-entity navigation in the viewer.
+## Idea sweep
 
-## v3-pre-2b: Handover Archive Sweep
+Scan the conversation for `<idea-candidate>` tags. For each one:
 
-Call `backlog_handover_resync()` quietly to enforce the 30-entry index cap and move any overflow into `handovers/_archive/<year>/`. Only matters when (a) no handover was written this session but the user manually edited `handovers/`, or (b) the cap was lowered. Skip silently on v2.
-
-## v3-pre-2c: Idea-Candidate Sweep
-
-After completing the work-summary phase, scan the in-context transcript for `<idea-candidate>` XML tags. For each tag found:
-
-1. Parse the `title` attribute (required), `tags`, `status`, `related-task`, `related-issue` (all optional).
-2. Use the tag's text content as the body. If empty, use the title as the body.
-3. Call:
+1. Read the `title` attribute (required) and `tags`, `status`, `related-task`, `related-issue` (optional). The tag's text is the body; with no text, use the title.
+2. Call:
    ```
    backlog_idea_create(
        title=<title>,
@@ -60,19 +41,10 @@ After completing the work-summary phase, scan the in-context transcript for `<id
        status=<parsed status or "candidate">,
        related_tasks=<[task] if related-task else []>,
        related_issues=<[issue] if related-issue else []>,
-       created_by="Claude",
    )
    ```
-4. Collect the returned IDEA-NNN ids.
+3. Collect the returned IDEA-NNN ids.
 
-**Commit directly — do NOT prompt the user per item.** The user's standing rule is no draft-and-approve gates in end-session.
+Create them without asking per item: the tag was already the capture step, and a per-item prompt at close time only delays the wrap-up.
 
-After all candidates are committed, also tally any IDEA-NNNs that were auto-logged via path C (call `backlog_idea_list(limit=10)` and filter to entries newer than the session start).
-
-Report inline in the wrap-up summary as a separate bullet:
-
-> **Ideas captured this session:** N total
-> - From `<idea-candidate>` tags: IDEA-009, IDEA-010
-> - Auto-logged: IDEA-011
-
-If both counts are zero, omit the bullet entirely.
+Report the ids as one bullet in the wrap-up summary ("Ideas captured this session: IDEA-009, IDEA-010"). With no ids, leave the bullet out.

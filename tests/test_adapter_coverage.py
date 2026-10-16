@@ -12,9 +12,10 @@ WRAPPER = textwrap.dedent("""\
     description: "Demo skill."
     ---
 
-    Follow the playbook at `../../playbooks/demo/playbook.md`. Read it in
-    full and execute it exactly; `references/` paths inside it resolve
-    relative to the playbook's directory.
+    Follow the playbook at `../../playbooks/demo/playbook.md` (relative to
+    this skill's base directory); it holds the tool calls, store rules and
+    user checkpoints for this workflow. `references/` and `templates/` paths
+    inside it resolve relative to the playbook's own directory.
     """)
 
 

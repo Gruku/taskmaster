@@ -1,88 +1,30 @@
 # End Session
 
-Log the current work session, transition tasks, and commit tracking files.
+Close the session's work: record what happened against the task, move the task to its next status, leave a handover when work continues, and commit the tracking files.
 
-## Why This Skill Exists
+`backlog_complete_task` writes the session record and the status change in one transaction, which makes it the only correct way to mark a task done or in-review. Setting `status` with `backlog_update_task` leaves no session record.
 
-`backlog_complete_task` atomically writes the changelog entry AND transitions the task status. Calling `backlog_update_task` directly to set status to "done" leaves PROGRESS.md silent. **This is the ONLY correct way to mark tasks done or in-review with backlog_complete_task.**
+## Before closing
 
-## Steps
+These feed the handover, so do them first. On a v2 backlog (`backlog_status` shows `Schema: v2`) skip the decision, handover and idea steps.
 
-### v3 Pre-Steps (skip on v2)
+- **Decisions.** `backlog_decision(action="list", status="open", task_id=<current>)`. Ask once about all of them together; anything unanswered is carried forward (`references/v3-pre-steps.md`). The outcome goes into the handover body under "Open decisions" / "Resolved this session", not into `backlog_handover_create` arguments.
+- **Handover.** Write one through `../handover/playbook.md`, without asking, when the task stays in flight (always), the session was long, or the user said "for tomorrow" or "context handoff". Skip it when the user said not to, or when the session was a small one-touch change. Carry on with the close whatever the handover's outcome.
+- **Ideas.** Create every `<idea-candidate>` tag from this session with `backlog_idea_create`, without asking per item (`references/v3-pre-steps.md`).
+- **Repo rules.** When the session surfaced something every assistant in this repo needs ("Y breaks if you do Z"), propose a 1-3 line addition to CLAUDE.md or AGENTS.md and add it on approval. Session-only insights belong in your own memory. When you found nothing, say nothing.
+- **Desk note.** At most one `backlog_note(action="create", text=...)`, for a thought that fits no task, idea, issue or handover, and don't repeat what the handover already says. Usually none.
 
-Check schema: `backlog_status` first line shows `Schema: v<N>`.
+## Close
 
-**v3-pre-1: Decision sweep** (before handover write). Call `backlog_decision(action="list", status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. The open / resolved sets go into the handover **body** under "Open decisions" / "Resolved this session" — not kwargs to `backlog_handover_create`. Full flow: `references/v3-pre-steps.md`.
+**Unfinished work stays in progress.** When the task's work isn't finished ("I'm done for today" in the middle of it; the handover says what is left), don't call `backlog_complete_task` and skip steps 1-6: the task stays `in-progress`, its worktree stays, and the handover is the session's record. Run steps 7 and 8, ending with "Task stays in-progress; resume with `Resume: ...`". The steps below are for finished work.
 
-**v3-pre-2: Handover auto-write.** Write automatically (no prompt) when: session >60 turns, context >200k tokens, task still in-flight, or user said "for tomorrow" / "context handoff". Infer `session_kind` and invoke `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
+The order matters: the close is refused while bugs filed against the task are open, and worktree cleanup needs the final status.
 
-**v3-pre-2a: Instruction-file candidate check.** Ask once: did this session surface knowledge that must bind ALL assistants here ("we always do X", "Y breaks if you do Z")? If yes, propose a 1-3 line addition to the repo's instruction file (CLAUDE.md / AGENTS.md) on user approval. Session-only insights go to your memory. Most sessions produce neither; skip silently.
-
-**v3-pre-2b: Handover archive sweep.** `backlog_handover_resync()` quietly.
-
-**v3-pre-2c: Idea-candidate sweep.** Scan for `<idea-candidate>` tags; commit each via `backlog_idea_create`. Full flow: `references/v3-pre-steps.md`.
-
-**v3-pre-2d: Loose thoughts → desk note (optional, max one).** If the session leaves a situational thought that fits no entity (not a task, idea, issue, or the handover's next_action) — write at most ONE consolidated note via `backlog_note(action="create", text=...)`. Default is none. Never duplicate handover content into a note.
-
-### Existing Flow
-
-**0. Summary mode.** Light session (1-2 commits, single-topic) -> auto-summary. Substantial (3+ commits) -> structured. See `references/summary-modes.md`.
-
-**1. Auto-generate summary.** Done / Decisions / Issues / Tasks touched from conversation context.
-
-**2. Patchnote (optional).** 1-2 sentences for user-visible changes. Skip for internal tasks. See `references/summary-modes.md`.
-
-**3. Session title.** `{Topic}: {Brief Description}`.
-
-**4. Target status.** Default `done` — Claude complete + gates passed. Target `in-review` ONLY when a human-only action blocks the task (API key, LLM config, account access); pass it as `human_action` (short imperative, e.g. "add OPENAI_API_KEY to .env") — `backlog_complete_task` rejects in-review without it. See `references/summary-modes.md`.
-
-**5. Skip review gate.** Call `backlog_complete_task` directly. Only ask on genuine ambiguity.
-
-**5b. Bug close-gate.** Before transitioning the task, query open Bugs linked via `found_in`:
-
-```
-backlog_bug_list(status="open", found_in="<active-task-id>")
-```
-
-If the result is non-empty:
-
-> "We're wrapping up **T-XXX** but it still has **N** open bug(s) linked via `found_in`:
-> - B-NNN — title
->
-> Resolve each before closing. For each open bug, pick a disposition: fix-now / spawn-task / shelve / promote."
-
-Walk the disposition entry point in `taskmaster:bug` for each open bug. Transition the task only when all linked bugs are non-`open`.
-
-`fixed` linked bugs (found_in=task) are archived to `bugs/archive/` automatically on close; say so.
-
-Note: `backlog_complete_task` enforces this server-side too.
-
-**6. Call `backlog_complete_task`.** Two paths:
-
-- **Single task (default):** `backlog_complete_task(task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release, human_action)`.
-- **Bundle:** Call `_get_session_bundle()` first. If a bundle is active (slug, members, …), call `backlog_complete_task(member, …)` for **each passing member** — every member gets its own completion record. Do NOT use `backlog_update_task` status-only for bundle members (see `references/edge-cases.md` §Bundle).
-
-**6b. Merge fan-out (bundle only).** On a single merge event, loop `backlog_record_merge(member, rung, sha)` over all bundle members from `_get_session_bundle()` — same rung and sha for each.
-
-**v3-post-complete-1.** For each `related_issues` that is open/investigating: ask user "Close as fixed or leave for follow-up?"
-
-**7. Worktree cleanup (done tasks only).** Skip for in-review.
-
-- **Single task:** offer `git worktree remove .worktrees/{task_id}`.
-- **Bundle:** offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` first. Never `--force` (guard-hooks blocks it) and never `rm -rf`.
-
-**8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit `chore: log session - {topic}` (native store: edge-cases).
-
-**9. Confirm.** "Session logged. Task is now `{target_status}`." If a handover was written this session, end with its resume line verbatim: `Resume: <thread> — <next_action>`.
-
-## Task Lifecycle
-
-`todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what); done = Claude complete + gates passed (human review is downstream, not on the board).
-
-**Verifying writes.** `[seq N]` = committed; `(export pending: …)` = committed, file pending; `No change … already …` (no seq) = already stored. `backlog_store_status` shows quarantined files.
-
-## Additional Resources
-
-- `references/v3-pre-steps.md` - full v3 pre-step flows (handover auto-write, idea sweep).
-- `references/summary-modes.md` - light vs structured mode, patchnote format, status decision rules.
-- `references/edge-cases.md` - no in-progress task, no git repo, native store, multiple tasks.
+1. **Blockers.** `backlog_context(focus=<task_id>, scope="task", include=[])` names every gate and open bug the close would refuse on. Take each open bug through the disposition in `../bug/playbook.md` (fix now, spawn a task, shelve, promote). For a missing gate, say which one and offer `../review-gate/playbook.md`; a refusal on a gate is reported, not worked around.
+2. **Status.** For finished work, `done` by default; `in-review` only when a human-only action blocks the task, passed as `human_action`. Rules and examples: `references/summary-modes.md`; lifecycle: `../../references/task-lifecycle.md`.
+3. **Summary.** Fill `done`, `decisions`, `issues` and `tasks_touched` from the session, with a title `{Topic}: {Brief description}`. A light session (1-2 commits, one topic) can pass `auto_summary=true` with git stats as `done`. Add a 1-2 sentence `patchnote` only for user-visible changes, and a `release` bucket if the project uses them (`references/summary-modes.md`).
+4. **Complete.** `backlog_complete_task(task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release, human_action)`. Bugs filed against the task and already fixed are archived by the close; say so. A bundle, or several unrelated tasks moved: `references/edge-cases.md`.
+5. **Related issues.** Find the open issues linked to the task and ask whether to close each as fixed (`references/summary-modes.md`).
+6. **Worktree.** For a done task, offer `git worktree remove .worktrees/{task_id}` (bundle rules: `references/edge-cases.md`). Use plain `git worktree remove`: on Windows, `--force` and `rm -rf` have wiped the parent checkout, `.git/` included.
+7. **Commit** the tracking files as `chore: log session - {topic}`. This is the one commit this skill makes, because ending the session is the user's ask; code is committed separately and only on request. Legacy store: stage `.taskmaster/` (backlog, handovers, bugs, issues, ideas, decisions, tasks) and `PROGRESS.md`. Native store (`backlog_store_status` shows an `Exporter lease`): use the managed commit in `references/edge-cases.md`, not plain git.
+8. **Report** "Session logged. Task is now `{target_status}`." If a handover was written, end with its `Resume: <thread> — <next_action>` line verbatim.

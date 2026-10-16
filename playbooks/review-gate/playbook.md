@@ -1,82 +1,32 @@
 # Review Gate
 
-Post-implementation quality gate. The user has finished implementing something and wants to know if it's solid. Lead with the overall verdict — they want validation, not a data dump.
+Post-implementation check of a task's code: is it solid enough to close? Lead the report with the verdict; the user wants a judgement, not a data dump. This reviews the diff. Design review of the spec is `taskmaster:spec-review` (`../spec-review/playbook.md`); plan review is `taskmaster:plan-review` (`../plan-review/playbook.md`).
 
-This skill reviews **code** (the diff). For pre-implementation design review of the spec/plan, use `taskmaster:spec-review`.
+Arguments: `task_id` (defaults to the in-progress task); `--codex` / `--no-codex` to force the Codex pass on or off.
 
-## Arguments
+## What to check
 
-- `task_id` (optional) — specific task ID; defaults to current in-progress task.
-- `--codex` / `--no-codex` (optional) — force enable/skip the Codex precision pass. Default: critical = auto-suggest; high = offer; medium/low = never. See `references/codex-integration.md`.
+Start with `backlog_get_task(task_id)` (priority, branch, worktree, spec and plan docs, review_instructions, bundle) and `backlog_context(focus=<task_id>, scope="task", include=[])`, which lists every unsatisfied gate and every open bug filed against the task.
 
-## Steps
+- **Gate 1, spec/plan exists** (critical/high only): existence, not correctness.
+- **Gate 2a, code review** of the diff between the task branch and its base. No branch: WARN on medium/low; on critical/high ask the user which diff to review. Delegating to a sub-agent works well; the brief is in `references/gate-details.md`.
+- **Gate 2b, Codex pass** (opt-in; critical = suggest, high = offer, else off): `references/codex-integration.md`.
+- **Gate 2c, spec adherence** (critical/high with a spec): `references/gate-details.md`.
+- **Gate 3, tests and build**, using the project's own commands in the task's worktree or sub_repo. None found is SKIP, not a failure.
 
-| Step | What |
-|---|---|
-| 1 | `backlog_get_task` — priority, branch, docs, review_instructions, spec_review record |
-| 2 | Gate 1: Spec/Plan Check (critical/high only — checks existence, not correctness) |
-| 3 | Gate 2a: Claude code review of the diff (see `references/gate-details.md`) |
-| 4 | Gate 2b: Codex pass (opt-in) — see `references/codex-integration.md` |
-| 5 | Gate 2c: Spec adherence for critical/high with a spec (see `references/gate-details.md`) |
-| 6 | Gate 3: Tests + Build (auto-detect runner — see `references/gate-details.md`) |
-| 7 | Present results — lead with verdict, gate matrix (see `references/gate-details.md`) |
-| 8 | Add review instructions if absent (see `references/gate-details.md`) |
-| 8b | Bug close-gate — query open bugs before transitioning (see below) |
-| 9 | Record the gate — the task stays `in-progress`; end-session closes it to `done` |
+Severity decides what blocks: Critical blocks. Important needs the user's acknowledgment. Minor, WARN and SKIP never block.
 
-**Blocking rules:** Critical findings block unconditionally. Important require user acknowledgment. Minor and WARN/SKIP never block.
+## Report and record
 
-**Gate recording.** After reaching a verdict, call:
-```
-backlog_record_gate(task_id, "review-gate", verdict="pass"|"warn"|"fail",
-                    commit_sha=<current sha>, critical_count=<n>)
-```
-A task cannot move to `done` until review-gate is `pass` (or explicitly skipped) — the data layer enforces this. If completion is blocked, surface `backlog_task_pipeline(task_id)` to show the outstanding gates.
+Show the verdict first, then the gate matrix and the findings grouped by severity, tagged by source (your own review or Codex). Matrix format: `references/gate-details.md`. If the task has `review_instructions`, show them as manual test steps. If it has none, draft them from what was built, save them with `backlog_update_task(task_id, "review_instructions", <text>)`, and tell the user they can edit them.
 
-Test runner detection, build detection, Codex Case A/B framing, gate matrix format, and review instructions handling in `references/gate-details.md`.
+Record the honest verdict, because the server lets a task reach `done` only on a recorded `pass` or an audited skip:
+`backlog_record_gate(task_id, "review-gate", verdict="pass"|"warn"|"fail", commit_sha=<sha>, critical_count=<n>, important_count=<n>)`.
+`pass` means no open Critical and any Importants acknowledged by the user (record their count in `important_count`); `warn` means Importants not yet acknowledged; `fail` means an open Critical. `commit_sha` is the full 40-character SHA of the task branch's tip (`git rev-parse <branch>`; `git rev-parse HEAD` when the task has no branch). The merge gate compares it exactly with that tip, so a short SHA, or the HEAD of a different checkout, never matches.
+When the user wants to proceed over findings, use `backlog_skip_gate(task_id, "review-gate", reason)` with their reason; don't record a `pass` over open Criticals. The task stays `in-progress`; end-session closes it.
 
-### Bug close-gate
+If `backlog_context` listed open bugs, walk each through `taskmaster:bug` (`../bug/playbook.md`: fix now / spawn task / shelve / promote). `backlog_complete_task` refuses while any stay open, so resolving them here saves a failed close later.
 
-Before transitioning the task (step 9), query open Bugs linked via `found_in`:
+## Bundles
 
-```
-backlog_bug_list(status="open", found_in="<active-task-id>")
-```
-
-If the result is non-empty:
-
-> "Task **T-XXX** has **N** open bug(s) linked via `found_in`:
-> - B-NNN — title
-> - B-MMM — title
->
-> Resolve each before close. For each open bug, choose disposition: fix-now / spawn-task / shelve / promote."
-
-Walk the disposition entry point in `taskmaster:bug` for each open bug. Only proceed to task transition when all linked bugs are non-`open`.
-
-Note: `backlog_complete_task` enforces this server-side too — the skill just gives the user the chance to resolve interactively before hitting the server gate.
-
-## Bundle Mode (per-member verdict)
-
-When `_get_session_bundle()` is set, the gate runs **once** but evaluates each member separately:
-
-1. Check each `member`'s acceptance criteria against the shared diff.
-2. Emit a combined report — one PASS/FAIL verdict per member.
-3. Record per-member (loop, shared `spec_path`): `backlog_record_gate(member, "review-gate", verdict=..., spec_path=<shared spec>)`.
-4. All pass → record each member's gate. Members stay `in-progress`; end-session closes them to `done`.
-5. Any fail → fix-up in the same worktree **or** descope (see `references/bundle-gate.md`).
-
-Non-bundle single-task flow is unchanged.
-
-### Descope path (summary)
-
-Descope is always explicit, never silent. Make four separate `backlog_update_task` calls (`bundle=""`, `status="todo"`, `branch=""`, `worktree=""`), then edit the shared spec doc directly to excise the member's section. Branch merges atomically without the descoped member. Full procedure: `references/bundle-gate.md`.
-
-## Related Reviewers (NOT part of this gate)
-
-- **`taskmaster:spec-review`** — pre-implementation adversarial review of the spec/plan.
-- **`/code-review`** (claude-plugins-official) — post-PR review, fans out agents, posts to GitHub.
-- **`/codex:adversarial-review`** — challenges design choices; spec-review uses a prose-friendly equivalent.
-
-## Verifying writes
-
-A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
+A task whose `bundle` field is set (or whose pick said `Picking bundle <slug>`) shares one diff with its bundle mates. List the members with `backlog_claim(action="status", task_id=<id>)` (`members`), review the shared diff once, and give one verdict per member against that member's acceptance criteria, recording a gate per member. A failing member is either fixed in the same worktree and re-gated alone, or descoped explicitly. Details: `references/bundle-gate.md`.

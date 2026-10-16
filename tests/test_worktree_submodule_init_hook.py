@@ -152,8 +152,8 @@ def test_worktree_with_submodule_emits_protocol_context(tmp_path):
     out = json.loads(r.stdout)  # must be valid JSON
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-    assert "SUBMODULE WORKTREE PROTOCOL" in ctx
+    assert "taskmaster ran submodule init in worktree" in ctx
     assert "sub ✓" in ctx
-    assert "LOST on worktree removal unless fetched back" in ctx
+    assert "lost when the worktree is removed" in ctx
     # the submodule really got initialized in the worktree
     assert (wt / "sub" / "README.md").is_file()

@@ -7,6 +7,37 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.4.0
+
+**Taskmaster gets out of the model's way, and new projects start native.** taskmaster-mods 0.2.3.
+
+**Prompts rewritten for the Claude 5.5 models.** Every skill, playbook, hook message and tool description was rewritten to the Claude 5.5 prompting guides: plain wording with reasons instead of capitalised emphasis, outcomes instead of scripted steps, each rule stated once, and every tool name and argument checked against the server.
+
+- A concrete first request goes straight to work. start-session (the dashboard) runs only when asked to orient ("orient me", "what should I work on", "show the backlog").
+- Tracked work with no task in progress: taskmaster finds a matching task or creates one, says so in one line, picks it and starts. No "want me to add a task?" or "right task?" stops. A blocker on a task the user asked for is reported in one line and work goes on; it stops only for a peer session's live claim, an in-review human action, or a failed spec review.
+- "Log a bug" writes the bug first and offers fix-now / shelve in the same reply. Defects the model notices itself are still offered before they are logged.
+- A decision record is written only for a choice that is left open or deferred; a choice answered on the spot stays in the conversation.
+- "I'm done for today" in the middle of a task leaves it in progress and records it in the handover, instead of closing it. End-session asks about open decisions once, together.
+- A direct change that grows into tracked work keeps its branch; pick-task no longer insists on a new worktree.
+- Skill descriptions name their boundary with neighbouring skills (superpowers, code review) and no longer claim to be the "only way".
+- The MCP server now sends instructions (how to read write receipts, when hand edits need `backlog_sync`), and tool descriptions were corrected: the valid handover kinds are listed, `backlog_update_task` lists every field it accepts, `backlog_record_gate` asks for the full 40-character `commit_sha` the merge gate compares, and `backlog_context` explains `include=[]`.
+- The SessionStart text is short, recognises `.claude/backlog.yaml` and root `backlog.yaml` projects (pointing them to migrate-v3, never init), and no longer tells the model to commit.
+- The merge-gate block message no longer explains how to switch the gate off.
+- Fixes in the playbooks: tasks link to issues with `backlog_link(type="fixes")` (the old `related_issues` argument did not exist); the handover file-index lookup uses the real schema; init no longer creates a backlog while checking for one; the Linear token check never prints the token; references to tools and commands that do not exist are gone.
+- A new prompt-style lint (`tests/test_prompt_style_lint.py`) fails on capitalised emphasis and on dead names.
+
+**Removed.** The seven `commands/*.md` files that duplicated skills (`check-todos`, `end-session`, `init-taskmaster`, `pick-task`, `review-gate`, `spec-review`, `start-session`). They hid the skills' descriptions from the model; `/taskmaster:<name>` still runs each skill. The one-time `migrate-lessons` skill is retired; start-session points to the same procedure when a `.taskmaster/lessons/` folder is found.
+
+**New projects start on the native store.** `backlog_init` now creates a native project directly, instead of a legacy store that needed a cutover.
+
+- Existing projects are untouched: a legacy project stays legacy until it is cut over, and a native one answers "already initialized". `.claude/` and root-layout backlogs are routed to migrate-v3.
+- `backlog_init(legacy_store=True)` keeps the legacy store. Init falls back to legacy by itself, with a `Note:`, on a network filesystem, a SQLite build the native store can't use, or a failed activation.
+- Init refuses in a linked worktree or a submodule before writing anything, records the chosen store in `taskmaster.json`, and finishes an interrupted native init when it is run again on a still-empty store. Two inits at the same time can't both write.
+- Init starts the coordinator before it returns, so the first write doesn't wait for it.
+- The pre-commit check no longer refuses `.taskmaster/taskmaster.json`, which the managed commit leaves out.
+
+**taskmaster-mods 0.2.3.** The handover guard's prompt says it was sent automatically, and the Restore brief marks the quoted transcript as data.
+
 ## 7.3.2
 
 **The Session tab shows everything the session did.** taskmaster-mods 0.2.2.

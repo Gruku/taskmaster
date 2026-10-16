@@ -1,122 +1,53 @@
-# Review Gate — Bundle Mode Detail
+# Review Gate: Bundle Mode
 
-Full walkthrough for per-member verdict and descope path when `_get_session_bundle()` is set.
+When a task belongs to a bundle, its members share one branch, one worktree and usually one spec. The gate reviews the shared diff once and judges each member on its own acceptance criteria.
 
-## Per-Member Verdict Flow
+## Detect the bundle
 
-### 1. Detect bundle
+The task's `bundle` field (shown by `backlog_get_task`) or the pick response line `Picking bundle <slug>: ids` marks bundle mode. For the member list, call `backlog_claim(action="status", task_id=<id>)` and read `members`. No bundle, or a bundle of one member: run the standard single-task gate.
 
-Call `_get_session_bundle()` at the start of the gate. If it returns a bundle with a non-empty `members` list, use bundle mode. Otherwise fall through to the standard single-task gate — no changes to that flow.
+## Per-member verdict
 
-```
-bundle = _get_session_bundle()
-if bundle and bundle.get("members"):
-    # bundle mode
-else:
-    # standard single-task flow (unchanged)
-```
+1. Compute the diff once from the shared branch.
+2. For each member, `backlog_get_task(member)` for its acceptance criteria and spec path, then judge the shared diff against them: `pass` or `fail`.
+3. Report one row per member:
 
-### 2. Shared context
-
-The bundle carries a shared branch, worktree, and (optionally) a shared spec doc path. Compute the diff once from the shared branch — all members share the same changeset in the same worktree.
-
-### 3. Per-member acceptance check
-
-For each `member` in `bundle["members"]`:
-- Load the member's task via `backlog_get_task(member)` to obtain its acceptance criteria and spec path.
-- Evaluate the shared diff against that member's criteria.
-- Assign a verdict: `pass` / `fail`.
-
-Emit a combined report with one row per member:
 ```
 Member   | Verdict | Notes
 ---------|---------|------
 T-001    | PASS    | All 3 ACs met
 T-002    | FAIL    | AC-2 missing: error handling not implemented
-T-003    | PASS    | —
+T-003    | PASS    | -
 ```
 
-### 4. Record per-member gates
+4. Record each member's gate with the shared spec path (or the member's own when there is no shared spec):
+   `backlog_record_gate(member, "review-gate", verdict="pass"|"fail", spec_path=<spec>, commit_sha=<full 40-character SHA of the shared branch tip, from `git rev-parse <branch>`>)`. The merge gate compares it exactly with that tip.
 
-Loop over all members and record each verdict individually. All share the same `spec_path` (the shared spec doc if present, else the individual task's spec path):
+Members stay `in-progress`; end-session closes them to `done`.
 
-```python
-for member in bundle["members"]:
-    backlog_record_gate(
-        member,
-        "review-gate",
-        verdict="pass" if member_passed else "fail",
-        spec_path=shared_spec_path,   # same for all members
-        commit_sha=current_sha,
-    )
+## A member fails
+
+Two options, the user's call:
+
+- Fix-up: address the failing criteria in the same worktree, then re-run the gate with just that member's id. Passed members aren't re-evaluated.
+- Descope: remove the member from the bundle and return it to `todo`. Descope is always explicit, since a silent removal would leave a task looking done with its work missing.
+
+## Descope procedure
+
+Four separate calls, because each field is its own update:
+
 ```
-
-### 5. All pass
-
-If all members pass:
-- Record each member's gate. Members stay `in-progress`; end-session closes them to `done`.
-- Close the gate — report "All N bundle members passed review-gate."
-
-### 6. Any fail — options
-
-For each failing member, present two options:
-
-**Option A — Fix-up:** Address the failing acceptance criteria in the same worktree, then re-run the gate for that member only.
-
-**Option B — Descope:** Remove the member from the bundle and return it to `todo`. See Descope path below.
-
----
-
-## Descope Path
-
-Descope is always explicit — every step is visible and acknowledged. Never silently remove a member.
-
-### Step 1: Clear the bundle membership
-
-```python
 backlog_update_task(member, "bundle", "")
-```
-
-`_valid_bundle_slug("")` returns `True`, so an empty string is accepted and means "not in any bundle."
-
-### Step 2: Return member to todo
-
-```python
 backlog_update_task(member, "status", "todo")
-```
-
-The member re-enters the backlog as a standalone unstarted task.
-
-### Step 3: Clear branch and worktree fields
-
-```python
 backlog_update_task(member, "branch", "")
 backlog_update_task(member, "worktree", "")
 ```
 
-These fields belonged to the shared bundle; the descoped task has no branch until it is picked again independently.
+An empty `bundle` means "not in any bundle". The branch and worktree belonged to the bundle; the descoped task gets its own when it is picked again.
 
-### Step 4: Edit the shared spec doc
+If there is a shared spec doc, edit the file directly to remove the descoped member's section (no tool mutates spec documents). Without a shared doc, skip this and say so in the descope report. The branch then carries only the remaining members' work and merges as usual.
 
-There is no document-mutation MCP tool by design — edit the markdown file directly:
+## Edge cases
 
-1. Locate the shared spec doc path (from `bundle["spec_path"]` or the task's `spec` field).
-2. Open the file with the `Edit` tool.
-3. Find and remove the section that belongs to the descoped member (typically a `## T-XXX` or `### member-id` heading and its content).
-4. Save. The spec now documents only the remaining bundle members.
-
-### Step 5: Atomic merge without the descoped member
-
-The branch now represents only the remaining members' work. Merge (or PR) proceeds normally. The descoped member's task is visible in the backlog as `todo` with no branch — ready to be picked independently in a future session.
-
----
-
-## Edge Cases
-
-**All members fail:** Offer fix-up passes for all, or descope all. If all are descoped, the branch has no remaining members — close the branch (archive or delete) and note it in each member's task body.
-
-**Single-member bundle:** A bundle with one member degenerates to the standard single-task flow. Detect this and skip the per-member report format; run the normal gate steps.
-
-**Partial fix-up then re-run:** After fixing a failing member, call the gate again with just that member's ID as `task_id` to re-evaluate. When it passes, record its gate (it stays `in-progress` until end-session closes it). Do not re-evaluate already-passed members.
-
-**Spec doc absent:** If the bundle has no shared spec doc, use each member's individual `spec` path as that member's `spec_path` in `backlog_record_gate`. The descope spec-edit step is skipped if there is no shared doc — note the skip in the descope report.
+- All members fail: fix-up passes for all, or descope all. If all are descoped, the branch has no members left; note that in each member's task and let the user decide what happens to the branch.
+- Partial fix-up: re-gate only the member that was fixed.

@@ -4,8 +4,9 @@
 """Project and runtime capability checks for native routing.
 
 The project capability is the database's own authority marker: `meta.schema_version`
-2 plus a ready `native` manifest. No runtime entry point writes those markers, so
-only a test (or a later authorized cutover) can make a project native. The legacy
+2 plus a ready `native` manifest. Only two runtime entry points write those markers:
+`backlog_init` on a project it has just created (`native.fresh`) and the operator
+cutover (`native.cutover`) on an existing legacy store. The legacy
 `Store` refuses such a database outright, which is why a native store has no
 legacy fallback to route to: an unrouted tool refuses instead.
 

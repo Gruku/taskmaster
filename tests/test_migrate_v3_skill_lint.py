@@ -46,27 +46,29 @@ def test_description_contains_trigger_phrases():
     fm = _read_frontmatter(SKILL_DIR / "SKILL.md")
     desc = fm["description"].lower()
     must_have = [
-        "upgrade to v3",
+        "adopt",
+        "legacy",
         "migrate to v3",
-        "switch to v3",
-        "enable narrative continuity",
     ]
     missing = [p for p in must_have if p not in desc]
     assert not missing, f"description is missing trigger phrases: {missing}"
 
 
-def test_playbook_contains_canonical_sentence():
+def test_playbook_names_the_tool_and_the_confirm():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
-    expected = (
-        "This is the ONLY correct way to migrate a project to v3"
-        " — do not call backlog_migrate_v3 directly without the pre-flight gate."
-    )
-    assert expected in text, "playbook.md is missing the canonical 'ONLY correct way' sentence"
+    assert "backlog_migrate_v3" in text
+    # The probe before the Adopt/Cancel question must be read-only: backlog_status errors on
+    # `.claude/`/root layouts and adopts a pre-store `.taskmaster/backlog.yaml`.
+    step_one = text.split("1. ", 1)[1].split("\n2. ", 1)[0]
+    assert step_one.startswith("Call `backlog_store_status`"), step_one
+    for token in ("no backlog found at", "backlog lives at", "no store yet"):
+        assert token in step_one, token
+    assert "Adopt" in text and "Cancel" in text, "playbook must keep the adopt/cancel confirm"
+    assert "Adopted into the store" in text and "adoption refused" in text
 
 
 def test_all_referenced_files_exist():
     expected_refs = [
-        PLAYBOOK_DIR / "references" / "v2-vs-v3.md",
         PLAYBOOK_DIR / "references" / "migration-steps.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
@@ -74,10 +76,10 @@ def test_all_referenced_files_exist():
 
 
 def test_references_are_not_stubs():
-    # The v2-vs-v3.md reference must have > 20 non-blank lines; no stub allowed.
+    # A reference must carry real content, not a stub.
     for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
+        assert len(non_blank) > 5, f"reference looks like a stub: {ref}"
 
 
 def test_playbook_links_resolve():

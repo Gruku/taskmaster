@@ -6965,11 +6965,9 @@ def projection_conflict_notice(conflict: Mapping[str, Any]) -> str:
     else:
         what = f"{kind} {conflict.get('id')}"
     return (
-        f"{rel} ({what}) was edited while the store held a change it had not "
-        f"written there yet, so neither version was applied to the other. Both "
-        f"are kept: the store has its version, the file is untouched, and "
-        f"exports to it are paused. Compare them with "
-        f'backlog_resolve_conflict(file="{rel}"), then keep one with '
+        f"{rel} ({what}) changed on disk while the store held an unexported change "
+        f"to it, so neither was applied and exports to it are paused. Compare with "
+        f'backlog_resolve_conflict(file="{rel}"), then keep one side with '
         f'take="file" or take="store".'
     )
 

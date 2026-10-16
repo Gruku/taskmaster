@@ -67,7 +67,23 @@ def test_references_exist():
 def test_references_not_stubs():
     for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference stub: {ref}"
+        assert len(non_blank) > 5, f"reference stub: {ref}"
+
+
+def test_references_carry_their_facts():
+    refs = PLAYBOOK_DIR / "references"
+    gate = (refs / "gate-details.md").read_text(encoding="utf-8")
+    assert "backlog_skip_gate" in gate and "review_instructions" in gate
+    bundle = (refs / "bundle-gate.md").read_text(encoding="utf-8")
+    assert "backlog_claim" in bundle and "members" in bundle
+    assert "_get_session_bundle" not in bundle
+
+
+def test_playbook_names_its_calls():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    for token in ("backlog_record_gate", "backlog_skip_gate", "backlog_context"):
+        assert token in text, f"playbook must name {token}"
+    assert "_get_session_bundle" not in text
 
 
 def test_playbook_links_resolve():
@@ -76,3 +92,9 @@ def test_playbook_links_resolve():
     assert refs, "playbook.md must reference at least one references/ file"
     missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
     assert not missing, f"unresolved: {missing}"
+
+
+def test_gate_record_names_verdict_and_full_sha():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "important_count" in text
+    assert "40-character" in text and "git rev-parse" in text

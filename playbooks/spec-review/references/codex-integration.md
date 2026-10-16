@@ -1,50 +1,44 @@
-# Spec Review — Codex Adversarial Pass (Gate C)
+# Spec Review: Codex Adversarial Pass (Gate C)
 
-Gate C is the Codex precision knife for spec-level blind spots. Skip silently if Codex isn't detected and not requested.
+Gate C is the Codex pass for spec-level blind spots. Skip silently when Codex isn't detected and wasn't requested.
 
-Codex detection: `~/.claude/plugins/cache/openai-codex/` exists OR `codex` is on PATH.
+Codex is detected when `~/.claude/plugins/cache/openai-codex/` exists or `codex` is on PATH. When `--codex` was passed but Codex isn't available, say so in one line and continue without it.
 
-Default behavior:
-- `critical`: auto-suggest, ask user before running
-- `high`: offer if Codex detected, default off
-- `medium` / `low`: never run
+Default by task priority:
+- `critical`: suggest it and ask before running
+- `high`: offer it when Codex is detected, default off
+- `medium` / `low`: don't run
 
-If `--codex` passed but Codex isn't available, WARN and continue without it.
+## Constraint
 
-## Constraints
+`/codex:adversarial-review` works on diffs only and can't review prose, so it doesn't fit a spec. Dispatch the Codex rescue sub-agent with an inspect-and-report brief instead.
 
-- `/codex:adversarial-review` is **diff-only** and won't work on prose — do NOT use it here.
-- Instead, dispatch the `codex:codex-rescue` subagent with explicit review-only framing.
+## Dispatch pattern
 
-## Dispatch Pattern
+Build the focus from what Gate B didn't flag, so the pass doesn't duplicate your review. If your tool can't dispatch sub-agents, run the same checklist inline.
 
-Build a focus from what Gate B *didn't* flag (avoids paying for a duplicate pass).
-
-If your tool cannot dispatch sub-agents, run the review inline against the same checklist.
 <!-- cc-only:start -->
 ```
 Agent({
   subagent_type: "codex:codex-rescue",
   description: "Codex adversarial spec review",
-  prompt: "REVIEW-ONLY. Do not write or modify code. Do not propose patches.
+  prompt: "Inspect the spec and the code and report; do not implement changes or propose patches.
 
-Read the spec at <abs path to spec> and the surrounding codebase. Produce
-an adversarial design review challenging the chosen approach.
+Read the spec at <abs path to spec> and the surrounding codebase. Produce an adversarial design review challenging the chosen approach.
 
 Claude's own review already flagged: <bullet list of Gate B findings>.
 
-Look specifically for blind spots Claude may have missed:
+Look for blind spots Claude may have missed:
 - Repeated bugs in this area that the spec doesn't address.
 - Implicit assumptions about <area-specific concerns>.
-- Cross-codebase patterns that suggest this approach has been tried/rejected before.
+- Cross-codebase patterns suggesting this approach was tried and rejected before.
 - Edge cases in <specific functions or flows> that the spec glosses over.
 
-Return a concise list of issues with file:line citations. Group by Critical /
-Important / Minor. Do not summarize Claude's findings — only add new ones."
+Return a concise list of issues with file:line citations, grouped Critical / Important / Minor. Add only new findings; don't restate Claude's."
 })
 ```
 <!-- cc-only:end -->
 
-## Merging into Report
+## Merging into the report
 
-Tag Codex findings with `(codex)` so the source is visible when merged into the gate matrix.
+Tag Codex findings with `(codex)` so the source is visible in the gate rows. Pass `codex_used=true` when recording.

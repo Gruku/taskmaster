@@ -13,12 +13,12 @@ discipline, Codex follows it advisorily).
 2. **Register the MCP server.** Merge `config.toml`'s
    `[mcp_servers.taskmaster]` block into `~/.codex/config.toml`.
    Slash prompts: copy `prompts/*.md` into `~/.codex/prompts/` — each file
-   becomes a `/name` prompt (e.g. `/start-session`). Routing rules: append
+   becomes a `/name` prompt (e.g. `/review-gate`). Routing rules: append
    `AGENTS.md`'s fragment to your project's `AGENTS.md` (or
    `~/.codex/AGENTS.md` for all projects).
 3. **Verify.** In a project with a `.taskmaster/` backlog (create one with
    the `init-taskmaster` playbook), start Codex and ask for the backlog
-   status — the `backlog_status` tool should answer. Then `/start-session`.
+   status — the `backlog_status` tool should answer. Then try `/start-session` to be oriented on the backlog.
 
 ## What each piece does
 

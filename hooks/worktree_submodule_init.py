@@ -153,7 +153,7 @@ def main() -> int:
         sub_git = wt / sub / ".git"
         # Check if submodule init produced a working directory
         if not sub_git.is_file() and not sub_git.is_dir():
-            failures += f"  - {sub}: submodule update --init failed (no .git in worktree)\\n"
+            failures += f"  - {sub}: submodule update --init failed (no .git in worktree)\n"
             continue
 
         # Fetch from main checkout's copy (avoids network)
@@ -169,7 +169,7 @@ def main() -> int:
                     fetch_output = ""
                     fetch_exit = 1
                 if fetch_exit != 0:
-                    failures += f"  - {sub}: fetch from main checkout failed: {fetch_output}\\n"
+                    failures += f"  - {sub}: fetch from main checkout failed: {fetch_output}\n"
                     continue
 
         # Validate: confirm HEAD is resolvable (submodule is actually checked out)
@@ -178,7 +178,7 @@ def main() -> int:
         except Exception:
             vr = None
         if vr is None or vr.returncode != 0:
-            failures += f"  - {sub}: initialized but HEAD is unresolvable (detached/corrupt)\\n"
+            failures += f"  - {sub}: initialized but HEAD is unresolvable (detached/corrupt)\n"
             continue
 
         try:
@@ -186,31 +186,30 @@ def main() -> int:
             sub_head = (hr.stdout or "").strip() if hr.returncode == 0 else ""
         except Exception:
             sub_head = ""
-        results += f"  - {sub} ✓ ({sub_head})\\n"
+        results += f"  - {sub} ✓ ({sub_head})\n"
 
     # Build status message
     if failures:
         if init_exit != 0:
-            status = f"❌ SUBMODULE INIT FAILED (exit {init_exit}): {init_output}"
+            status = f"Submodule init failed (exit {init_exit}): {init_output}"
         else:
-            status = "⚠ PARTIAL FAILURE — some submodules failed validation"
+            status = "Some submodules failed validation."
         detail = (
-            f"{status}\\n\\nSucceeded:\\n{results or '  (none)'}\\n\\nFailed:\\n{failures}"
-            "\\nManual recovery required. Run in the worktree:"
-            "\\n  git submodule update --init"
-            "\\n  git -C <submodule> fetch <main-checkout>/<submodule>"
+            f"{status}\nSucceeded:\n{results or '  (none)' + chr(10)}Failed:\n{failures}"
+            "Recover by running in the worktree:\n"
+            "  git submodule update --init\n"
+            f"  git -C <submodule> fetch {main_checkout or '<main-checkout>'}/<submodule>"
         )
     else:
         status = "✓ All submodules initialized and validated"
-        detail = f"{status}\\n{results}"
+        detail = f"{status}\n{results}".rstrip("\n")
 
-    # Escape for JSON (same transform chain as the shell: backslash-double,
-    # quote-escape, tab-escape, then real newlines -> spaces)
+    # Escape for JSON; real newlines become \n so the lists stay on separate lines.
     detail_escaped = (
         detail.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("\t", "\\t")
-        .replace("\n", " ")
+        .replace("\n", "\\n")
     )
 
     wt_escaped = _json_escape(worktree_path)
@@ -218,7 +217,7 @@ def main() -> int:
         f"""{{
   "hookSpecificOutput": {{
     "hookEventName": "PostToolUse",
-    "additionalContext": "SUBMODULE WORKTREE PROTOCOL — {wt_escaped}\\n\\n{detail_escaped}\\n\\nCommits in worktree submodules are ISOLATED — they will be LOST on worktree removal unless fetched back.\\n\\nBEFORE removing this worktree or merging, run for each submodule:\\n  git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>\\n\\nThis ensures no commits are lost."
+    "additionalContext": "taskmaster ran submodule init in worktree {wt_escaped}. {detail_escaped}\\nCommits made inside these submodules exist only in the worktree's submodule clones and are lost when the worktree is removed. Before removing or merging the worktree, fetch each submodule's commits back: git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>"
   }}
 }}
 """

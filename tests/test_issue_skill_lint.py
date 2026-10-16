@@ -60,13 +60,11 @@ def test_description_contains_trigger_phrases():
     assert not missing, f"description is missing trigger phrases: {missing}"
 
 
-def test_playbook_contains_canonical_sentence():
+def test_playbook_routes_writes_through_bar_check():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
-    expected = (
-        "This is the ONLY correct way to write or transition a project Issue"
-        " — do not call `backlog_issue_create` or `backlog_issue_update` directly."
-    )
-    assert expected in text, "playbook.md is missing the canonical 'ONLY correct way' sentence"
+    assert "backlog_issue_create" in text and "backlog_issue_update" in text
+    assert "bar" in text.lower()
+    assert "evidence" in text.lower()
 
 
 def test_playbook_documents_all_entry_points():
@@ -107,10 +105,15 @@ def test_all_referenced_files_exist():
 
 
 def test_references_are_not_stubs():
-    # Each reference > 20 non-blank lines; each template > 5 (per spec).
+    # Each reference and template > 5 non-blank lines, plus content checks.
     for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
+        assert len(non_blank) > 5, f"reference looks like a stub: {ref}"
+    refs = PLAYBOOK_DIR / "references"
+    assert "backlog_issue_create" in (refs / "entry-point-flows.md").read_text(encoding="utf-8")
+    assert "fixed_in_task" in (refs / "lifecycle.md").read_text(encoding="utf-8")
+    assert "evidence" in (refs / "auto-extraction.md").read_text(encoding="utf-8")
+    assert "backlog_bug_promote" in (refs / "issue-bar.md").read_text(encoding="utf-8")
     for tpl in (PLAYBOOK_DIR / "templates").iterdir():
         non_blank = [ln for ln in tpl.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 5, f"template looks like a stub: {tpl}"
@@ -136,3 +139,11 @@ def test_description_within_word_budget():
     count = description_word_count("issue")
     budget = DESCRIPTION_WORD_OVERRIDES.get("issue", DEFAULT_DESC_WORDS)
     assert count <= budget, f"description is {count} words (budget: {budget})"
+
+
+def test_task_issue_link_uses_a_tool_that_can_store_it():
+    # backlog_add_task has no related_issues argument; the link is a `fixes` backlog_link.
+    refs = PLAYBOOK_DIR / "references"
+    flows = (refs / "entry-point-flows.md").read_text(encoding="utf-8")
+    assert 'type="fixes"' in flows and "backlog_link" in flows
+    assert "related_issues" not in flows

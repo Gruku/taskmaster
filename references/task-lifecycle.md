@@ -3,26 +3,27 @@
 ## State Machine
 
 ```
-todo → in-progress → in-review → done → archived
-         ↑              ↑                   ↑
-    (pick-task)  (end-session, when      (archive)
-                    human-blocked)
+todo → in-progress → done → archived
+          ↕   ↘
+     in-review  blocked → todo | in-progress | in-review | archived
 ```
+
+`done` can also go back to `in-review`, an in-progress task can be unpicked back to `todo`, and an archived task can only go back to `todo`. Status moves go through the skills below; the server enforces the legal moves on tasks that have a lane, and a task with no lane is exempt except when leaving `archived`.
 
 ## What Each Status Means
 
 | Status | Who's Active | What's Happening |
 |--------|-------------|-----------------|
 | **todo** | Nobody | Task is defined and waiting. May have unmet dependencies. |
-| **in-progress** | Claude | Actively being worked on. Locked to a session. Has a worktree. |
-| **in-review** | The user | Exception state: AI work complete, but an action only the human can perform blocks it. The task's `human_action` states it. Entering in-review without one is rejected. |
-| **done** | Nobody | Claude complete + required gates passed. Session summary logged to PROGRESS.md. |
-| **blocked** | Nobody | Cannot proceed — external dependency, missing info, or upstream task not done. |
-| **archived** | Nobody | Permanently cleared from the active board. Still in YAML but hidden from listings. |
+| **in-progress** | The assistant | Actively being worked on. Claimed by a session. Has a worktree. |
+| **in-review** | The user | Exception state: the AI work is complete, but an action only the human can perform blocks it. The task's `human_action` states it. Entering in-review without one is rejected. |
+| **done** | Nobody | Work complete and the lane's required gates passed. The session summary is in the session log (`PROGRESS.md`, kept under `.taskmaster/local/` on a native store and not committed). |
+| **blocked** | Nobody | Cannot proceed: external dependency, missing info, or an upstream task not done. |
+| **archived** | Nobody | Cleared from the active board. Still stored, but hidden from listings. |
 
 ## Why In-Review Exists
 
-`in-review` is an **exception state**, not a pipeline stage. It means the AI work is complete but an action only the human can perform blocks true completion — adding an API key, changing LLM config, granting access. The blocking action is recorded on the task as `human_action`; every write path rejects in-review without it.
+`in-review` is an exception state, not a pipeline stage. It means the AI work is complete but an action only the human can perform blocks true completion: adding an API key, changing LLM config, granting access. The blocking action is recorded on the task as `human_action`; every write path rejects in-review without it.
 
 Most tasks never touch in-review: they go `in-progress → done` once the lane's gates pass. Human review of done work happens downstream (review sweeps), not on the board.
 
@@ -30,13 +31,18 @@ Most tasks never touch in-review: they go `in-progress → done` once the lane's
 
 | From | To | How | What Happens |
 |------|----|-----|-------------|
-| todo | in-progress | `pick-task` skill or `backlog_pick_task` | Sets `started` timestamp, locks to session, creates worktree |
-| in-progress | done | `end-session` skill | Gates passed; session summary logged |
-| in-progress | in-review | `end-session` skill | A human-only action blocks the task; `human_action` recorded |
-| in-review | done | `start-session` / `end-session` | Human action handled (verified or user-confirmed); `human_action` cleared |
+| todo | in-progress | `pick-task` skill or `backlog_pick_task` | Sets `started`, claims the task for the session, creates the worktree |
+| in-progress | done | `end-session` skill (`backlog_complete_task`) | Gates passed; session summary logged |
+| in-progress | in-review | `end-session` skill (`backlog_complete_task`, `target_status="in-review"`) | A human-only action blocks the task; `human_action` recorded |
+| in-review | done | `end-session` skill (`backlog_complete_task`) | The human action is handled (verified or user-confirmed); `human_action` cleared |
 | in-review | in-progress | `pick-task` skill | Resume work after the human action is handled |
-| done | archived | `backlog_archive_task` | Clears from board. Reason recorded. |
-| todo/blocked | archived | `backlog_archive_task` | Requires non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
+| todo / in-progress / in-review | blocked | `backlog_update_task(id, "status", "blocked")`, with the reason in `blockers` | Records that the task cannot proceed |
+| blocked | todo / in-progress | `backlog_update_task(id, "status", ...)` once the blocker clears (a blocked task is not directly pickable) | Work can resume |
+| blocked | done / in-review | `backlog_complete_task` | A blocked task can still be completed |
+| done / blocked / todo | archived | `backlog_archive_task` | Clears the task from the board; a `todo` task needs a non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
+| in-progress / in-review | archived | `backlog_update_task(id, "status", "archived")` | `backlog_archive_task` refuses these two statuses |
+| in-progress | todo | `backlog_update_task(id, "status", "todo")` | Unpick: the task goes back to waiting |
+| archived | todo | `backlog_update_task(id, "status", "todo")` | Unarchive; the only legal move out of archived |
 
 ## Phases
 

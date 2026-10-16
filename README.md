@@ -8,7 +8,7 @@ Taskmaster is a local-first task and backlog system for AI-assisted software
 projects. It gives Claude Code and Codex a shared MCP core, disciplined workflow
 playbooks, durable session continuity, and a fast browser-based project board.
 
-[![Version](https://img.shields.io/badge/version-7.3.2-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
+[![Version](https://img.shields.io/badge/version-7.4.0-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-d97706?style=flat-square)](https://docs.anthropic.com/en/docs/claude-code)
@@ -203,11 +203,12 @@ entity kind through the store's FTS, and `backlog_index_status` reports the
 derived tables and rebuilds them on demand (on a native store, `verify=True`
 checks the graph tables against the full oracle without changing them).
 
-### Native store (opt-in)
+### Native store
 
-7.0.0 adds a second storage mode, the **native authority**, which a project gets only when an
-operator runs the explicit cutover (`python -m taskmaster.native.cutover`). Nothing migrates
-automatically, and the legacy store above stays the default. On a native store one repository
+7.0.0 adds a second storage mode, the **native authority**. A project created by `backlog_init`
+starts on it (`backlog_init(legacy_store=True)` opts out); an existing legacy project gets it
+only when an operator runs the explicit cutover (`python -m taskmaster.native.cutover`), and
+nothing migrates automatically. On a native store one repository
 coordinator process owns all writes, files are exported after each commit, hand edits are
 imported only at an explicit sync, and `.taskmaster/` is committed with the managed Git command
 (`python -m taskmaster.coordinator.git_cli commit`). Replies can also say

@@ -1,11 +1,11 @@
 ---
 name: decision
-description: "Write/resolve/drop project decisions in .taskmaster/decisions/. Invoke when about to write an inline option menu - route here, not Options: in chat. Also 'choose between', 'pick an option', 'decide on', 'open question', 'resolve DEC-X', 'drop DEC-X'. Only correct way - do not call backlog_decision_create directly."
+description: "Record, resolve or drop project decisions (DEC-N) so an open choice survives the session. Use in place of an inline 'Options:' menu of two or more mutually exclusive paths that the user defers or leaves open, and for 'choose between', 'pick an option', 'decide on', 'open question', 'resolve DEC-X', 'drop DEC-X'. A choice answered right away stays in chat."
 ---
 
 # Decision
 
 Follow the playbook at `../../playbooks/decision/playbook.md` (relative to
-this skill's base directory). Read it in full and execute it exactly.
-`references/` and `templates/` paths inside the playbook resolve relative
-to the playbook's own directory.
+this skill's base directory); it holds the tool calls, store rules and
+user checkpoints for this workflow. `references/` and `templates/` paths
+inside it resolve relative to the playbook's own directory.

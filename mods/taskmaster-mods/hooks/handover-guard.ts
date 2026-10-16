@@ -127,7 +127,7 @@ export function isHandoverWritten(ran: { readonly deny?: string; readonly text?:
 
 /** Without a fork: the prompt the main conversation answers with the handover skill. */
 export const guardPrompt = (idleMinutes: number, tokens: number, compact: boolean): string =>
-  `Cache-cold guard: this session has been idle ${idleMinutes} min at ${Math.round(tokens / 1000)}k tokens of context and the ` +
+  `[taskmaster-mods handover guard, sent automatically, not typed by the user] Cache-cold guard: this session has been idle ${idleMinutes} min at ${Math.round(tokens / 1000)}k tokens of context and the ` +
   'prompt cache expires at 60 min. Write a handover now with the taskmaster:handover skill, then stop.' +
   (compact ? ' The session is compacted once this turn ends.' : '')
 

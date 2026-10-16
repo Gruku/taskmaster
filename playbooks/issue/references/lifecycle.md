@@ -1,88 +1,36 @@
-# Issue Lifecycle
+# Issue lifecycle
 
-## State machine
+## States
 
 ```
-open ────────────────────────────────► fixed      (requires fixed_in_task)
-  │                                  ► wontfix
-  │                                  ► duplicate  (requires duplicate_of)
+open ──────────────► fixed      (needs fixed_in_task)
+  │                ► wontfix
+  │                ► duplicate  (needs duplicate_of)
   ▼
-investigating ──────────────────────► fixed       (requires fixed_in_task)
-                                    ► wontfix
-                                    ► duplicate   (requires duplicate_of)
+investigating ─────► fixed | wontfix | duplicate  (same requirements)
 ```
 
-Valid statuses: `open`, `investigating`, `fixed`, `wontfix`, `duplicate`.
+Valid statuses: `open`, `investigating`, `fixed`, `wontfix`, `duplicate`. There is no `closed` or `reopened` status; see the regression pattern below.
 
-There is no `closed` status and no `reopened` status. See the regression pattern below.
+`backlog_issue_update` takes one `field`/`value` per call and validates the stored row, so set the companion field first, then `status`. A missing required field comes back as an `Error:` naming it.
 
 ## Transitions
 
-### open → investigating
+- **open → investigating**: root-cause analysis has started. `backlog_issue_update("ISS-NNN", "status", "investigating")`.
+- **→ fixed**: the fix is committed under a task. Set `fixed_in_task` to that task id, then `status` to `fixed`. The store fills `resolved` with today's date.
+  ```
+  backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")
+  backlog_issue_update("ISS-NNN", "status", "fixed")
+  ```
+- **→ wontfix**: the defect is acknowledged but not worth fixing (scope, cost, acceptable behavior). Note the reason in the body first, then set `status` to `wontfix`.
+- **→ duplicate**: the same defect is tracked under another Issue. Set `duplicate_of` to that id, then `status` to `duplicate`.
+  ```
+  backlog_issue_update("ISS-NNN", "duplicate_of", "ISS-MMM")
+  backlog_issue_update("ISS-NNN", "status", "duplicate")
+  ```
 
-When to use: you have started root-cause analysis but have not landed a fix.
+`severity` must be one of P0, P1, P2, P3.
 
-Required field: none.
+## Regression pattern
 
-```
-backlog_issue_update("ISS-NNN", "status", "investigating")
-```
-
-The most common first transition. Use it to signal that the issue is being actively worked rather than sitting in the queue.
-
-### investigating → fixed (most common path)
-
-When to use: the fix is committed and covered by a task.
-
-Required field: `fixed_in_task` must be set to the task ID that contains the fix. `_validate_issue` raises `ValueError` if `fixed_in_task` is absent when `status="fixed"`. Set it first — `backlog_issue_update` takes one field/value per call and validates the merged on-disk state.
-
-```
-backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")
-backlog_issue_update("ISS-NNN", "status", "fixed")
-```
-
-The backend auto-fills `resolved` with today's ISO date if it is not already set. The issue file is rewritten and the index is rebuilt automatically via `sync_issue_index`.
-
-### open → wontfix
-
-When to use: triaged out — the defect is acknowledged but not worth fixing (scope, cost, acceptable behavior, etc.). Add a brief explanation in the body before transitioning.
-
-Required field: none, but a body note is expected by convention.
-
-```
-backlog_issue_update("ISS-NNN", "status", "wontfix")
-```
-
-### open/investigating → duplicate
-
-When to use: the same defect is already tracked under another `ISS-NNN`.
-
-Required field: `duplicate_of` must be set. `_validate_issue` raises `ValueError` if `duplicate_of` is absent when `status="duplicate"`. Set it first (one field/value per call).
-
-```
-backlog_issue_update("ISS-NNN", "duplicate_of", "ISS-MMM")
-backlog_issue_update("ISS-NNN", "status", "duplicate")
-```
-
-## What happens on disk
-
-Each issue lives in `.taskmaster/issues/ISS-NNN.md` as a YAML-frontmatter + markdown-body file. After any `backlog_issue_update` call, `sync_issue_index` rebuilds the slim index entry in `backlog.yaml` from disk. The `_ISSUE_INDEX_FIELDS` kept in the index are: `id`, `title`, `status`, `severity`, `components`, `related_tasks`. Full content is in the individual file; the index is only for fast dashboard rendering.
-
-## Regression pattern (re-opening)
-
-The backend has no `reopened` status. If a `fixed` issue regresses — the bug returns in a later release — the correct approach is:
-
-1. Create a new issue with `backlog_issue_create`, noting in the title or body that it is a regression.
-2. Set `discovered_by` to describe who found the regression and when.
-3. Reference the original issue in the `related_tasks` list or body prose (e.g. "Regression of ISS-NNN, previously fixed in T-MMM").
-
-Do not mutate the status of the original `fixed` issue. The original fix still happened; the regression is a new defect with its own history.
-
-## Validate rules (from `_validate_issue` in `taskmaster_v3.py`)
-
-- `status` must be one of `("open", "investigating", "fixed", "wontfix", "duplicate")` — else `ValueError`.
-- `severity` must be one of `("P0", "P1", "P2", "P3")` — else `ValueError`.
-- If `status == "fixed"`, `fixed_in_task` must be non-empty — else `ValueError`.
-- If `status == "duplicate"`, `duplicate_of` must be non-empty — else `ValueError`.
-
-These rules fire on both create (`write_issue`) and update (`update_issue`). The MCP tools surface the `ValueError` text directly — if you see one, the required field is missing.
+If a `fixed` Issue regresses, leave the original alone: its fix really happened. Create a new Issue with `backlog_issue_create`, say in the title or body that it is a regression ("Regression of ISS-NNN, previously fixed in T-MMM"), list the original's task in `related_tasks`, and describe who found it and when in `discovered_by`.

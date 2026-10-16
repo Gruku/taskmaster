@@ -56,13 +56,18 @@ def test_references_exist():
         assert (PLAYBOOK_DIR / "references" / ref).exists(), f"missing references/{ref}"
 
 
-def test_references_not_stubs():
-    freshly_created = {"v3-pre-steps.md", "summary-modes.md"}
-    for ref in (PLAYBOOK_DIR / "references").iterdir():
-        if ref.name not in freshly_created:
-            continue
-        non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference stub: {ref}"
+def test_references_are_not_stubs_and_carry_their_facts():
+    """Each reference exceeds a stub floor and names the calls it exists for."""
+    must_name = {
+        "v3-pre-steps.md": ["backlog_decision", "backlog_idea_create", "taskmaster:handover"],
+        "summary-modes.md": ["backlog_complete_task", "backlog_issue_update", "human_action"],
+    }
+    for ref, needles in must_name.items():
+        text = (PLAYBOOK_DIR / "references" / ref).read_text(encoding="utf-8")
+        non_blank = [ln for ln in text.splitlines() if ln.strip()]
+        assert len(non_blank) > 5, f"reference stub: {ref}"
+        missing = [n for n in needles if n not in text]
+        assert not missing, f"{ref} missing: {missing}"
 
 
 def test_playbook_links_resolve():
@@ -75,6 +80,24 @@ def test_playbook_links_resolve():
 
 def test_playbook_contains_canonical_sentence():
     text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
-    assert "ONLY" in text and "backlog_complete_task" in text, (
-        "Missing canonical 'ONLY correct way' sentence"
+    assert "only correct way" in text.lower() and "backlog_complete_task" in text, (
+        "Missing the 'only correct way' sentence naming backlog_complete_task"
     )
+
+
+def test_unfinished_work_stays_in_progress():
+    """"I'm done for today" mid-task must not mark unfinished work done."""
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "Unfinished work stays in progress" in text
+    assert "don't call `backlog_complete_task`" in text
+    summary = (PLAYBOOK_DIR / "references" / "summary-modes.md").read_text(encoding="utf-8")
+    assert "FROM links" in summary and "backlog_query" in summary
+
+
+def test_playbook_close_blocker_read_and_bundle_members():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert 'backlog_context(focus=<task_id>, scope="task", include=[])' in text
+    assert "references/edge-cases.md" in text and "bundle" in text
+    edge = (PLAYBOOK_DIR / "references" / "edge-cases.md").read_text(encoding="utf-8")
+    assert 'backlog_claim(action="status"' in edge and "members" in edge
+    assert "_get_session_bundle" not in text

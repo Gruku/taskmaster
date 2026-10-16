@@ -21,7 +21,10 @@ SKILL_BUDGETS: dict[str, int] = {
     "migrate-v3":      1_200,
     "check-todos":     1_200,
     "add-idea":        1_200,
-    "migrate-lessons": 1_000,
+    "bug":             600,
+    "decision":        700,
+    "linear":          1_000,
+    "plan-review":     600,
 }
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"

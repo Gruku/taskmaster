@@ -305,7 +305,7 @@ def _stamp_native(root: Path, db_file: Path, tid: str, rung: str, sha: str, merg
         try:
             merge_stamps.enqueue(backlog_dir, entry)
         except Exception as exc:  # noqa: BLE001
-            _log(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); NOT RECORDED")
+            _log(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); not recorded")
             return
         _log(root, f"{outcome[1]}; merge stamp {label} queued for the MCP server")
         return  # no coordinator answered: replaying now would only wait again
