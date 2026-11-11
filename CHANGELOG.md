@@ -7,6 +7,10 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## Unreleased
+
+**Fixed: the viewer could open on a port browsers refuse** (Firefox: "This address is restricted", seen on :6566). When a project's own port in 6800–6899 was taken, the viewer took any OS-assigned port, and Windows hands out ports from 1024 up when WSL or Hyper-V set its dynamic range. The viewer now tries the rest of the 6800–6899 band first, reuses this project's viewer if another session already serves it on a band port, and skips every port on the browsers' blocked list.
+
 ## 7.4.0
 
 **Taskmaster gets out of the model's way, and new projects start native.** taskmaster-mods 0.2.3.

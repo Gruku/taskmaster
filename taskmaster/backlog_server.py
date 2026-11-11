@@ -12678,10 +12678,24 @@ _viewer_started = False
 VIEWER_PORT = 0
 
 
+_PORT_BAND = range(6800, 6900)
+
+# Ports browsers refuse to open ("bad ports" in the WHATWG Fetch spec; Firefox and Chrome
+# block these). Windows can hand any of them out as an ephemeral port when its dynamic
+# range starts at 1024 (WSL/Hyper-V set it so), and a viewer there cannot be opened.
+BROWSER_BLOCKED_PORTS = frozenset({
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+    101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
+    179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563,
+    587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060,
+    5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+})
+
+
 def _project_port() -> int:
     """Deterministic port per project root, in range 6800–6899."""
     h = hashlib.md5(str(ROOT.resolve()).encode()).hexdigest()
-    return 6800 + int(h, 16) % 100
+    return _PORT_BAND.start + int(h, 16) % len(_PORT_BAND)
 
 
 def _check_identity(port: int) -> bool:
@@ -12705,36 +12719,53 @@ def _init_storage() -> None:
     pass
 
 
+class _ExclusiveServer(ThreadingHTTPServer):
+    # No SO_REUSEADDR: on Windows it lets several processes bind one port, and
+    # requests then reach the wrong session's server.
+    allow_reuse_address = False
+
+
+def _bind_viewer(target: int, make=None):
+    """Bind the viewer near `target`: (server, port), or (None, port) when this project's
+    viewer already serves `port` in another session.
+
+    Tries the 6800–6899 band from `target` onward, then OS-assigned ports, and never
+    returns a port browsers refuse to open.
+    """
+    make = make or (lambda port: _ExclusiveServer(("127.0.0.1", port), ViewerHandler))
+    width = len(_PORT_BAND)
+    for step in range(width):
+        port = _PORT_BAND.start + (target - _PORT_BAND.start + step) % width
+        if port in BROWSER_BLOCKED_PORTS:
+            continue
+        try:
+            return make(port), port
+        except OSError:
+            if _check_identity(port):
+                return None, port
+    for _ in range(32):
+        server = make(0)
+        port = server.server_address[1]
+        if port not in BROWSER_BLOCKED_PORTS:
+            return server, port
+        server.server_close()
+    raise OSError("no browser-openable port is free for the viewer")
+
+
 def _start_viewer_server() -> int:
     """Start the viewer HTTP server on a deterministic per-project port.
 
-    If another session for the same project already owns the port, reuse it.
-    If a different project owns it, fall back to an OS-assigned port.
+    If another session for the same project already serves the viewer, reuse it.
+    If a different project owns the port, move along the band, then to an OS-assigned port.
     """
     global _viewer_started, VIEWER_PORT
     if _viewer_started:
         return VIEWER_PORT
 
-    target_port = _project_port()
-
-    # Disable SO_REUSEADDR — on Windows, it allows multiple processes to bind
-    # the same port, causing requests to route to the wrong session's server.
-    class _ExclusiveServer(ThreadingHTTPServer):
-        allow_reuse_address = False
-
-    try:
-        server = _ExclusiveServer(("127.0.0.1", target_port), ViewerHandler)
-        VIEWER_PORT = target_port
-    except OSError:
-        # Port taken — check if the existing server serves the same project
-        if _check_identity(target_port):
-            # Same project, another session already runs the server — reuse it
-            _viewer_started = True
-            VIEWER_PORT = target_port
-            return VIEWER_PORT
-        # Different project owns this port — use a random free port
-        server = _ExclusiveServer(("127.0.0.1", 0), ViewerHandler)
-        VIEWER_PORT = server.server_address[1]
+    server, VIEWER_PORT = _bind_viewer(_project_port())
+    if server is None:
+        _viewer_started = True
+        return VIEWER_PORT
 
     _init_storage()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
