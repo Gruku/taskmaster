@@ -2,6 +2,7 @@
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
 import type { TmHandover, TmHandoverSummary, TmLinkedTask, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
+import { unframe } from './untrusted'
 
 export type Parsed<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
 export type ListRow = {
@@ -58,14 +59,15 @@ export function firstParagraph(text: string): string {
  * unwrapped here, from `structuredContent` when given, else from the block. Any other reply comes back unchanged.
  */
 export function replyText(text: string, structured?: unknown): string {
-  if (isObject(structured) && typeof structured.result === 'string') return structured.result
+  // team-server-027: a teammate's text arrives inside untrusted-data frames; every later parse reads the plain content.
+  if (isObject(structured) && typeof structured.result === 'string') return unframe(structured.result)
   const trimmed = text.trim()
-  if (!/^\{\s*"result"\s*:/.test(trimmed)) return text
+  if (!/^\{\s*"result"\s*:/.test(trimmed)) return unframe(text)
   try {
     const value: unknown = JSON.parse(trimmed)
-    return isObject(value) && Object.keys(value).length === 1 && typeof value.result === 'string' ? value.result : text
+    return unframe(isObject(value) && Object.keys(value).length === 1 && typeof value.result === 'string' ? value.result : text)
   } catch {
-    return text
+    return unframe(text)
   }
 }
 

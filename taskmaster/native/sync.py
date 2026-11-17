@@ -308,7 +308,8 @@ def apply(transaction, operation, arguments):
         connection, transaction.request, transaction.group, kind, event_id, "sync.apply",
         {"file_base64": arguments["observed_base64"], "file_hash": digest,
          "flagged_base64": None if flagged is None else base64.b64encode(flagged[0]).decode("ascii")},
-        dict({"file": rel, "mode": mode, "reason": arguments["reason"]}, **({"checkout": linked} if linked else {})))
+        dict({"file": rel, "mode": mode, "reason": arguments["reason"]}, **({"checkout": linked} if linked else {})),
+        extended=transaction.event_columns)
     if linked is not None:
         # The linked checkout's base/hold changes atomically with the import; the
         # main checkout's manifest, flags and quarantine are not this file's.

@@ -75,7 +75,8 @@ def _links(kind, doc):
 
 
 def _kind_for_id(connection, ident):
-    row = connection.execute("SELECT kind FROM entity_core WHERE public_id=? AND deleted=0 "
+    # Profiles are people, never link endpoints (team-identity-001 D17).
+    row = connection.execute("SELECT kind FROM entity_core WHERE public_id=? AND deleted=0 AND kind<>'profile' "
                              "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,kind LIMIT 1", (ident,)).fetchone()
     return row[0] if row else "task"
 

@@ -27,8 +27,15 @@ export type World = {
   runs: string[][]
   /** The exit code a command gets (default 0); git's branch read answers `branch` either way. */
   runExit: (argv: readonly string[]) => number
-  /** A whole answer for a command (null: runExit and an empty stdout): the restore tests answer scan.py here. */
-  answer: (argv: readonly string[]) => { exitCode: number; stdout: string; stderr?: string } | null
+  /**
+   * A whole answer for a command (null: runExit and an empty stdout): the restore tests answer scan.py here. `reject`: the
+   * call rejects after `afterMs` of the mock clock (0: at once, a command that could not start; its bound: a timeout).
+   */
+  answer: (argv: readonly string[], stdin: string | undefined) => { exitCode: number; stdout: string; stderr?: string } | { reject: string; afterMs?: number } | null
+  /** What each `$.process.run` was given on stdin, in run order (undefined: none). */
+  stdins: (string | undefined)[]
+  /** What `$.fs.exists` answers for a path (the team-server marker tests); by default nothing exists. */
+  exists: (path: string) => boolean
   /** What `$.env.get` answers, by name. */
   env: Record<string, string>
 }
@@ -54,6 +61,8 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     runs: [],
     runExit: () => 0,
     answer: () => null,
+    stdins: [],
+    exists: () => false,
     env: {},
   }
   let queue: Promise<void> = Promise.resolve()
@@ -109,9 +118,15 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('session.root', () => ({ value: world.root }))
   on('session.cwd', () => ({ value: world.cwd }))
   on('session.repo', () => ({ value: { root: world.root, remote: null, internal: false, name: null } }))
-  on('process.run', ($, e) => {
+  on('fs.exists', ($, e) => ({ value: world.exists(e.path) }) as never)
+  on('process.run', async ($, e) => {
     world.runs.push([...e.argv])
-    const answer = world.answer(e.argv)
+    world.stdins.push(e.init?.stdin)
+    const answer = world.answer(e.argv, e.init?.stdin)
+    if (answer !== null && 'reject' in answer) {
+      if ((answer.afterMs ?? 0) > 0) await clock.sleep(answer.afterMs ?? 0)
+      return { deny: answer.reject }
+    }
     if (answer !== null) {
       return { value: { exitCode: answer.exitCode, stdout: answer.stdout, stderr: answer.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }

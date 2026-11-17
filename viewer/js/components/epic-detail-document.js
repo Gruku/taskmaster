@@ -2,6 +2,7 @@
 // status breakdown counted from the very task list it draws, its tasks grouped by status as real links — on the
 // /epic/<id> page and in the detail modal alike. Pure of page chrome: it writes nothing outside `container`.
 import { mountMarkdown } from './markdown.js';
+import { docLink } from '../lib/doc-link.js';
 import {
   designBadge, epicStats, epicProgress, epicBreakdown, isCloseable, epicStatusMeta, statusGroupOf, STATUS_GROUPS,
 } from '../lib/epic-format.js';
@@ -107,7 +108,7 @@ function attention(items) {
 function docsList(docs) {
   return section('ed-docs-block', 'Docs', h('ul', { class: 'ed-docs' }, Object.entries(docs).map(([key, path]) =>
     h('li', {}, [
-      h('a', { href: `/file/${path}`, target: '_blank', rel: 'noopener' }, key),
+      h('a', docLink(path), key),
       h('span', { class: 't-tech' }, String(path)),
     ]))));
 }

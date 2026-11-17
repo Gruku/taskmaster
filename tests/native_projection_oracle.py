@@ -24,8 +24,9 @@ def child_environment():
 
 
 class NativeCall:
-    def __init__(self, connection, backlog_dir, session):
+    def __init__(self, connection, backlog_dir, session, agent=''):
         self.connection, self.backlog_dir, self.session = connection, backlog_dir, session
+        self.agent = agent
         self.seq = None
         self.notices = []
         self.receipts = []
@@ -40,7 +41,8 @@ class NativeCall:
         receipt = commands.execute(self.connection, {
             'protocol': 2, 'store_id': store_id, 'caller_scope': self.session,
             'request_id': uuid.uuid4().hex, 'operation': operation,
-            'arguments': arguments, 'expected_revisions': list(expected or [])})
+            'arguments': arguments, 'expected_revisions': list(expected or []),
+            'actor': {'agent': self.agent}})
         self.drain(through=receipt['commit_seq'])
         self.receipts.append(receipt)
         if receipt['affected']:
@@ -60,7 +62,7 @@ class NativeCall:
 
 
 @contextmanager
-def open_call(database, backlog_dir, session):
+def open_call(database, backlog_dir, session, agent=''):
     with closing(sqlite3.connect(database, isolation_level=None, timeout=30, check_same_thread=False)) as connection:
         connection.execute('PRAGMA busy_timeout=30000')
-        yield NativeCall(connection, backlog_dir, session)
+        yield NativeCall(connection, backlog_dir, session, agent)

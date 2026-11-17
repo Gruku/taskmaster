@@ -18,7 +18,6 @@ const NOW_MS = Date.UTC(2026, 9, 10, 16, 43)
 const noop = (): void => undefined
 const ON: RestoreHandlers = {
   strip: { choose: noop, toggleDone: noop, overlay: noop },
-  turnPage: noop,
   rescan: noop,
   toggleCompact: noop,
   focus: noop,

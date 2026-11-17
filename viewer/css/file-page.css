@@ -1,0 +1,21 @@
+/* User intent: the /file/ markdown page's own styles, in a file on the viewer's tokens, so the sandboxed page needs no inline <style> under its CSP. */
+body { margin: 0; background: var(--bg-page); color: var(--fg-default); font-family: var(--font-narrator);
+  font-size: var(--size-narrator-small); line-height: var(--leading-body); }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-sm) var(--page-gutter); background: var(--surface-raised); border-bottom: 1px solid var(--border-default); }
+.topbar a { color: var(--text-accent); text-decoration: none; font-size: var(--size-narrator-whisper); font-weight: 600; }
+.topbar a:hover { text-decoration: underline; }
+.topbar .path { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--fg-subtle); font-family: var(--font-technical);
+  font-size: var(--size-technical-small); }
+.open-editor { padding: 4px var(--space-sm); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  white-space: nowrap; background: var(--surface-recessed); }
+.open-editor:hover { background: var(--surface-raised); border-color: var(--border-strong); }
+.zoom-controls { display: flex; align-items: center; gap: 4px; }
+.zoom-btn { min-width: var(--control-size-sm); padding: 2px var(--space-sm); background: var(--surface-recessed);
+  color: var(--fg-default); border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer;
+  font-size: var(--size-narrator-whisper); font-weight: 600; line-height: 1.4; text-align: center; }
+.zoom-btn:hover { background: var(--surface-raised); border-color: var(--border-strong); }
+.zoom-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.zoom-label { min-width: 36px; text-align: center; color: var(--fg-subtle); font-family: var(--font-technical);
+  font-size: var(--size-technical-label); }
+.md-body#content { max-width: 860px; margin: 0 auto; padding: var(--space-lg) var(--page-gutter); }

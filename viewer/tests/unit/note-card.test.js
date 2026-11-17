@@ -154,3 +154,11 @@ test('the composer is not focused on mount, keeps its text when the create is re
   await tick();
   assert.equal(ta.value, '');
 });
+
+test('a note names its author: Claude, You for the solo literal, else the teammate handle (security review m-2)', async () => {
+  const { noteAuthor } = await import('../../js/components/desk/note-card.js');
+  assert.equal(noteAuthor('claude'), 'Claude');
+  assert.equal(noteAuthor('user'), 'You');
+  assert.equal(noteAuthor(undefined), 'You');
+  assert.equal(noteAuthor('bob'), 'bob');
+});

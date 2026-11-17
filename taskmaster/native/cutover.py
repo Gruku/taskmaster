@@ -150,6 +150,9 @@ def _connect_readonly(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None, timeout=30)
 
 
+connect_readonly = _connect_readonly      # public name for 014's migration, which opens stores read-only
+
+
 def _has_table(connection, name: str) -> bool:
     return connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
@@ -447,7 +450,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]:
+def projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]:
     """`(entry, bytes, mtime)` for each file of the projection set, each read exactly once, so
     the manifest entry, the archive entry and any comparison describe the same bytes."""
     base = Path(root) / ".taskmaster"
@@ -466,6 +469,9 @@ def _projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]
             continue
         reads.append(({"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}, data, mtime))
     return reads
+
+
+_projection_reads = projection_reads    # the public name 014 uses; the old name stays for callers
 
 
 def projection_files(root: Path, connection=None) -> list[dict]:
@@ -519,6 +525,32 @@ def verify_backup(path: Path, expected_digest: str | None = None) -> str:
     return digest
 
 
+def copy_database(source: Path, target: Path, *, prepare=None) -> dict:
+    """SQLite online backup of `source` (opened read-only) to `target`: written as `target.partial`,
+    integrity-checked, then renamed into place and fsynced. Returns `{"sha256", "size"}`.
+
+    A WAL store with a live writer copies consistently; callers that need the copy to match a
+    particular state hold a write lock around it (write_backup, 014's pack). `prepare(destination)` may edit
+    the copy (never the source) before it is checked, e.g. to drop machine-local rows from a bundle."""
+    source, target = Path(source), Path(target)
+    temp = target.with_name(target.name + ".partial")
+    temp.unlink(missing_ok=True)
+    try:
+        with closing(_connect_readonly(source)) as reader, closing(sqlite3.connect(temp)) as destination:
+            reader.backup(destination)
+            if prepare is not None:
+                prepare(destination)
+                destination.commit()
+            result = [tuple(row) for row in destination.execute("PRAGMA integrity_check").fetchall()]
+        if result != [("ok",)]:
+            raise CutoverAborted(f"copy of {source} failed integrity_check: {result[:5]}")
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+    _fsync(target)
+    return {"sha256": _sha256(target), "size": target.stat().st_size}
+
+
 def write_backup(connection, root: Path, carryover: dict) -> dict:
     """Back up the store while `connection` holds BEGIN IMMEDIATE and has written nothing.
 
@@ -529,12 +561,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     if not connection.in_transaction:
         raise RuntimeError("write_backup requires the caller's BEGIN IMMEDIATE")
     target = _backup_target(root)
-    temp = target.with_name(target.name + ".partial")
-    temp.unlink(missing_ok=True)
-    with closing(_connect_readonly(database_path(root))) as reader, closing(sqlite3.connect(temp)) as destination:
-        reader.backup(destination)
-    os.replace(temp, target)
-    _fsync(target)
+    copy_database(database_path(root), target)
     backup_digest = verify_backup(target, domain_digest(connection))
     sidecar = database_path(root).parent / "id-reservations.json"
     sidecar_sha = _sha256(sidecar) if sidecar.exists() else None
@@ -1021,11 +1048,18 @@ def _ownership(root: Path):
         raise CutoverRefused("the coordinator ownership lock is held by a live process; stop it first") from error
 
 
+def _server_fence(root) -> None:
+    """G4 (team-server-009): never open a store in a server-mode project from here."""
+    from taskmaster import server_fence
+    server_fence.check(root)
+
+
 def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
     """Every check, the counts and the planned actions. Writes nothing: the store is opened
     read-only and `open_writers` is not probed. `live_owner` may take and at once release
     the ownership byte lock when `owner.lock` exists; that changes no file bytes."""
     root = Path(root)
+    _server_fence(root)
     path = database_path(root)
     report = {"mode": "dry-run", "root": str(root), "store": str(path), "refusals": [], "warnings": []}
     missing = missing_primitives()
@@ -1087,6 +1121,7 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
             log=lambda line: None) -> dict:
     """Run (or `resume`) the cutover to completion. Raises CutoverRefused / CutoverAborted."""
     root = Path(root)
+    _server_fence(root)
     path = database_path(root)
     _require_primitives()
     if not path.exists():
@@ -1403,6 +1438,7 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
     row and file as it is.
     """
     root = Path(root)
+    _server_fence(root)
     path = database_path(root)
     try:
         _quiesce()
@@ -1530,6 +1566,7 @@ EXIT_OK, EXIT_FENCED, EXIT_REFUSED, EXIT_FAILED_UNFENCED = 0, 1, 2, 3
 
 def fence_state(root: Path) -> dict:
     """Re-read the store after a failure: is a fence up, or is only the release row owed?"""
+    _server_fence(root)
     path = database_path(root)
     try:
         with closing(_connect_readonly(path)) as connection:
@@ -1618,6 +1655,11 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.clear_orphan_fence and not args.rollback:
         parser.error("--clear-orphan-fence requires --rollback")
+    from taskmaster import server_fence
+    server_text = server_fence.refusal(args.root)
+    if server_text is not None:
+        print(json.dumps({"state": "refused", "detail": server_text}))
+        return EXIT_REFUSED
     log = (lambda line: None) if args.json else print
     mode = "dry-run" if args.dry_run else "rollback" if args.rollback else "resume" if args.resume else "run"
     code = EXIT_OK

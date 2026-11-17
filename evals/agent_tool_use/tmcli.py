@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastmcp import Client
-from fastmcp.client.transports import StdioTransport
+from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import evalpaths  # noqa: E402
@@ -154,12 +154,23 @@ def describe_text(tool) -> str:
             f"{json.dumps(tool.inputSchema, indent=2, ensure_ascii=False)}\n")
 
 
-async def run(ns, home: Path, log: Log) -> int:
+def make_transport(ns, home: Path, log: Log):
+    """Stdio to a private copy of the seeded backlog, or (server mode) a member connection to a team server whose
+    key is read from the environment variable named by --key-env: the key never reaches a log or an argument."""
+    if ns.server_url:
+        key = os.environ.get(ns.key_env or "")
+        if not key:
+            raise SystemExit(f"server mode needs the member key in the environment variable named by --key-env ({ns.key_env!r})")
+        return StreamableHttpTransport(ns.server_url, headers={"Authorization": f"Bearer {key}"})
     root = ensure_run_copy(home, ns.run)
     # The server's banner and logging go to a file, never into what the agent reads.
-    transport = StdioTransport(command="uv", args=["run", "--quiet", str(ns.server)],
-                               env=dict(os.environ, TASKMASTER_ROOT=str(root)), cwd=str(root),
-                               log_file=log.path.with_suffix(".server.log"))
+    return StdioTransport(command="uv", args=["run", "--quiet", str(ns.server)],
+                          env=dict(os.environ, TASKMASTER_ROOT=str(root)), cwd=str(root),
+                          log_file=log.path.with_suffix(".server.log"))
+
+
+async def run(ns, home: Path, log: Log) -> int:
+    transport = make_transport(ns, home, log)
     started = time.monotonic()
     async with Client(transport) as client:
         if ns.action == "names":
@@ -214,6 +225,8 @@ def main() -> int:
     parser.add_argument("--run", default=os.environ.get("TM_EVAL_RUN"), help="run id (given to you with the task)")
     parser.add_argument("--home", help=argparse.SUPPRESS)
     parser.add_argument("--server", default=os.environ.get("TM_EVAL_SERVER") or str(evalpaths.DEFAULT_SERVER), help=argparse.SUPPRESS)
+    parser.add_argument("--server-url", default=os.environ.get("TM_EVAL_SERVER_URL"), help=argparse.SUPPRESS)
+    parser.add_argument("--key-env", default=os.environ.get("TM_EVAL_KEY_ENV"), help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("names", help="list the available tool names")
     describe = sub.add_parser("describe", help="show a tool's description and parameters")

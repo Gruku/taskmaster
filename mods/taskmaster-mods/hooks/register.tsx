@@ -31,6 +31,7 @@ import { bindingChange, callSucceeded, isWriteTool, parseStoredBinding, pruneBin
 import { DEMO_DETAILS, DEMO_RESUMED_FROM, DEMO_SUMMARIES, demoHandoverList, demoPhases, demoSessionHistory, demoSnapshot, isCurrentDemo } from './demo'
 import { bandTree } from './band'
 import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
+import { wheelMove } from './scroll-list'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
 import { onRestore, refreshRestore, restoreHostOf } from './restore/hooks'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
@@ -45,7 +46,7 @@ import {
   bandModel,
   FRESH_CURSOR,
   handoverNotice,
-  handoverPage,
+  handoverFocus,
   HANDOVERS,
   isStaleTicks,
   restoreHiddenKey,
@@ -61,6 +62,7 @@ import { ALL, FRESH_PHASE_VIEWS, loadChoice, PHASE_PANES, phaseStoreOf } from '.
 import { type Refresher, type RunOutcome, singleFlight } from './refresh'
 import { reviewPaneTree } from './review'
 import { FRESH_REVIEW_LIST, listView, reviewItems } from './review-list'
+import { remoteDepsOf, remoteOf } from './remote'
 import { readResumedFrom, RESUME_PROMPT_RE, resumedIdOf } from './resumed'
 import { sessionTree } from './session'
 import { createHistoryFlows, FRESH_SESSION_HISTORY, sessionHistoryView } from './session-history'
@@ -80,7 +82,7 @@ const FAULT = atom({ plugin: 'taskmaster-mods', key: 'fault' } as const, 'none' 
 const BINDING = atom({ plugin: 'taskmaster-mods', key: 'binding' } as const, null as TmBinding | null)
 const NOTICE = atom({ plugin: 'taskmaster-mods', key: 'handoverNotice' } as const, null as TmHandoverNotice | null)
 const PHASE_VIEWS = atom({ plugin: 'taskmaster-mods', key: 'phaseViews' } as const, FRESH_PHASE_VIEWS as Readonly<Record<TmPhasePane, TmPhaseView>>)
-const HANDOVER_PAGE = atom({ plugin: 'taskmaster-mods', key: 'handoverPage' } as const, 0)
+const HANDOVER_FIRST = atom({ plugin: 'taskmaster-mods', key: 'handoverFirst' } as const, 0)
 const HANDOVER_LIST = atom({ plugin: 'taskmaster-mods', key: 'handoverList' } as const, null as TmHandoverList | null)
 const HANDOVER_MARKS = atom({ plugin: 'taskmaster-mods', key: 'handoverMarks' } as const, FRESH_MARKS as TmHandoverMarks)
 const REVIEW_LIST = atom({ plugin: 'taskmaster-mods', key: 'reviewList' } as const, FRESH_REVIEW_LIST as TmReviewList)
@@ -96,7 +98,10 @@ const RR_POLARITY = { plugin: 'rr-tui', key: 'polarity' } as const
 
 /** Exported so a test can drive the real bindings. */
 export function hostOf($: EngineInterface): TmHost {
+  let remoteFor: ReturnType<typeof remoteOf> | null = null
   return {
+    // team-server-007 D14: null (solo) unless the repo root holds 009's marker or latch; checked once per root.
+    remote: async () => (remoteFor ??= remoteOf(remoteDepsOf($)))((await $.session.repo())?.root ?? (await $.session.root())),
     now: () => $.clock.now(),
     sleep: (ms, signal) => $.clock.sleep(ms, signal ? { signal } : undefined),
     after: (ms, fn) => {
@@ -222,8 +227,8 @@ function writerOf($: EngineInterface): TmWriter {
     phaseView: async (pane, change) => {
       await update($, PHASE_VIEWS, all => ({ ...all, [pane]: change(all[pane]) }))
     },
-    handoverPage: async page => {
-      await update($, HANDOVER_PAGE, () => page)
+    handoverFirst: async first => {
+      await update($, HANDOVER_FIRST, () => first)
     },
     handoverList: async change => {
       await update($, HANDOVER_LIST, change)
@@ -815,7 +820,7 @@ export const register: Register = (on, options) => {
     const list = await read($, REVIEW_LIST)
     // The focused card's task detail is read on demand (lane, gate, notes); the collapsed cards need none.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable) {
-      const item = listView(reviewItems(snapshot, cursor, details), cursor.currentId, list.page).focused
+      const item = listView(reviewItems(snapshot, cursor, details), cursor.currentId, list.first).focused
       if (item !== null && item.kind === 'task' && details[item.id] === undefined) askDetail(item.id)
     }
     const views = await read($, PHASE_VIEWS)
@@ -831,6 +836,7 @@ export const register: Register = (on, options) => {
       detailsOpen: await read($, DETAILS_OPEN),
       connecting: mod.source === 'tm' && (await read($, FAULT)) === 'connecting',
       surface: e.surface,
+      ...(e.props.scroll === undefined ? {} : { rows: e.props.scroll.bodyRows }),
       say: (text: string) => mod.host?.toast(text),
       demo: mod.source === 'demo',
       tabs: await tabsFor($, 'review'),
@@ -858,8 +864,7 @@ export const register: Register = (on, options) => {
           toggleDone: () => act(f => f.toggleDone('review')),
           overlay: open => act(f => f.setOverlay('review', open)),
         },
-        focus: (id, page) => act(f => f.focusCard(id, page)),
-        turnPage: page => act(f => f.turnReviewPage(page)),
+        focus: (id, first) => act(f => f.focusCard(id, first)),
         select: id => act(f => f.toggleSelect(id)),
         selectAll: ids => act(f => f.selectAll(ids)),
         selectNone: () => act(f => f.selectNone()),
@@ -904,7 +909,8 @@ export const register: Register = (on, options) => {
       marks: await read($, HANDOVER_MARKS),
       phaseView: demo && !views.handovers.loaded ? { ...views.handovers, phases: demoPhases('handovers'), loaded: true } : views.handovers,
       pick: await read($, PICK),
-      page: await read($, HANDOVER_PAGE),
+      first: await read($, HANDOVER_FIRST),
+      ...(e.props.scroll === undefined ? {} : { rows: e.props.scroll.bodyRows }),
       summaries,
       summaryOpen: await read($, SUMMARY_OPEN),
       now,
@@ -917,7 +923,7 @@ export const register: Register = (on, options) => {
     // stays drawn meanwhile.
     if (mod.source === 'tm' && snapshot !== null && snapshot.reachable && view.summaryOpen !== '') {
       const shown = phaseHandovers(listedHandovers(view.list, snapshot, view.marks.showClosed), view.phaseView.choice, view.list?.tasks ?? {})
-      const picked = handoverPage(shown, view.page, view.pick).picked
+      const picked = handoverFocus(shown, view.first, view.pick).picked
       const held = picked === undefined ? undefined : summaries[picked.id]
       if (picked !== undefined && picked.id === view.summaryOpen && (held === undefined || held.stale === true)) askSummary(picked.id)
     }
@@ -928,8 +934,7 @@ export const register: Register = (on, options) => {
       view,
       {
         pick: id => act(f => f.pick(id)),
-        move: (page, id) => act(f => f.moveTo(page, id)),
-        turnPage: (page, firstId) => act(f => f.turnPage(page, firstId)),
+        move: (first, id) => act(f => f.moveTo(first, id)),
         select: id => act(f => f.selectHandover(id)),
         selectOnly: ids => act(f => f.selectHandovers(ids)),
         toggleSummary: (handover, open) => act(f => f.toggleSummary(handover, open)),
@@ -1080,6 +1085,23 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+
+  // The wheel over a list pane scrolls the list an item a tick: the pane draws a tree that fits its rows, so the engine's own
+  // window has nowhere to go. The window's first item and the focus are state (the pane draws them), kept in view by the render.
+  for (const [requestId, pane] of [
+    ['tm-review', 'review'],
+    ['tm-handovers', 'handovers'],
+  ] as const) {
+    on('ui.scroll', { requestId }, async ($, e, next) => {
+      if (e.origin.kind !== 'person') return next(e)
+      await ready($)
+      const move = wheelMove(pane, e.by)
+      if (move !== null) {
+        act(f => (pane === 'review' ? (move.id === null ? f.scrollReview(move.first, null) : f.focusCard(move.id, move.first, false)) : f.scrollHandovers(move.first, move.id)))
+      }
+      return {}
+    }).catch(($, e, next) => next(e)) // a failed write never holds the wheel up: replay what the chain beneath settled
+  }
 
   // The Tab ring landing on a card's box focuses that card (it expands); a confirm or refusal on the card left behind goes.
   on('ui.focus', { requestId: 'tm-review' }, async ($, e, next) => {

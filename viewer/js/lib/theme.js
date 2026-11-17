@@ -1,5 +1,5 @@
 // User intent: dark is the default theme; the user's choice persists, and the viewer follows the OS only when 'system' was chosen.
-// The pre-paint inline script in index.html duplicates resolveTheme() and the 'tm.theme' key — keep the two in agreement.
+// The pre-paint script js/theme-boot.js (loaded by index.html) duplicates resolveTheme() and the 'tm.theme' key — keep the two in agreement.
 const KEY = 'tm.theme';
 const PREFS = new Set(['dark', 'light', 'system']);
 let pref = 'dark';

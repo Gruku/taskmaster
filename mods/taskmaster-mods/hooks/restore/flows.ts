@@ -15,6 +15,7 @@ import {
   copyTextOf,
   defaultBurst,
   isTicked,
+  recentIds,
   launchSpecOf,
   paneRows,
   restorePendingOf,
@@ -41,7 +42,7 @@ export type RestoreWriter = {
 export type RestoreDeps = {
   readonly source: 'tm' | 'demo'
   readonly rh: RestoreHost
-  readonly tm: Pick<TmHost, 'call' | 'sleep' | 'log'>
+  readonly tm: Pick<TmHost, 'call' | 'sleep' | 'log' | 'remote'>
   readonly store: PhaseStore
   readonly read: { readonly data: () => Promise<TmRestoreData>; readonly view: () => Promise<TmRestoreView> }
   readonly write: RestoreWriter
@@ -144,9 +145,9 @@ export function createRestoreFlows(d: RestoreDeps) {
   }
 
   return {
-    /** `/tm-restore [days]`: the pane opens at once on page 1 and fills when the scan lands; the answer names the burst. */
+    /** `/tm-restore [days]`: the pane opens at once at the top of the list and fills when the scan lands; the answer names the burst. */
     open: async (days: number): Promise<string> => {
-      await d.write.view(v => ({ ...v, page: 0, focus: '' }))
+      await d.write.view(v => ({ ...v, first: 0, focus: '' }))
       if (!(await d.openPane())) d.toast('taskmaster-mods: widen the terminal to see the pane')
       d.loadPhases()
       await rescan(days)
@@ -157,7 +158,7 @@ export function createRestoreFlows(d: RestoreDeps) {
       if (burst === undefined) return 'Restore opened: no recent sessions in this repo.'
       return `Restore opened: ${burst.ids.length} ${burst.ids.length === 1 ? 'session' : 'sessions'} closed together, ${burst.open} unfinished.`
     },
-    /** `u`: the pane's window again, the page kept. */
+    /** `u`: the pane's window again, the list as it stood. */
     rescan: async (): Promise<void> => {
       await rescan((await d.read.data()).days)
     },
@@ -165,11 +166,17 @@ export function createRestoreFlows(d: RestoreDeps) {
     startScan: async (): Promise<void> => {
       await rescan(SIGNAL_DAYS, RESOLVE_RETRIES)
     },
-    turnPage: async (page: number): Promise<void> => {
-      await d.write.view(v => ({ ...v, page, focus: '' }))
+    /** A new phase, or the pane opened: the list from its top, nothing focused yet. */
+    top: async (): Promise<void> => {
+      await d.write.view(v => ({ ...v, first: 0, focus: '' }))
     },
-    focus: async (id: string): Promise<void> => {
-      await d.write.view(v => (v.focus === id ? v : { ...v, focus: id }))
+    /** j / k, p / n or the Tab ring: this session takes the focus and the window starts at `first`. */
+    focus: async (id: string, first: number): Promise<void> => {
+      await d.write.view(v => (v.focus === id && v.first === first ? v : { ...v, focus: id, first }))
+    },
+    /** The wheel scrolled the list: the window starts at `first`; a session the focus moved to takes it. */
+    scroll: async (first: number, id: string | null): Promise<void> => {
+      await d.write.view(v => ({ ...v, first, ...(id === null ? {} : { focus: id }) }))
     },
     /** `s` / a click on the box: flips the tick; a session that cannot reopen says why instead. */
     toggle: async (id: string): Promise<void> => {
@@ -180,9 +187,10 @@ export function createRestoreFlows(d: RestoreDeps) {
         d.toast(why)
         return
       }
-      await d.write.view(v => ({ ...v, selected: { ...v.selected, [id]: !isTicked(row, v.selected, v.opened) } }))
+      const recent = recentIds(await rowsNow())
+      await d.write.view(v => ({ ...v, selected: { ...v.selected, [id]: !isTicked(row, v.selected, v.opened, recent.has(id)) } }))
     },
-    /** all · unfinished · none: explicit ticks for the page's sessions. */
+    /** all · unfinished · none: explicit ticks for the sessions in the list. */
     select: async (changes: Readonly<Record<string, boolean>>): Promise<void> => {
       await d.write.view(v => ({ ...v, selected: { ...v.selected, ...changes } }))
     },

@@ -32,7 +32,12 @@ def manifest(connection: sqlite3.Connection, *, authorities=("legacy",), allow_p
     result = dict(connection.execute("SELECT key,value FROM native_manifest WHERE key IN "
                                     "('schema_version','protocol','authority','state','store_id','event_high_water',"
                                     "'source_digest','local_state_imported')"))
-    versions = {str(schema.VERSION)}
+    # An activated store may be at any schema this build supports; staging is
+    # always rebuilt at the base schema.
+    if result.get("authority") == "native":
+        versions = {str(v) for v in schema.SUPPORTED}
+    else:
+        versions = {str(schema.BASE_VERSION)}
     if allow_prior_staging and result.get("authority") == "legacy":
         versions.update({"1", "2"})
     if result.get("schema_version") not in versions or result.get("protocol") != str(schema.PROTOCOL):

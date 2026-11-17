@@ -5,6 +5,9 @@ import { mountSidebar } from './components/sidebar.js';
 import { initTheme, setThemePref } from './lib/theme.js';
 import { icon } from './components/icon.js';
 import { createPrefsWriter, deepMerge } from './lib/prefs-writer.js';
+import { installCsrf } from './lib/csrf.js';
+
+installCsrf(document, window);
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;

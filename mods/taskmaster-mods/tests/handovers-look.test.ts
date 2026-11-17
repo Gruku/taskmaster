@@ -1,5 +1,5 @@
 // User intent: the handovers pane as the approved prototype draws it (spec §9, §15.6–15.7, Handovers.dc.html) — row 1 the
-// picker with ◐ show closed, the pager and u; the sentence; the bulk close row; 3 items a page (title / slug · branch · linked
+// picker with ◐ show closed, the position and u; the sentence; the bulk close row; a list of 3-line items (title / slug · branch · linked
 // tasks / next), the focused one boxed with r resume handover here filled and x close handover last; a dim footer.
 import { describe, expect, test } from 'claude-code/testing'
 
@@ -20,7 +20,6 @@ const noop = (): void => undefined
 const ON: HandoversHandlers = {
   pick: noop,
   move: noop,
-  turnPage: noop,
   select: noop,
   selectOnly: noop,
   toggleSummary: noop,
@@ -42,7 +41,7 @@ const view = (over: Partial<HandoversView> = {}): HandoversView => ({
   marks: FRESH_MARKS,
   phaseView: { ...FRESH_PHASE_VIEW, phases: demoPhases('handovers'), loaded: true },
   pick: '',
-  page: 0,
+  first: 0,
   summaries: DEMO_SUMMARIES,
   summaryOpen: '',
   now: NOW,
@@ -59,14 +58,14 @@ describe('the handovers pane, as drawn', () => {
   test('the frame, row 1, the sentence and the bulk close row', () => {
     const tree = handoversPaneTree(testKit(), view(), ON, 116)
     expect(walk(tree)[0]?.props).toMatchObject({ borderStyle: 'round', borderColor: T.border.default })
-    for (const text of ['HANDOVERS', ' All  6 ▾ ', '◐ show closed', ' 1 / 2 ', '5 open · newest 2h ago']) expect(textsOf(tree), text).toContain(text)
+    for (const text of ['HANDOVERS', ' All  6 ▾ ', '◐ show closed', ' 1–5 of 5 ', '5 open · newest 2h ago']) expect(textsOf(tree), text).toContain(text)
     expect(byKey(tree, 'show-closed')?.props?.hotkey).toBeUndefined()
     expect(byKey(tree, 'close-selected')?.props).toMatchObject({ hotkey: 'b', label: 'close 0 handovers', dimColor: true })
   })
 
-  test('3 items a page; the focused one is boxed with its linked tasks and keys; collapsed ones carry none', () => {
+  test('every item listed; the focused one is boxed with its linked tasks and keys; collapsed ones carry none', () => {
     const tree = handoversPaneTree(testKit(), view(), ON, 116)
-    expect(walk(tree).filter(e => String(e.props?.key ?? '').startsWith('ho-sel:')).filter(e => e.type === 'Button')).toHaveLength(3)
+    expect(walk(tree).filter(e => String(e.props?.key ?? '').startsWith('ho-sel:')).filter(e => e.type === 'Button')).toHaveLength(5)
     expect(walk(tree).filter(e => e.type === 'Box' && e.props?.borderStyle === 'round' && String(e.props?.key ?? '').startsWith('card:')).map(e => e.props?.key)).toEqual([`card:${FIRST!.id}`])
     for (const [key, hotkey, label] of [
       ['resume', 'r', 'resume handover here'],
@@ -96,7 +95,7 @@ describe('the handovers pane, as drawn', () => {
 
   test('a closed handover draws faint with ✓ CLOSED, and its x is disabled', () => {
     const closed = LIST.handovers.find(h => h.status === 'closed')!
-    const tree = handoversPaneTree(testKit(), view({ marks: { ...FRESH_MARKS, showClosed: true }, pick: closed.id, page: 2 }), ON, 116)
+    const tree = handoversPaneTree(testKit(), view({ marks: { ...FRESH_MARKS, showClosed: true }, pick: closed.id, first: 2 }), ON, 116)
     expect(textsOf(tree)).toContain('✓ CLOSED       ')
     expect(byKey(tree, 'close')?.props?.dimColor).toBe(true)
   })

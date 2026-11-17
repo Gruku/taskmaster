@@ -1,6 +1,6 @@
 // User intent: the handovers pane's rules without drawing (spec §9) — a handover counts under each of its linked tasks'
-// phases or under no task, closed ones only on demand, j / k cross pages, a handover opened from elsewhere lands on its
-// phase and page, and a close leaves one toast naming every refusal.
+// phases or under no task, closed ones only on demand, j / k down the scrolling list, a handover opened from elsewhere lands on
+// its phase and its place in the list, and a close leaves one toast naming every refusal.
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEMO_TASKS, demoHandoverList, demoSnapshot } from '../hooks/demo'
@@ -68,25 +68,26 @@ describe('handover phases', () => {
 
 describe('moving and arriving', () => {
   const list = many(12)
-  test('j and k cross pages and stop at the ends', () => {
-    expect(moveTarget(list, 0, 'h-1', 1)).toEqual({ page: 0, id: 'h-2' })
-    expect(moveTarget(list, 0, 'h-3', 1)).toEqual({ page: 1, id: 'h-4' })
-    expect(moveTarget(list, 1, 'h-4', -1)).toEqual({ page: 0, id: 'h-3' })
-    expect(moveTarget(list, 0, '', 1)).toEqual({ page: 0, id: 'h-2' })
+  test('j and k step down the list, from the pick or else the first visible handover, and stop at the ends', () => {
+    expect(moveTarget(list, 0, 'h-1', 1)).toEqual({ index: 1, id: 'h-2' })
+    expect(moveTarget(list, 0, 'h-3', 1)).toEqual({ index: 3, id: 'h-4' })
+    expect(moveTarget(list, 1, 'h-4', -1)).toEqual({ index: 2, id: 'h-3' })
+    expect(moveTarget(list, 0, '', 1)).toEqual({ index: 1, id: 'h-2' })
+    expect(moveTarget(list, 5, '', 1)).toEqual({ index: 6, id: 'h-7' })
     expect(moveTarget(list, 0, 'h-1', -1)).toBeNull()
     expect(moveTarget(list, 3, 'h-12', 1)).toBeNull()
     expect(moveTarget([], 0, '', 1)).toBeNull()
   })
 
-  test('arriving keeps a phase that holds the handover, else picks its first known phase, else All; with its page', () => {
+  test('arriving keeps a phase that holds the handover, else picks its first known phase, else All; with its place in the list', () => {
     const all = listedHandovers(LIST, SNAP, false)
     const phases = ['patch-1-9', 'release-2', NO_TASK].map(phase)
-    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, phases, ALL)).toEqual({ choice: ALL, page: 1 })
-    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, phases, 'patch-1-9')).toEqual({ choice: 'release-2', page: 0 })
-    expect(arrival(all, '2026-10-04-audit-fixes-landed', LIST.tasks, phases, 'patch-1-9')).toEqual({ choice: 'patch-1-9', page: 0 })
-    expect(arrival(all, '2026-10-03-viewer-reskin-2a', LIST.tasks, phases, 'release-2')).toEqual({ choice: NO_TASK, page: 0 })
-    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, [], 'patch-1-9')).toEqual({ choice: ALL, page: 1 })
-    expect(arrival(many(12), 'h-11', {}, [], ALL)).toEqual({ choice: ALL, page: 3 })
+    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, phases, ALL)).toEqual({ choice: ALL, index: 3 })
+    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, phases, 'patch-1-9')).toEqual({ choice: 'release-2', index: 0 })
+    expect(arrival(all, '2026-10-04-audit-fixes-landed', LIST.tasks, phases, 'patch-1-9')).toEqual({ choice: 'patch-1-9', index: 1 })
+    expect(arrival(all, '2026-10-03-viewer-reskin-2a', LIST.tasks, phases, 'release-2')).toEqual({ choice: NO_TASK, index: 0 })
+    expect(arrival(all, '2026-10-02-store-read-hang', LIST.tasks, [], 'patch-1-9')).toEqual({ choice: ALL, index: 3 })
+    expect(arrival(many(12), 'h-11', {}, [], ALL)).toEqual({ choice: ALL, index: 10 })
     expect(arrival(all, 'not-listed', LIST.tasks, phases, ALL)).toBeNull()
   })
 })

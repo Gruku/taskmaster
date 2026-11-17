@@ -15,6 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import stat
@@ -27,6 +28,7 @@ from taskmaster.bounded_run import run_bounded
 from taskmaster.native import metrics
 from taskmaster.projection_paths import UnsafePath, check_component, safe_path
 from . import job as jobs
+from . import scopes
 from .contained import ManagedChild
 
 LOG = logging.getLogger(__name__)
@@ -77,11 +79,22 @@ def executable():
     return str(Path(found).resolve())
 
 
-def probe(root, *args, ok=(0,), stdin=None, limit=PROBE_LIMIT, timeout=PROBE_TIMEOUT):
+# Variables a caller may add through `probe(env=...)` (team-server-013 §4.4). `environment()` scrubs every
+# inherited GIT_* first; this list keeps a caller from putting GIT_DIR, GIT_WORK_TREE or GIT_CONFIG_* back.
+EXTRA_ENV = re.compile(r'GIT_INDEX_FILE|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE)|GCM_INTERACTIVE'
+                       r'|GIT_SSH_COMMAND|GIT_SSH|GIT_SSH_VARIANT')
+
+
+def probe(root, *args, ok=(0,), stdin=None, limit=PROBE_LIMIT, timeout=PROBE_TIMEOUT, env=None, with_stderr=False):
+    """`env` adds only EXTRA_ENV variables; `with_stderr` returns (code, stdout, stderr) instead of (code, stdout)."""
     flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-    env = environment({'GIT_OPTIONAL_LOCKS': '0'})
+    extra = {'GIT_OPTIONAL_LOCKS': '0'}
+    for key, value in (env or {}).items():
+        if not EXTRA_ENV.fullmatch(key) or not isinstance(value, str):
+            raise ValueError(f'probe env may not set {key}')
+        extra[key] = value
     try:
-        completed = run_bounded([executable(), '--no-optional-locks', *args], cwd=root, env=env,
+        completed = run_bounded([executable(), '--no-optional-locks', *args], cwd=root, env=environment(extra),
                                 input=stdin, timeout=timeout, **flags)
     except subprocess.TimeoutExpired:
         raise GitRefused(f'git {args[0]} timed out') from None
@@ -89,6 +102,8 @@ def probe(root, *args, ok=(0,), stdin=None, limit=PROBE_LIMIT, timeout=PROBE_TIM
         raise GitRefused(f'git {args[0]} failed: {completed.stderr.decode("utf-8", "replace").strip()[:500]}')
     if len(completed.stdout) > limit:
         raise GitRefused(f'git {args[0]} output exceeds {limit} bytes')
+    if with_stderr:
+        return completed.returncode, completed.stdout, completed.stderr
     return completed.returncode, completed.stdout
 
 
@@ -171,7 +186,7 @@ def _same_text_digests(owner, backlog, rel):
     return sync_files.Digests.of(content) if checkouts.same_text(base, content) else None
 
 
-def generation(owner, through, backlog=None):
+def generation(owner, through, backlog=None, *, exact=False):
     """The published generation and whether every file on disk still carries it.
 
     `through` is the barrier's synchronized target: a domain write committed after
@@ -194,7 +209,7 @@ def generation(owner, through, backlog=None):
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
                                   'ORDER BY file').fetchall()
         connection.rollback()
-    mismatched, blobs = [], {}
+    mismatched, blobs, exact_blobs = [], {}, {}
     for rel, digest in rows:
         try:
             known = scan.digests(rel)
@@ -213,10 +228,14 @@ def generation(owner, through, backlog=None):
         # LF-normalised. Both carry the generation's text (up to line endings), so
         # whatever eol conversion Git applies when staging, a foreign blob is caught.
         blobs[rel] = sorted({known.blob, known.blob_lf})
+        exact_blobs[rel] = known.blob
     sync_files.save_scan(owner.root, scan)
     value = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()
-    return ({'digest': value, 'files': len(rows), 'through': through, 'blobs': blobs},
-            [rel for rel, _ in rows], mismatched)
+    gen = {'digest': value, 'files': len(rows), 'through': through, 'blobs': blobs}
+    if exact:
+        # team-server-013 commits the disk bytes exactly; never part of a managed-Git marker.
+        gen['exact'] = exact_blobs
+    return gen, [rel for rel, _ in rows], mismatched
 
 
 def _head_tree(root):
@@ -809,7 +828,7 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_t
     op_id = uuid.uuid4().hex
     # One coherent generation: import external edits, then publish through the
     # captured target. Later domain writes stay pending for the next generation.
-    synced = owner.sync(caller_scope=f'git:{request[0]}'[:256], request_id=f'{op_id}:pre',
+    synced = owner.sync(caller_scope=f'{scopes.GIT_PREFIX}{request[0]}'[:256], request_id=f'{op_id}:pre',
                         import_files=True, through=0, files=None, take_file=False,
                         **({'worktree': str(root)} if checkout.linked else {}),
                         **({} if sync_timeout is None else {'timeout': sync_timeout}))

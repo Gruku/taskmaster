@@ -8,7 +8,8 @@ from __future__ import annotations
 import time
 
 from taskmaster import backlog_server as bs
-from taskmaster.coordinator import sync_files
+from taskmaster.coordinator import allowlist, sync_files
+from taskmaster.coordinator import client as coordinator_client
 from taskmaster.coordinator import sync_jobs
 from taskmaster.coordinator.protocol import HandshakeError, ServiceUnavailable
 from taskmaster.native import sync
@@ -17,6 +18,14 @@ from taskmaster.projection_parse import classify
 from .handovers import _backlog_document
 from .registry import adapter
 from .runtime import error_text
+
+
+def _host_sync_refused() -> str | None:
+    """On a team server only the host operator imports host files (team-server-012 D1). Answered here, before
+    any file is listed or read; the client and coordinator gates refuse the same `sync`/`sync_job` anyway."""
+    if coordinator_client.served_action_refusal(allowlist.HOST_SYNC_WHAT) is None:
+        return None
+    return f"Error: {allowlist.HOST_SYNC_REFUSED}"
 
 
 def _documents(call, kind: str) -> tuple[list[str], list[str]]:
@@ -70,6 +79,9 @@ def _tally(call, results) -> tuple[list[str], list[str], list[str], list[str]]:
 
 
 def _resync(call, kind: str, headline) -> str:
+    refused = _host_sync_refused()
+    if refused is not None:
+        return refused
     try:
         files, warnings = _documents(call, kind)
         results = [call.sync(files[start:start + sync.MAX_FILES])
@@ -245,6 +257,9 @@ def _render(call, answer) -> str:
 def backlog_sync(call, *, files=None, sync_id=""):
     if not bs._backlog_path().exists():
         return "No backlog found."
+    refused = _host_sync_refused()
+    if refused is not None:
+        return refused
     try:
         named = None if files is None else [_relative(rel) for rel in files]
         if sync_id and not sync_jobs.ID_PATTERN.fullmatch(sync_id):

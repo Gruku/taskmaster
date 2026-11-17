@@ -84,16 +84,29 @@ def _main_worktree(root) -> Path | None:
     return None
 
 
+SERVER_TEXT = ("server mode: `.taskmaster/` isn't committed from this clone; the server's state is "
+               "backed up on the `taskmaster-state` branch. Unstage the .taskmaster/ files "
+               "(`git rm -r --cached .taskmaster`; add -f if Git says the staged content differs). "
+               "Staged deletions are fine: they untrack the directory.")
+
+
 def check(root) -> tuple[bool, str]:
     root = Path(root)
+    from taskmaster import server_fence
+    server = server_fence.refusal(root) is not None
+    # Server mode (team-server-014): deleting what the migration untracked is the right resolution of a merge with the
+    # new main, so only staged additions, changes, renames and type changes under .taskmaster/ are refused.
+    filters = ['--diff-filter=ACMRT'] if server else []
     staged = [path.decode('utf-8', 'surrogateescape') for path in
-              _git(root, 'diff', '--cached', '--name-only', '-z', '--no-renames', '--', '.taskmaster').split(b'\0')
+              _git(root, 'diff', '--cached', '--name-only', '-z', '--no-renames', *filters, '--', '.taskmaster').split(b'\0')
               if path]
     # `taskmaster.json` is the server's config, not a projection: the managed commit never
     # carries it, so it is committed with plain Git and has no generation to check against.
     staged = [path for path in staged if not path.startswith('.taskmaster/local/') and path not in NOT_PROJECTIONS]
     if not staged:
         return True, 'no projection files staged'
+    if server:
+        return False, SERVER_TEXT
     # The main checkout (git dir == common dir; also submodules and --separate-git-dir)
     # holds its own store; a linked worktree's authority is the main worktree Git lists
     # first. Never "no native store" while a store exists that could not be resolved.

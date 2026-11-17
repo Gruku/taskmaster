@@ -22,6 +22,9 @@ import sys
 import uuid
 
 OK_STATES = {'completed', 'clear', 'accepted'}
+NOT_MANAGED = ("server mode: this clone holds no Taskmaster projections, so there is nothing for managed Git to do; "
+               "use plain git (git commit, git checkout). The team's state is backed up on the server's "
+               "taskmaster-state branch.")
 
 
 def main(argv=None):
@@ -59,7 +62,18 @@ def main(argv=None):
         worktree = None
     if args.command == 'recover' and worktree is not None and not args.release_drift:
         parser.error('--worktree applies to recover only with --release-drift')
-    client = Client(root, timeout=args.timeout + 60)
+    from taskmaster import server_fence
+    from taskmaster.server_fence import ServerModeRefused
+    if server_fence.refusal(root) is not None:
+        # A team-server clone holds no Taskmaster projections and runs no coordinator, so there is nothing for managed
+        # Git to do (team-server-011 D8). Answer plainly, run nothing, and construct no client.
+        print(json.dumps({'state': 'not-managed', 'detail': NOT_MANAGED, 'checkout': str(root)}, indent=2))
+        return 0 if args.command == 'status' else 2
+    try:
+        client = Client(root, timeout=args.timeout + 60)
+    except ServerModeRefused as exc:
+        print(json.dumps({'state': 'refused', 'detail': str(exc), 'checkout': str(root)}, indent=2))
+        return 2
     if args.command in ('commit', 'checkout'):
         # Print the id first: a lost response is recovered by retrying it, never by re-running Git.
         request_id = args.request_id or uuid.uuid4().hex

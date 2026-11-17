@@ -26,6 +26,25 @@ the legacy tool cannot drift on it (D8's dual path):
   a claim arbitrarily far into the future.
 - **Claims are fully visible** (D6 iv): `locked_by` already renders everywhere,
   and a live peer's claim is mandatory context, not a detail.
+- **Two session shapes** (team-server-003). A host session is `host-pid-nonce`,
+  judged by the `sessions` table as before. A shared server's session is
+  `<handle>@<16 hex>`, one per MCP connection, judged by whether that connection
+  is open (`CONNECTED`); `<handle>@viewer` is a person's viewer. A person's own
+  earlier session whose connection is gone is *adoptable*: their new session
+  treats its claim as its own and takes it over without `force`. Their other
+  open session is still protected and needs `force`. Adoption goes by handle
+  alone, so a handle added again after revocation adopts the earlier holder's
+  disconnected claims without `force`: re-issue a handle only to the same person.
+- **Force across people is an operator power** (D7, D11). A served member can
+  never take, drop or move a teammate's unexpired claim — not with `force`, not
+  by a status move, completion, archive, batch line or viewer write. Host and
+  solo callers (`requester=None`) keep the rules above unchanged.
+- **A server's claims are connection-bound** (team-server-010). While a remote
+  holder's connection is open it never reads as expired by its stamp (`read`),
+  and the claim keeper (`serve/claim_keeper.py`) keeps the stamp at least
+  `RENEW_BELOW_SECONDS` ahead. Once the connection is gone the stamp is cut to
+  `DISCONNECTED_TTL_SECONDS`; a restart gives the claims of sessions that were
+  alive one such grace. Host-shaped holders keep the rules above.
 
 Storage is `entity_extensions` (D6), i.e. an ordinary authored field on the task
 document, on both stores. No schema bump, no re-backfill; the cost is that
@@ -36,6 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 import re
 
 from . import blockers
@@ -67,6 +87,11 @@ MIN_TTL_SECONDS = 60
 MAX_TTL_SECONDS = 7 * 24 * 60 * 60
 # The heartbeat window `store_status` already treats as "recently seen".
 HEARTBEAT_WINDOW_SECONDS = 60
+# Connection-bound claims on a server (team-server-010): a remote holder whose connection is open never reads as
+# expired by its stamp (the keeper keeps the stamp at least RENEW_BELOW ahead; `read` is the backstop if it falls
+# behind). Once the connection is gone the stamp is cut to DISCONNECTED_TTL, which is also the grace after a restart.
+DISCONNECTED_TTL_SECONDS = 15 * 60
+RENEW_BELOW_SECONDS = 60 * 60
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -137,11 +162,59 @@ def session_row(connection, session: str):
         ("session", "pid", "host", "started", "last_seen", "cwd", "current_tool"), row))
 
 
-# Every session id this project mints is `{hostname}-{pid}-{nonce}`:
-# `backlog_server.SESSION_ID` (what `locked_by` records) and
-# `store.Store.session` (what keys the `sessions` table) are built by the same
-# expression in two places.
+# Two session shapes exist (team-server-003 design D1):
+#
+# - Host-local: `{hostname}-{pid}-{nonce}`. `backlog_server.SESSION_ID` (what
+#   `locked_by` records for a stdio server) and `store.Store.session` (what keys
+#   the `sessions` table) are built by the same expression in two places.
+# - Remote: `{handle}@{16 hex}`, one per MCP connection on a shared server
+#   (`taskmaster.serve.sessions`), or `{handle}@{channel}` for a non-MCP caller
+#   such as the viewer. `@` is in neither a handle nor a hostname, so the two
+#   shapes never parse as each other, and a remote holder is never judged by the
+#   host's process table.
 SESSION_SHAPE = re.compile(r"(?P<host>.+)-(?P<pid>\d+)-(?P<nonce>[0-9a-f]{8})(?::t\d+)?$")
+REMOTE_HANDLE = r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?"   # == team_identity.HANDLE_RE.pattern (test-pinned)
+CHANNELS = frozenset({"viewer", "read", "hook"})          # pseudo-sessions for non-MCP callers (read: 007, hook: 008)
+REMOTE_SESSION_RE = re.compile(
+    rf"(?P<handle>{REMOTE_HANDLE})@(?P<nonce>[0-9a-f]{{16}}|{'|'.join(sorted(CHANNELS))})")
+# Whether a remote session's MCP connection is open right now. Assigned only by
+# the serve daemon (`SessionRegistry.connected`); None means no server, so no
+# connection can be open.
+CONNECTED = None
+
+
+def remote_handle(session) -> "str | None":
+    """The handle a remote session id names, or None for any other shape."""
+    if not isinstance(session, str):
+        return None
+    match = REMOTE_SESSION_RE.fullmatch(session)
+    return match.group("handle") if match else None
+
+
+def _is_channel(session) -> bool:
+    match = REMOTE_SESSION_RE.fullmatch(session) if isinstance(session, str) else None
+    return bool(match) and match.group("nonce") in CHANNELS
+
+
+def connected(session) -> bool:
+    """True only for a remote MCP session whose connection the server holds open."""
+    hook = CONNECTED
+    if hook is None or remote_handle(session) is None or _is_channel(session):
+        return False
+    return bool(hook(session))
+
+
+def adoptable(holder, session) -> bool:
+    """Whether `session` may treat `holder`'s claim as its own: the same person
+    (handle), and the holder's connection is gone. A channel session (the
+    person's viewer) sees all of the person's sessions as its own. One person's
+    two open connections stay protected from each other (design D6, Q2)."""
+    if not holder or holder == session:
+        return False
+    handle = remote_handle(holder)
+    if handle is None or handle != remote_handle(session):
+        return False
+    return _is_channel(session) or not connected(holder)
 
 
 def identity(holder: str):
@@ -180,6 +253,10 @@ def liveness(holder: str, row, *, now=None, hostname=None, pid_alive=None):
     and is already true of the shipped rule; the failure direction is a claim
     that stands too long, which is the safe one.
     """
+    if remote_handle(holder) is not None:
+        # A remote session's liveness is its connection, never this host's pids or
+        # heartbeat rows; a closed connection is not proof of death (the TTL decides).
+        return True if connected(holder) else None
     now = now or now_utc()
     cutoff = (now - timedelta(seconds=HEARTBEAT_WINDOW_SECONDS)).isoformat()
     if row is not None and (row.get("last_seen") or "") >= cutoff:
@@ -221,7 +298,7 @@ class ClaimState:
         """This state as the mandatory resolver's `claim` fact, or None."""
         if not self.holder:
             return None
-        return blockers.Claim(holder=self.holder, live=self.live, expired=self.expired)
+        return blockers.Claim(holder=self.holder, live=self.live, expired=self.expired, mine=self.mine)
 
     def as_dict(self) -> dict:
         return {"task_id": self.task_id, "holder": self.holder, "expires_at": self.expires_at,
@@ -246,9 +323,11 @@ def read(task, *, task_id: str, session: str, connection, now=None) -> ClaimStat
     expires_at = raw if isinstance(raw, str) and stamped_for_holder else ""
     live = holder_liveness(connection, holder, now=now)
     deadline = parse_stamp(expires_at)
+    held_open = live is True and remote_handle(holder) is not None   # team-server-010 D4
     expired = (task.get("status") in TERMINAL_STATUSES or live is False
-               or (deadline is not None and now >= deadline))
-    return ClaimState(task_id, holder, expires_at, live, bool(expired), holder == session)
+               or (deadline is not None and now >= deadline and not held_open))
+    return ClaimState(task_id, holder, expires_at, live, bool(expired),
+                      holder == session or adoptable(holder, session))
 
 
 def foreign_holder(task, session: str) -> str:
@@ -266,13 +345,76 @@ def foreign_holder(task, session: str) -> str:
     holder = task.get(HOLDER_FIELD) or ""
     if not isinstance(holder, str):
         holder = str(holder)
-    return holder if holder and holder != session else ""
+    return holder if holder and holder != session and not adoptable(holder, session) else ""
 
 
 # Only the claim tools write the holder (decided with the user, N09 §4e/§4f):
 # a bare field write or a batch line could name any holder or erase a peer's.
 HOLDER_WRITE_REFUSAL = ("`locked_by` is written only by the claim tools: `backlog_pick_task` takes "
                         "a claim, `backlog_claim` renews or releases it.")
+
+
+@dataclass(frozen=True)
+class Requester:
+    """Who a served command is for, as the server's coordinator resolved it from the
+    authenticated key (team-server-003 D7). None stands for host-local and solo
+    callers, which keep the rules as they were."""
+    handle: str
+    may_force_any: bool
+
+
+def _holder_of(task) -> str:
+    holder = task.get(HOLDER_FIELD) or ""
+    return holder if isinstance(holder, str) else str(holder)
+
+
+def _whose(holder: str) -> str:
+    return remote_handle(holder) or "another session"
+
+
+def _protected_from(state: "ClaimState", requester: "Requester | None") -> bool:
+    """A claim the requester may not take, drop or move: another person's, unexpired."""
+    if requester is None or requester.may_force_any or not state.holder or state.mine or state.expired:
+        return False
+    return remote_handle(state.holder) != requester.handle
+
+
+def force_refusal(task_id: str, state: "ClaimState", requester: "Requester | None") -> "str | None":
+    """Why `force` may not take this claim, or None (D7: force across people is an operator power)."""
+    if not _protected_from(state, requester):
+        return None
+    at = f" at {state.expires_at}" if state.expires_at else ""
+    who = _whose(state.holder)
+    return (f"task `{task_id}` is claimed by {who} (`{state.holder}`). Only an operator can take a "
+            f"teammate's claim with force. Ask {who} to release it, or wait until it expires{at}; then "
+            f"`backlog_claim(action=\"release\", task_id=\"{task_id}\")` frees it.")
+
+
+def move_refusal(task_id: str, before: dict, after: dict, *, session: str, connection,
+                 requester: "Requester | None", now=None) -> "str | None":
+    """Why a write may not change this task's claim, or None (D11).
+
+    Every task write runs through it, so a member can never drop or move another
+    person's unexpired claim — not by a status move to `done` or `archived`, not by
+    completing or archiving, not by a batch line or a viewer write. The claim is judged
+    on the document before the write, so a claim stranded on a `done` row is free.
+    """
+    if requester is None or requester.may_force_any:
+        return None
+    if all((field in before) == (field in after)
+           and json.dumps(before.get(field), sort_keys=True) == json.dumps(after.get(field), sort_keys=True)
+           for field in CLAIM_FIELDS):
+        return None
+    if not _holder_of(before):
+        return None
+    state = read(before, task_id=task_id, session=session, connection=connection, now=now)
+    if not _protected_from(state, requester):
+        return None
+    who = _whose(state.holder)
+    until = f" until {state.expires_at}" if state.expires_at else ""
+    return (f"task `{task_id}` is claimed by {who} (`{state.holder}`){until}. This change would release or "
+            f"move that claim, and only an operator can do that to a teammate's claim. Ask {who} to release "
+            f"it first, or wait until it expires. Nothing was changed.")
 
 
 def survives_status_change(doc, *, session: str, connection, now=None) -> bool:
@@ -378,6 +520,12 @@ def lock_refusal(task_id: str, state, status: str = "in-progress") -> str:
             f"`backlog_claim(action=\"release\", task_id=\"{task_id}\")` frees it without force.")
 
 
+def own_open_session_refusal(task_id: str, state: "ClaimState") -> str:
+    """E3: the person's other session still holds it with its connection open (D6)."""
+    return (f"Error: task `{task_id}` is held by your other open session (`{state.holder}`). Pick a different "
+            f"task, or use `backlog_pick_task({task_id}, force=true)` to take it over from that session.")
+
+
 def ok(state: ClaimState, *, renewed_from: str = "", members=()) -> dict:
     answer = dict(state.as_dict(), ok=True)
     if renewed_from:
@@ -387,10 +535,21 @@ def ok(state: ClaimState, *, renewed_from: str = "", members=()) -> dict:
     return answer
 
 
-def conflict(state: ClaimState) -> dict:
+def conflict(state: ClaimState, requester: "Requester | None" = None) -> dict:
+    hint = HINT.format(task_id=state.task_id)
+    if requester is not None and not requester.may_force_any:
+        who = remote_handle(state.holder)
+        if who is not None and who == requester.handle:
+            hint = (f"held by your other open session `{state.holder}`; "
+                    f"backlog_pick_task(\"{state.task_id}\", force=True) takes it over from that session")
+        else:
+            at = f" at {state.expires_at}" if state.expires_at else ""
+            who = _whose(state.holder)
+            hint = (f"claimed by {who}. Ask {who} to release it, or wait until it expires{at}; "
+                    f"only an operator can take a teammate's claim")
     return {"ok": False, "error": "claim_conflict", "task_id": state.task_id,
             "holder": state.holder, "live": state.live, "expires_at": state.expires_at,
-            "hint": HINT.format(task_id=state.task_id)}
+            "hint": hint}
 
 
 def refusal(error: str, message: str, **extra) -> dict:

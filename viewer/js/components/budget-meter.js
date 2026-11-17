@@ -1,3 +1,5 @@
+import { h } from '../util/h.js';
+
 /**
  * Render a single horizontal budget bar.
  * @param {object} opts
@@ -10,18 +12,16 @@
  * @returns {HTMLElement}
  */
 export function buildBudgetMeter({ label, used, limit, pct, tier, format = 'num' }) {
-  const el = document.createElement('div');
-  el.className = `bmeter bmeter--${tier}`;
-  el.innerHTML = `
-    <div class="bmeter-row">
-      <span class="bmeter-label">${label}</span>
-      <span class="bmeter-vals">${formatVal(used, format)}<span class="bmeter-sep"> / </span>${formatVal(limit, format)}</span>
-    </div>
-    <div class="bmeter-track">
-      <div class="bmeter-fill" style="width: ${(pct * 100).toFixed(1)}%"></div>
-    </div>
-  `;
-  return el;
+  // Text nodes and CSSOM only: the label is data, and a strict style-src forbids a style attribute.
+  const fill = h('div', { class: 'bmeter-fill' });
+  fill.style.width = `${(pct * 100).toFixed(1)}%`;
+  return h('div', { class: `bmeter bmeter--${tier}` }, [
+    h('div', { class: 'bmeter-row' }, [
+      h('span', { class: 'bmeter-label' }, String(label)),
+      h('span', { class: 'bmeter-vals' }, [formatVal(used, format), h('span', { class: 'bmeter-sep' }, ' / '), formatVal(limit, format)]),
+    ]),
+    h('div', { class: 'bmeter-track' }, fill),
+  ]);
 }
 
 function formatVal(v, fmt) {

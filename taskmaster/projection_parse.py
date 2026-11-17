@@ -36,7 +36,22 @@ ENTITY_FILE_SPECS = (
     ("note", ("notes/NOTE-*.md", "notes/_archive/NOTE-*.md")),
     ("area", ("areas/*.md",)),
     ("tracker", ("trackers/*.md", "integrations/trackers/*.md")),
+    ("profile", ("users/*/profile.yaml",)),
 )
+# Kinds only a native store holds; the legacy store never scans their files.
+NATIVE_ONLY_KINDS = ("profile",)
+
+
+def path_ident(kind: str, path: PurePosixPath) -> str | None:
+    """The identity a matched authored path names; None when it names none.
+
+    A profile is keyed by its directory, which must be a valid handle.
+    """
+    if kind == "profile":
+        from taskmaster.team_identity import HANDLE_RE
+        handle = path.parts[1] if len(path.parts) == 3 else ""
+        return handle if HANDLE_RE.fullmatch(handle) else None
+    return path.stem
 
 
 def classify(rel: str) -> tuple[str, str | None]:
@@ -53,7 +68,9 @@ def classify(rel: str) -> tuple[str, str | None]:
             for pattern in patterns:
                 parts = PurePosixPath(pattern).parts
                 if len(parts) == len(path.parts) and all(fnmatch.fnmatch(a, b) for a, b in zip(path.parts, parts)):
-                    return kind, path.stem
+                    ident = path_ident(kind, path)
+                    if ident is not None:
+                        return kind, ident
     raise ValueError(f"not an authored projection: {rel!r}")
 
 
@@ -184,6 +201,14 @@ def authored_rows(kind: str, ident: str | None, content: bytes) -> dict[tuple[st
         if not isinstance(doc, dict):
             raise ValueError("project.yaml must be a mapping")
         return {("project", ident or PROJECT_ID): (doc, None)}
+    if kind == "profile" and ident:
+        if has_conflict_markers(text):
+            raise ValueError("git conflict markers")
+        doc = yaml_io.safe_load(text)
+        if not isinstance(doc, dict):
+            raise ValueError("profile.yaml must be a mapping")
+        validate_identity(kind, ident, doc)
+        return {("profile", ident): (doc, None)}
     if not ident:
         return None
     doc, body = entity_text(kind, text)

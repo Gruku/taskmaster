@@ -31,7 +31,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import yaml
 
-from taskmaster import projection_parse, yaml_io
+from taskmaster import git_eol as _git_eol, projection_parse, yaml_io
 from taskmaster.integrity import check_database
 from taskmaster.admission import (
     BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
@@ -149,7 +149,8 @@ def _uses_crlf(path: Path) -> bool:
 
 
 def _match_line_endings(
-    content: bytes, path: Path, default_crlf: bool = False
+    content: bytes, path: Path, default_crlf: bool = False,
+    backlog_dir: Path | None = None,
 ) -> bytes:
     """`content` (rendered with LF) in the line-ending style `path` already has.
 
@@ -158,12 +159,23 @@ def _match_line_endings(
     into `archive/` have no bytes at their new path, and writing those LF left
     `tasks/` carrying two styles at once.
     """
-    crlf = _probe_crlf(path)
+    # Git's answer for the path comes first (tm-audit-039): a file written in any other
+    # style than the one a checkout would give it shows as modified in `git status`.
+    crlf = _git_eol.crlf_for(backlog_dir, path)
+    if crlf is None:
+        crlf = _probe_crlf(path)
     if crlf is None:
         crlf = default_crlf
     if not crlf:
         return content
     return content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+def apply_git_line_endings(content: bytes, path: Path, backlog_dir: Path) -> bytes:
+    """`content` (LF) in the style Git would check `path` out with; unchanged when Git has no opinion."""
+    if _git_eol.crlf_for(backlog_dir, path):
+        return content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    return content
 _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 # `ideas/IDEAS.md` is derived output, not an entity: the exporter regenerates it
 # from the idea rows and the scan refreshes its hash without ever parsing it.
@@ -641,6 +653,11 @@ def _after_fork_child() -> None:
     # hang forever and an inherited gate is never handed on.
     _ARRIVAL_GATES = {}
     _ARRIVAL_GATES_LOCK = threading.Lock()
+    # The raw-read lock may have been held by a parent thread at the fork (B-105). The
+    # descriptors themselves stay valid in the child and are kept: the child holds no
+    # SQLite locks yet, and closing them later would only repeat the bug.
+    global _RAW_READ_FDS_LOCK
+    _RAW_READ_FDS_LOCK = threading.Lock()
 
 
 if hasattr(os, "register_at_fork"):
@@ -801,9 +818,86 @@ _REQUIRED_TABLES = frozenset(
 )
 
 
+# B-105: on POSIX, closing *any* descriptor on a file drops every fcntl lock this
+# process holds on it -- SQLite's own included. SQLite keeps a SHARED lock on the
+# database file for as long as a WAL connection is open, and a peer closing its last
+# connection takes EXCLUSIVE to decide that nobody else is using the database; when it
+# gets it, it checkpoints and deletes `-wal` and `-shm` under the live connections, and
+# the database is corrupted. A plain `open()`/`close()` of `store.db` (the header
+# check, a backup copy) therefore must never close while this process may hold SQLite
+# locks on that file. Descriptors are kept per inode for the process lifetime instead,
+# and only closed by `reset_for_tests`, after every connection has been closed.
+_RAW_READ_FDS: dict[tuple[int, int], int] = {}
+_RAW_READ_FDS_LOCK = threading.Lock()
+
+
+def _raw_read_fd(path: Path) -> int:
+    """A read-only descriptor on `path` that this process never closes (POSIX only)."""
+    with _RAW_READ_FDS_LOCK:
+        try:
+            stat = os.stat(path)
+            descriptor = _RAW_READ_FDS.get((stat.st_dev, stat.st_ino))
+            if descriptor is not None:
+                return descriptor
+        except FileNotFoundError:
+            pass
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        stat = os.fstat(descriptor)
+        key = (stat.st_dev, stat.st_ino)
+        if key in _RAW_READ_FDS:
+            # Raced a replace of `path`: keep the existing descriptor and leak this
+            # one rather than close it, which would drop the locks it is meant to keep.
+            return _RAW_READ_FDS[key]
+        for stale, old in list(_RAW_READ_FDS.items()):
+            # A deleted file can carry no lock anyone else relies on.
+            try:
+                gone = os.fstat(old).st_nlink == 0
+            except OSError:
+                gone = True
+            if gone:
+                del _RAW_READ_FDS[stale]
+                try:
+                    os.close(old)
+                except OSError:
+                    pass
+        _RAW_READ_FDS[key] = descriptor
+        return descriptor
+
+
+def _close_raw_read_fds() -> None:
+    with _RAW_READ_FDS_LOCK:
+        for descriptor in _RAW_READ_FDS.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        _RAW_READ_FDS.clear()
+
+
 def _read_sqlite_header(path: Path) -> bytes:
-    with path.open("rb") as handle:
-        return handle.read(16)
+    if os.name == "nt":
+        # Windows byte-range locks belong to the handle that took them; closing this
+        # one cannot release SQLite's, and a held handle would block rename/delete.
+        with path.open("rb") as handle:
+            return handle.read(16)
+    return os.pread(_raw_read_fd(path), 16, 0)
+
+
+def _copy_raw_file(source: Path, target: Path) -> None:
+    """`shutil.copy2` without closing a descriptor on `source` (see B-105 above)."""
+    if os.name == "nt":
+        shutil.copy2(source, target)
+        return
+    descriptor = _raw_read_fd(source)
+    offset = 0
+    with open(target, "wb") as out:
+        while True:
+            chunk = os.pread(descriptor, 1 << 20, offset)
+            if not chunk:
+                break
+            out.write(chunk)
+            offset += len(chunk)
+    shutil.copystat(source, target)
 
 
 def _validate_safe_identifier(ident: str) -> None:
@@ -969,6 +1063,9 @@ def open_store(
 ) -> "Store":
     with _STATE_LOCK:
         resolved = _resolve_for(backlog_path, root)
+        # The split-brain fence (team-server-009): never open or create a store in a server-mode project.
+        from taskmaster import server_fence
+        server_fence.check(resolved.root)
         path = db_path(resolved.backlog_path)
         instance = _STORES.get(path)
         if instance is None:
@@ -990,6 +1087,8 @@ def read_only_status(
     """
     with _STATE_LOCK:
         resolved = _resolve_for(backlog_path, root)
+        from taskmaster import server_fence
+        server_fence.check(resolved.root)
         instance = _STORES.get(db_path(resolved.backlog_path))
     return (instance or Store(resolved)).read_only_status()
 
@@ -1048,6 +1147,7 @@ def reset_for_tests() -> None:
                 pass
         _ALL_CONNECTIONS.clear()
         _CONNECTION_IDENTITIES.clear()
+        _close_raw_read_fds()
         registry = getattr(_THREAD_STATE, "registry", None)
         if registry is not None:
             registry.finalizer.detach()
@@ -1936,6 +2036,7 @@ class Store:
             kind: sorted(ids) for kind, ids in sorted(reserved.items())
         }
         path = self._reservation_path
+        # local/ reservation and intent files are machine-local: deliberately not Git-aware.
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_name(f"{path.name}.tmp.{self.session}")
         with temp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -2018,6 +2119,7 @@ class Store:
             return
         payload = {"session": tx.session, "entries": tx._intent_entries}
         path = tx._intent_path
+        # local/ intent file: machine-local, deliberately not Git-aware.
         temp = path.with_name(f"{path.name}.tmp")
         with temp.open("w", encoding="utf-8", newline="\n") as handle:
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -2143,7 +2245,7 @@ class Store:
             candidate = Path(f"{self.db_path}{suffix}")
             if candidate.exists():
                 target = self.db_path.with_name(f"store.db.{label}-{stamp}{suffix}")
-                shutil.copy2(candidate, target)
+                _copy_raw_file(candidate, target)
 
     def _discard_empty_database(self, connection: sqlite3.Connection) -> None:
         """Delete the database this open created, after a refused adoption.
@@ -2766,8 +2868,9 @@ class Store:
                 updated, default_flow_style=False, sort_keys=False, allow_unicode=True
             )
             temp = path.with_name(f"{path.name}.tmp.{self.session}")
-            with temp.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write(payload)
+            with temp.open("wb") as handle:
+                handle.write(apply_git_line_endings(
+                    payload.encode("utf-8"), path, self.backlog_path.parent))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp, path)
@@ -2791,7 +2894,7 @@ class Store:
         temp = target.with_name(f"{target.name}.tmp.{self.session}")
         try:
             with temp.open("wb") as handle:
-                handle.write(data)
+                handle.write(apply_git_line_endings(data, target, self.backlog_path.parent))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp, target)
@@ -4423,7 +4526,9 @@ class Store:
 
     # Ordered canonical-first: a legacy duplicate path is an import fallback
     # and never overrides the canonical one.
-    _ENTITY_FILE_SPECS = projection_parse.ENTITY_FILE_SPECS
+    # Native-only kinds (profiles) are never scanned: team mode refuses legacy stores.
+    _ENTITY_FILE_SPECS = tuple(spec for spec in projection_parse.ENTITY_FILE_SPECS
+                               if spec[0] not in projection_parse.NATIVE_ONLY_KINDS)
 
     @contextmanager
     def _memoized_entity_files(self) -> Iterator[None]:
@@ -5480,8 +5585,9 @@ class Store:
                 self._load_dict_from_connection(tx.connection), existing, entries
             )
             target.parent.mkdir(parents=True, exist_ok=True)
-            with temp.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write(rendered)
+            with temp.open("wb") as handle:
+                handle.write(apply_git_line_endings(
+                    rendered.encode("utf-8"), target, self.backlog_path.parent))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp, target)
@@ -5540,7 +5646,7 @@ class Store:
         move silently changed the file's line endings.
         """
         default = self._dominant_line_ending_crlf() if prior_crlf is None else prior_crlf
-        return _match_line_endings(content, path, default)
+        return _match_line_endings(content, path, default, self.backlog_path.parent)
 
     def _dominant_line_ending_crlf(self) -> bool:
         """Whether this project's git-facing files are mostly CRLF.
@@ -6216,7 +6322,7 @@ def render_entity_file(
         if not any(field in heavy for field in heavy_fields) and not rendered_body:
             return None, None
         return render_frontmatter(heavy, rendered_body).encode("utf-8"), (heavy, rendered_body)
-    if kind == "project":
+    if kind in ("project", "profile"):
         return yaml.dump(dict(doc), default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"), None
     return render_frontmatter(dict(doc), body).encode("utf-8"), (doc, body)
 

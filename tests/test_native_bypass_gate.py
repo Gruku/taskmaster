@@ -135,7 +135,7 @@ EXERCISES = {
     # Both forms: the partial line form and the atomic `commands` form, which is a
     # separate path and must be just as free of the legacy store and a projection scan.
     ("backlog_batch_update", None): lambda: (bs.backlog_batch_update(operations=chr(10).join([
-        "update test-epic-001 depends_on test-epic-002", "update test-epic-001 phase Development",
+        "update test-epic-002 depends_on test-epic-001", "update test-epic-001 phase Development",
         "status test-epic-002 in-progress", "complete test-epic-002", "pick test-epic-001",
         "archive test-epic-002 wont-fix", "update_epic test-epic name Renamed"])),
         bs.backlog_batch_update(commands=[

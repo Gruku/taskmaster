@@ -207,6 +207,35 @@ def assert_canonical_sections(kind: str, sections: list[str]) -> None:
             raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
 
 
+def served_doc_text(doc_path: str) -> tuple[bool, str | None, bool]:
+    """In a team-server daemon, `(True, text, False)` when the shared tracked-file rule allows `doc_path`
+    under the served root; `(True, None, True)` when `doc_path` is git-tracked but gone from the work
+    tree (a clear "not found"); else `(True, None, False)`, refused. Elsewhere `(False, None, False)`
+    and nothing is read.
+
+    team-server-005 Part B: the path is judged and read in one step by `serve.tracked.read_tracked_file`
+    (resolved path, git-tracked, never `.git/` or `.taskmaster/local/`, no check/open race). The root
+    is always the daemon's `backlog_server.ROOT`, never a caller-derived project root, so a missing
+    `backlog.yaml` cannot reopen an unchecked read. UTF-8 decoding errors propagate as before.
+    """
+    from taskmaster.coordinator import client as coordinator_client
+    if not coordinator_client.serving():                     # never calls the provider; solo stays as it was
+        return False, None, False
+    import sys
+    from taskmaster.serve.tracked import read_tracked_file, tracked_files_for   # lazy: solo never imports serve
+    root = getattr(sys.modules.get("taskmaster.backlog_server"), "ROOT", None)
+    if root is None or not isinstance(doc_path, str):
+        return True, None, False
+    data = read_tracked_file(Path(root), doc_path)
+    if data is None:
+        # Only a name git itself lists (plain, relative, inside the root) is probed for existence.
+        missing = doc_path in tracked_files_for(Path(root)).get() and not os.path.lexists(Path(root) / doc_path)
+        return True, None, missing
+    from taskmaster.native import provenance                 # 027: served repository text is framed for every reader
+    provenance.note_external(provenance.REPOSITORY)
+    return True, data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n"), False   # as read_text() would
+
+
 def read_doc_section(
     doc_path: str,
     project_root: Path | None = None,
@@ -217,6 +246,15 @@ def read_doc_section(
     the only place a section's content comes off the filesystem, so a caller that
     never reaches it never touches a file.
     """
+    serving, text, missing = served_doc_text(doc_path)
+    if serving:
+        if missing:
+            return f"(unresolved: {doc_path})", {"source": "missing", "path": doc_path, "imported": False}
+        if text is None:
+            from taskmaster.coordinator.allowlist import SERVED_DOC_REFUSED
+            return (f"(refused: {SERVED_DOC_REFUSED.format(path=doc_path)})",
+                    {"source": "refused", "path": doc_path, "imported": False})
+        return text, {"source": "filesystem", "path": doc_path, "imported": False}
     resolved = (project_root / doc_path) if project_root else Path(doc_path)
     if resolved.exists():
         return resolved.read_text(encoding="utf-8"), {"source": "filesystem", "path": doc_path, "imported": False}
@@ -308,6 +346,10 @@ def section_provenance_line(entry: dict[str, Any]) -> str:
         parts.append(f"content_hash: `{entry['content_hash']}`")
     if entry.get("imported_seq") is not None:
         parts.append(f"imported_seq: {entry['imported_seq']}")
+    # Uploads and restores only (team-server-012 D4, D10); a file import's line is unchanged.
+    for key in ("origin", "restored_origin", "imported_by", "original_seq"):
+        if entry.get(key) not in (None, ""):
+            parts.append(f"{key}: {entry[key]}")
     if entry.get("imported") is False:
         parts.append("imported: false")
     return "*" + " · ".join(parts) + "*"
@@ -3841,6 +3883,157 @@ VIEWER_PREFS_DEFAULTS = {
 }
 
 
+# What a viewer-prefs write may contain (security review I-3). On a team server the prefs file is one file shared
+# by every member, and a patch used to be deep-merged unchecked: {"issues": "x"} broke /api/issues for everyone and
+# a 200 KB padding key grew the file without bound. A patch may name only these keys, each with this shape; the
+# stored file is read back through the same shape, so an old or hand-edited value can't break a reader either. The
+# viewer's own writes (viewer/js, prefs.patch) are all listed here; a new one is added here with it.
+_PREF_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:/-]{0,100}")
+VIEWER_PREFS_MAX_BYTES = 64 * 1024
+
+
+def _pref_token(value) -> bool:
+    """An id, enum or column key; None resets it."""
+    return value is None or (isinstance(value, str) and bool(_PREF_TOKEN_RE.fullmatch(value)))
+
+
+VIEWER_PREFS_SEARCH_MAX = 200
+
+
+def _pref_search(value) -> bool:
+    return isinstance(value, str) and len(value) <= VIEWER_PREFS_SEARCH_MAX
+
+
+def _pref_tokens(value) -> bool:
+    return (isinstance(value, list) and len(value) <= 200
+            and all(isinstance(item, str) and _PREF_TOKEN_RE.fullmatch(item) for item in value))
+
+
+def _pref_flag(value) -> bool:
+    return isinstance(value, bool)
+
+
+def _pref_int(low, high):
+    return lambda value: type(value) is int and low <= value <= high
+
+
+def _pref_number(low, high):
+    return lambda value: type(value) in (int, float) and low <= value <= high
+
+
+def _pref_layout(value) -> bool:
+    return isinstance(value, list) and len(value) <= 100 and all(
+        isinstance(item, dict) and set(item) <= {"id", "type", "size", "rail", "index"}
+        and all(_pref_int(0, 1000)(v) if k == "index" else _pref_token(v) for k, v in item.items())
+        for item in value)
+
+
+_PREF_SORT = {"by": _pref_token, "dir": _pref_token}
+_PREF_VIEW = {"view": _pref_token}
+VIEWER_PREFS_SCHEMA = {
+    "schema_version": _pref_int(0, 1000),
+    "theme": _pref_token,
+    "card_density": _pref_token,
+    "zoom": _pref_number(0.25, 4),
+    "screens": {
+        "task_detail": _PREF_VIEW, "kanban": _PREF_VIEW,
+        "sessions": {"view": _pref_token, "handoverStatus": _pref_tokens},
+        "issues": {"view": _pref_token, "promotedFromBug": _pref_flag},
+        "bugs": {"statuses": _pref_tokens, "archived": _pref_flag, "sort": _pref_token},
+        "auto_mode": {"view": _pref_token, "helper_dismissed": _pref_flag},
+    },
+    "dashboard": {"layout": _pref_layout},
+    "ui": {"sidebar_collapsed": _pref_flag, "detail_view_mode": _pref_token, "last_task_id": _pref_token,
+           "last_epic_id": _pref_token, "last_issue_id": _pref_token},
+    "kanban": {
+        "filters": {"priorities": _pref_tokens, "epics": _pref_tokens, "areas": _pref_tokens, "phase": _pref_token,
+                    "group_by": _pref_token, "sort": _PREF_SORT, "search": _pref_search},
+        "collapsed_columns": _pref_tokens, "pinnedEpics": _pref_tokens, "epicSort": _pref_token,
+    },
+    "issues": {"aging": {name: _pref_int(1, 3650) for name in ("Critical", "High", "Medium", "Low")}},
+    "table": {"sort": _PREF_SORT, "search": _pref_search,
+              "filters": {name: _pref_tokens for name in ("status", "priority", "epic", "area")}},
+}
+
+
+def viewer_prefs_patch_refusal(patch, schema=None, path="") -> "str | None":
+    """Why `patch` may not be merged into the viewer prefs, or None: an unknown key, or a value of the wrong shape."""
+    schema = VIEWER_PREFS_SCHEMA if schema is None else schema
+    if not isinstance(patch, dict):
+        return f"`{path or 'the patch'}` must be a JSON object"
+    for key, value in patch.items():
+        where = f"{path}.{key}" if path else str(key)
+        if key not in schema:
+            return f"unknown viewer pref `{where[:120]}`"
+        spec = schema[key]
+        if isinstance(spec, dict):
+            refusal = viewer_prefs_patch_refusal(value, spec, where)
+            if refusal:
+                return refusal
+        elif not spec(value):
+            return f"viewer pref `{where}` has the wrong shape"
+    return None
+
+
+def _prune_viewer_prefs(stored, schema, defaults):
+    """`stored` read through `schema`: unknown keys and wrong-shaped values are dropped, defaults fill the gaps."""
+    from copy import deepcopy
+    out = deepcopy(defaults) if isinstance(defaults, dict) else {}
+    if not isinstance(stored, dict):
+        return out
+    for key, spec in schema.items():
+        if key not in stored:
+            continue
+        value = stored[key]
+        if isinstance(spec, dict):
+            if isinstance(value, dict):
+                out[key] = _prune_viewer_prefs(value, spec, out.get(key) if isinstance(out.get(key), dict) else {})
+        elif spec(value):
+            out[key] = deepcopy(value)
+    return out
+
+
+def deep_merge(dst: dict, src: dict) -> dict:
+    """Recursively merge *src* into *dst* in-place and return *dst*.
+
+    Dict-valued keys are merged recursively; all other values are replaced
+    with a deep copy of the source value.
+    """
+    from copy import deepcopy
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            deep_merge(dst[k], v)
+        else:
+            dst[k] = deepcopy(v)
+    return dst
+
+
+def _clamp_viewer_prefs_search(patch) -> None:
+    """Cut an over-long search box entry to VIEWER_PREFS_SEARCH_MAX in place, rather than refusing the whole patch:
+    the viewer merges a debounce window's changes into one PUT, so a refusal dropped the others too (re-review m-C)."""
+    if not isinstance(patch, dict):
+        return
+    for section, path in (("kanban", ("filters",)), ("table", ())):
+        node = patch.get(section)
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and isinstance(node.get("search"), str):
+            node["search"] = node["search"][:VIEWER_PREFS_SEARCH_MAX]
+
+
+def apply_viewer_prefs_patch(backlog_path: Path, patch, v4: "bool | None" = None) -> None:
+    """The one write path for viewer prefs (viewer PUT and the MCP tool, both stores): check, merge, cap, save.
+    Raises ValueError naming the problem, and writes nothing, when the patch is refused."""
+    _clamp_viewer_prefs_search(patch)
+    refusal = viewer_prefs_patch_refusal(patch)
+    if refusal:
+        raise ValueError(refusal)
+    prefs = deep_merge(load_viewer_prefs(backlog_path, v4), patch)
+    if len(json.dumps(prefs, indent=2)) > VIEWER_PREFS_MAX_BYTES:
+        raise ValueError(f"viewer prefs would exceed {VIEWER_PREFS_MAX_BYTES // 1024} KiB")
+    save_viewer_prefs(backlog_path, prefs, v4)
+
+
 def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
     """Where this backlog's viewer prefs live.
 
@@ -3858,11 +4051,16 @@ def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
 
 def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
-    Unknown top-level keys are preserved across reads (forward-compat).
-    Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
+    Read through VIEWER_PREFS_SCHEMA: unknown keys and wrong-shaped values are dropped,
+    and missing keys are filled from VIEWER_PREFS_DEFAULTS.
     """
     import json
     from copy import deepcopy
+    # The prefs file is shared by every member and records no writer, and its search fields hold free text: on a team
+    # server a tool that returns it frames it as unattributed for every reader, whoever else wrote to the store
+    # (re-review I-3; Codex finding 1). A no-op outside a served tool call.
+    from taskmaster.native import provenance
+    provenance.note_external(provenance.UNATTRIBUTED)
     p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     if not p.exists():
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
@@ -3884,19 +4082,9 @@ def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
         atomic_write(p, json.dumps(prefs, indent=2))
         return prefs
 
-    # Deep-merge defaults under the loaded data so missing nested keys appear.
-    def _merge(default, loaded):
-        if isinstance(default, dict) and isinstance(loaded, dict):
-            out = dict(loaded)  # preserve unknown keys
-            for k, v in default.items():
-                if k not in out:
-                    out[k] = deepcopy(v)
-                else:
-                    out[k] = _merge(v, out[k])
-            return out
-        return loaded
-
-    return _merge(VIEWER_PREFS_DEFAULTS, raw)
+    # Read through the schema, defaults filling the gaps: a stored value of the wrong shape (old, hand-edited, or
+    # written before writes were checked) reads as its default rather than breaking /api/issues (review I-3).
+    return _prune_viewer_prefs(raw, VIEWER_PREFS_SCHEMA, VIEWER_PREFS_DEFAULTS)
 
 def save_viewer_prefs(backlog_path: Path, prefs: dict, v4: "bool | None" = None) -> None:
     import json

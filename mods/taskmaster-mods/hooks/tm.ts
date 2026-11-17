@@ -22,6 +22,7 @@ import {
   parsePipeline,
 } from './parse'
 import { NO_TASK } from './phases'
+import { RemoteFailure, type TmCall } from './remote'
 
 export const TM_TIMEOUT_MS = 3000
 /** A write may queue behind the store's writer (ruling F14); it is never retried, so it gets longer than a read. */
@@ -41,12 +42,14 @@ export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
  * A call that got no usable reply. `transient`: worth retrying before reporting offline — the mod's own read timeout (a cold
  * server's first reads), or the engine saying the server is not connected yet (it connects seconds after session start).
  * `pending`: on the mod's own timeout, the call itself, still running (a write may still land); settles when it does.
+ * `unreadable`: the team server's reader answered, but not readably (the unreadable fault, not offline).
  */
 export class TmUnreachable extends Error {
   constructor(
     message: string,
     readonly transient: boolean = false,
     readonly pending?: Promise<unknown>,
+    readonly unreadable: boolean = false,
   ) {
     super(message)
   }
@@ -100,15 +103,55 @@ async function bounded(host: Pick<TmHost, 'call' | 'sleep'>,tool: string, args: 
   return first.reply
 }
 
-export async function callTm(host: Pick<TmHost, 'call' | 'sleep'>,tool: string, args: Record<string, unknown>): Promise<TmReply> {
-  const reply = await bounded(host, tool, args, TM_TIMEOUT_MS)
+function checked(tool: string, reply: TmReply): TmReply {
   if (reply.isError) throw new TmUnreachable(`${tool}: ${firstParagraph(reply.text) || 'the server reported an error'}`)
   return reply
 }
 
-/** A write: bounded to 15 s; an isError reply comes back to the caller, whose refusal shows the server's own text. */
+type Reads = { readonly replies: readonly TmReply[]; readonly stale: string | null }
+
+/**
+ * Reads, as one batch (team-server-007 D14). Solo (no reader, or no marker): the MCP calls one after another, each bounded
+ * to 3 s, the first failure ending the batch, exactly as before. A team-server clone: one tm_read.py process for the whole
+ * batch; its failure is transient (retry ladder), offline or unreadable as the reader's kind says. `stale`: the reader
+ * served its stale cache because the server is away (drawn, with the offline fault).
+ */
+export async function readMany(host: Pick<TmHost, 'call' | 'sleep' | 'remote'>, calls: readonly TmCall[]): Promise<Reads> {
+  const remote = host.remote === undefined ? null : await host.remote()
+  if (remote === null) {
+    const replies: TmReply[] = []
+    for (const c of calls) replies.push(checked(c.tool, await bounded(host, c.tool, c.args, TM_TIMEOUT_MS)))
+    return { replies, stale: null }
+  }
+  let read: Awaited<ReturnType<typeof remote.read>>
+  try {
+    read = await remote.read(calls)
+  } catch (error) {
+    if (!(error instanceof RemoteFailure)) throw error
+    throw new TmUnreachable(error.message, error.fault === 'transient', undefined, error.fault === 'unreadable')
+  }
+  return { replies: read.replies.map((reply, i) => checked(calls[i]?.tool ?? 'tm', reply)), stale: read.stale }
+}
+
+export async function callTm(host: Pick<TmHost, 'call' | 'sleep' | 'remote'>, tool: string, args: Record<string, unknown>): Promise<TmReply> {
+  const [reply] = (await readMany(host, [{ tool, args }])).replies
+  if (reply === undefined) throw new TmUnreachable(`${tool}: no reply`)
+  return reply
+}
+
+/**
+ * A write: bounded to 15 s; an isError reply comes back to the caller, whose refusal shows the server's own text. In a
+ * team-server clone the next read skips the reader's cache, so the write shows at once.
+ */
 export function writeTm(host: TmHost, tool: string, args: Record<string, unknown>): Promise<TmReply> {
-  return bounded(host, tool, args, TM_WRITE_TIMEOUT_MS)
+  const reply = bounded(host, tool, args, TM_WRITE_TIMEOUT_MS)
+  if (host.remote !== undefined) {
+    void host
+      .remote()
+      .then(remote => remote?.wrote())
+      .catch(() => undefined)
+  }
+  return reply
 }
 
 function offlineSnapshot(input: FetchInput, reason: string): TmSnapshot {
@@ -149,29 +192,40 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   const listArgs: Record<string, unknown> = { status: 'in-review', limit: QUEUE_WINDOW }
   if (input.scope.waitingOnly) listArgs.waiting_on_human = true
   if (input.scope.phase !== '') listArgs.phase = input.scope.phase
-  let replies: [TmReply, TmReply, TmReply, TmReply, TmReply, TmReply, TmReply | null, TmReply | null]
-  // One call after another, never together: the server answers one call at a time, so calls sent together queue and each
-  // one's 3 s bound counts the others' time (on CodeMaestro: ~0.7 s each alone, 3.5–4 s each when sent together).
+  const calls: TmCall[] = [
+    { tool: 'backlog_list_tasks', args: listArgs },
+    // P0/P1 issues on their own: continuity ranks every in-review task before any issue, so its 50-row review window
+    // holds no issue on a big backlog. Status `open` is continuity's own rule for an issue that asks for review.
+    { tool: 'backlog_issue_list', args: { status: 'open', severity: 'P0', limit: QUEUE_WINDOW } },
+    { tool: 'backlog_issue_list', args: { status: 'open', severity: 'P1', limit: QUEUE_WINDOW } },
+    // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
+    { tool: 'backlog_continuity_items', args: { action_class: 'review', limit: QUEUE_WINDOW } },
+    { tool: 'backlog_continuity_items', args: { action_class: 'decide', limit: QUEUE_WINDOW } },
+    { tool: 'backlog_handover_list', args: { format: 'json', status: 'open', limit: HANDOVER_WINDOW } },
+    ...(taskId === null
+      ? []
+      : [
+          { tool: 'backlog_get_task', args: { task_id: taskId } },
+          { tool: 'backlog_task_pipeline', args: { task_id: taskId } },
+        ]),
+  ]
+  let reads: Reads
+  // Solo: one call after another, never together: the server answers one call at a time, so calls sent together queue and
+  // each one's 3 s bound counts the others' time (on CodeMaestro: ~0.7 s each alone, 3.5–4 s each when sent together).
   try {
-    replies = [
-      await callTm(host, 'backlog_list_tasks', listArgs),
-      // P0/P1 issues on their own: continuity ranks every in-review task before any issue, so its 50-row review window
-      // holds no issue on a big backlog. Status `open` is continuity's own rule for an issue that asks for review.
-      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P0', limit: QUEUE_WINDOW }),
-      await callTm(host, 'backlog_issue_list', { status: 'open', severity: 'P1', limit: QUEUE_WINDOW }),
-      // Kept for the ages it gives (task and issue timestamps) where its window holds the item.
-      await callTm(host, 'backlog_continuity_items', { action_class: 'review', limit: QUEUE_WINDOW }),
-      await callTm(host, 'backlog_continuity_items', { action_class: 'decide', limit: QUEUE_WINDOW }),
-      await callTm(host, 'backlog_handover_list', { format: 'json', status: 'open', limit: HANDOVER_WINDOW }),
-      taskId === null ? null : await callTm(host, 'backlog_get_task', { task_id: taskId }),
-      taskId === null ? null : await callTm(host, 'backlog_task_pipeline', { task_id: taskId }),
-    ]
+    reads = await readMany(host, calls)
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
+    if (error instanceof TmUnreachable && error.unreadable) {
+      return { snapshot: offlineSnapshot(input, reason), fault: 'unreadable', unreadable: [{ tool: 'tm_read', text: reason }] }
+    }
     const transient = error instanceof TmUnreachable && error.transient
     return { snapshot: offlineSnapshot(input, reason), fault: 'offline', unreadable: [], transient }
   }
-  const [list, p0, p1, review, decide, handovers, task, pipeline] = replies
+  const at = (i: number): TmReply => reads.replies[i] ?? { text: '', isError: false }
+  const [list, p0, p1, review, decide, handovers] = [at(0), at(1), at(2), at(3), at(4), at(5)]
+  const task = taskId === null ? null : at(6)
+  const pipeline = taskId === null ? null : at(7)
   const refused = [list, p0, p1, review, decide, handovers].find(reply => isRefusal(reply.text))
   if (refused !== undefined) return { snapshot: offlineSnapshot(input, firstParagraph(refused.text)), fault: 'offline', unreadable: [] }
 
@@ -216,7 +270,7 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   return {
     snapshot: {
       reachable: true,
-      reason: '',
+      reason: reads.stale ?? '',
       fetchedAt: input.now,
       queue,
       queueTotal: listed.total + issueCount + decisionCount,
@@ -225,7 +279,7 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       handoversTotal: ho.total,
       bound,
     },
-    fault: unreadable.length > 0 ? 'unreadable' : 'none',
+    fault: reads.stale !== null ? 'offline' : unreadable.length > 0 ? 'unreadable' : 'none',
     unreadable,
   }
 }

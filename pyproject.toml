@@ -4,13 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taskmaster"
-version = "7.4.0"
+version = "7.5.0"
 description = "Task/backlog management MCP server with narrative continuity (handovers, issues, decisions)"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "gruku" }]
 requires-python = ">=3.11"
-dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+dependencies = ["anyio", "fastmcp>=3.4,<4", "h11>=0.16", "httpx", "mcp>=1.28,<2", "pydantic>=2", "pyyaml", "starlette>=1.0.1,<2", "uvicorn>=0.35,<1"]
+
+[project.scripts]
+# The team server's operator front door on a Linux host (team-server-016 D4): the systemd unit and the admin
+# commands run this, never `python -m` from the served project's directory, which may hold its own `taskmaster/`.
+taskmaster-serve = "taskmaster.serve.cli:main"
 
 [project.optional-dependencies]
 # Test requirements (B-091): `uv pip install -e ".[dev]"` yields a venv that runs the suite.

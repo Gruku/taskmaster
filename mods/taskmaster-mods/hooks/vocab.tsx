@@ -8,6 +8,7 @@ import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp, ty
 import { truncate } from './model'
 import type { TmPane } from './flows'
 import type { SidebarView } from './nav'
+import type { ScrollEntry, ScrollWindow } from './scroll-list'
 import { atEnd, isDoneShown, orderPhases, pickerName, shownTabs, step } from './phases'
 import type { RrGround, RrSignalKind } from './rr'
 
@@ -284,6 +285,13 @@ export function hints(k: Kit, items: readonly FooterItem[], width: number): Rend
   return <Box flexDirection="row">{out}</Box>
 }
 
+/** Rows the footer's Buttons flow to (its hints sit over them): the keys, three cells each, in rows of `width`. */
+export function footerRows(items: readonly FooterItem[], width: number): number {
+  const keys = items.reduce((n, item) => n + (item.press?.length ?? 0), 0)
+  const perRow = Math.max(1, Math.floor(Math.max(3, width) / 3))
+  return FOOTER_KEYS === 'inline' ? 1 : Math.ceil(keys / perRow)
+}
+
 /** A pane's last row: the hints, and every listed key pressable (FOOTER_KEYS says how the keys are drawn). */
 export function footer(k: Kit, items: readonly FooterItem[], width: number): RenderNode {
   const { Box, Text, Button } = k.ui
@@ -452,6 +460,14 @@ const cardTight = (width: number): boolean => width - 4 < TIGHT_ROOM
 /** The cells inside a focused card drawn in `width`: its border and (unless tight) its side padding taken off. */
 export const cardInner = (width: number): number => Math.max(10, width - (cardTight(width) ? 2 : 4))
 
+/**
+ * Rows a focusedItem takes: its border, head, lines, extras, then a blank row and the action rows. `extra` and `actions` count one
+ * row a node; `extraRows` says so when an extra node holds several.
+ */
+export function focusedRows(a: { readonly lines: readonly unknown[]; readonly extra?: readonly unknown[]; readonly extraRows?: number; readonly actions: readonly unknown[] }): number {
+  return 2 + 1 + a.lines.length + (a.extraRows ?? a.extra?.length ?? 0) + (a.actions.length === 0 ? 0 : 1 + a.actions.length)
+}
+
 /** The focused item: boxed in the focus border, its lines, any extra rows, then a blank row and its action rows. */
 export function focusedItem(
   k: Kit,
@@ -488,7 +504,15 @@ export function itemRule(k: Kit, width: number): RenderNode {
   return <Text color={k.t.border.default}>{`  ${'┄'.repeat(Math.max(0, width - 2))}`}</Text>
 }
 
-export type ListEntry = { readonly focused: boolean; readonly nodes: readonly RenderNode[] }
+export type ListEntry = {
+  readonly focused: boolean
+  readonly nodes: readonly RenderNode[]
+  /** Rows the nodes take (default: one a node, right for a collapsed item; a focused card passes focusedRows). */
+  readonly rows?: number
+  /** A scrolling list's group (restore's sections): its header is drawn above the group's first visible item. */
+  readonly group?: string
+  readonly header?: RenderNode
+}
 
 /** Items in order, a rule between two collapsed neighbours (the focused box needs none). */
 export function listing(k: Kit, entries: readonly ListEntry[], width: number): RenderNode[] {
@@ -501,10 +525,53 @@ export function listing(k: Kit, entries: readonly ListEntry[], width: number): R
   return out
 }
 
+/** What the windowing needs of each entry: its rows, group and whether it has a header (one row). */
+export const scrollEntries = (entries: readonly ListEntry[]): ScrollEntry[] =>
+  entries.map(e => ({ rows: e.rows ?? e.nodes.length, focused: e.focused, ...(e.group === undefined ? {} : { group: e.group }), ...(e.header === undefined ? {} : { header: 1 }) }))
+
+/** `↑ 3 more` / `↓ 5 more`: a quiet line where items hide. */
+export function moreRow(k: Kit, arrow: '↑' | '↓', n: number): RenderNode {
+  const { Text } = k.ui
+  return <Text color={k.t.fg.subtle}>{`  ${arrow} ${n} more`}</Text>
+}
+
+/**
+ * The window's items (windowOf over scrollEntries): `↑ N more` above, each group under its header (a group started above shows
+ * its header again over its first visible item), a blank row between groups, `↓ N more` below.
+ */
+export function scrollListing(k: Kit, entries: readonly ListEntry[], win: ScrollWindow, width: number): RenderNode[] {
+  const { Text } = k.ui
+  const out: RenderNode[] = []
+  if (win.above > 0 && win.more) out.push(moreRow(k, '↑', win.above))
+  let chunk: ListEntry[] = []
+  const flush = (): void => {
+    out.push(...listing(k, chunk, width))
+    chunk = []
+  }
+  for (let i = win.start; i < win.end; i++) {
+    const entry = entries[i]!
+    const prev = i > win.start ? entries[i - 1] : undefined
+    if (prev === undefined || (prev.group ?? '') !== (entry.group ?? '')) {
+      flush()
+      if (prev !== undefined) out.push(<Text> </Text>)
+      if (entry.header !== undefined) out.push(entry.header)
+    }
+    chunk.push(entry)
+  }
+  flush()
+  if (win.below > 0 && win.more) out.push(moreRow(k, '↓', win.below))
+  return out
+}
+
 // ── The frame (component sheet FRAME) ──────────────────────────────────────────────────────────────────────────────
 
 export type Health = { readonly kind: RrSignalKind; readonly word: string }
 const HEALTH_GLYPH: Readonly<Record<RrSignalKind, string>> = { success: '●', warning: '▲', critical: '▲', info: '○' }
+
+/** Rows a paneFrame takes besides its children: the round border's two, and the title's own row where the title is a row. */
+export function frameRows(k: Kit): number {
+  return 2 + (PANEL_TITLE[k.surface === 'desktop' ? 'desktop' : 'terminal'] === 'row' ? 1 : 0)
+}
 
 /**
  * A pane: round border in border.default on the page ground, `◆ TASKMASTER · NAME` set into the top border (desktop: a first
@@ -612,18 +679,30 @@ export function linkPiece(k: Kit, a: { readonly id: string; readonly text: strin
   return { el: quietButton(k, a.id, a.text, a.color, a.onPress), width: a.text.length }
 }
 
-/** `‹ 1 / 2 ›`: the arrows are quiet Buttons (`p` / `n` live in the footer); at an end the arrow dims and says why. */
-export function pagerPiece(k: Kit, a: { readonly page: number; readonly pages: number; readonly onTurn: (page: number) => void }): Piece {
+/**
+ * The toolbar's place in a list: a scrolling list's `‹ 4–9 of 23 ›` (`position`; the arrows page up and down) or a paged one's
+ * `‹ 1 / 2 ›` (the Session history). The arrows are quiet Buttons (`p` / `n` live in the footer); at an end the arrow dims and says why.
+ */
+export function pagerPiece(
+  k: Kit,
+  a:
+    | { readonly page: number; readonly pages: number; readonly onTurn: (page: number) => void }
+    | { readonly position: string; readonly atTop: boolean; readonly atEnd: boolean; readonly onPage: (dir: -1 | 1) => void },
+): Piece {
   const { Box, Text } = k.ui
-  const pages = Math.max(1, a.pages)
-  const at = Math.min(Math.max(0, a.page), pages - 1)
-  const count = ` ${at + 1} / ${pages} `
+  const scrolling = 'position' in a
+  const pages = scrolling ? 1 : Math.max(1, a.pages)
+  const at = scrolling ? 0 : Math.min(Math.max(0, a.page), pages - 1)
+  const count = ` ${scrolling ? a.position : `${at + 1} / ${pages}`} `
+  const first = scrolling ? a.atTop : at === 0
+  const last = scrolling ? a.atEnd : at === pages - 1
+  const turn = (dir: -1 | 1): void => (scrolling ? a.onPage(dir) : a.onTurn(at + dir))
   return {
     el: (
       <Box flexDirection="row">
-        {quietButton(k, 'page-prev', '‹', k.t.fg.subtle, () => a.onTurn(at - 1), at === 0 ? 'Already on the first page' : '')}
+        {quietButton(k, 'page-prev', '‹', k.t.fg.subtle, () => turn(-1), first ? (scrolling ? 'Already at the top' : 'Already on the first page') : '')}
         <Text color={k.t.fg.subtle}>{count}</Text>
-        {quietButton(k, 'page-next', '›', k.t.fg.subtle, () => a.onTurn(at + 1), at === pages - 1 ? 'Already on the last page' : '')}
+        {quietButton(k, 'page-next', '›', k.t.fg.subtle, () => turn(1), last ? (scrolling ? 'Already at the end' : 'Already on the last page') : '')}
       </Box>
     ),
     width: count.length + 2,
@@ -680,6 +759,14 @@ export function summaryRow(k: Kit, sentence: string, tallies: readonly Tally[], 
 }
 
 export type Scope = { readonly id: string; readonly label: string; readonly onPress: () => void }
+
+/** Rows bulkRow takes: one, or the wrapped keys and a row of scopes under them when they do not fit side by side. */
+export function bulkRows(k: Kit, a: { readonly keys: readonly Piece[]; readonly scopes: readonly Scope[]; readonly width: number }): number {
+  const scopeWidth = a.scopes.reduce((n, s) => n + s.label.length, 0) + 3 * Math.max(0, a.scopes.length - 1)
+  const keysWidth = a.keys.reduce((n, p) => n + p.width, 0) + 3 * Math.max(0, a.keys.length - 1)
+  return keysWidth + 2 + scopeWidth > a.width ? actionRows(k, a.keys, a.width).length + 1 : 1
+}
+
 
 /** Row 3: bulk keys at the left (their labels carry the count), scope Buttons (`all · none`) at the right. */
 export function bulkRow(k: Kit, a: { readonly keys: readonly Piece[]; readonly scopes: readonly Scope[]; readonly width: number }): RenderNode {

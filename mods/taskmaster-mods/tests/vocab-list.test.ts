@@ -24,7 +24,6 @@ import {
   summaryRow,
   togglePiece,
 } from '../hooks/vocab'
-import { LIST_PAGE_SIZE } from '../hooks/model'
 import { byKey, testKit, textsOf, walk } from './fixtures/kit-ui'
 import { widthOf } from './fixtures/measure'
 import { STUB_TOKENS as T } from './fixtures/tokens'
@@ -83,7 +82,6 @@ describe('the list item', () => {
     const rows = listing(k, [{ focused: true, nodes: [card] }, collapsed, collapsed], 80)
     expect(rows.filter(r => textsOf(r).join('').includes('┄'))).toHaveLength(1)
     expect(textsOf(itemRule(k, 10))).toEqual(['  ┄┄┄┄┄┄┄┄'])
-    expect(LIST_PAGE_SIZE).toBe(3)
   })
 })
 

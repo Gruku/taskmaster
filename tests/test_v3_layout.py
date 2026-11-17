@@ -800,8 +800,9 @@ def test_viewer_prefs_missing_file_defaults_to_dark(tmp_path):
     assert (on_disk["theme"], on_disk["schema_version"]) == ("dark", 1)
 
 
-def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
-    """Forward-compat: don't strip keys we don't know about."""
+def test_viewer_prefs_unknown_keys_dropped_on_read(tmp_path, monkeypatch):
+    """Unknown keys are not carried forward (security review I-3 reversed the old forward-compat rule): the prefs
+    file is shared on a team server, so only the keys the viewer uses survive a read and a save."""
     import json
     from taskmaster.taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
     bp = _prefs_bp(tmp_path)
@@ -811,7 +812,7 @@ def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     prefs = load_viewer_prefs(bp)
     save_viewer_prefs(bp, prefs)
     saved = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text())
-    assert saved["future_field"] == "preserve_me"
+    assert "future_field" not in saved and saved["theme"] == "dark"
 
 
 def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):

@@ -19,6 +19,15 @@ import yaml
 REFUSAL = "Refusing to use the taskmaster plugin directory"
 
 
+@pytest.fixture(autouse=True)
+def _config_paths_follow_root(tmp_path, monkeypatch):
+    # CONFIG_PATH is computed from the real cwd at import; without this, a local
+    # .taskmaster/taskmaster.json in the developer's checkout leaks into these tests.
+    from taskmaster import backlog_server
+    monkeypatch.setattr(backlog_server, "CONFIG_PATH", tmp_path / ".taskmaster" / "taskmaster.json")
+    monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "taskmaster.json")
+
+
 def test_resolve_paths_raises_on_plugin_dir_fixture(tmp_path, monkeypatch):
     """A backlog.yaml adjacent to backlog_server.py is refused."""
     (tmp_path / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))

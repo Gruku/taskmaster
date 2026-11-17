@@ -336,16 +336,19 @@ def prefs_set(call, *, patch_json):
         return f"Error: invalid JSON ({exc})"
     if not isinstance(patch, dict):
         return "Error: patch must be a JSON object"
-    v4 = _prefs_v4(call)
-    prefs = v3.load_viewer_prefs(bs._backlog_path(), v4=v4)
-    bs._deep_merge(prefs, patch)
-    v3.save_viewer_prefs(bs._backlog_path(), prefs, v4=v4)
+    try:
+        v3.apply_viewer_prefs_patch(bs._backlog_path(), patch, v4=_prefs_v4(call))
+    except ValueError as exc:
+        return f"Error: {exc}. Nothing was changed."
     return "ok"
 
 
 @adapter("backlog_open_viewer")
 def open_viewer(call):
-    # A host action: the board it opens is served by the native viewer routes.
+    # A host action: the board it opens is served by the native viewer routes. Over the team server the host is
+    # the server, so it answers with the URL instead of opening a browser there (B-110).
+    if bs._serve_mode():
+        return bs._served_viewer_notice()
     port = bs._start_viewer_server()
     url = f"http://127.0.0.1:{port}/"
     bs.webbrowser.open(url)

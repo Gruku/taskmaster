@@ -128,7 +128,7 @@ def read(task_id, database=None, *, compatibility=False):
         etag = (task_etag(snapshot.connection, snapshot.identity, task_id, native=snapshot.native is not None)
                 if snapshot.connection is not None else f"{snapshot.identity}:{snapshot.seq}")
         full, _ = bs._task_full_from(data, etag, bs._backlog_path(), task_id)
-        claim = claims.read(task, task_id=task_id, session=bs.SESSION_ID, connection=snapshot.connection).as_dict()
+        claim = claims.read(task, task_id=task_id, session=bs.current_session(), connection=snapshot.connection).as_dict()
         return {"task": dict(full, claim=claim) if compatibility else claims.without_claim_fields(full),
                 "related": related_from(task_id, task, tasks, rows, bs._backlog_path()),
                 "claim": claim, "etag": etag}

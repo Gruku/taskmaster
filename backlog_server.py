@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+# dependencies = ["anyio", "fastmcp>=3.4,<4", "h11>=0.16", "httpx", "mcp>=1.28,<2", "pydantic>=2", "pyyaml", "starlette>=1.0.1,<2", "uvicorn>=0.35,<1"]
 # ///
 """Entry shim: keeps `.mcp.json` (`uv run ${CLAUDE_PLUGIN_ROOT}/backlog_server.py`)
 working unchanged after the core moved into the taskmaster/ package.

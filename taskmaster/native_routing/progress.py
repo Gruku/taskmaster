@@ -38,6 +38,7 @@ import sqlite3
 import time
 import uuid
 
+from taskmaster import store
 from taskmaster.native.db import assert_native
 from taskmaster.native.queries import Repository
 from taskmaster.native.workflow import (
@@ -239,8 +240,9 @@ class _Writer:
         self._drop_strays()
         try:
             self.target.parent.mkdir(parents=True, exist_ok=True)
-            with temp.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write(rendered)
+            with temp.open("wb") as handle:
+                handle.write(store.apply_git_line_endings(
+                    rendered.encode("utf-8"), self.target, self.target.parent.parent))
                 handle.flush()
                 os.fsync(handle.fileno())
             self.checkpoint("progress_temp_written")

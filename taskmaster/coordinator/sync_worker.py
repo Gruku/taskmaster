@@ -11,11 +11,12 @@ import json
 import sqlite3
 import time
 
-from taskmaster.native import contracts, metrics, projection, sync
+from taskmaster.native import actor, contracts, metrics, projection, sync
 from taskmaster.native.contracts import CancelledBeforeExecution
 from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
 from taskmaster.projection_parse import classify
+from . import scopes
 from . import sync_files
 from .protocol import SYNC_TIMEOUT, validate_sync_timeout as validate_timeout
 from .sync_prepare import prepare
@@ -34,6 +35,19 @@ RESERVE_SHARE = 0.1
 IMPORT_GRACE = FINISH_TIMEOUT
 # sync.finish always gets at least this long, however much of the allowance the grace used.
 FINISH_FLOOR = 0.5
+
+
+# Files of a kind the store's native schema cannot hold yet are a definite skip, never pending:
+# turning team mode on upgrades the store, and the next sync imports them.
+_HELD_BACK = {"profile": "profiles are imported only once team mode is on; skipped"}
+
+
+def _held_back_kinds(owner):
+    """Kinds whose rows need a newer native schema than this store's (schema.KIND_SINCE)."""
+    from taskmaster.native import schema
+    with closing(owner._connect(readonly=True)) as connection:
+        version = int(connection.execute("SELECT value FROM native_manifest WHERE key='schema_version'").fetchone()[0])
+    return {kind for kind, since in schema.KIND_SINCE.items() if version < since}
 
 
 def _finish_timeout(remaining, grace_used):
@@ -272,7 +286,7 @@ def bound(result, named=()):
 def operation_scope(caller_scope, request_id):
     if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
         raise ValueError('sync requires caller_scope and request_id')
-    return 'sync-' + hashlib.sha256(encode([caller_scope, request_id]).encode()).hexdigest()
+    return scopes.SYNC_PREFIX + hashlib.sha256(encode([caller_scope, request_id]).encode()).hexdigest()
 
 
 # The `sync` metrics record always carries these (0 when nothing was counted).
@@ -318,6 +332,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
 
     # Membership sets beside the ordered lists: a sync may name tens of thousands of paths.
     unresolved_seen, notices_seen = set(), set()
+    skipped = set()  # held back by the store's schema: neither imported nor checked at completion
 
     def pending(rel, reason):
         if rel and rel not in unresolved_seen:
@@ -332,7 +347,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
 
     def submit(operation, key, arguments):
         envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=scope,
-                        request_id=key, operation=operation, arguments=arguments, expected_revisions=[])
+                        request_id=key, operation=operation, arguments=arguments, expected_revisions=[],
+                        actor=actor.advisory(actor.INTERNAL_AGENT))
         # Validate before enqueue, including the fully encoded 1 MiB limit.
         contracts.validate(envelope)
         return owner.submit(envelope)
@@ -459,6 +475,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 result['warnings'].extend(warnings)
                 drift |= set(found)
             owner.checkpoint('sync_files_selected')
+            held_back = _held_back_kinds(owner)
             size = batch_size()
             for first in range(0, len(selected), size):
                 batch = selected[first:first + size]
@@ -480,6 +497,15 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     if unverified:
                         pending(rel, unverified)
                         continue
+                    if held_back:
+                        try:
+                            kind = classify(rel)[0]
+                        except ValueError:
+                            kind = None
+                        if kind in held_back:
+                            result['warnings'].append(f'{rel}: {_HELD_BACK.get(kind, "not importable yet; skipped")}')
+                            skipped.add(rel)
+                            continue
                     if skippable is not None and skippable(rel, _hit(scan, rel)):
                         continue  # exactly prepare's no-op outcome; see _unchanged_rule
                     try:
@@ -620,6 +646,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                             pending(rel, 'derived index differs from the published generation; '
                                     + checkouts.DERIVED_GUIDANCE)
                 for rel in selected:
+                    if rel in skipped:
+                        continue
                     try:
                         # A fresh lstat: publication may have rewritten the file since.
                         hit = _hit(scan, rel, fresh=True) if fast else None

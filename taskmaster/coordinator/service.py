@@ -27,8 +27,13 @@ from taskmaster.admission import UnsupportedStoreError
 from .ownership import Ownership, OwnershipUnavailable
 from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, CoordinatorStopping, ServiceUnavailable, build_identity,
                        check_handshake, connect, describe, encode, identify, identify_connection, older, same_build)
+from .actor_resolver import LOCAL, ActorResolver, LocalCloneSource, Origin
 
 LOG = logging.getLogger(__name__)
+
+
+def _without_actor(request):
+    return {k: v for k, v in request.items() if k != 'actor'}
 
 
 @dataclass
@@ -37,6 +42,7 @@ class Work:
     future: Future = field(default_factory=Future)
     cancelled: threading.Event = field(default_factory=threading.Event)
     admitted: bool = False
+    origin: Origin = LOCAL
     queued_at: float = 0.0  # perf_counter at enqueue; set only while metrics are enabled
 
 
@@ -77,7 +83,7 @@ class AdmissionQueue:
 
 class Coordinator:
     def __init__(self, root, *, queue_limit=256, handler_limit=64, checkpoint=None, exporter=None,
-                 linear_client_factory=None):
+                 linear_client_factory=None, actor_source=None):
         self.root = Path(root).resolve(strict=True)
         self.identity = identify(self.root)
         # The code this process runs; commands are served only to clients of the same build.
@@ -100,6 +106,8 @@ class Coordinator:
         # non-zero the writer admits nothing new; the in-flight command finishes.
         self.admission = threading.Condition()
         self.pauses = 0
+        # team-server-014: when set, every queued and later write fails with this text before it executes.
+        self.refusing = None
         self.active_syncs = 0
         # `backlog_sync` jobs by id (sync_jobs.py): at most one runs at a time.
         self.sync_jobs = {}
@@ -120,6 +128,14 @@ class Coordinator:
         self.threads = []
         from .linear_worker import LinearWorker
         self.linear = LinearWorker(self, client_factory=linear_client_factory)
+        from .identity_gate import IdentityGate
+        # The lambda reads `self.checkpoint` late: tests replace it after construction.
+        self.team_identity = IdentityGate(self.root, store_id=self.identity['store_id'],
+                                          checkpoint=lambda stage: self.checkpoint(stage))
+        self.actor_resolver = ActorResolver(actor_source or LocalCloneSource(self.team_identity))
+
+    def _origin(self, message):
+        return LOCAL                      # session coordinators ignore any origin field
 
     def _connect(self, *, readonly=False):
         connection = connect(self.root, readonly=readonly)
@@ -186,22 +202,24 @@ class Coordinator:
         return dict(self.identity, nonce=self.nonce, token=self.token, pid=os.getpid(),
                     port=self.server.server_port, build=self.build)
 
-    def submit(self, envelope):
+    def submit(self, envelope, *, origin=LOCAL):
         request, _ = contracts.validate(envelope)
         if request.get('request_id') is None:
             raise ValueError('IPC commands require a durable request_id')
         if request['store_id'] != self.identity['store_id']:
             raise contracts.Conflict('request targets a different store identity')
-        work = Work(request)
+        work = Work(request, origin=origin)
         key = (request['caller_scope'], request['request_id'])
         with self.guard:
             if self.stopping.is_set():
                 raise CoordinatorStopping('coordinator is stopping; retry the same request_id')
+            if self.refusing is not None:
+                raise ServiceUnavailable(self.refusing)
             old = self.pending.get(key)
             # A cancelled entry the writer had already dequeued stays pending until it
             # fails at admission; a retry of the key is new work, never that cancelled future.
             if old is not None and not old.cancelled.is_set():
-                if old.request != request:
+                if _without_actor(old.request) != _without_actor(request):
                     raise contracts.Conflict('request_id reused with a different queued payload')
                 return old.future
             if metrics.ENABLED:
@@ -236,6 +254,11 @@ class Coordinator:
                 work.future.set_exception(contracts.CancelledBeforeExecution('cancelled while queued'))
             return {'state': 'cancelled_before_execution', 'may_have_committed': False}
 
+    def _requester(self, work):
+        """Who this command is for, as a `claims.Requester`; None keeps today's rules (session
+        coordinators). The serve coordinator resolves it from the authenticated origin."""
+        return None
+
     def _writer(self):
         connection = None
         try:
@@ -269,8 +292,16 @@ class Coordinator:
                             self.checkpoint(stage)
                         if dequeued is not None:
                             started = time.perf_counter()
-                        receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
-                                                   checkpoint=admitted)
+                        if self.refusing is not None:
+                            raise ServiceUnavailable(self.refusing)
+                        # Who a served command is for (None: host-local, today's rules); may refuse.
+                        requester = self._requester(work)
+                        # Team mode: attribute this write, or refuse it before anything commits.
+                        if self.team_identity.admit(connection, work.request, work.origin):
+                            self.export_needed.set()
+                        request = self.actor_resolver.stamp(connection, work.request, work.origin)
+                        receipt = commands.execute(connection, request, cancelled=work.cancelled.is_set,
+                                                   checkpoint=admitted, requester=requester)
                         if dequeued is not None:
                             self._committed(receipt)
                         work.future.set_result(receipt)
@@ -318,6 +349,14 @@ class Coordinator:
         """Stop admitting new commands; pair with `resume_writer`."""
         with self.admission:
             self.pauses += 1
+
+    def refuse_writes(self, reason):
+        """Fail every queued, paused and later write with `reason` before it executes (014's pack, after
+        its snapshot). Irreversible for this coordinator; reads and `flush` are unaffected."""
+        with self.guard:
+            self.refusing = str(reason)
+        with self.admission:
+            self.admission.notify_all()
 
     def resume_writer(self):
         with self.admission:
@@ -435,6 +474,13 @@ class Coordinator:
         if not isinstance(message, dict):
             raise ValueError('IPC message must be an object')
         method = message.get('method')
+        # A marker written after this coordinator started (M10): stop, serve nothing more.
+        from taskmaster import server_fence
+        try:
+            server_fence.check(self.root)
+        except server_fence.ServerModeRefused:
+            self.stop()
+            raise
         check_handshake(message.get('identity'), self.identity, self.nonce, self.build, any_build=method == 'retire')
         # Recheck the authority fence and identity, including after store swaps.
         if identify(self.root) != self.identity:
@@ -442,7 +488,7 @@ class Coordinator:
             raise ServiceUnavailable('native authority changed; restart the coordinator')
         self.last_activity = time.monotonic()
         if method == 'retire':
-            return self.retire(message['identity']['build'])
+            return self.retire(message['identity']['build'], message)
         if method == 'status':
             return dict(self.identity, nonce=self.nonce, build=self.build, queued=self.queue.qsize(),
                         linear_queued=len(self.linear.jobs),
@@ -482,7 +528,10 @@ class Coordinator:
             visibility = message.get('visibility', 'native')
             if visibility not in ('native', 'legacy'):
                 raise ValueError('visibility must be native or legacy')
-            receipt = self.submit(message.get('envelope')).result()
+            origin = self._origin(message)
+            # Only a non-local origin is passed on, so a plain `submit(envelope)` double keeps working.
+            receipt = (self.submit(message.get('envelope')) if origin is LOCAL
+                       else self.submit(message.get('envelope'), origin=origin)).result()
             projection = (self.flush(receipt['commit_seq']) if visibility == 'legacy' else
                           {'state': receipt['projection_state'], 'through': receipt['commit_seq'], 'notices': []})
             return {'receipt': receipt, 'projection': projection}
@@ -536,7 +585,12 @@ class Coordinator:
                 self.stopping.set()
             return expired
 
-    def retire(self, requester):
+    def public_error(self, exc) -> dict:
+        """The IPC answer for a failed message. Solo answers the exception's own text; the serve
+        daemon's coordinator overrides this to scrub paths and hide internal errors (team-server-006)."""
+        return {'error': str(exc), 'type': type(exc).__name__}
+
+    def retire(self, requester, message=None):
         """A client of another build asks this owner to leave. It stops exactly as an idle
         expiry does (`main` then closes: queue drained, threads joined, publication held
         while the ownership lock is released), and only while idle, so nothing in flight is
@@ -740,7 +794,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # Disconnect does not undo an admitted command.
         except Exception as exc:
-            self.answer(409, {'error': str(exc), 'type': type(exc).__name__})
+            self.answer(409, owner.public_error(exc))
 
     def answer(self, status, value):
         try:

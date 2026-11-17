@@ -1307,13 +1307,18 @@ wheels = [
 
 [[package]]
 name = "taskmaster"
-version = "7.4.0"
+version = "7.5.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "fastmcp" },
+    { name = "h11" },
     { name = "httpx" },
+    { name = "mcp" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -1325,13 +1330,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio" },
     { name = "fastmcp", specifier = ">=3.4,<4" },
+    { name = "h11", specifier = ">=0.16" },
     { name = "httpx" },
+    { name = "mcp", specifier = ">=1.28,<2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'" },
     { name = "pyyaml" },
+    { name = "starlette", specifier = ">=1.0.1,<2" },
+    { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
 provides-extras = ["dev"]
 

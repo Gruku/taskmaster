@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+from . import actor
 from .migrate import encode
 
 MAX_BYTES = 1024 * 1024
@@ -73,9 +74,12 @@ def validate_operation(operation, arguments, *, in_batch=False):
             raise ValueError('graph repair is a whole-store maintenance command and runs on its own')
         lifecycle.validate(operation, arguments)
 
+# The actor is stamped after validation (spec section 4); leaving it out keeps an actor-less envelope's 7.4.x fingerprint.
+UNHASHED = ("request_id", "actor")
+
 
 def validate(envelope):
-    if not isinstance(envelope, dict) or set(envelope) - {"protocol", "store_id", "caller_scope", "request_id", "operation", "arguments", "expected_revisions"}:
+    if not isinstance(envelope, dict) or set(envelope) - {"protocol", "store_id", "caller_scope", "request_id", "operation", "arguments", "expected_revisions", "actor", "clone"}:
         raise ValueError("invalid command envelope")
     # Copy through canonical JSON so a caller cannot mutate an admitted request.
     encoded = encode(envelope).encode("utf-8")
@@ -87,6 +91,12 @@ def validate(envelope):
     for name in ("store_id", "caller_scope"):
         if not isinstance(request.get(name), str) or not 1 <= len(request[name]) <= 256:
             raise ValueError(f"invalid {name}")
+    if "actor" in request:
+        actor.check(request["actor"])
+    if "clone" in request:
+        from . import clone_fields
+        if not isinstance(request["clone"], str) or not request["clone"] or not clone_fields.valid_clone(request["clone"]):
+            raise ValueError("invalid clone")
     key = request.get("request_id")
     if key is not None and (not isinstance(key, str) or not 1 <= len(key) <= 256):
         raise ValueError("invalid request_id")
@@ -110,5 +120,5 @@ def validate(envelope):
         if identity in seen:
             raise ValueError("duplicate expected revision")
         seen.add(identity)
-    fingerprint = hashlib.sha256(encode({k: v for k, v in request.items() if k != "request_id"}).encode()).hexdigest()
+    fingerprint = hashlib.sha256(encode({k: v for k, v in request.items() if k not in UNHASHED}).encode()).hexdigest()
     return request, fingerprint

@@ -25,8 +25,25 @@ if str(PLUGIN_ROOT) not in sys.path:
 os.environ.setdefault("TASKMASTER_TWINS_VERIFY", "1")
 
 
+def _require_project_fastmcp() -> None:
+    # B-100: a non-venv interpreter with fastmcp < 3.4 (pyproject needs >=3.4,<4) produced ten
+    # misleading failures that read as release regressions. Stop before collection instead.
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        found = version("fastmcp")
+    except PackageNotFoundError:
+        found = "not installed"
+    parts = tuple(int(p) for p in found.split(".")[:2] if p.isdigit())
+    if len(parts) < 2 or not (3, 4) <= parts < (4, 0):
+        raise pytest.UsageError(
+            f"fastmcp {found} under {sys.executable}; the suite needs fastmcp>=3.4,<4. "
+            "Run it with the project venv (.venv/Scripts/python -m pytest)."
+        )
+
+
 def pytest_configure(config):
     """Register custom markers (avoids PytestUnknownMarkWarning)."""
+    _require_project_fastmcp()
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (real git/bash subprocess)"
     )
@@ -46,6 +63,14 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "scale: full-size acceptance profiles, deselected by default; run with `-m scale`",
+    )
+    config.addinivalue_line(
+        "markers",
+        "twohost: the two-host harness (tests/twohost), deselected by default; run with `-m twohost`",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gap(task_id): a pin of today's behaviour for a gap that a later task closes (tests/twohost/gaps.py)",
     )
     # Tests that run several Python processes at once are grouped as
     # `heavy_processes`; under plain `-n N` (xdist's default `load`) the marker
@@ -78,13 +103,18 @@ def pytest_unconfigure(config):
         patch.undo()
 
 
+OPT_IN_MARKERS = ("scale", "twohost")
+
+
 def pytest_collection_modifyitems(config, items):
-    """Deselect `scale` profiles unless the marker expression asks for them."""
-    if "scale" in (getattr(config.option, "markexpr", "") or ""):
+    """Deselect opt-in profiles (`scale`, `twohost`) unless the marker expression names them."""
+    expression = getattr(config.option, "markexpr", "") or ""
+    opted_out = tuple(name for name in OPT_IN_MARKERS if name not in expression)
+    if not opted_out:
         return
-    kept = [item for item in items if item.get_closest_marker("scale") is None]
+    kept = [item for item in items if not any(item.get_closest_marker(name) for name in opted_out)]
     if len(kept) != len(items):
-        config.hook.pytest_deselected(items=[item for item in items if item.get_closest_marker("scale")])
+        config.hook.pytest_deselected(items=[item for item in items if item not in kept])
         items[:] = kept
 
 # Make `import skill_budget_helper` work from tests that live in this directory.
@@ -238,6 +268,15 @@ def _child_process_guard(request):
 
 
 @pytest.fixture(autouse=True)
+def _query_workers():
+    """backlog_query keeps idle worker processes for reuse; a test's own end reaps them for the child guard."""
+    yield
+    from taskmaster.native import query_worker  # noqa: PLC0415
+
+    query_worker.POOL.close()
+
+
+@pytest.fixture(autouse=True)
 def _store_isolation():
     """Never let one test's SQLite store, cache, or root resolution leak forward.
 
@@ -265,6 +304,24 @@ def _native_coordinator_isolation(monkeypatch):
         yield
     finally:
         close_owned()
+
+
+def check_no_leaked_leases():
+    """Fail on a serve host lease a test left held, and release it (team-server-009).
+
+    A leaked lease would exempt every later test in this process from the split-brain fence.
+    """
+    fence = sys.modules.get("taskmaster.server_fence")
+    if fence is None:
+        return
+    leaked = fence.reset_for_tests()
+    assert not leaked, f"leaked serve host leases: {[str(lease.root) for lease in leaked]}"
+
+
+@pytest.fixture(autouse=True)
+def _host_lease_guard():
+    yield
+    check_no_leaked_leases()
 
 
 @pytest.fixture()
@@ -372,6 +429,7 @@ _GUARDED_DIRS = (
     "areas",
     "trackers",
     "integrations",
+    "users",
 )
 # A projection file is at most this many directory levels below its kind
 # directory: `bugs/B-1.md` (1), `notes/_archive/N-1.md` and

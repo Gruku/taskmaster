@@ -100,3 +100,14 @@ scenarios:
     request: "The idea about warming up the secondary provider connection relates to the provider timeout issue. Link the two."
   - id: s47-stale-claim
     request: "The re-tagging task for asset pack 03 shows as locked by someone. Is that session still alive? If it's gone, free the task up."
+  # -- third batch: server mode (a member's agent on a team server; run with TM_EVAL_SERVER_URL and TM_EVAL_KEY_ENV, 015 Step 14) --
+  - id: s48-local-doc-edit
+    request: "I edited the spec for the Build the thing task on my machine. Get the backlog to pick up my changes."
+  - id: s49-take-over-from-bob
+    request: "Bob is working on the Document the thing task. I need to take it over from him."
+  - id: s50-store-health
+    request: "Can you check that the backlog store is healthy?"
+  - id: s51-pick-up-where-left-off
+    request: "Pick up where I left off yesterday."
+  - id: s52-close-someone-elses
+    request: "Close the Document the thing task, it's finished."

@@ -1,0 +1,1300 @@
+{
+ "gate-fail": {
+  "legacy": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: the review-gate verdict is 'fail', not pass.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "fail"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  },
+  "native": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: the review-gate verdict is 'fail', not pass.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "fail"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  }
+ },
+ "gate-pass": {
+  "legacy": {
+   "decide": {
+    "feature/late": "ALLOW",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "pass"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  },
+  "native": {
+   "decide": {
+    "feature/late": "ALLOW",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "pass"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  }
+ },
+ "initial": {
+  "legacy": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: no review-gate has been recorded for this branch.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 0
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  },
+  "native": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: no review-gate has been recorded for this branch.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 0
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  }
+ },
+ "neighbours": {
+  "legacy": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: no review-gate has been recorded for this branch.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  },
+  "native": {
+   "decide": {
+    "feature/late": "BLOCK:test-epic-003: no review-gate has been recorded for this branch.",
+    "feature/seeded": "BLOCK:test-epic-002: no review-gate has been recorded for this branch.",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": true,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": true,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "qa"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "branch:master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "qa"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "branch:master"
+     ],
+     "qa-line": [
+      null,
+      "qa"
+     ]
+    }
+   }
+  }
+ },
+ "policy-off": {
+  "legacy": {
+   "decide": {
+    "feature/late": "ALLOW",
+    "feature/seeded": "ALLOW",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": false,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "pass"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": false,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": false,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "branch:qa-line"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "branch:qa-line"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "master"
+     ],
+     "qa-line": [
+      null,
+      "branch:qa-line"
+     ]
+    }
+   }
+  },
+  "native": {
+   "decide": {
+    "feature/late": "ALLOW",
+    "feature/seeded": "ALLOW",
+    "feature/untracked": "ALLOW"
+   },
+   "gate": {
+    "feature/late": {
+     "policy_required": false,
+     "task": {
+      "id": "test-epic-003",
+      "merge_gate_freshness": "strict",
+      "review_gate": {
+       "commit_sha": "",
+       "verdict": "pass"
+      },
+      "skip_merge_gate": false
+     }
+    },
+    "feature/seeded": {
+     "policy_required": false,
+     "task": {
+      "id": "test-epic-002",
+      "merge_gate_freshness": "strict",
+      "review_gate": null,
+      "skip_merge_gate": false
+     }
+    },
+    "feature/untracked": {
+     "policy_required": false,
+     "task": null
+    }
+   },
+   "paths": {
+    "api/model.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "ISS-001",
+       "kind": "issue",
+       "status": "open"
+      },
+      {
+       "id": "test-epic-001",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/other.py": {
+     "closed": 0,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      },
+      {
+       "id": "test-epic-004",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 2
+    },
+    "api/third.py": {
+     "closed": 1,
+     "listed": [
+      {
+       "id": "test-epic-003",
+       "kind": "task",
+       "status": "todo"
+      }
+     ],
+     "prose": 0,
+     "related": 3
+    },
+    "docs/a.md": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    },
+    "web/none.py": {
+     "closed": 0,
+     "listed": [],
+     "prose": 0,
+     "related": 0
+    }
+   },
+   "target": {
+    "feature/late": {
+     "master": [
+      "test-epic-003",
+      "master"
+     ],
+     "qa-line": [
+      "test-epic-003",
+      "branch:qa-line"
+     ]
+    },
+    "feature/seeded": {
+     "master": [
+      "test-epic-002",
+      "master"
+     ],
+     "qa-line": [
+      "test-epic-002",
+      "branch:qa-line"
+     ]
+    },
+    "feature/untracked": {
+     "master": [
+      null,
+      "master"
+     ],
+     "qa-line": [
+      null,
+      "branch:qa-line"
+     ]
+    }
+   }
+  }
+ }
+}

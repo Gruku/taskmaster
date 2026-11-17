@@ -260,17 +260,27 @@ def _discover_git(start: Path):
     return None
 
 
-def _git_common_root(start: Path) -> Path | None:
+def git_common_root_checked(start: Path) -> tuple[Path | None, bool]:
+    """`(root, definitive)`: the git common dir's parent for `start`, or None outside a repository.
+
+    `definitive` is False only when git had to be asked and gave no answer (an unusable
+    repository, git's "dubious ownership" refusal without safe.directory, git missing). A
+    caller that caches must not cache that None (the split-brain fence, team-server-009).
+    """
     found = _discover_git(start)
     if found is _ASK_GIT:
         common = _git_rev_parse(start, "--git-common-dir")
         if common is None:
-            return None
+            return None, False
         common_path = Path(common)
         if not common_path.is_absolute():
             common_path = start / common_path
-        return _absolute(common_path).parent
-    return None if found is None else found[1].parent
+        return _absolute(common_path).parent, True
+    return (None if found is None else found[1].parent), True
+
+
+def _git_common_root(start: Path) -> Path | None:
+    return git_common_root_checked(start)[0]
 
 
 def _git_checkout_root(start: Path) -> Path | None:

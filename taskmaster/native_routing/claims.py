@@ -34,6 +34,18 @@ def _held_by(connection, session):
         "ORDER BY c.public_id", (session,))]
 
 
+def _adoptable(connection, session):
+    """Tasks the person's other, disconnected sessions hold: this session may take them over (D8)."""
+    handle = claims.remote_handle(session)
+    if handle is None:
+        return []
+    rows = connection.execute(
+        "SELECT c.public_id, json_extract(t.locked_by_json,'$') FROM task_operational t "
+        "JOIN entity_core c ON c.entity_key=t.entity_key WHERE c.kind='task' AND c.deleted=0 "
+        "AND json_extract(t.locked_by_json,'$') LIKE ? ORDER BY c.public_id", (f"{handle}@%",))
+    return [ident for ident, holder in rows if claims.adoptable(holder, session)]
+
+
 def _state(snapshot, ident, session):
     return claims.read(reads.get(snapshot, "task", ident)["fields"], task_id=ident,
                        session=session, connection=snapshot.connection)
@@ -43,7 +55,7 @@ def _state(snapshot, ident, session):
 # contract inventory has no per-action targets to route against.
 @adapter("backlog_claim")
 def backlog_claim(call, *, action, task_id, ttl_seconds):
-    session = bs.SESSION_ID
+    session = call.session
 
     def answer(payload):
         return call.finish(json.dumps(payload))
@@ -59,9 +71,13 @@ def backlog_claim(call, *, action, task_id, ttl_seconds):
         return answer(claims.refusal("task_required", f"`{action}` needs a task_id"))
     with call.read() as snapshot:
         if not task_id:
-            return answer({"ok": True, "session": session,
-                           "claims": [_state(snapshot, ident, session).as_dict()
-                                      for ident in _held_by(snapshot.connection, session)]})
+            payload = {"ok": True, "session": session,
+                       "claims": [_state(snapshot, ident, session).as_dict()
+                                  for ident in _held_by(snapshot.connection, session)]}
+            adoptable = _adoptable(snapshot.connection, session)
+            if claims.remote_handle(session) is not None:
+                payload["adoptable"] = [_state(snapshot, ident, session).as_dict() for ident in adoptable]
+            return answer(payload)
         found = reads.find_task(snapshot, task_id)
         if not found:
             return answer(claims.refusal("not_found", f"task `{task_id}` not found"))
@@ -76,7 +92,7 @@ def backlog_claim(call, *, action, task_id, ttl_seconds):
     # command still re-checks it: only its transaction can make the check atomic.
     blocker = claims.blocked_by(states, release=action == "release")
     if blocker is not None:
-        return answer(claims.conflict(blocker))
+        return answer(claims.conflict(blocker, bs._session_requester()))
     if not any(s.holder for s in states):
         if action == "renew":
             return answer(claims.refusal(
@@ -92,5 +108,7 @@ def backlog_claim(call, *, action, task_id, ttl_seconds):
         return answer(claims.refusal("claim_refused", error_text(exc)))
     with call.read() as snapshot:
         after = _state(snapshot, task_id, session)
-    return answer(claims.ok(after, renewed_from=state.expires_at if action == "renew" else "",
-                            members=members))
+    result = claims.ok(after, renewed_from=state.expires_at if action == "renew" else "", members=members)
+    if action == "renew" and state.holder and state.holder != after.holder:
+        result["adopted_from"] = state.holder     # D8: the person's earlier session's claim moved here
+    return answer(result)

@@ -2,6 +2,7 @@
 import hashlib
 
 import pytest
+import yaml
 
 from taskmaster import backlog_server as bs, store
 from taskmaster.coordinator.sync_prepare import prepare
@@ -19,11 +20,11 @@ def twins(tmp_path, monkeypatch):
 REL = "tasks/test-epic-001.md"
 
 
-def setup_base(connection, root):
-    content = (root / ".taskmaster" / REL).read_bytes()
+def setup_base(connection, root, rel=REL):
+    content = (root / ".taskmaster" / rel).read_bytes()
     connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?) ON CONFLICT(file) DO UPDATE SET content=excluded.content",
-                       (REL, content))
-    connection.execute("UPDATE projection SET content_hash=? WHERE file=?", (hashlib.sha1(content).hexdigest(), REL))
+                       (rel, content))
+    connection.execute("UPDATE projection SET content_hash=? WHERE file=?", (hashlib.sha1(content).hexdigest(), rel))
     connection.commit()
     return content
 
@@ -33,9 +34,9 @@ def edited_file(root, original, old="Original", new="External"):
     (root / ".taskmaster" / REL).write_bytes(content.encode("utf-8"))
 
 
-def candidate(connection, root, **kwargs):
+def candidate(connection, root, rel=REL, **kwargs):
     with Repository(connection).snapshot() as snapshot:
-        return prepare(snapshot, root / ".taskmaster", REL, **kwargs)
+        return prepare(snapshot, root / ".taskmaster", rel, **kwargs)
 
 
 def test_verified_base_merges_disjoint_database_and_file_edits(twins, monkeypatch):
@@ -96,3 +97,88 @@ def test_missing_file_is_repair_not_a_delete(twins):
         assert plan.state == "repair" and plan.observation is None
         with pytest.raises(ValueError, match="missing file"):
             candidate(connection, twins.native, take_file=True)
+
+
+# -- project.yaml hand edits: the team block (team-sync-001) ------------------
+
+PROJECT_REL = "project.yaml"
+TEAM_MANIFEST = {"schema_version": 1, "meta": {"name": "Demo", "slug": "demo", "kind": "app"},
+                 "team": {"protocol": 1, "sync": {"mode": "off"}}}
+
+
+@pytest.fixture
+def project_twins(tmp_path, monkeypatch):
+    return make_twins(tmp_path, monkeypatch,
+                      lambda: bs.backlog_project_set(yaml.safe_dump(TEAM_MANIFEST)),
+                      engine_oracle=True)
+
+
+def hand_edit_project(root, **team):
+    path = root / ".taskmaster" / PROJECT_REL
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["team"] = {**doc["team"], **team}
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
+def test_hand_edited_team_protocol_is_quarantined(project_twins):
+    root = project_twins.native
+    with native_connection(root) as connection:
+        setup_base(connection, root, PROJECT_REL)
+        hand_edit_project(root, protocol=2)
+        plan = candidate(connection, root, PROJECT_REL)
+        assert plan.state == "quarantine" and "init-team upgrade" in plan.reason
+        with pytest.raises(ValueError, match=r"^project\.yaml cannot be taken:"):
+            candidate(connection, root, PROJECT_REL, take_file=True)
+        commit_only(connection, "sync.apply", plan.arguments)
+        with Repository(connection).snapshot() as snapshot:
+            assert snapshot.get("project", "__project__")["fields"]["team"]["protocol"] == 1
+
+
+def test_hand_edited_invalid_team_value_is_quarantined(project_twins):
+    root = project_twins.native
+    with native_connection(root) as connection:
+        setup_base(connection, root, PROJECT_REL)
+        hand_edit_project(root, sync={"mode": "sometimes"})
+        plan = candidate(connection, root, PROJECT_REL)
+        assert plan.state == "quarantine" and "team.sync.mode" in plan.reason
+
+
+def test_hand_edited_team_mode_imports(project_twins):
+    root = project_twins.native
+    with native_connection(root) as connection:
+        setup_base(connection, root, PROJECT_REL)
+        hand_edit_project(root, sync={"mode": "manual"}, future=1)
+        plan = candidate(connection, root, PROJECT_REL)
+        assert plan.state == "apply", plan.reason
+        team = plan.arguments["rows"][0]["fields"]["team"]
+        assert team["sync"]["mode"] == "manual" and team["future"] == 1
+
+
+def test_unquoted_off_hand_edit_imports(project_twins):
+    from taskmaster.project import team_config_from_document
+
+    root = project_twins.native
+    path = root / ".taskmaster" / PROJECT_REL
+    with native_connection(root) as connection:
+        setup_base(connection, root, PROJECT_REL)
+        text = path.read_text(encoding="utf-8")
+        assert "mode: off" in text or "mode: 'off'" in text
+        path.write_text(text.replace("mode: 'off'", "mode: off"), encoding="utf-8")
+        assert "mode: 'off'" not in path.read_text(encoding="utf-8")
+        plan = candidate(connection, root, PROJECT_REL)
+        assert plan.state == "apply", plan.reason
+        fields = plan.arguments["rows"][0]["fields"]
+        assert fields["team"]["sync"]["mode"] is False
+        assert team_config_from_document(fields).sync.mode == "off"
+
+
+def test_stored_row_id_does_not_disturb_the_import_guard(project_twins):
+    root = project_twins.native
+    with native_connection(root) as connection:
+        setup_base(connection, root, PROJECT_REL)
+        with Repository(connection).snapshot() as snapshot:
+            assert snapshot.get("project", "__project__", include_body=True)["fields"]["id"] == "__project__"
+        hand_edit_project(root, sync={"mode": "auto"})
+        assert candidate(connection, root, PROJECT_REL).state == "apply"
+        hand_edit_project(root, protocol=2)
+        assert candidate(connection, root, PROJECT_REL).state == "quarantine"

@@ -1,8 +1,8 @@
 // User intent: what the handovers pane lists and where its keys land (spec §9) — which handovers a phase holds through their
-// linked tasks, the `◐ closed` toggle, j / k across pages, where a handover opened from the band or Session tab sits, and
-// the one toast a close leaves — as plain functions, tested without drawing.
+// linked tasks, the `◐ closed` toggle, j / k down the scrolling list, where a handover opened from the band or Session tab sits,
+// and the one toast a close leaves — as plain functions, tested without drawing.
 import type { TmHandover, TmHandoverList, TmHandoverMarks, TmLinkedTask, TmPhase, TmSnapshot } from '../types'
-import { ageLabel, handoverPage, LIST_PAGE_SIZE as PAGE_SIZE } from './model'
+import { ageLabel, handoverFocus } from './model'
 import { ALL, NO_TASK } from './phases'
 
 export const FRESH_MARKS: TmHandoverMarks = { selected: [], ask: null, showClosed: false }
@@ -46,18 +46,18 @@ export function tallyLine(shown: readonly TmHandover[], now: number): string {
   return [`${shown.length - closed} open`, ...(closed > 0 ? [`${closed} closed`] : []), ...(age === '' ? [] : [`newest ${age} ago`])].join(' · ')
 }
 
-/** j (+1) / k (-1): the next or previous handover from the picked one, across pages; null at either end. */
-export function moveTarget(shown: readonly TmHandover[], page: number, pick: string, dir: -1 | 1): { readonly page: number; readonly id: string } | null {
-  const picked = handoverPage(shown, page, pick).picked
-  const at = picked === undefined ? -1 : shown.indexOf(picked)
-  const to = shown[at + dir]
-  if (at < 0 || to === undefined) return null
-  return { page: Math.floor((at + dir) / PAGE_SIZE), id: to.id }
+/** j (+1) / k (-1): the next or previous handover from the picked one, with its place in the list; null at either end. */
+export function moveTarget(shown: readonly TmHandover[], first: number, pick: string, dir: -1 | 1): { readonly index: number; readonly id: string } | null {
+  const { index, picked } = handoverFocus(shown, first, pick)
+  const to = shown[index + dir]
+  if (picked === undefined || to === undefined) return null
+  return { index: index + dir, id: to.id }
 }
 
 /**
  * Where a handover opened from the band or the Session tab shows: the chosen phase when it already holds it, else the first
- * of its phases the strip knows (no task included), else All; and its page there. Null when the list does not hold it.
+ * of its phases the strip knows (no task included), else All; and its place in the list there (the window starts on it).
+ * Null when the list does not hold it.
  */
 export function arrival(
   listed: readonly TmHandover[],
@@ -65,14 +65,14 @@ export function arrival(
   tasks: Tasks,
   phases: readonly TmPhase[],
   choice: string,
-): { readonly choice: string; readonly page: number } | null {
+): { readonly choice: string; readonly index: number } | null {
   const h = listed.find(x => x.id === id)
   if (h === undefined) return null
   const own = phasesOf(h, tasks)
   const known = own.filter(p => phases.some(x => x.id === p))
   const chosen = choice === ALL || own.includes(choice) ? choice : (known[0] ?? ALL)
   const at = phaseHandovers(listed, chosen, tasks).findIndex(x => x.id === id)
-  return { choice: chosen, page: Math.max(0, Math.floor(at / PAGE_SIZE)) }
+  return { choice: chosen, index: Math.max(0, at) }
 }
 
 /** Selected ids still open in what is shown: what `Close N` counts and closes. */

@@ -1,0 +1,5 @@
+# User intent: shell scripts and the Linux deploy files keep LF endings even in a Windows checkout
+# (core.autocrlf=true here), so bash in WSL and systemd/Caddy on the host can read them as checked out.
+*.sh text eol=lf
+deploy/** text eol=lf
+.github/workflows/*.yml text eol=lf

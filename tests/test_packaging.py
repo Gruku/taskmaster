@@ -85,6 +85,14 @@ def test_fastmcp_is_held_below_the_next_major():
     assert re.search(r"<\s*4(\b|\.)", spec), spec
 
 
+def test_h11_is_pinned():
+    """team-server-006: h11 is serve's only HTTP parser; 0.16.0 fixes CVE-2025-43859 (chunked-trailer smuggling)."""
+    from packaging.specifiers import SpecifierSet
+    spec = next(r for r in _pyproject()["project"]["dependencies"] if _name(r) == "h11")
+    specifier = SpecifierSet(spec[len("h11"):])
+    assert "0.16.0" in specifier and "0.15.0" not in specifier
+
+
 def test_dev_extra_can_collect_and_run_the_suite():
     """B-091: `uv pip install -e ".[dev]"` must produce a venv that runs the suite."""
     dev = {_name(r) for r in _pyproject()["project"]["optional-dependencies"]["dev"]}
@@ -190,6 +198,7 @@ def _cli(*args, code=None):
     ("git", "checkout"),
     ("git-hook", "pre-commit"),
     ("coordinator", "stop"),
+    ("serve", "--insecure-bind"),
 ])
 def test_cli_dispatches_to_each_module(command, module_usage):
     result = _cli(command, "--help")
@@ -201,6 +210,7 @@ def test_cli_rejects_an_unknown_command():
     result = _cli("nope")
     assert result.returncode == 2
     assert "cutover" in result.stderr and "git-hook" in result.stderr and "coordinator" in result.stderr
+    assert "serve" in result.stderr
 
 
 def test_cli_never_imports_the_server():
@@ -215,6 +225,30 @@ def test_cli_never_imports_the_server():
             "print('SERVER' if 'taskmaster.backlog_server' in sys.modules else 'CLEAN')\n")
     result = _cli(code=code)
     assert result.stdout.strip().splitlines()[-1] == "CLEAN", result.stdout + result.stderr
+
+
+def test_serve_help_never_imports_the_server():
+    """`serve --help` must stay import-free, like every other CLI help."""
+    shim = (ROOT / "taskmaster_cli.py").as_posix()
+    code = ("import runpy, sys\n"
+            f"sys.argv = [{shim!r}, 'serve', '--help']\n"
+            "try:\n"
+            f"    runpy.run_path({shim!r}, run_name='__main__')\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('SERVER' if 'taskmaster.backlog_server' in sys.modules else 'CLEAN')\n")
+    result = _cli(code=code)
+    assert result.stdout.strip().splitlines()[-1] == "CLEAN", result.stdout + result.stderr
+
+
+def test_serve_daemon_import_never_imports_the_server():
+    """Design D2: the server module is loaded by `load_server_module`, never by importing the daemon."""
+    code = ("import sys\n"
+            f"sys.path.insert(0, {ROOT.as_posix()!r})\n"
+            "import taskmaster.serve.daemon, taskmaster.serve.cli\n"
+            "print('taskmaster.backlog_server' in sys.modules)\n")
+    result = _cli(code=code)
+    assert result.stdout.strip().splitlines()[-1] == "False", result.stdout + result.stderr
 
 
 def test_cli_launch_is_not_mistaken_for_a_store_client():
@@ -422,3 +456,45 @@ def test_check_accepts_uv_s_normalized_pre_release_in_the_lock(tmp_path):
     for spelled, ok in (('"9.9.0-rc.1"', True), ('"9.9.0rc2"', False)):
         (tmp_path / "uv.lock").write_bytes(lock.replace('"9.9.0rc1"', spelled).encode("utf-8"))
         assert (bump.check(tmp_path) == []) is ok, spelled
+
+
+def test_serve_console_entry_points_at_the_serve_cli():
+    """team-server-016 D4: `taskmaster-serve` is the host's front door; its target must be a callable main."""
+    scripts = _pyproject()["project"]["scripts"]
+    assert scripts == {"taskmaster-serve": "taskmaster.serve.cli:main"}
+    module, _, attr = scripts["taskmaster-serve"].partition(":")
+    code = ("import importlib, sys\n"
+            f"sys.path.insert(0, {ROOT.as_posix()!r})\n"
+            f"main = getattr(importlib.import_module({module!r}), {attr!r})\n"
+            "print(callable(main))\n")
+    result = _cli(code=code)
+    assert result.stdout.strip().splitlines()[-1] == "True", result.stdout + result.stderr
+
+
+def test_serve_console_entry_help_never_imports_the_server():
+    """What the console wrapper runs - `sys.exit(main())` with argv ['--help'] - stays import-free and exits 0."""
+    code = ("import sys\n"
+            f"sys.path.insert(0, {ROOT.as_posix()!r})\n"
+            "from taskmaster.serve.cli import main\n"
+            "sys.argv = ['taskmaster-serve', '--help']\n"
+            "try:\n"
+            "    code = main()\n"
+            "except SystemExit as exc:\n"
+            "    code = exc.code\n"
+            "print('SERVER' if 'taskmaster.backlog_server' in sys.modules else 'CLEAN', code)\n")
+    result = _cli(code=code)
+    assert result.stdout.strip().splitlines()[-1] == "CLEAN 0", result.stdout + result.stderr
+
+
+def test_serve_user_commands_never_import_the_server():
+    """`serve add-user --help` stays import-free, like `serve --help`."""
+    shim = (ROOT / "taskmaster_cli.py").as_posix()
+    code = ("import runpy, sys\n"
+            f"sys.argv = [{shim!r}, 'serve', 'add-user', '--help']\n"
+            "try:\n"
+            f"    runpy.run_path({shim!r}, run_name='__main__')\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('SERVER' if 'taskmaster.backlog_server' in sys.modules else 'CLEAN')\n")
+    result = _cli(code=code)
+    assert result.stdout.strip().splitlines()[-1] == "CLEAN", result.stdout + result.stderr

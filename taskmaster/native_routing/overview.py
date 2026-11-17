@@ -17,6 +17,8 @@ from taskmaster import backlog_server as bs
 from taskmaster import query_guard
 from taskmaster import store
 from taskmaster import taskmaster_v3 as v3
+from taskmaster.coordinator import allowlist
+from taskmaster.coordinator import client as coordinator_client
 from taskmaster.native import compatibility
 from taskmaster.native import projection as outbox
 
@@ -230,11 +232,21 @@ def _project_path():
     return project_yaml_path(bs._project_root_or_cwd())
 
 
+def _manifest_refusal():
+    """On a team server only the operator writes the project manifest (user ruling on the security review's m-9);
+    the coordinator's allowlist refuses project.set in any envelope as the backstop."""
+    refused = coordinator_client.served_action_refusal(allowlist.OPERATOR_OPERATIONS["project.set"])
+    return None if refused is None else f"Error: {refused}"
+
+
 @adapter("backlog_project_set")
 def project_set(call, *, yaml_content):
     from taskmaster import yaml_io
     from taskmaster.project import validate_manifest_dict
     import yaml
+    refused = _manifest_refusal()
+    if refused:
+        return refused
     try:
         data = yaml_io.safe_load(yaml_content) or {}
     except yaml.YAMLError as exc:
@@ -251,6 +263,9 @@ def project_set(call, *, yaml_content):
 @adapter("backlog_project_init")
 def project_init(call, *, name, slug):
     from taskmaster.project import SCHEMA_VERSION, validate_manifest_dict
+    refused = _manifest_refusal()
+    if refused:
+        return refused
     if not name or not name.strip():
         raise ValueError("name: required (project name must be non-empty)")
     path = _project_path()
@@ -278,10 +293,29 @@ def project_init(call, *, name, slug):
 # ── Linear (local actions only) ─────────────────────────────────────────────
 
 
+def served_linear_guard(action, token_env):
+    """`(token_env, refusal)` for a `backlog_linear` action. On a team server, probe and bootstrap_apply
+    read or name the daemon's Linear secret: operator only, and only from TASKMASTER_LINEAR_TOKEN
+    (team-server-005 D6, D7), decided before any environment read; link and unlink are operator only too. Shared with the legacy body
+    (`backlog_server.backlog_linear`) so a routing fallback cannot run them ungated. Elsewhere unchanged."""
+    if action in ("link", "unlink") and coordinator_client.serving():
+        # A link chooses which issue the operator's token overwrites (user ruling on the security review's m-7).
+        return token_env, coordinator_client.served_action_refusal(allowlist.OPERATOR_OPERATIONS[f"linear.{action}"])
+    if action not in ("probe", "bootstrap_apply") or not coordinator_client.serving():
+        return token_env, None
+    refused = coordinator_client.served_action_refusal(f"backlog_linear {action}")
+    if refused is not None:
+        return token_env, refused
+    return allowlist.server_token_env(token_env)
+
+
 @adapter("backlog_linear", actions=("probe", "bootstrap_apply", "link", "unlink", "list", "show", "status", "retry"),
          unknown=lambda action: json.dumps({"error": f"unknown action {action!r}"}))
 def linear(call, *, action, task_id, external_key, workspace_alias, token_env, team_id, status_mapping,
            priority_mapping, default_workspace, tracker_id, target_id, request_id, caller_scope):
+    token_env, refused = served_linear_guard(action, token_env)
+    if refused is not None:
+        return json.dumps({"error": refused})
     if action == "probe":
         # An external query against Linear's API; it reads no store and no projection.
         return bs.backlog_linear_probe(token_env)

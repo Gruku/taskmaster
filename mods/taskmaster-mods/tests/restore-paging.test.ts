@@ -12,6 +12,9 @@ import {
   detailOf,
   formatTokens,
   isTicked,
+  listHeader,
+  listOf,
+  recentIds,
   pageHeader,
   pageRows,
   pagesOf,
@@ -61,11 +64,11 @@ describe('bursts', () => {
 })
 
 describe('pages', () => {
-  test('page 1 is the closing burst plus what closed after; older sessions page newest first, three a page', () => {
+  test('page 1 is the closing burst plus what closed after; older sessions chunk newest first when a size is given, else one page', () => {
     // Twenty minutes apart: each older session is a burst of its own.
     const older = [5, 4, 3, 2, 1, 0, -1].map(n => row(`o${n}`, n % 2 ? 'done' : 'wip', -10_000 + n * 1200))
     const rows = [...ROWS, ...older]
-    const pages = pagesOf(rows, burstsOf(rows), '')
+    const pages = pagesOf(rows, burstsOf(rows), '', 3)
     expect(pages.map(p => p.isBurst)).toEqual([true, false, false, false])
     expect(pages[0]).toMatchObject({ burstSize: 3, since: 1, from: 980, to: 2000 })
     expect(pageRows(rows, pages[0]).map(r => r.s.id)).toEqual(['b', 'solo', 'c', 'a'])
@@ -74,6 +77,40 @@ describe('pages', () => {
     expect(pageRows(rows, pages[3]).map(r => r.s.id)).toEqual(['o-1'])
     expect(pagesOf([], [], '')).toEqual([])
     expect(pageRows(rows, undefined)).toEqual([])
+  })
+
+  test('without a size the older sessions are one page; the pane lists the burst page then that one', () => {
+    const older = [5, 4, 3, 2, 1, 0, -1].map(n => row(`o${n}`, n % 2 ? 'done' : 'wip', -10_000 + n * 1200))
+    const rows = [...ROWS, ...older]
+    const pages = pagesOf(rows, burstsOf(rows), '')
+    expect(pages.map(p => p.isBurst)).toEqual([true, false])
+    expect(pageRows(rows, pages[1]).map(r => r.s.id)).toEqual(['o5', 'o4', 'o3', 'o2', 'o1', 'o0', 'o-1'])
+  })
+
+  test('the list: the closing burst then the older ones, grouped by section with that order kept inside each', () => {
+    const older = [5, 4, 3, 2, 1, 0, -1].map(n => row(`o${n}`, n % 2 ? 'done' : 'wip', -10_000 + n * 1200))
+    const rows = [...ROWS, ...older]
+    const list = listOf(rows, burstsOf(rows), '')
+    expect(list.map(r => r.s.id)).toEqual(['b', 'solo', 'c', 'o4', 'o2', 'o0', 'a', 'o5', 'o3', 'o1', 'o-1'])
+  })
+
+  test('the list sentence: the burst header with the count listed when more follow; an older-only list says its span', () => {
+    const older = [5, 4].map(n => row(`o${n}`, 'wip', -10_000 + n * 1200))
+    const rows = [...ROWS, ...older]
+    expect(listHeader(rows, burstsOf(rows), '', 2100)).toMatch(/^3 closed together · .* · 1 closed since · 6 listed$/)
+    expect(listHeader(ROWS, burstsOf(ROWS), '', 2100)).toMatch(/^3 closed together · /)
+    expect(listHeader(ROWS, burstsOf(ROWS), '', 2100)).not.toMatch(/listed/)
+    expect(listHeader([], [], '', 0)).toBe('')
+  })
+
+  test('only the closing burst and what closed after it default to ticked; an old unfinished one is ticked by hand', () => {
+    const older = [row('old', 'wip', -50_000)]
+    const rows = [...ROWS, ...older]
+    const recent = recentIds(rows)
+    expect([...recent].sort()).toEqual(['a', 'b', 'c', 'solo'])
+    expect(isTicked(rows.find(r => r.s.id === 'old')!, {}, {}, recent.has('old'))).toBe(false)
+    expect(isTicked(rows.find(r => r.s.id === 'old')!, { old: true }, {}, recent.has('old'))).toBe(true)
+    expect(isTicked(rows.find(r => r.s.id === 'solo')!, {}, {}, recent.has('solo'))).toBe(true)
   })
 
   test('within the burst page: interrupted, wip, ?, handed off, done, then newest', () => {

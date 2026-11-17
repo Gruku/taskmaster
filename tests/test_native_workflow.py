@@ -624,6 +624,8 @@ def test_project_initialization_refuses_to_overwrite_an_existing_manifest(worksp
     {"schema_version": 1, "meta": {"name": "Demo"}},                  # no slug
     {"schema_version": 1, "meta": {"name": "Demo", "slug": "demo"},
      "repos": [{"name": "a"}]},                                       # repo without a path
+    {"schema_version": 1, "meta": {"name": "Demo", "slug": "demo"},
+     "team": {"sync": {"mode": "sometimes"}}},                        # invalid team block
 ])
 def test_project_settings_refuse_a_manifest_the_loader_cannot_parse(workspace, document):
     """A committed manifest becomes project.yaml; one the loader cannot read
@@ -637,6 +639,56 @@ def test_project_settings_refuse_a_manifest_the_loader_cannot_parse(workspace, d
         assert statements == []   # refused at admission, before any database work
         with pytest.raises(KeyError):
             fields(connection, "project", "__project__")
+
+
+FULL_TEAM = {"protocol": 1, "sync": {"mode": "manual", "remote": "upstream", "state_branch": "team/state",
+                                     "debounce_s": 10, "claim_wait_s": 2, "linger_s": 60},
+             "plan": {"fade_days": 14}, "linear_clone": "clone-abc", "ref_roots": ["docs/a"]}
+
+
+def test_project_settings_store_the_team_block_as_one_document(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "project.set", {"document": {**MANIFEST, "team": FULL_TEAM}}, "team")
+        assert fields(connection, "project", "__project__")["team"] == FULL_TEAM
+        rows = connection.execute("SELECT field FROM configuration WHERE field='team'").fetchall()
+        assert len(rows) == 1
+
+
+def test_project_settings_refuse_a_team_protocol_change_without_upgrade(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "project.set", {"document": {**MANIFEST, "team": {"protocol": 1}}}, "create")
+        with pytest.raises(ValueError, match="init-team upgrade"):
+            run(connection, "project.set", {"document": {**MANIFEST, "team": {"protocol": 2}}}, "bump")
+        assert fields(connection, "project", "__project__")["team"]["protocol"] == 1
+
+
+def test_project_settings_upgrade_changes_only_the_protocol(workspace, monkeypatch):
+    from taskmaster.project import with_team_protocol
+    monkeypatch.setattr("taskmaster.project.SUPPORTED_TEAM_PROTOCOLS", (1, 2))
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        stored = {**MANIFEST, "team": {"protocol": 1}}
+        run(connection, "project.set", {"document": stored}, "create")
+        changed = with_team_protocol(stored, 2)
+        changed["meta"]["name"] = "Other"
+        with pytest.raises(ValueError, match="changes only team.protocol"):
+            run(connection, "project.set", {"document": changed, "team_protocol_upgrade": True}, "dirty")
+        assert fields(connection, "project", "__project__")["team"]["protocol"] == 1
+        assert fields(connection, "project", "__project__")["meta"]["name"] == "Demo"
+        run(connection, "project.set", {"document": with_team_protocol(stored, 2),
+                                        "team_protocol_upgrade": True}, "upgrade")
+        assert fields(connection, "project", "__project__")["team"]["protocol"] == 2
+
+
+def test_project_set_admission_checks_the_upgrade_flag(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        statements = []
+        connection.set_trace_callback(statements.append)
+        with pytest.raises(ValueError, match="team_protocol_upgrade must be boolean"):
+            run(connection, "project.set", {"document": MANIFEST, "team_protocol_upgrade": "yes"}, "flag")
+        with pytest.raises(ValueError, match="unknown project.set argument"):
+            run(connection, "project.set", {"document": MANIFEST, "bogus": 1}, "unknown")
+        connection.set_trace_callback(None)
+        assert statements == []
 
 
 def test_linking_linear_creates_a_tracker_and_task_edits_enqueue_exactly_one_push(workspace):

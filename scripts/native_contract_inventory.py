@@ -60,7 +60,7 @@ KIND_OWNERS = {
     "idea": {"memberships": "related_tasks related_issues tags promoted_to"},
     "note": {"note_operational": "author pinned"},
     "area": {}, "tracker": {"tracker_operational": "external_system external_key instance_alias sync_direction last_synced last_pushed synced_hash push_hash"},
-    "backlog": {}, "project": {},
+    "backlog": {}, "project": {}, "profile": {},
 }
 ALLOWLIST_KINDS = {"ALLOWED_FIELDS": "task", "ALLOWED_EPIC_FIELDS": "epic",
     "ALLOWED_PHASE_FIELDS": "phase", "ALLOWED_AREA_FIELDS": "area",

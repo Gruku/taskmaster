@@ -19,13 +19,13 @@ const SCAN = scanOf([
 const REFS = refsReply(['["t","t-1","in-review","full","p1"]  Sign off', '["t","t-2","in-progress","full","p1"]  Supersede', '["h","h-1","open"]'])
 
 describe('open and scan', () => {
-  test('/tm-restore opens at page 1, asks for the phases, scans the repo and names the burst', async () => {
+  test('/tm-restore opens at the top of the list, asks for the phases, scans the repo and names the burst', async () => {
     const f = fakeRestore({ scan: SCAN, tm: [REFS] })
-    f.view = { ...f.view, page: 2, focus: 'old' }
+    f.view = { ...f.view, first: 2, focus: 'old' }
     const flows = createRestoreFlows(f.deps)
     expect(await flows.open(4)).toBe('Restore opened: 3 sessions closed together, 2 unfinished.')
     expect([f.opened, f.phasesAsked]).toEqual([1, 1])
-    expect(f.view).toMatchObject({ page: 0, focus: '', busy: '' })
+    expect(f.view).toMatchObject({ first: 0, focus: '', busy: '' })
     expect(f.runs[0]).toEqual(['python', '-I', 'C:\\mod\\scanner\\scan.py', 'scan', '--config-dir', 'C:\\Users\\me\\.claude', '--root', ROOT, '--days', '4', '--cache', 'C:\\tmp\\tm-restore-scan-cache.json'])
     expect(f.data).toMatchObject({ scan: SCAN, error: '', days: 4 })
     expect(paneRows(f.data, 'me').map(r => [r.s.id, r.status])).toEqual([
@@ -66,14 +66,14 @@ describe('open and scan', () => {
     expect(f.waits).toEqual([])
   })
 
-  test('u rescans the same window and keeps the page', async () => {
+  test('u rescans the same window and keeps the list where it was', async () => {
     const f = fakeRestore({ scan: SCAN, tm: [REFS] })
     const flows = createRestoreFlows(f.deps)
     await flows.open(7)
-    await flows.turnPage(1)
+    await flows.focus('old', 1)
     await flows.rescan()
     expect(f.runs.at(-1)).toContain('7')
-    expect(f.view.page).toBe(1)
+    expect(f.view).toMatchObject({ first: 1, focus: 'old' })
   })
 })
 
@@ -128,13 +128,17 @@ describe('the pane state', () => {
     expect(f.toasts).toEqual(['Session audit wrote no handover: it reopens with --resume'])
   })
 
-  test('z toggles compact; a page turn drops the focus; focus moves', async () => {
+  test('z toggles compact; focus sets the window start with the session; top starts the list over; the wheel moves the window and the focus only when told', async () => {
     const f = fakeRestore({ scan: SCAN, tm: [REFS] })
     const flows = createRestoreFlows(f.deps)
     await flows.toggleCompact()
-    await flows.focus('audit')
-    expect(f.view).toMatchObject({ compact: true, focus: 'audit' })
-    await flows.turnPage(1)
-    expect(f.view).toMatchObject({ page: 1, focus: '' })
+    await flows.focus('audit', 2)
+    expect(f.view).toMatchObject({ compact: true, focus: 'audit', first: 2 })
+    await flows.scroll(4, null)
+    expect(f.view).toMatchObject({ focus: 'audit', first: 4 })
+    await flows.scroll(5, 'old')
+    expect(f.view).toMatchObject({ focus: 'old', first: 5 })
+    await flows.top()
+    expect(f.view).toMatchObject({ first: 0, focus: '' })
   })
 })

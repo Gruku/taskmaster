@@ -3,8 +3,11 @@
 # sqlite3 authorizer on the connection — so a bypass of one is still stopped by the other.
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import re
 import sqlite3
+import sys
 import time
 
 # `LIMIT` caps rows, not work: a cross join or a runaway recursive CTE can burn minutes
@@ -43,6 +46,25 @@ SCHEMA_SUMMARY = (
 _FTS_SHADOW = tuple(f"entity_fts_{suffix}" for suffix in
                     ("data", "idx", "docsize", "config", "content"))
 READABLE_TABLES = frozenset(TABLES) | frozenset(_FTS_SHADOW) | {"sqlite_master"}
+
+# The host's own bookkeeping: `sessions` holds host paths, host names and PIDs, `linear_queue`
+# payloads and errors, `projection` the host's file bookkeeping. The team server's read endpoint
+# refuses them, because its answers are also cached on teammates' disks (team-server-007 D7, ruling I6).
+HOST_PRIVATE_TABLES = frozenset({"sessions", "linear_queue", "projection"})
+READ_ENDPOINT_TABLES = READABLE_TABLES - HOST_PRIVATE_TABLES
+# Set only around a read-endpoint tool call (`restricted`); MCP calls never set it, so they are unchanged.
+READABLE: "contextvars.ContextVar[frozenset[str] | None]" = contextvars.ContextVar("taskmaster_query_readable",
+                                                                                   default=None)
+
+
+@contextlib.contextmanager
+def restricted(tables):
+    """Narrow every Authorizer built in this context (threads it is copied into included) to `tables`."""
+    token = READABLE.set(frozenset(tables))
+    try:
+        yield
+    finally:
+        READABLE.reset(token)
 
 FORBIDDEN = re.compile(
     r"\b(ATTACH|DETACH|PRAGMA|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM|REINDEX)\b",
@@ -152,6 +174,20 @@ _ACTION_NAMES = {
 }
 
 
+# SQL functions a backlog question never needs that build large values or burn CPU from nothing: zeroblob/randomblob
+# make blobs of any size, hex/quote double one, printf/format pad to any width, char builds text from numbers. Denied
+# by name, so the statement is refused before it runs (security review I-1, round 2); the worker process's kill and
+# memory cap remain the bound for everything else.
+DENIED_FUNCTIONS = frozenset({"zeroblob", "randomblob", "hex", "unhex", "quote", "printf", "format", "char"})
+
+
+def serving() -> bool:
+    """Whether this process is a team server daemon. Read from the already-imported coordinator client, so the query
+    worker (which imports only this module) and solo sessions never import it."""
+    client = sys.modules.get("taskmaster.coordinator.client")
+    return bool(client is not None and getattr(client, "ORIGIN_PROVIDER", None) is not None)
+
+
 class Authorizer:
     """Callable sqlite3 authorizer: read the store tables, nothing else.
 
@@ -165,12 +201,25 @@ class Authorizer:
     # no schema at all. The fixed allowlist is the only rule inside them.
     _SCHEMAS = frozenset({"main", "temp"})
 
-    def __init__(self, declared: frozenset[str] = frozenset()) -> None:
-        self.readable = READABLE_TABLES
+    def __init__(self, declared: frozenset[str] = frozenset(), *, readable: "frozenset[str] | None" = None,
+                 deny_functions: "bool | None" = None) -> None:
+        # Narrower than READABLE_TABLES only: an override (argument or the READABLE context) never widens it.
+        override = readable if readable is not None else READABLE.get()
+        self.readable = READABLE_TABLES if override is None else READABLE_TABLES & frozenset(override)
         self.declared = frozenset(declared)
+        # Real tables a restricted caller is shut out of: a declared name equal to one must not reopen it, because
+        # SQLite reports a schema-less read for a CTE/window name and for nothing else (row counts leaked).
+        self.excluded = READABLE_TABLES - self.readable
         self.denial: str | None = None
+        # DENIED_FUNCTIONS guard a shared server's memory; a solo session keeps them (hex, printf, ...).
+        self.deny_functions = serving() if deny_functions is None else bool(deny_functions)
 
     def __call__(self, action: int, arg1, arg2, dbname, source) -> int:  # noqa: ARG002
+        if (action == sqlite3.SQLITE_FUNCTION and self.deny_functions and isinstance(arg2, str)
+                and arg2.lower() in DENIED_FUNCTIONS):
+            if self.denial is None:
+                self.denial = f"FUNCTION {arg2.lower()}"
+            return sqlite3.SQLITE_DENY
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
             # SQLITE_RECURSIVE is the step of a `WITH RECURSIVE` CTE, not a write.
             return sqlite3.SQLITE_OK
@@ -182,7 +231,7 @@ class Authorizer:
             # and the schema was ignored, so the explicit `main.` qualifier
             # named the real table while the allowance meant for the CTE let it
             # through. Declared names authorize nothing inside a real schema.
-            if dbname not in self._SCHEMAS and arg1 in self.declared:
+            if dbname not in self._SCHEMAS and arg1 in self.declared and arg1 not in self.excluded:
                 return sqlite3.SQLITE_OK
         # FTS5 issues `PRAGMA data_version` internally on every MATCH; it only reads a
         # counter. `validate` already rejects a user-written PRAGMA, so this can only

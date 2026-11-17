@@ -13,12 +13,13 @@ export const BAND: RenderInput<'AbovePrompt'> = {
   props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 11 }, view: {} },
 }
 
-export const pane = (requestId: string): RenderInput<'Pane'> => ({
+/** A pane whose body may show `bodyRows` rows (the engine's scroll.bodyRows): a short one makes a list scroll. */
+export const pane = (requestId: string, bodyRows = 44): RenderInput<'Pane'> => ({
   component: 'Pane',
   surface: 'terminal',
   requestId,
   viewport: { columns: 180, rows: 48, isFullscreen: true },
-  props: { title: requestId, isFocused: true, bodyColumns: 72, placement: 'dock', scroll: { offset: 0, bodyRows: 44 }, view: {} },
+  props: { title: requestId, isFocused: true, bodyColumns: 72, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} },
 })
 
 /** "N waiting on you" as the person reads it now the band has no counts: the review pane's summary line, drawn as JSON. */

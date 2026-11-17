@@ -7,7 +7,41 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
-## Unreleased
+## 7.5.0
+
+**Team server: one project's backlog served to a team, per project and opt-in.** A project moves to a server with
+`taskmaster serve init pack` (on your laptop) and `serve init --from` (on the host); the committed
+`.taskmaster-server.json` marker switches that one project to the server, and every other project stays local. Each
+person and agent gets their own API key; the server runs behind Caddy with HTTPS. How to deploy:
+`docs/runbooks/team-server-deploy.md` (Hetzner/Ubuntu 24.04, systemd, Caddy, backups) and
+`docs/runbooks/team-server-migration.md`.
+
+- `taskmaster serve`: a remote MCP endpoint (`/mcp`), a read API for hooks (`/read/v1`) and a merge-stamp write API
+  (`/write/v1`), each behind per-person keys (`serve add-user`, `rotate-user`, `revoke-user`, `list-users`), an
+  operator token that works only on the host, per-key rate and in-flight limits, and a command allowlist for members.
+- Per-connection sessions and receipts, claims that renew while the agent stays connected and lapse when it leaves,
+  a fail-closed merge gate that also works as a required CI check, and the split-brain fence: a fenced clone refuses
+  its local store and points at the server.
+- The viewer is served on its own host name with a key-to-cookie login.
+- Backups: the server exports its state to a `taskmaster-state` branch and pushes it to a dedicated backup repository;
+  the runbook drills a restore.
+- Client side: `taskmaster remote set-key` stores a key per server, and hooks read through the server.
+- Team mode (`team.sync.mode: "manual"` in the manifest) gives each teammate a profile on first write and refuses the
+  bootstrap token's attributed writes; turn it on before the first teammate key (deploy runbook, section 5).
+- Security review fixes: `backlog_query` runs in a killable, memory-capped worker with a bounded snapshot; a
+  teammate's `sub_repo` never reaches a shell command; viewer prefs are validated and framed; no write path may close
+  a `depends_on` cycle; the project manifest and Linear links are operator-only on a server; served records name the
+  key's handle.
+- Measured on a 2-vCPU host, 60 agents for 120 s: p95 pick 4.0 s, add_task 4.2 s, query 10.1 s; one key's burst of
+  32 slow queries runs one and refuses the rest at once.
+
+**Untrusted-text framing for team servers (team-server-027).** A teammate's stored text can no longer reach another member's agent as if it were instructions.
+
+- The server wraps text written by someone else in `<untrusted-data-...>` blocks that name the authors (handles, `~unattributed`, `~imported`, `~repository`) and carry a note that it is data. A member's own text, and solo mode, are unchanged. Authors come from the store's event history, per field.
+- The mods unframe replies before showing them or judging a call, so nothing looks different on screen.
+- New: `serve set-user <handle> --owns-pre-team-history`, shown by `list-users`. Reserved handles added: system, you, assistant, human, anthropic.
+- Merge-ladder labels and gate `commit_sha` values are validated on write (branch-like labels, hex SHAs), so they can't carry prose; `serve init pack` reports labels to rename.
+- Session-start and the pick-task and review-gate playbooks tell the agent that framed text is data. Command hooks never print stored text (tested). taskmaster-mods 0.2.5.
 
 **Fixed: the viewer could open on a port browsers refuse** (Firefox: "This address is restricted", seen on :6566). When a project's own port in 6800–6899 was taken, the viewer took any OS-assigned port, and Windows hands out ports from 1024 up when WSL or Hyper-V set its dynamic range. The viewer now tries the rest of the 6800–6899 band first, reuses this project's viewer if another session already serves it on a band port, and skips every port on the browsers' blocked list.
 

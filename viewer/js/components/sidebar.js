@@ -4,6 +4,7 @@
 // own close button, by clicking the backdrop scrim, or by choosing a nav link.
 
 import { icon } from './icon.js';
+import { serverMode, signOut } from '../lib/csrf.js';
 
 // `icon` is a name from components/icon.js.
 const SECTIONS = [
@@ -32,6 +33,26 @@ function span(className, child) {
   el.className = className;
   el.append(child);
   return el;
+}
+
+// Server mode only: the footer holds Sign out. A failed sign-out says so in a live region, so it is never
+// mistaken for a success.
+function signOutFooter() {
+  const footer = document.createElement('div');
+  footer.className = 'sidebar-footer';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn--ghost btn--sm sidebar-signout';
+  btn.textContent = 'Sign out';
+  const status = document.createElement('p');
+  status.className = 'sidebar-signout-msg';
+  status.setAttribute('aria-live', 'polite');
+  btn.addEventListener('click', async () => {
+    status.textContent = '';
+    if (!(await signOut(window, document))) status.textContent = 'Sign out failed. Reload and try again.';
+  });
+  footer.append(btn, status);
+  return footer;
 }
 
 export function mountSidebar(el, { store, prefs }) {
@@ -79,6 +100,7 @@ export function mountSidebar(el, { store, prefs }) {
   nav.className = 'sidebar-nav';
   nav.setAttribute('aria-label', 'Primary');
   el.appendChild(nav);
+  if (serverMode(document)) el.appendChild(signOutFooter());
 
   // Sections
   for (const sect of SECTIONS) {

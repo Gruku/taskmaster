@@ -6,6 +6,7 @@
 // Also here: the handover status pill and its menu (a refused change is said beside the pill), and `RightRail`,
 // the generic in-page panel a screen opens beside its list (Sessions).
 
+import { docLink } from '../lib/doc-link.js';
 import { linkPillsEl, legacyLinksToTyped } from './link-pills.js';
 import { renderMarkdown } from './markdown.js';
 import { statusMarker, priorityMarker, marker } from './status.js';
@@ -109,12 +110,8 @@ function panelDocs(task, level) {
   const items = Object.entries(docs)
     .filter(([, href]) => typeof href === 'string' && href.trim())
     .map(([type, href]) => {
-      const external = /^https?:\/\//i.test(href);
       // A path is served from the project root by the viewer's file route.
-      const attrs = external
-        ? { href, target: '_blank', rel: 'noopener noreferrer' }
-        : { href: `/file/${encodeURI(href.replace(/^\/+/, ''))}`, target: '_blank', rel: 'noopener' };
-      return h('li', {}, [h('a', { class: 'td-doc-link', ...attrs },
+      return h('li', {}, [h('a', { class: 'td-doc-link', ...docLink(href) },
         [h('span', { class: 'td-doc-type' }, type), h('span', { class: 'td-doc-path' }, href)])]);
     });
   return items.length ? panel('docs', 'Docs', level, [h('ul', { class: 'td-doc-list' }, items)]) : null;

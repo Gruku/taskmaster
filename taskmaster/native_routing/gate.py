@@ -30,6 +30,25 @@ class NativeUnavailable(UnsupportedStoreError):
     """A native-authority store this runtime cannot serve; never a legacy fallback."""
 
 
+class ServerModeUnavailable(NativeUnavailable):
+    """The project is in server mode: no local store is opened here (team-server-009)."""
+
+
+def fence_path(backlog_path: Path) -> Path:
+    """The project directory the split-brain fence checks for this backlog path.
+
+    The store's own root when the layout resolves; otherwise the backlog directory's parent
+    for a `.taskmaster`/`.claude` directory, and the directory itself for a root-layout
+    `backlog.yaml`. The fence adds the enclosing repository root either way.
+    """
+    from taskmaster import store
+    try:
+        return store.resolve_location(backlog_path).root
+    except store.LegacyLayoutError:
+        directory = store._backlog_dir(Path(backlog_path))
+        return directory.parent if directory.name in (".taskmaster", ".claude") else directory
+
+
 def _runtime_error() -> str | None:
     global _RUNTIME_ERROR
     with _RUNTIME_LOCK:
@@ -59,7 +78,10 @@ def native_database(backlog_path: Path) -> Path | None:
     `NativeUnavailable` — handing that database to the legacy writer is never
     an option, and the legacy store would refuse it anyway.
     """
-    from taskmaster import store
+    from taskmaster import server_fence, store
+    refused = server_fence.refusal(fence_path(backlog_path))
+    if refused is not None:
+        raise ServerModeUnavailable(refused)
     try:
         path = database_path(backlog_path)
     except store.LegacyLayoutError:

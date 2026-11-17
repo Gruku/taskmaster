@@ -39,6 +39,10 @@ from pathlib import Path
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from taskmaster.native_routing import hook_reads
+from taskmaster import server_marker
+
+_STARTED = time.monotonic()      # the hook's own clock: a server read never outlives the host's 10 s kill
+SERVER_BUDGET_SECONDS = 2.0
 
 try:
     from taskmaster.root import (
@@ -53,20 +57,11 @@ except Exception:  # pragma: no cover — partially installed plugin
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit"}
 
-# Kinds that can be named in the line, in output order.
-LISTED_KINDS = ("bug", "issue", "task", "handover")
-KIND_ORDER = {kind: i for i, kind in enumerate(LISTED_KINDS)}
-
-OPEN_STATUS = {
-    "task": {"todo", "in-progress", "blocked", "in-review"},
-    "bug": {"open", "adopted"},
-    "issue": {"open", "investigating"},
-    "handover": {"open"},
-}
-
-# `anchors` and `location` are deliberate claims that an entity owns a path.
-# A prose mention is not, so it is counted and never named.
-STRUCTURAL_SOURCES = {"anchors", "location"}
+# The classification rules live with the read view, so a team server answers exactly as this hook does.
+LISTED_KINDS = hook_reads.LISTED_KINDS
+KIND_ORDER = hook_reads.KIND_ORDER
+OPEN_STATUS = hook_reads.OPEN_STATUS
+STRUCTURAL_SOURCES = hook_reads.STRUCTURAL_SOURCES
 
 MAX_IDS = 6
 HANDOVER_ID_CHARS = 24
@@ -76,18 +71,6 @@ LOG_MAX_BYTES = 1024 * 1024
 LOG_KEEP_BYTES = 512 * 1024
 
 _WORKTREE_RE = re.compile(r"^\.worktrees/[^/]+/")
-
-_MATCH_SQL = (
-    "SELECT e.kind, e.id, e.status, e.archived, p.match_kind, p.path, p.source"
-    " FROM entity_paths p JOIN entities e ON e.kind = p.kind AND e.id = p.id"
-    " WHERE e.deleted = 0"
-    "   AND ((p.match_kind='exact' AND p.path=?) OR p.match_kind='glob')"
-)
-
-_RELATED_SQL = (
-    "SELECT b_kind, b_id FROM related WHERE a_kind=? AND a_id=?"
-    " UNION SELECT a_kind, a_id FROM related WHERE b_kind=? AND b_id=?"
-)
 
 
 class Entry:
@@ -108,59 +91,23 @@ class ResolveResult:
         self.prose = prose
         self.related = related
 
+    @classmethod
+    def from_view(cls, data: dict) -> "ResolveResult":
+        """From a `paths` view, local or the team server's (v1 `data`)."""
+        return cls([Entry(e["id"], e["kind"], e["status"]) for e in data["listed"]],
+                   data["closed"], data["prose"], data["related"])
+
 
 # ── Matching ────────────────────────────────────────────────────
 
 
-def _glob_to_regex(pattern: str) -> "re.Pattern[str]":
-    """Anchored regex for a path glob: `**` crosses `/`, `*` and `?` do not."""
-    out = []
-    i = 0
-    while i < len(pattern):
-        ch = pattern[i]
-        if ch == "*":
-            if pattern.startswith("**", i):
-                out.append(".*")
-                i += 2
-                continue
-            out.append("[^/]*")
-        elif ch == "?":
-            out.append("[^/]")
-        else:
-            out.append(re.escape(ch))
-        i += 1
-    return re.compile("".join(out) + r"\Z")
-
-
-def _glob_match(pattern: str, rel: str) -> bool:
-    return _glob_to_regex(pattern).match(rel) is not None
-
-
 def _connect_ro(db_file) -> sqlite3.Connection:
-    """A connection that can read the store and can never write to it.
-
-    `mode=ro` is deliberately not used: a read-only open cannot create the
-    `-shm` a WAL database needs, and SQLite defers that failure to the first
-    statement rather than to the open, so the error would surface far from
-    here (design spec 3.1). `mode=rw` gets the same write guard from
-    `query_only` and, unlike a bare path, cannot bring a missing store into
-    existence — a hook must never create one. The probe statement makes an
-    unusable database fail here, where the caller can log it and go quiet.
-    """
-    uri = Path(db_file).resolve().as_uri() + "?mode=rw"
-    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
-    try:
-        con.execute("PRAGMA query_only=ON")
-        con.execute("BEGIN")
-        hook_reads.admit(con)
-    except BaseException:
-        con.close()
-        raise
-    return con
+    """A read-only connection inside an open read transaction (`hook_reads.connect_ro`)."""
+    return hook_reads.connect_ro(db_file, BUSY_TIMEOUT_SECONDS)
 
 
 def max_change_seq(db_file) -> int:
-    """`MAX(changes.seq)` — the store revision this answer belongs to."""
+    """The store revision this answer belongs to."""
     con = _connect_ro(db_file)
     try:
         return _max_change_seq(con)
@@ -169,11 +116,7 @@ def max_change_seq(db_file) -> int:
 
 
 def _max_change_seq(con: sqlite3.Connection) -> int:
-    if hook_reads.is_native(con):
-        # A native store's revision is its domain event high water.
-        return hook_reads.revision(con)
-    row = con.execute("SELECT MAX(seq) FROM changes").fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
+    return hook_reads.store_revision(con)
 
 
 def resolve(db_file, rel: str) -> ResolveResult:
@@ -190,66 +133,7 @@ def resolve(db_file, rel: str) -> ResolveResult:
 
 
 def _resolve(con: sqlite3.Connection, rel: str) -> ResolveResult:
-    native = hook_reads.is_native(con)
-    rows = con.execute(hook_reads.PATH_MATCH_SQL if native else _MATCH_SQL, (rel,)).fetchall()
-
-    matched: dict = {}
-    for kind, eid, status, archived, match_kind, path, source in rows:
-        if match_kind == "glob" and not _glob_match(path, rel):
-            continue
-        entry = matched.get((kind, eid))
-        if entry is None:
-            matched[(kind, eid)] = entry = [status, archived, False]
-        if source in STRUCTURAL_SOURCES:
-            entry[2] = True
-
-    listed = []
-    closed = 0
-    prose = 0
-    for (kind, eid), (status, archived, structural) in matched.items():
-        if kind not in KIND_ORDER:
-            prose += 1
-            continue
-        # Handovers carry no anchors/location field at all — prose is the only
-        # path signal they can ever have, so it is the one that counts for them.
-        if not structural and kind != "handover":
-            prose += 1
-        elif not archived and (status or "") in OPEN_STATUS[kind]:
-            listed.append(Entry(eid, kind, status or ""))
-        else:
-            closed += 1
-
-    listed.sort(key=lambda e: (KIND_ORDER[e.kind], e.id))
-    return ResolveResult(listed, closed, prose, _count_related(con, listed, matched, native))
-
-
-def _count_related(con, listed: list, matched: dict, native: bool = False) -> int:
-    """Open work that travels with the listed items but does not claim this file.
-
-    The count is the invitation to run `backlog_query`; naming the ids would
-    cost more line than the association is worth.
-    """
-    neighbours = set()
-    for entry in listed:
-        key = (entry.kind, entry.id)
-        found = (hook_reads.neighbours(con, *key) if native else
-                 con.execute(_RELATED_SQL, (key[0], key[1], key[0], key[1])))
-        for kind, eid in found:
-            if (kind, eid) not in matched:
-                neighbours.add((kind, eid))
-    count = 0
-    for kind, eid in neighbours:
-        if kind not in OPEN_STATUS:
-            continue
-        row = con.execute(
-            hook_reads.LIVE_STATUS_SQL if native else
-            "SELECT status FROM entities"
-            " WHERE kind=? AND id=? AND deleted=0 AND archived=0",
-            (kind, eid),
-        ).fetchone()
-        if row and (row[0] or "") in OPEN_STATUS[kind]:
-            count += 1
-    return count
+    return ResolveResult.from_view(hook_reads.paths_view(con, rel))
 
 
 # ── Formatting ──────────────────────────────────────────────────
@@ -345,9 +229,11 @@ def _relative_to(root: Path, target: Path):
     return rel
 
 
-def seen_path(root: Path, session_id: str) -> Path:
+def seen_path(root: Path, session_id: str, base: Path | None = None) -> Path:
+    """The dedupe file: under `.taskmaster/local/` in solo, under the server's hook state dir in server mode."""
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id) or "nosession"
-    return root / ".taskmaster" / "local" / "hook-seen" / f"{safe}.json"
+    folder = base if base is not None else root / ".taskmaster" / "local"
+    return folder / "hook-seen" / f"{safe}.json"
 
 
 def load_seen(path: Path) -> dict:
@@ -431,7 +317,15 @@ def main() -> int:
         target = Path(file_path)
         start = Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
         root, reason = project_root(start, target)
-        if root is None or not (root / ".taskmaster").is_dir():
+        if root is None:
+            return 0
+        try:
+            marker = server_marker.server_mode(root)
+        except server_marker.ServerConfigError:
+            return 0          # a server clone whose marker can't be read: never fall back to a local store
+        if marker is not None:
+            return _server_mode(root, target, session_id if isinstance(session_id, str) else "")
+        if not (root / ".taskmaster").is_dir():
             return 0
         if reason:
             log_reason(root, reason)
@@ -481,6 +375,44 @@ def main() -> int:
         if root is not None:
             log_reason(root, repr(exc))
         return 0
+    return 0
+
+
+def _server_mode(root: Path, target: Path, session_id: str) -> int:
+    """A team-server clone (team-server-007): the same line, from the server's `paths` view."""
+    from taskmaster.remote import hookside
+    from taskmaster.remote.client import ReadUnavailable, hook_deadline
+
+    state = None
+
+    def log(text):
+        hookside.append_log(state, "edit_resurface", text)
+    try:
+        server = hookside.server_of(root)
+        state = hookside.state_dir(server)
+        rel = relative_path(root, target)
+        if rel is None:
+            return 0
+        session = hookside.connect(root, log=log)
+        result = session.client.read("paths", {"path": rel},
+                                     deadline=hook_deadline(SERVER_BUDGET_SECONDS, started=_STARTED))
+    except ReadUnavailable as failure:
+        log(f"{failure.kind}: {failure.message}; staying quiet")
+        return 0
+    resolved = ResolveResult.from_view(result.data)
+    if not resolved.listed:
+        return 0
+    line = format_line(rel, resolved)
+    if state is not None:
+        seen_file = seen_path(root, session_id, base=state)
+        seen = load_seen(seen_file)
+        entry = seen.get(rel)
+        seen[rel] = [result.revision, line]
+        record_seen(seen_file, seen)
+        if entry is not None and entry[1] == line:
+            return 0
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse", "additionalContext": line}}))
     return 0
 
 

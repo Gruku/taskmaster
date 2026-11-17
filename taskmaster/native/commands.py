@@ -38,7 +38,7 @@ def _write_field(connection, key, kind, field, value, *, remove=False):
 
 PREFIXES = {"note": "NOTE-", "bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-"}
 # These identities are caller-derived, never allocated: the caller owns the name.
-NAMED_KINDS = ("task", "epic", "phase", "area", "tracker", "project", "backlog")
+NAMED_KINDS = ("task", "epic", "phase", "area", "tracker", "project", "backlog", "profile")
 
 
 def _taken(connection, kind, ident):
@@ -112,6 +112,8 @@ def _reserve_id(connection, kind, doc, requested=None):
 def projection_path(kind, ident, archived):
     if kind == "project":
         return "project.yaml"
+    if kind == "profile":
+        return f"users/{ident}/profile.yaml"
     directories = {"task": "tasks", "note": "notes", "decision": "decisions", "bug": "bugs", "issue": "issues",
                    "idea": "ideas", "handover": "handovers", "epic": "epics", "phase": "phases",
                    "area": "areas", "tracker": "trackers"}
@@ -129,16 +131,41 @@ def projection_path(kind, ident, archived):
     return f"{directory}/{ident}.md"
 
 
+def _stale_copy(connection, ident, section, path, stored, row, expected) -> str:
+    """The D5 conflict text (team-server-012): what is stored under the declared path, by whom, against what
+    the caller expected. Hashes, a handle, a seq and the caller's own relative path only (006 passes it)."""
+    from .documents import import_origin
+    wanted = f"the {expected[:12]}… you expected" if expected else "no stored copy, as you expected"
+    if not stored:
+        return f"nothing is imported under {path}, not {wanted}; retry with expected_hash={{\"{section}\": \"\"}}"
+    facts = import_origin(connection, row[2])
+    by = f"imported by {facts['imported_by']} at seq {row[2]}" if facts["imported_by"] else f"imported at seq {row[2]}"
+    return (f"the stored copy changed: it is sha256 {stored[:12]}… ({by}), not {wanted}; read it with "
+            f"backlog_document(kind=\"task\", entity_id=\"{ident}\", sections=[\"{section}\"], provenance=True) "
+            f"and retry with "
+            f"expected_hash={{\"{section}\": \"{stored}\"}} to replace it")
+
+
+# The field each record kind names its author in. A bug's discovered_by is not one: it is the enum user|claude (who
+# found it, the person or the agent), checked on every path, so no one can be named there.
+ATTRIBUTION_FIELDS = {"note": "author", "idea": "created_by"}
+
+
 class Transaction:
-    def __init__(self, connection, request, identity):
+    def __init__(self, connection, request, identity, requester=None):
         self.connection, self.request = connection, request
+        self.requester = requester
         self.snapshot = Snapshot(connection, identity)
         self.group = None
+        self.event_columns = events.columns(connection)
         self.seq = int(identity["event_high_water"])
         self.affected = {}
         # Entities a write left exactly as stored, with the document the command
         # observed. A reply to a no-op names this value, never a later read.
         self.unchanged = {}
+        # team-server-011: a member's branch/worktree writes diverted to `clone_fields`, for the receipt.
+        self.clone_writes = []
+        self.named_field = None
         # Every counter reports work actually issued. A "global rebuild" counter
         # lived here that nothing could increment, so it proved nothing; the
         # absence of graph work is asserted directly against the SQL instead.
@@ -156,7 +183,7 @@ class Transaction:
         if body_changed and operation != "create":
             event_before["_body"], event_after["_body"] = before_body, body
         self.group, self.seq = events.append(self.connection, self.request, self.group, kind, ident, operation,
-                                            event_before, event_after)
+                                            event_before, event_after, entity_key=key, extended=self.event_columns)
         self.connection.execute("UPDATE entity_core SET revision=revision+?,last_seq=? WHERE entity_key=?", (int(operation != "create"), self.seq, key))
         before_search = None if operation == "create" else search.inputs(before, before_body)
         self.counters["fts_documents"] += int(search.maintain(self.connection, key, kind, ident, before_search, search.inputs(after, body)))
@@ -185,11 +212,20 @@ class Transaction:
         if body is not None and not isinstance(body, str):
             raise ValueError("document body must be text or null")
         doc = deepcopy(doc)
+        if self.requester is not None and kind in ATTRIBUTION_FIELDS:
+            # On a team server a record's author is the key's handle, never the caller's text or a literal
+            # "claude"/"user" (security review m-2).
+            doc[ATTRIBUTION_FIELDS[kind]] = self.requester.handle
+        if kind == "task":
+            _check_task_paths({}, doc)
         ident = _reserve_id(self.connection, kind, doc, requested_id)
         # The store stamps the id on every document it creates, the project
         # manifest included (a later replace may drop it, as the tool's put does).
         if kind != "backlog":
             doc["id"] = ident
+        if kind == "task" and self.requester is not None:
+            from . import clone_fields
+            doc = clone_fields.divert(self, ident, {}, doc)
         key = _put_entity(self.connection, {"kind": kind, "id": ident, "doc": doc, "body": body,
                                           "rev": 1, "updated_seq": self.seq, "archived": int(bool(doc.get("archived"))),
                                           "deleted": 0, "epic": doc.get("epic"), "status": doc.get("status")})
@@ -206,6 +242,18 @@ class Transaction:
             raise ValueError("document body must be text or null")
         entity = before_entity if before_entity is not None else self.snapshot.get(kind, ident, include_body=True)
         before = entity["fields"]
+        if kind == "task":
+            _check_task_paths(before, after)
+            self._check_new_dependencies(ident, before, after)
+        if kind == "task" and self.requester is not None:
+            # Every task write passes here: a member never drops or moves a teammate's live claim (D11).
+            from . import claims
+            refusal = claims.move_refusal(ident, before, after, session=self.request.get("caller_scope", ""),
+                                          connection=self.connection, requester=self.requester)
+            if refusal:
+                raise Conflict(refusal)
+            from . import clone_fields
+            after = clone_fields.divert(self, ident, before, deepcopy(after))
         key = self.connection.execute("SELECT entity_key FROM entity_core WHERE kind=? AND public_id=?", (kind, ident)).fetchone()[0]
         for field in set(before) | set(after):
             if (field in before) != (field in after) or encode(before.get(field)) != encode(after.get(field)):
@@ -219,7 +267,54 @@ class Transaction:
         self._changed(key, kind, ident, before, after, body, "update", before_body=entity["body"],
                       prior_file=projection_path(kind, ident, entity["archived"]))
 
-    def import_document(self, kind, ident, section, path, body):
+    def _check_new_dependencies(self, ident, before, after):
+        """A newly added depends_on entry may not close a cycle, whatever path wrote it (the tools check before they
+        send; `commands=`, batch lines and the viewer did not; security review m-8). Old entries are not re-judged."""
+        old = set(_dependency_list(before.get("depends_on")))
+        for dependency in _dependency_list(after.get("depends_on")):
+            if dependency in old:
+                continue
+            if dependency == ident:
+                raise ValueError(f"depends_on: `{ident}` cannot depend on itself")
+            if self._depends_on_reaches(dependency, ident):
+                raise ValueError(f"depends_on: adding `{dependency}` would create a cycle in the depends_on chain "
+                                 f"({ident} -> {dependency})")
+
+    def _depends_on_reaches(self, start, goal):
+        seen, stack = set(), [start]
+        while stack:
+            node = stack.pop()
+            if node == goal:
+                return True
+            if node in seen:
+                continue
+            seen.add(node)
+            try:
+                fields = self.snapshot.get("task", node)["fields"]
+            except KeyError:
+                continue
+            stack.extend(_dependency_list(fields.get("depends_on")))
+        return False
+
+    def annotate(self, kind, ident, operation, after):
+        """Record text a command writes beside an entity rather than into it (a session changelog paragraph).
+
+        The entity keeps its revision, as `import_document` does, but the text gets its own domain event so the
+        change feed sees it and authorship knows who wrote it (027 review Codex I2): the paragraph is served back
+        by `backlog_last_session`, and a write that left the document unchanged would otherwise record no author.
+        """
+        key, revision, last_seq = self.connection.execute(
+            "SELECT entity_key,revision,last_seq FROM entity_core WHERE kind=? AND public_id=?", (kind, ident)).fetchone()
+        self.group, self.seq = events.append(self.connection, self.request, self.group, kind, ident, operation,
+                                             {}, after, entity_key=key, extended=self.event_columns)
+        if (kind, ident) not in self.affected:
+            known = self.unchanged.get((kind, ident))
+            fields = known["fields"] if known else self.snapshot.get(kind, ident)["fields"]
+            self.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": revision, "last_seq": last_seq,
+                                            "fields": deepcopy(fields)}
+        return self.seq
+
+    def import_document(self, kind, ident, section, path, body, *, source=None, expected_hash=None, restore=None):
         """Store an external document's prose so a read never needs its file.
 
         This is not an authored-field change: `entity_core` keeps its revision, and
@@ -236,11 +331,20 @@ class Transaction:
             "SELECT path,content_hash,imported_seq FROM external_documents WHERE entity_key=? AND section=?",
             (key, section)).fetchone()
         if row is not None and (row[0], row[1]) == (path, content_hash):
-            return row[2]
+            return row[2]                    # identical text wins over a stale expected_hash: nothing to lose
+        if expected_hash is not None:
+            # Only a copy under the declared path counts, as `retrieve` serves only that one (012 D5).
+            stored = row[1] if row is not None and row[0] == path else ""
+            if stored != expected_hash:
+                raise contracts.Conflict(_stale_copy(self.connection, ident, section, path, stored, row, expected_hash))
         before = {} if row is None else {"section": section, "path": row[0], "content_hash": row[1]}
         after = {"section": section, "path": path, "content_hash": content_hash}
+        if restore is not None:
+            after = {**after, "source": "restore", **restore}
+        elif source == "upload":
+            after["source"] = "upload"
         self.group, self.seq = events.append(self.connection, self.request, self.group, kind, ident,
-                                             "document.import", before, after)
+                                             "document.import", before, after, entity_key=key, extended=self.event_columns)
         self.connection.execute(
             "INSERT INTO external_documents VALUES(?,?,?,?,?,?) ON CONFLICT(entity_key,section) DO UPDATE SET "
             "path=excluded.path,body=excluded.body,content_hash=excluded.content_hash,"
@@ -272,7 +376,10 @@ class Transaction:
             lifecycle.apply(self, operation, arguments)
 
 
-def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False, checkpoint=lambda stage: None):
+def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False, checkpoint=lambda stage: None,
+            requester=None):
+    # `requester` (a `claims.Requester`, or None for host-local and solo callers) is who a served
+    # command is for. It is not part of the request, so the payload hash and replay ignore it.
     request, fingerprint = contracts.validate(envelope)
     if connection.in_transaction:
         raise RuntimeError("command requires its own transaction")
@@ -310,7 +417,7 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         # before N14, only once the command is admitted (a lookup when present).
         neighbourhood.ensure_indexes(connection)
         checkpoint("admitted")
-        transaction = Transaction(connection, request, identity)
+        transaction = Transaction(connection, request, identity, requester=requester)
         try:
             transaction.apply(request["operation"], request["arguments"])
         finally:
@@ -322,8 +429,12 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         unchanged = [item for key, item in transaction.unchanged.items() if key not in transaction.affected]
         if unchanged:
             outcome["unchanged"] = unchanged
+        if transaction.clone_writes:
+            outcome["clone_fields"] = list(transaction.clone_writes)
         if hasattr(transaction, 'result'):
             outcome['result'] = transaction.result
+        if request.get("actor") is not None:
+            outcome["actor"] = request["actor"]
         receipts.save(connection, request, fingerprint, outcome)
         checkpoint("receipt")
         if transaction.affected:
@@ -342,3 +453,19 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         if meter:
             meter.close()
         connection.execute(f"PRAGMA foreign_keys={int(original_fk)}")
+
+
+def _check_task_paths(before, after):
+    """Every task write (tools, `commands=`, the viewer, imports) stores only a safe sub_repo and bundle (review I-2)."""
+    from .domain import task_path_refusal
+    refusal = task_path_refusal(before, after)
+    if refusal:
+        raise ValueError(refusal)
+
+
+def _dependency_list(value):
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if not isinstance(value, (list, tuple)):
+        return []                     # an unreadable stored value (a number, a mapping) never blocks the write
+    return [item for item in value if isinstance(item, str)]

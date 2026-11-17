@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -378,38 +379,304 @@ def test_merge_squash_still_detected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _approve(home: Path, session: str, *branches: str, age: float = 0.0) -> Path:
+    path = home / ".claude" / f"taskmaster-merge-approve-{session}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time() - age
+    path.write_text("".join(json.dumps({"branch": b, "at": now}) + "\n" for b in branches), encoding="utf-8")
+    os.utime(path, (now, now))
+    return path
+
+
 def test_existing_approval_allows_blocked_merge(tmp_path):
-    """Fresh taskmaster-merge-approve-<session> file => block path exits 0."""
+    """A fresh approval line for the branch => the block path exits 0."""
     _seed(tmp_path, policy=True, gates={}, branch="feature/x")
     home = tmp_path / "home"
-    home.mkdir()
-    approve_dir = home / ".claude"
-    approve_dir.mkdir()
-    approve_file = approve_dir / "taskmaster-merge-approve-s"
-    approve_file.touch()
-
-    r = run(
-        {"tool_input": {"command": "git merge feature/x"}, "session_id": "s"},
-        tmp_path,
-        home=home,
-    )
+    _approve(home, "s", "feature/x")
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path, home=home)
     assert r.returncode == 0
 
 
 def test_approval_survives_second_blocked_merge(tmp_path):
-    """Approval file is NOT consumed — second blocked merge within 60s still allowed."""
+    """The approval is NOT consumed: a second blocked merge within 60 s is still allowed."""
     _seed(tmp_path, policy=True, gates={}, branch="feature/x")
     home = tmp_path / "home"
-    home.mkdir()
-    approve_dir = home / ".claude"
-    approve_dir.mkdir()
-    approve_file = approve_dir / "taskmaster-merge-approve-s"
-    approve_file.touch()
-
+    approve_file = _approve(home, "s", "feature/x")
     payload = {"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}
-    r1 = run(payload, tmp_path, home=home)
-    r2 = run(payload, tmp_path, home=home)
-    assert r1.returncode == 0
-    assert r2.returncode == 0
-    # File must still be present (not consumed)
+    assert run(payload, tmp_path, home=home).returncode == 0
+    assert run(payload, tmp_path, home=home).returncode == 0
     assert approve_file.exists()
+
+
+def test_an_empty_approval_file_no_longer_approves(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "taskmaster-merge-approve-s").touch()
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path, home=home)
+    assert r.returncode == 2
+
+
+def test_an_approval_for_another_branch_or_an_old_one_does_not_approve(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    home = tmp_path / "home"
+    payload = {"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}
+    _approve(home, "s", "feature/y")
+    assert run(payload, tmp_path, home=home).returncode == 2
+    _approve(home, "s", "feature/x", age=120)
+    assert run(payload, tmp_path, home=home).returncode == 2
+    assert not (home / ".claude" / "taskmaster-merge-approve-s").exists()      # all lines expired: removed
+
+
+def test_no_session_id_means_no_approval_is_honoured(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    home = tmp_path / "home"
+    _approve(home, "default", "feature/x")
+    assert run({"tool_input": {"command": "git merge feature/x"}}, tmp_path, home=home).returncode == 2
+
+
+def test_both_block_texts_name_the_question_rule(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 2 and "starts with `[merge-gate feature/x]`" in r.stderr
+    assert "merge-gate blocked this merge: T-001: no review-gate has been recorded" in r.stderr
+
+
+# ---------------------------------------------------------------------------
+# team-server-008 step 4: the shared reader reaches the decision
+# ---------------------------------------------------------------------------
+
+
+def test_a_message_option_no_longer_hides_the_branch(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    for command in ("git merge --no-ff feature/x -m msg", "git status && git merge feature/x && git push",
+                    "git merge feature/x; echo done", "git merge feature/x 2>&1 | tail -3"):
+        r = run({"tool_input": {"command": command}, "session_id": "s"}, tmp_path)
+        assert r.returncode == 2, command
+        assert "[merge-gate feature/x]" in r.stderr
+
+
+def test_an_octopus_merge_gates_every_named_branch(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    r = run({"tool_input": {"command": "git merge feature/other feature/x"}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 2 and "[merge-gate feature/x]" in r.stderr
+
+
+def test_a_read_only_merge_command_spawns_no_decision(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    for command in ("git merge-base main feature/x", "git merge-tree a b", "git merge --abort", "git merge"):
+        assert run({"tool_input": {"command": command}, "session_id": "s"}, tmp_path).returncode == 0, command
+
+
+def test_solo_allows_a_command_the_reader_cannot_follow(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    r = run({"tool_input": {"command": 'sh -c "git merge feature/x"'}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 0 and r.stderr == ""
+
+
+def test_git_dash_c_judges_the_merge_in_that_clone(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    _seed(other, policy=True, gates={}, branch="feature/x")
+    here = tmp_path / "here"
+    here.mkdir()
+    r = run({"tool_input": {"command": f"git -C {other.as_posix()} merge feature/x"}, "session_id": "s",
+             "cwd": str(here)}, here)
+    assert r.returncode == 2 and "no review-gate has been recorded" in r.stderr
+
+
+def test_a_remote_branch_is_checked_under_its_short_name_but_asked_about_as_written(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    _init_git_repo(tmp_path, "scratch")
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin", "https://example.invalid/r.git"],
+                   check=True, capture_output=True)
+    home = tmp_path / "home"
+    payload = {"tool_input": {"command": "git merge origin/feature/x"}, "session_id": "s"}
+    r = run(payload, tmp_path, home=home)
+    assert r.returncode == 2 and "[merge-gate origin/feature/x]" in r.stderr
+    _approve(home, "s", "feature/x")                        # an approval for the short name is not enough
+    assert run(payload, tmp_path, home=home).returncode == 2
+    _approve(home, "s", "origin/feature/x")                 # the name as written lets the same command through
+    assert run(payload, tmp_path, home=home).returncode == 0
+
+
+def test_in_an_octopus_merge_approving_one_branch_still_blocks_on_the_other(tmp_path):
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    tm = tmp_path / ".taskmaster"
+    home = tmp_path / "home"
+    payload = {"tool_input": {"command": "git merge feature/x feature/x"}, "session_id": "s"}
+    assert run(payload, tmp_path, home=home).returncode == 2
+    _approve(home, "s", "feature/x")
+    assert run(payload, tmp_path, home=home).returncode == 0
+    two = {"tool_input": {"command": "git merge feature/x feature/y"}, "session_id": "s"}
+    assert run(two, tmp_path, home=home).returncode == 0       # feature/y has no task: allowed once x is approved
+    assert tm.exists()
+
+
+@pytest.mark.parametrize("command", [
+    "touch ~/.claude/taskmaster-merge-approve-s1",
+    "echo x > /home/u/.claude/taskmaster-merge-approve-s1",
+    "cp a taskmaster-merge-approve-s1",
+    'printf "{}" >> "$HOME/.claude/taskmaster-merge-approve-s"',
+])
+def test_a_command_naming_the_approval_file_is_refused_in_every_mode(tmp_path, command):
+    r = run({"tool_input": {"command": command}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 2
+    assert "the merge-gate approval file is written only by the approval hook, from the user's answer" in r.stderr
+    teammate_dir = tmp_path / "tm"
+    teammate_dir.mkdir()
+    (teammate_dir / ".taskmaster-server.json").write_text("{}", encoding="utf-8")
+    assert run({"tool_input": {"command": command}, "session_id": "s"}, teammate_dir).returncode == 2
+
+
+def test_an_unrelated_command_is_unaffected_by_the_forgery_check(tmp_path):
+    assert run({"tool_input": {"command": "ls -la"}, "session_id": "s"}, tmp_path).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# team-server-008 step 4: server mode (a teammate's clone)
+# ---------------------------------------------------------------------------
+
+from test_hooks_server_mode import HOST_ID, clone, teammate  # noqa: E402,F401  (fixtures)
+from test_serve_read_api import root, serve  # noqa: E402,F401  (fixtures)
+
+
+def run_in_clone(world, command, *, home, session="s", extra=None):
+    payload = {"tool_input": {"command": command}, "session_id": session, "cwd": str(world.clone), **(extra or {})}
+    env = dict(world.env, HOME=str(home))
+    return subprocess.run([sys.executable, HOOK], input=json.dumps(payload), text=True, encoding="utf-8",
+                          capture_output=True, cwd=str(world.clone), env=env, timeout=60)
+
+
+def test_a_teammate_with_a_stale_gate_is_blocked_with_the_verdict_text(teammate, tmp_path):
+    r = run_in_clone(teammate, "git merge shared", home=tmp_path / "h")
+    assert r.returncode == 2
+    assert "merge-gate blocked this merge: test-epic-001: no review-gate has been recorded" in r.stderr
+    assert "[merge-gate shared]" in r.stderr
+    assert "This clone uses a Taskmaster team server" not in r.stderr
+
+
+def test_a_teammate_whose_server_is_down_is_blocked_with_the_unavailable_text(teammate, tmp_path):
+    teammate.daemon.request_stop("server goes away")
+    teammate.thread.join(30)
+    started = time.monotonic()
+    r = run_in_clone(teammate, "git merge shared", home=tmp_path / "h")
+    assert r.returncode == 2 and time.monotonic() - started < 15
+    assert "This clone uses a Taskmaster team server" in r.stderr
+    assert "Taskmaster server unreachable; retry or bypass explicitly" in r.stderr
+
+
+def test_a_fresh_approval_lets_the_merge_through_while_the_server_is_down(teammate, tmp_path):
+    teammate.daemon.request_stop("server goes away")
+    teammate.thread.join(30)
+    home = tmp_path / "h"
+    _approve(home, "s", "shared")
+    started = time.monotonic()
+    r = run_in_clone(teammate, "git merge shared", home=home)
+    assert r.returncode == 0 and time.monotonic() - started < 8
+
+
+def test_a_command_the_reader_cannot_follow_blocks_in_a_teammate_clone(teammate, tmp_path):
+    r = run_in_clone(teammate, 'sh -c "git merge shared"', home=tmp_path / "h")
+    assert r.returncode == 2
+    assert "can't tell with confidence which branch this command merges" in r.stderr
+
+
+def test_a_branch_name_the_server_cannot_be_asked_about_blocks(teammate, tmp_path):
+    r = run_in_clone(teammate, "git merge release#1", home=tmp_path / "h")
+    assert r.returncode == 2 and "can't be sent to the Taskmaster server" in r.stderr
+
+
+def test_a_teammate_non_merge_command_spawns_nothing_and_passes(teammate, tmp_path):
+    for command in ("git status", "git merge-base main shared", "ls"):
+        assert run_in_clone(teammate, command, home=tmp_path / "h").returncode == 0, command
+
+
+def test_the_teammate_decision_runs_in_this_process(teammate, tmp_path, monkeypatch):
+    import io
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("merge_gate_inproc", HOOK)
+    gate = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = gate
+    spec.loader.exec_module(gate)
+    for name, value in teammate.env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    payload = {"tool_input": {"command": "git merge shared"}, "session_id": "s", "cwd": str(teammate.clone)}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    spawned = []
+    real_run, real_popen = subprocess.run, subprocess.Popen
+
+    def watch(args):
+        if isinstance(args, (list, tuple)) and args and "python" in str(args[0]).lower():
+            spawned.append(list(args))
+        if isinstance(args, (list, tuple)) and any("merge_gate_decide" in str(a) for a in args):
+            spawned.append(list(args))
+
+    def run_spy(args, *a, **k):
+        watch(args)
+        return real_run(args, *a, **k)
+
+    class PopenSpy(real_popen):
+        def __init__(self, args, *a, **k):
+            watch(args)
+            super().__init__(args, *a, **k)
+    monkeypatch.setattr(subprocess, "run", run_spy)
+    monkeypatch.setattr(subprocess, "Popen", PopenSpy)
+    assert gate.main() == 2
+    assert spawned == []
+
+
+# ── the watchdog ────────────────────────────────────────────────────────────────
+
+WRAPPER = """
+import sys, time
+sys.path.insert(0, {hooks!r})
+import merge_gate
+import merge_gate_decide
+merge_gate_decide.decide = lambda *a, **k: time.sleep(30)
+sys.exit(merge_gate.main())
+"""
+
+
+def test_the_watchdog_blocks_a_silent_decision_at_nine_seconds(tmp_path):
+    clone_dir = tmp_path / "clone"
+    clone_dir.mkdir()
+    (clone_dir / ".taskmaster-server.json").write_text(json.dumps(
+        {"format": 1, "host_id": HOST_ID, "mode": "server", "url": "https://team.example/mcp"}), encoding="utf-8")
+    wrapper = tmp_path / "wrap.py"
+    wrapper.write_text(WRAPPER.format(hooks=str(Path(HOOK).parent)), encoding="utf-8")
+    payload = {"tool_input": {"command": "git merge shared"}, "session_id": "s", "cwd": str(clone_dir)}
+    env = dict(os.environ, HOME=str(tmp_path / "h"))
+    env.pop("TASKMASTER_ROOT", None)
+    started = time.monotonic()
+    r = subprocess.run([sys.executable, str(wrapper)], input=json.dumps(payload), text=True, encoding="utf-8",
+                       capture_output=True, cwd=str(clone_dir), env=env, timeout=60)
+    elapsed = time.monotonic() - started
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "the merge gate got no answer within 9 s; retry or bypass explicitly." in r.stderr
+    assert 8.8 <= elapsed <= 9.8 + 3, elapsed          # interpreter and import start-up are inside the 9 s
+
+
+def test_the_watchdog_does_nothing_in_a_solo_project(tmp_path):
+    hooks = Path(HOOK).parent
+    fake = tmp_path / "hooks"
+    fake.mkdir()
+    for name in ("merge_gate.py", "merge_command.py"):
+        (fake / name).write_text((hooks / name).read_text(encoding="utf-8"), encoding="utf-8")
+    (fake / "merge_gate_decide.py").write_text(
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(hooks.parent)!r})\n"
+        "def server_clone(cwd):\n    return False\n"
+        "if __name__ == '__main__':\n    time.sleep(11)\n    print('BLOCK:T-1: too late')\n", encoding="utf-8")
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed(project, policy=True, gates={}, branch="feature/x")
+    payload = {"tool_input": {"command": "git merge feature/x"}, "session_id": "s", "cwd": str(project)}
+    env = dict(os.environ, HOME=str(tmp_path / "h"))
+    started = time.monotonic()
+    r = subprocess.run([sys.executable, str(fake / "merge_gate.py")], input=json.dumps(payload), text=True,
+                       encoding="utf-8", capture_output=True, cwd=str(project), env=env, timeout=60)
+    elapsed = time.monotonic() - started
+    assert r.returncode == 0 and "got no answer" not in r.stderr, (r.stdout, r.stderr)
+    assert 8.5 <= elapsed < 11, elapsed

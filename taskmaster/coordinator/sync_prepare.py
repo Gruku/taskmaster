@@ -139,6 +139,19 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None, scan=
         if unchanged_quarantine:
             return still_quarantined
         return result("quarantine", f"invalid authored projection: {reason}")
+    if kind == "project":
+        # A shared team block must be valid and its protocol changes only through an
+        # explicit upgrade; a hand edit of either never enters the database silently.
+        from taskmaster.project import team_import_refusal
+        stored = entity("project", ident or "__project__")
+        reason = team_import_refusal(None if stored is None else stored["fields"],
+                                     next(iter(authored.values()))[0])
+        if reason:
+            if take_file:
+                raise ValueError(f"{rel} cannot be taken: {reason}")
+            if unchanged_quarantine:
+                return still_quarantined
+            return result("quarantine", f"invalid authored projection: {reason}")
     base_rows = authored_base = None
     if trusted:
         try:

@@ -90,6 +90,11 @@ def _crlf(data: bytes) -> bytes:
     return _lf(data).replace(LF, CR + LF)
 
 
+def matches_record(data: bytes, content_hash: str | None) -> bool:
+    """Whether `data` is the file a projection record describes, line endings aside (the exporter's own rule)."""
+    return content_hash is not None and content_hash in {_digest(data), _digest(_lf(data)), _digest(_crlf(data))}
+
+
 def _move(source: Path, target: Path) -> bool:
     """Rename `source` over `target` (a name only this exporter uses); False if `source` is gone."""
     try:
@@ -280,6 +285,12 @@ def _through(connection) -> int:
     if oldest is not None:
         return int(oldest) - 1
     return int(connection.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
+
+
+def watermark(connection) -> int:
+    """The watermark `update_through` would store, recomputed read-only: below it nothing unheld is owed
+    (team-server-013 reads it to tell a caught-up export from a stalled one)."""
+    return _through(connection)
 
 
 def update_through(connection) -> None:
@@ -921,7 +932,9 @@ class Exporter:
 # ── Resolution (S10) ────────────────────────────────────────────────────────
 
 RESOLVE = "projection.resolve"
-_RESOLVE_ARGUMENTS = {"file", "take", "replaced_base64", "replaced_hash"}
+# `replaced_omitted`: the replaced bytes are too large to inline, and the resolver checked they still equal the
+# bytes captured at flagging, which the event keeps anyway (team-server-012 D7, re-review R-M1 and Q-M1).
+_RESOLVE_ARGUMENTS = {"file", "take", "replaced_base64", "replaced_hash", "replaced_omitted"}
 
 
 def resolvable(connection, rel: str) -> tuple[str, str | None, bytes | None] | None:
@@ -949,6 +962,10 @@ def validate_resolve(arguments: dict) -> None:
     if arguments.get("take") != "store":
         raise ValueError('projection.resolve only keeps the store version; take="file" needs the importer (N13)')
     encoded, digest = arguments.get("replaced_base64"), arguments.get("replaced_hash")
+    if "replaced_omitted" in arguments:
+        if arguments["replaced_omitted"] is not True or encoded is not None or not isinstance(digest, str):
+            raise ValueError("replaced_omitted takes replaced_hash alone, without replaced_base64")
+        return
     if (encoded is None) != (digest is None):
         raise ValueError("replaced_base64 and replaced_hash come together")
     if encoded is not None:
@@ -983,6 +1000,11 @@ def apply_resolve(transaction, arguments: dict) -> None:
     if found is None:
         raise ValueError(f"{rel} is not flagged; there is nothing to resolve")
     kind, ident, flagged = found
+    omitted = arguments.get("replaced_omitted") is True
+    if omitted and (flagged is None or _digest(flagged) != arguments["replaced_hash"]):
+        # Only bytes the event keeps anyway (the flagged copy) may be replaced by hash alone (Q-M1).
+        raise ValueError(f"{rel} changed after it was flagged, so its bytes are not kept anywhere; "
+                         "resolve it on the host")
     if _has_conflict_table(connection):
         connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
     if arguments.get("replaced_hash") is not None:
@@ -995,15 +1017,19 @@ def apply_resolve(transaction, arguments: dict) -> None:
         connection.execute("UPDATE projection SET dirty=1,quarantined=0,quarantine_mtime=NULL,quarantine_size=NULL,"
                            "quarantine_hash=NULL,exported_seq=NULL WHERE file=?", (rel,))
     replaced = arguments.get("replaced_base64")
-    raw = base64.b64decode(replaced) if replaced is not None else flagged
+    # A hash-only resolution replaced exactly the flagged bytes (checked above): `flagged_base64` keeps them,
+    # so `file` stays empty rather than holding a second (and third) copy (012 gate M2).
+    raw = base64.b64decode(replaced) if replaced is not None else (None if omitted else flagged)
     before = {"file": None if raw is None else raw.decode("utf-8", errors="replace"),
               "file_base64": None if raw is None else base64.b64encode(raw).decode("ascii"),
               "flagged_base64": None if flagged is None else base64.b64encode(flagged).decode("ascii"),
-              "file_missing": replaced is None, "store": None}
+              "file_missing": replaced is None and not omitted, "store": None}
+    if omitted:
+        before["file_inlined"] = False                       # the replaced bytes are `flagged_base64`
     event_id = ident or ("__backlog__" if kind == "backlog" else rel)
     transaction.group, transaction.seq = events.append(
         connection, transaction.request, transaction.group, kind, event_id, "resolve",
-        before, {"file": rel, "took": "store"})
+        before, {"file": rel, "took": "store"}, extended=transaction.event_columns)
     core = None
     if ident is not None:
         core = connection.execute("SELECT entity_key,revision,last_seq,archived,deleted FROM entity_core "

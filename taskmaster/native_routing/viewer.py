@@ -34,7 +34,7 @@ def database():
 
 
 def _open(database):
-    return runtime.open_call(database, database.parent.parent, bs.SESSION_ID)
+    return runtime.open_call(database, database.parent.parent, bs.current_session())
 
 
 def _etag(snapshot) -> str:
@@ -212,12 +212,14 @@ def _prefs_put(handler, database):
     if not isinstance(patch, dict):
         handler._send_json(400, {"ok": False, "error": "patch must be a JSON object"})
         return
-    current = prefs(database)
-    bs._deep_merge(current, patch)
     with _open(database) as call, call.read() as snap:
         entity = reads.get(snap, "backlog", "__backlog__")
     v4 = v3.detect_schema_version(entity["fields"] if entity else {}) >= v3.SCHEMA_V4
-    v3.save_viewer_prefs(bs._backlog_path(), current, v4=v4)
+    try:
+        v3.apply_viewer_prefs_patch(bs._backlog_path(), patch, v4=v4)
+    except ValueError as exc:
+        handler._send_json(400, {"ok": False, "error": str(exc)})
+        return
     handler._send_json(200, {"ok": True})
 
 
@@ -414,6 +416,14 @@ def _task_create(handler, database):
         handler._send_json(400, {"ok": False, "error": str(exc)})
 
 
+def _refusal_status(refusal) -> int:
+    """404 for a missing task; 409 for a domain conflict, such as a teammate's live claim the write would
+    drop (team-server-003 D11, E7), so the guarded viewer shows the refusal instead of an internal error."""
+    if isinstance(refusal, KeyError):
+        return 404
+    return 409 if isinstance(refusal, Conflict) else 500
+
+
 def _stale_or(handler, task_id, refusal):
     if isinstance(refusal, Conflict) and str(refusal).startswith("stale:"):
         handler._send_stale(task_id, str(refusal)[len("stale:"):])
@@ -429,8 +439,7 @@ def _task_archive(handler, database, task_id):
         detail = read(task_id, database)
         handler._send_json(200, {"ok": True}, etag=detail["etag"])
     elif not _stale_or(handler, task_id, refusal):
-        code = 404 if isinstance(refusal, KeyError) else 500
-        handler._send_json(code, {"ok": False, "error": str(refusal)})
+        handler._send_json(_refusal_status(refusal), {"ok": False, "error": str(refusal)})
 
 
 def _task_update(handler, database, task_id, method):
@@ -473,7 +482,7 @@ def _task_update(handler, database, task_id, method):
     if refusal is not None:
         if _stale_or(handler, task_id, refusal):
             return
-        handler._send_json(404 if isinstance(refusal, KeyError) else 500, {"ok": False, "error": str(refusal)})
+        handler._send_json(_refusal_status(refusal), {"ok": False, "error": str(refusal)})
         return
     from taskmaster.viewer_detail import write_response
     task, etag = write_response(task_id, database)

@@ -70,7 +70,7 @@ export function sessionHistoryView(a: {
 export type HistoryDeps = {
   readonly source: 'tm' | 'demo'
   readonly rh: RestoreHost
-  readonly tm: Pick<TmHost, 'call' | 'sleep' | 'log'>
+  readonly tm: Pick<TmHost, 'call' | 'sleep' | 'log' | 'remote'>
   readonly sessionId: () => Promise<string>
   readonly repoRoot: () => Promise<string>
   /** Milliseconds, as $.clock.now. */

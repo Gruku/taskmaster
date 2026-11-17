@@ -164,3 +164,12 @@ test('the merge dots say the rung reached in words for assistive tech', () => {
   assert.equal(ladder.querySelector('.card-sr').textContent, 'Merged to stage, 2 of 3');
   for (const d of ladder.querySelectorAll('.ml-dot')) assert.equal(d.getAttribute('aria-hidden'), 'true');
 });
+
+test('the docs button opens only a safe link: a javascript: doc renders no button; a path or https doc does', () => {
+  for (const spec of ['javascript:alert(1)', ' JaVa\tScript:alert(1)', 'data:text/html,x', 'vbscript:x']) {
+    assert.equal(card({ docs: { spec } }).querySelector('.card-docs'), null, spec);
+  }
+  for (const spec of ['docs/x.md', 'https://x/y']) {
+    assert.ok(card({ docs: { spec } }).querySelector('.card-docs'), spec);
+  }
+});

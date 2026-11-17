@@ -6,8 +6,25 @@ Legacy tables remain the only writer authority until the later adapter cutover.
 """
 import sqlite3
 
-VERSION = 3
+# VERSION is the highest native schema this build supports; new stores are born at
+# BASE_VERSION and move up only through `native.upgrade` (team mode turns 4 on).
+VERSION = 5
+BASE_VERSION = 3
+SUPPORTED = frozenset({3, 4, 5})
 PROTOCOL = 2
+# The lowest native schema a store needs before it may hold rows of a kind.
+KIND_SINCE = {"profile": 4}
+# Fixed public ids are never renamed, so their events keep entity_key NULL.
+SINGLETON_KINDS = ("backlog", "project")
+SCHEMA_5_COLUMNS = (
+    "ALTER TABLE domain_events ADD COLUMN actor TEXT CHECK(actor IS NULL OR json_valid(actor))",
+    "ALTER TABLE domain_events ADD COLUMN entity_key INTEGER",
+)
+SCHEMA_5_BACKFILL = (
+    "UPDATE domain_events SET entity_key=(SELECT c.entity_key FROM entity_core c "
+    "WHERE c.kind=domain_events.kind AND c.public_id=domain_events.id) "
+    "WHERE kind NOT IN ('backlog','project')")
+SCHEMA_5_INDEX = "CREATE INDEX ix_domain_events_entity_key ON domain_events(entity_key,seq)"
 COMMON = {
     "entity_core": "id title status priority archived deleted rev updated_seq",
     "entity_documents": "_body body",
@@ -27,6 +44,8 @@ KINDS = {
     "area": {},
     "tracker": {"tracker_operational": "external_system external_key instance_alias sync_direction last_synced last_pushed synced_hash push_hash"},
     "backlog": {}, "project": {},
+    # Shared per-person profile (users/<handle>/profile.yaml); fields live in entity_extensions.
+    "profile": {},
 }
 OPERATIONS = {table: fields.split() for groups in KINDS.values()
               for table, fields in groups.items() if table.endswith("_operational")}
@@ -127,9 +146,9 @@ def upgrade_staging(connection: sqlite3.Connection, version: int) -> None:
     """The supported older staging schemas; caller owns the atomic backfill."""
     if not connection.in_transaction:
         raise RuntimeError("staging upgrade requires an owned transaction")
-    if version == VERSION:
+    if version == BASE_VERSION:
         return
-    if version not in (1, 2) or VERSION != 3:
+    if version not in (1, 2) or BASE_VERSION != 3:
         raise RuntimeError("unsupported staging upgrade")
     if version < 2:
         for statement in DDL:
@@ -138,3 +157,25 @@ def upgrade_staging(connection: sqlite3.Connection, version: int) -> None:
     # v2 -> v3 moves handover task membership out of the extension bag into the
     # typed membership table. There is no DDL change; the caller's re-backfill
     # rewrites every relation, and that is what relocates the existing rows.
+
+
+def upgrade_native(connection: sqlite3.Connection, version: int) -> None:
+    """One step of an activated native store from `version` to `version + 1`; the
+    caller (`native.upgrade`) owns the transaction and writes the manifest.
+
+    3 -> 4 adds the `profile` kind, whose fields live in `entity_extensions`, so it
+    has no DDL. 4 -> 5 adds domain_events.actor and entity_key (team-identity-002); the
+    backfill runs here, inside the caller's one transaction. Each later schema change
+    adds its own step and version here.
+    """
+    if not connection.in_transaction:
+        raise RuntimeError("native upgrade requires an owned transaction")
+    if version == 3:
+        return
+    if version == 4:
+        for statement in SCHEMA_5_COLUMNS:
+            connection.execute(statement)
+        connection.execute(SCHEMA_5_BACKFILL)
+        connection.execute(SCHEMA_5_INDEX)
+        return
+    raise RuntimeError(f"no native upgrade step from schema {version}")

@@ -1,6 +1,6 @@
 // User intent: the review pane in the rework's vocabulary (spec §8, §15.6–15.7, Review.dc.html) — the phase picker, what waits
-// on the person as one sentence and its tallies, a bulk row whose labels carry the count, three 3-line items a page with only
-// the focused one boxed with its labelled actions (one filled), and one dim footer that owns the navigation keys.
+// on the person as one sentence and its tallies, a bulk row whose labels carry the count, a list that fills the pane and scrolls
+// (only the focused card boxed, with its labelled actions, one filled), and one dim footer that owns the navigation keys.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderNode, RenderSurface } from 'claude-code'
 
@@ -24,6 +24,7 @@ import {
   selectedTasks,
 } from './review-list'
 import type { Rr } from './rr'
+import { pagedBy, positionLabel, rememberScroll, type ScrollWindow, windowOf } from './scroll-list'
 import {
   actionKey,
   actionRows,
@@ -44,7 +45,13 @@ import {
   type ListEntry,
   listing,
   offlineRow,
+  focusedRows,
+  footerRows,
+  frameRows,
+  bulkRows,
   pagerPiece,
+  scrollEntries,
+  scrollListing,
   paneFrame,
   paneToolbar,
   tabRow,
@@ -72,6 +79,8 @@ export type ReviewView = {
   say: (text: string) => void
   /** tm is being retried after a transient failure: with no good snapshot the pane says "Connecting…". */
   connecting?: boolean
+  /** Rows the pane body may show (Pane `scroll.bodyRows`); absent: the whole list is drawn. */
+  rows?: number
   /** Demo data: the frame's health says demo. */
   demo?: boolean
   /** The tab row's panes and counts (absent: no tab row). */
@@ -91,13 +100,11 @@ export type ReviewHandlers = {
   openViewer: (id: string) => void
   copyCheck: (id: string, text: string, surface: RenderSurface) => void
   strip: StripHandlers
-  /** j / k (or the Tab ring): this card takes the focus; `page` is its page. */
-  focus: (id: string, page: number) => void
-  /** p / n: show this page, its first card focused. */
-  turnPage: (page: number) => void
+  /** j / k, p / n or the Tab ring: this card takes the focus; `first` is the list's first visible card then. */
+  focus: (id: string, first: number) => void
   /** s, or a click on a card's mark: select or unselect that task. */
   select: (id: string) => void
-  /** `all`: select these tasks (this page's); `none`: clear the selection. */
+  /** `all`: select these tasks (every one in the list); `none`: clear the selection. */
   selectAll: (ids: readonly string[]) => void
   selectNone: () => void
   /** u: read the queue and the phases again (retry while offline). */
@@ -194,7 +201,7 @@ function checkRows(k: Kit, it: TmQueueItem, check: TmCheck, ticked: readonly str
 }
 
 /** The focused item: its context, the `human` field, the checks with `t` and `c` under them, details, a refusal, then its actions or y/n. */
-async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewView, on: ReviewHandlers, width: number): Promise<RenderNode> {
+async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewView, on: ReviewHandlers, width: number): Promise<{ readonly node: RenderNode; readonly rows: number }> {
   const { t } = k
   const room = cardInner(width)
   const col = contentCol(room)
@@ -208,7 +215,8 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
       onPress: () => on.fill(it.kind === 'decision' ? `Resolve decision ${it.id} with the taskmaster:decision skill` : `Look at ${it.id}`),
     })
     const lines: Seg[][] = [contextOf(k, it, v, true), ...wrapText(what, room - col).map(text => [{ text, color: t.fg.default }])]
-    return focusedItem(k, { id: it.id, head, lines, actions: actionRows(k, [open], room - 1) }, width)
+    const spec = { id: it.id, head, lines, actions: actionRows(k, [open], room - 1) }
+    return { node: focusedItem(k, spec, width), rows: focusedRows(spec) }
   }
   const action = actionOf(it, v)
   const check = splitCheck(action)
@@ -217,15 +225,18 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
   const armed = mode === 'card'
   const lines: Seg[][] = [contextOf(k, it, v, true), fieldSegs(k, 'human', humanOf(check, action))]
   const extra: RenderNode[] = checkRows(k, it, check, ticked, armed, v.list.ticking, on, room)
+  let extraRows = 0 // rows the extras take beyond one a node
   if (armed) {
     const keys = [
       ...(check.items.length === 0 ? [] : [actionKey(k, { id: 'tick', key: 't', label: 'tick check 1-9', onPress: on.armTick })]),
       actionKey(k, { id: 'copy', key: 'c', label: 'copy live check', onPress: press => on.copyCheck(it.id, action, press.surface) }),
     ]
     const { Box } = k.ui
+    const keyRows = actionRows(k, keys, room - col)
+    extraRows += keyRows.length - 1 // one node, several rows
     extra.push(
       <Box paddingLeft={col} flexDirection="column">
-        {actionRows(k, keys, room - col)}
+        {keyRows}
       </Box>,
     )
   }
@@ -245,7 +256,8 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
   if (mode === 'confirm') {
     const open = check.items.filter(entry => !ticked.includes(entry)).length
     const question = doneQuestion(open, check.items.length, it.id, Math.max(room - 16, Math.min(room - 1, 16)))
-    return focusedItem(k, { id: it.id, head, lines, extra, actions: askRow(k, { id: 'confirm', question, onYes: () => on.confirmDone(it.id), onNo: on.cancel, width: room - 1 }) }, width)
+    const spec = { id: it.id, head, lines, extra, actions: askRow(k, { id: 'confirm', question, onYes: () => on.confirmDone(it.id), onNo: on.cancel, width: room - 1 }) }
+    return { node: focusedItem(k, spec, width), rows: focusedRows({ ...spec, extraRows: extra.length + extraRows }) }
   }
   const actions = actionRows(
     k,
@@ -258,7 +270,8 @@ async function focusedCard(k: Kit, it: TmQueueItem, head: HeadSpec, v: ReviewVie
     ],
     room - 1,
   )
-  return focusedItem(k, { id: it.id, head, lines, extra, actions }, width)
+  const spec = { id: it.id, head, lines, extra, actions }
+  return { node: focusedItem(k, spec, width), rows: focusedRows({ ...spec, extraRows: extra.length + extraRows }) }
 }
 
 /** The note for the agent, on its own: the card it answers and the Input, nothing else with a key. */
@@ -311,7 +324,7 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
     return frame([offlineRow(k, s.reason, retry, inner), <Text> </Text>, footer(k, [{ keys: 'u', word: 'retry' }, ...tail], inner)])
   }
   const items = reviewItems(s, v.cursor, v.details)
-  const view = listView(items, v.cursor.currentId, v.list.page)
+  const view = listView(items, v.cursor.currentId, v.list.first)
   const focused = view.focused
 
   // A note is a page of its own with one key (cancel): no tab row there, so nothing pulls the person off the half-written note.
@@ -319,21 +332,54 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   if (v.list.bulk === 'agent') return noteFrame(composeBulkNote(k, items, v, on, inner))
   if (focused !== null && focused.kind === 'task' && cardMode(v.cursor, focused) === 'note') return noteFrame(composeNote(k, focused, actionOf(focused, v), on, inner))
 
-  const top = paneToolbar(k, {
-    left: phasePicker(k, v.strip, on.strip),
-    right: [pagerPiece(k, { page: view.page, pages: view.pages, onTurn: page => on.turnPage(page) }), refreshPiece(k, { label: 'refresh', onPress: () => on.refresh() })],
-    width: inner,
-  })
+  // The list: every card, drawn into the rows the pane has left once the pinned rows are counted (spec §15.6).
+  const entries: ListEntry[] = []
+  if (focused !== null) {
+    for (const it of items) {
+      const head: HeadSpec = {
+        mark: { key: `sel:${it.id}`, selected: v.list.selected.includes(it.id), onPress: () => on.select(it.id), ...(isSelectable(it) ? {} : { dim: NOT_SELECTABLE }) },
+        badge: KIND_WORD[reviewKind(it)].toUpperCase(),
+        ident: it.id,
+        title: oneLine(it.title),
+        age: ageLabel(it.timestamp, v.now),
+      }
+      if (it.id === focused.id) {
+        const card = await focusedCard(k, it, head, v, on, inner)
+        entries.push({ focused: true, nodes: [card.node], rows: card.rows })
+      } else {
+        const human = it.kind === 'task' ? humanOf(splitCheck(actionOf(it, v)), actionOf(it, v)) : ''
+        const lines = [contextOf(k, it, v, false), ...(human === '' ? [] : [fieldSegs(k, 'human', human)])]
+        entries.push({ focused: false, nodes: item(k, head, lines, inner), rows: 1 + lines.length })
+      }
+    }
+  }
+  const scroll = scrollEntries(entries)
+  const ids = items.map(it => it.id)
+  // Set once the rows are known (below); the keys only run after the frame is drawn.
+  const place: { win: ScrollWindow; room: number } = { win: windowOf({ entries: [], room: 1, first: 0, focus: -1 }), room: 1 }
+  const moveTo = (index: number, first: number): void => {
+    const id = ids[index]
+    if (id !== undefined) on.focus(id, first)
+  }
+  const step = (dir: -1 | 1): void => {
+    const to = neighbour(items, view, dir)
+    if (to === null) k.say(dir === 1 ? 'Already on the last card' : 'Already on the first card')
+    else moveTo(to.index, windowOf({ entries: scroll, room: place.room, first: place.win.start, focus: to.index }).start)
+  }
+  const turn = (dir: -1 | 1): void => {
+    const to = pagedBy({ entries: scroll, room: place.room, first: place.win.start, focus: view.index, dir })
+    if (to.focus === view.index && to.first === place.win.start) k.say(dir === 1 ? 'Already at the end' : 'Already at the top')
+    else moveTo(to.focus, to.first)
+  }
+
   const asking = v.list.bulk === 'done' || (focused !== null && cardMode(v.cursor, focused) === 'confirm')
-  const prev = neighbour(items, view, -1)
-  const next = neighbour(items, view, 1)
   const keys: FooterItem[] = [
     {
       keys: 'j/k',
       word: 'move',
       press: [
-        { id: 'focus-next', key: 'j', onPress: () => (next === null ? k.say('Already on the last card') : on.focus(next.id, next.page)) },
-        { id: 'focus-prev', key: 'k', onPress: () => (prev === null ? k.say('Already on the first card') : on.focus(prev.id, prev.page)) },
+        { id: 'focus-next', key: 'j', onPress: () => step(1) },
+        { id: 'focus-prev', key: 'k', onPress: () => step(-1) },
       ],
     },
     {
@@ -359,8 +405,8 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
             keys: 'p/n',
             word: 'page',
             press: [
-              { key: 'p', onPress: () => (view.page === 0 ? k.say('Already on the first page') : on.turnPage(view.page - 1)) },
-              { key: 'n', onPress: () => (view.page >= view.pages - 1 ? k.say('Already on the last page') : on.turnPage(view.page + 1)) },
+              { key: 'p', onPress: () => turn(-1) },
+              { key: 'n', onPress: () => turn(1) },
             ],
           },
         ]),
@@ -368,8 +414,25 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
     ...tail,
   ]
   const done = v.cursor.done.length
+  // The window over the list in the room left, remembered for the wheel; and the toolbar that says where it stands.
+  const placed = (pinned: number): RenderNode => {
+    place.room = v.rows === undefined ? Number.POSITIVE_INFINITY : v.rows - pinned
+    place.win = windowOf({ entries: scroll, room: place.room, first: v.list.first, focus: view.index })
+    rememberScroll('review', { entries: scroll, ids, room: place.room, first: place.win.start, focus: view.index })
+    return paneToolbar(k, {
+      left: phasePicker(k, v.strip, on.strip),
+      right: [
+        ...(items.length === 0 ? [] : [pagerPiece(k, { position: positionLabel(place.win, items.length), atTop: view.index <= 0, atEnd: view.index >= items.length - 1, onPage: turn })]),
+        refreshPiece(k, { label: 'refresh', onPress: () => on.refresh() }),
+      ],
+      width: inner,
+    })
+  }
+  // The rows around the list: the frame, the tab row and its blank, the toolbar, a blank above the footer and the footer.
+  const around = frameRows(k) + (tabs.length === 0 ? 0 : 2) + 1 + 1 + footerRows(keys, inner)
 
   if (focused === null) {
+    const top = placed(around)
     const tab = orderPhases(v.strip.view.phases, v.strip.allCount, v.strip.view.choice).find(x => x.id === v.strip.view.choice)
     const empty =
       v.strip.view.choice === ALL
@@ -387,9 +450,21 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
   ].join(' · ')
   const counts = kindCounts(items)
   const summary = summaryRow(k, sentence, KINDS.map(kind => ({ word: KIND_WORD[kind].toUpperCase(), count: counts[kind] })), inner)
-  const pageTasks = view.entries.filter(isSelectable).map(it => it.id)
+  // `all` takes every task in the list (the phase's, as listed), not a page's.
+  const allTasks = items.filter(isSelectable).map(it => it.id)
   const chosen = selectedTasks(items, v.list.selected).map(it => it.id)
   const n = chosen.length
+  const bulkSpec = {
+    keys: [
+      actionKey(k, { id: 'bulk-done', key: 'b', label: `mark ${plural(n, 'task')} done`, onPress: () => on.bulkAsk('done', chosen), ...(n === 0 ? { dim: 'Nothing selected to mark done' } : {}) }),
+      actionKey(k, { id: 'bulk-agent', key: 'g', label: `send ${plural(n, 'task')} to agent`, onPress: () => on.bulkAsk('agent', chosen), ...(n === 0 ? { dim: 'Nothing selected to send to the agent' } : {}) }),
+    ],
+    scopes: [
+      { id: 'sel-all', label: 'all', onPress: () => on.selectAll(allTasks) },
+      { id: 'sel-none', label: 'none', onPress: on.selectNone },
+    ],
+    width: inner,
+  }
   const bulk: RenderNode[] =
     v.list.bulk === 'done'
       ? askRow(k, {
@@ -401,34 +476,9 @@ export async function reviewPaneTree(ui: Ui, rr: Rr, v: ReviewView, on: ReviewHa
         })
       : v.list.bulk === 'busy'
         ? [line(k, [{ text: `working · one task at a time: ${v.list.bulkIds.length}`, color: t.tone.info }], inner).el]
-        : [
-            bulkRow(k, {
-              keys: [
-                actionKey(k, { id: 'bulk-done', key: 'b', label: `mark ${plural(n, 'task')} done`, onPress: () => on.bulkAsk('done', chosen), ...(n === 0 ? { dim: 'Nothing selected to mark done' } : {}) }),
-                actionKey(k, { id: 'bulk-agent', key: 'g', label: `send ${plural(n, 'task')} to agent`, onPress: () => on.bulkAsk('agent', chosen), ...(n === 0 ? { dim: 'Nothing selected to send to the agent' } : {}) }),
-              ],
-              scopes: [
-                { id: 'sel-all', label: 'all', onPress: () => on.selectAll(pageTasks) },
-                { id: 'sel-none', label: 'none', onPress: on.selectNone },
-              ],
-              width: inner,
-            }),
-          ]
-  const entries: ListEntry[] = []
-  for (const it of view.entries) {
-    const head: HeadSpec = {
-      mark: { key: `sel:${it.id}`, selected: v.list.selected.includes(it.id), onPress: () => on.select(it.id), ...(isSelectable(it) ? {} : { dim: NOT_SELECTABLE }) },
-      badge: KIND_WORD[reviewKind(it)].toUpperCase(),
-      ident: it.id,
-      title: oneLine(it.title),
-      age: ageLabel(it.timestamp, v.now),
-    }
-    if (it.id === focused.id) {
-      entries.push({ focused: true, nodes: [await focusedCard(k, it, head, v, on, inner)] })
-    } else {
-      const human = it.kind === 'task' ? humanOf(splitCheck(actionOf(it, v)), actionOf(it, v)) : ''
-      entries.push({ focused: false, nodes: item(k, head, [contextOf(k, it, v, false), ...(human === '' ? [] : [fieldSegs(k, 'human', human)])], inner) })
-    }
-  }
-  return frame([top, ...withPhaseMenu(k, v.strip, on.strip, [summary, ...bulk, <Text> </Text>, ...listing(k, entries, inner)]), <Text> </Text>, footer(k, keys, inner)])
+        : [bulkRow(k, bulkSpec)]
+  const bulkHeight = v.list.bulk === 'done' ? bulk.length : v.list.bulk === 'busy' ? 1 : bulkRows(k, bulkSpec)
+  // Over the list: the summary, the bulk row and a blank row.
+  const top = placed(around + 1 + bulkHeight + 1)
+  return frame([top, ...withPhaseMenu(k, v.strip, on.strip, [summary, ...bulk, <Text> </Text>, ...scrollListing(k, entries, place.win, inner)]), <Text> </Text>, footer(k, keys, inner)])
 }

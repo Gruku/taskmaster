@@ -11,7 +11,8 @@ import { stateOf, type World, worldOf } from './fixtures/world'
 
 const DEMO = { options: { source: 'demo' }, plugins: [RR_STUB] }
 const TM = { plugins: [RR_STUB] }
-const RESTORE_PANE = { ...pane('tm-restore'), props: { ...pane('tm-restore').props, bodyColumns: 120 } }
+/** Tall enough for the whole demo list: a short pane would scroll RUNNING NOW out of the drawing. */
+const RESTORE_PANE = { ...pane('tm-restore', 120), props: { ...pane('tm-restore', 120).props, bodyColumns: 120 } }
 const ENV = { USERPROFILE: 'C:\\Users\\me', TEMP: 'C:\\tmp' }
 const HO = { id: 'h-1', path: 'C:\\work\\proj\\.taskmaster\\handovers\\h-1.md', tldr: 'Half done', next: 'Finish the rows' }
 
@@ -54,6 +55,28 @@ describe('/tm-restore in demo mode', () => {
     }
   })
 
+  test('a short pane windows the list: the section row shows above the first visible item, j scrolls, RUNNING NOW comes last', DEMO, async ($, on) => {
+    worldOf(on, mock.clock(on))
+    await $.session.start(SESSION)
+    const short = { ...pane('tm-restore', 30), props: { ...pane('tm-restore', 30).props, bodyColumns: 120 } }
+    const ui = await $.ui.mount({ plugin: PLUGIN, ...short })
+    const marks = async () => (await ui.findAll({ type: 'Button' })).map(b => String(b.props.key ?? '')).filter(k => k.startsWith('sel:'))
+    const first = await marks()
+    expect(first.length).toBeGreaterThan(0)
+    expect(first.length).toBeLessThan(6)
+    expect(first[0]).toBe('sel:demo-audit')
+    expect(await ui.find({ type: 'Text', text: 'UNFINISHED' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^  ↓ \d+ more$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'RUNNING NOW' })).toBeUndefined()
+    for (let i = 0; i < 12; i += 1) {
+      await ui.press({ key: 'restore-down' })
+      await ui.redraw()
+    }
+    const last = await marks()
+    expect(last.at(-1)).toBe('sel:demo-old-1')
+    expect(await ui.find({ type: 'Text', text: /^  ↑ \d+ more$/ })).toBeDefined()
+  })
+
   test('the pane draws the demo sessions even before the command ran', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     const ui = await $.ui.mount({ plugin: PLUGIN, ...RESTORE_PANE })
@@ -79,7 +102,7 @@ describe('/tm-restore over tm', () => {
     expect((await ui.find({ type: 'Button', key: 'restore-resume-all' }))?.props?.label).toBe('resume 2 sessions')
   })
 
-  test('keys: s ticks, j moves the open card, v flips the mode, z compacts, u rescans, n pages, a phase narrows', TM, async ($, on) => {
+  test('keys: s ticks, j moves the open card, v flips the mode, z compacts, u rescans, n pages by a window, a phase narrows', TM, async ($, on) => {
     const clock = mock.clock(on, { now: 1_791_700_000_000 })
     const world = worldOf(on, clock)
     world.env = ENV
@@ -92,9 +115,12 @@ describe('/tm-restore over tm', () => {
     await clock.settle()
     await ui.redraw()
     expect(await label('restore-resume-all')).toBe('resume 1 session')
-    await ui.press({ key: 'restore-down' })
-    await clock.settle()
-    await ui.redraw()
+    // The list runs by section (unfinished, handed off, idle): j down until U5, which is handed off, holds the open card.
+    for (let i = 0; i < 4 && (await ui.find({ type: 'Button', key: 'resume:u5' })) === undefined; i += 1) {
+      await ui.press({ key: 'restore-down' })
+      await clock.settle()
+      await ui.redraw()
+    }
     expect(await ui.find({ type: 'Button', key: 'resume:u5' })).toBeDefined()
     expect(await label('mode:u5')).toBe('switch resume mode')
     expect(await ui.find({ type: 'Text', text: ' --resume ' })).toBeDefined()
@@ -113,12 +139,10 @@ describe('/tm-restore over tm', () => {
     await ui.press({ key: 'refresh' })
     await clock.settle()
     expect(scans()).toBe(before + 1)
-    await ui.press({ key: 'page-next' })
-    await clock.settle()
-    await ui.redraw()
+    // The older session is in the same list now, not on a later page; n pages by a window of items.
     expect(await ui.find({ type: 'Button', key: 'sel:old' })).toBeDefined()
-    expect(await ui.find({ type: 'Button', key: 'sel:u5' })).toBeUndefined()
-    // A phase narrows to that phase's sessions and starts at its page 1.
+    expect(await ui.find({ type: 'Button', key: 'sel:u5' })).toBeDefined()
+    // A phase narrows to that phase's sessions and starts at the top.
     await ui.press({ key: 'phase-field' })
     await clock.settle()
     await ui.redraw()
@@ -139,9 +163,12 @@ describe('/tm-restore over tm', () => {
     await $.session.start(SESSION)
     await $.command.run(command('tm-restore'))
     const ui = await $.ui.mount({ plugin: PLUGIN, ...RESTORE_PANE })
-    await ui.press({ key: 'restore-down' })
-    await clock.settle()
-    await ui.redraw()
+    // The list runs by section (unfinished, handed off, idle): j down until U5, which is handed off, holds the open card.
+    for (let i = 0; i < 4 && (await ui.find({ type: 'Button', key: 'resume:u5' })) === undefined; i += 1) {
+      await ui.press({ key: 'restore-down' })
+      await clock.settle()
+      await ui.redraw()
+    }
     await ui.press({ key: 'resume:u5' })
     await clock.settle()
     expect(world.store.get('resumed-from:u5')).toBe('h-1')

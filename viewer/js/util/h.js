@@ -11,6 +11,8 @@ export function h(tag, attrs = {}, ...rest) {
     if (k === 'class') el.className = v;
     else if (k === 'on') for (const [evt, fn] of Object.entries(v)) el.addEventListener(evt, fn);
     else if (k === 'html') el.innerHTML = v;
+    // CSSOM, not setAttribute: a strict style-src blocks a style attribute but allows style writes from script.
+    else if (k === 'style') el.style.cssText = v;
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
   const children = rest.length === 1 ? [].concat(rest[0]) : rest;

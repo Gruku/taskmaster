@@ -1,5 +1,5 @@
-// User intent: pin the review list's rules (spec §8) — kinds and their order, pages and the focused card, j / k across pages,
-// what a bulk action may touch and the one toast it ends with — without drawing anything.
+// User intent: pin the review list's rules (spec §8) — kinds and their order, the focused card and where the window starts, j / k
+// down the list, what a bulk action may touch and the one toast it ends with — without drawing anything.
 import { describe, expect, test } from 'claude-code/testing'
 
 import { FRESH_CURSOR } from '../hooks/model'
@@ -67,25 +67,24 @@ describe('review list', () => {
     expect(ids(reviewItems(snap(queue), FRESH_CURSOR, {}))).toEqual(['b-001', 'a-001'])
   })
 
-  test('pages of three: the focused card picks the page; without one, the stored page (clamped) and its first card', () => {
+  test('the focused card when it is listed; without one, the card at the stored first-visible index (clamped)', () => {
     const items = many(12)
-    expect(listView(items, '', 0)).toMatchObject({ page: 0, pages: 4, index: 0 })
-    expect(ids(listView(items, '', 3).entries)).toEqual(['t-010', 't-011', 't-012'])
-    expect(listView(items, '', 9)).toMatchObject({ page: 3, index: 9 })
-    expect(listView(items, 't-007', 0)).toMatchObject({ page: 2, index: 6 })
-    expect(listView(items, 'gone', 1).focused?.id).toBe('t-004')
-    expect(listView([], '', 3)).toMatchObject({ page: 0, pages: 1, index: -1, focused: null })
+    expect(listView(items, '', 0)).toMatchObject({ index: 0 })
+    expect(listView(items, '', 9)).toMatchObject({ index: 9 })
+    expect(listView(items, '', 99).focused?.id).toBe('t-012')
+    expect(listView(items, 't-007', 0)).toMatchObject({ index: 6 })
+    expect(listView(items, 'gone', 1).focused?.id).toBe('t-002')
+    expect(listView([], '', 3)).toMatchObject({ index: -1, focused: null })
   })
 
-  test('j / k step across pages and stop at both ends', () => {
+  test('j / k step down the list and stop at both ends', () => {
     const items = many(7)
-    expect(neighbour(items, listView(items, 't-003', 0), 1)).toEqual({ id: 't-004', page: 1 })
-    expect(neighbour(items, listView(items, 't-004', 0), -1)).toEqual({ id: 't-003', page: 0 })
+    expect(neighbour(items, listView(items, 't-003', 0), 1)).toEqual({ id: 't-004', index: 3 })
+    expect(neighbour(items, listView(items, 't-004', 0), -1)).toEqual({ id: 't-003', index: 2 })
     expect(neighbour(items, listView(items, '', 0), -1)).toBeNull()
     expect(neighbour(items, listView(items, 't-007', 0), 1)).toBeNull()
     expect(neighbour([], listView([], '', 0), 1)).toBeNull()
   })
-
   test('the kinds row counts and the newest dated card', () => {
     const items = [task('a', 'critical'), task('b', 'high', '2026-10-02T10:00'), task('c', 'high', 'junk'), task('d', 'low', '2026-10-04T10:00', '')]
     expect(kindCounts(items)).toEqual({ blocked: 1, action: 2, review: 1 })

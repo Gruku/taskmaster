@@ -19,7 +19,6 @@ const noop = (): void => undefined
 const ON: HandoversHandlers = {
   pick: noop,
   move: noop,
-  turnPage: noop,
   select: noop,
   selectOnly: noop,
   toggleSummary: noop,
@@ -41,7 +40,7 @@ const view = (over: Partial<HandoversView> = {}): HandoversView => ({
   marks: FRESH_MARKS,
   phaseView: { ...FRESH_PHASE_VIEW, phases: demoPhases('handovers'), loaded: true },
   pick: '',
-  page: 0,
+  first: 0,
   summaries: DEMO_SUMMARIES,
   summaryOpen: '',
   now: NOW,
@@ -54,7 +53,7 @@ const picks = (tree: unknown) => walk(tree).filter(e => e.type === 'Button' && S
 const overlay = (open = true) => ({ ...FRESH_PHASE_VIEW, phases: demoPhases('handovers'), loaded: true, overlay: open })
 
 describe('handovers pane', () => {
-  test('row 1: the picker, ◐ show closed, the pager and u refresh; the open list has All and a no task row with open counts', () => {
+  test('row 1: the picker, ◐ show closed, the position (1–5 of 5) and u refresh; the open list has All and a no task row with open counts', () => {
     const tree = draw({}, 120)
     expect(textsOf(tree)).toContain('HANDOVERS')
     expect(byKey(tree, 'page-prev')?.props).toMatchObject({ dimColor: true })
@@ -74,13 +73,13 @@ describe('handovers pane', () => {
     expect(byKey(open, 'phase-pick:patch-1-9')?.props?.label).toMatch(/^Patch 1\.9 · active +2$/)
   })
 
-  test('the tally and the close row (dim with nothing selected, all · none); three items, the first focused and boxed', () => {
+  test('the tally and the close row (dim with nothing selected, all · none); every item listed, the first focused and boxed', () => {
     const tree = draw()
     expect(textsOf(tree)).toContain('5 open · newest 2h ago')
     expect(byKey(tree, 'close-selected')?.props).toMatchObject({ hotkey: 'b', label: 'close 0 handovers', dimColor: true })
     expect(byKey(tree, 'select-all')?.props?.label).toBe('all')
     expect(byKey(tree, 'select-none')?.props?.label).toBe('none')
-    expect(picks(tree)).toEqual(SNAP.handovers.slice(0, 3).map(x => `ho:${x.id}`))
+    expect(picks(tree)).toEqual(SNAP.handovers.map(x => `ho:${x.id}`))
     expect(cards(tree).map(c => c.props?.key)).toEqual([`card:${FIRST!.id}`])
     expect(cards(tree)[0]?.props?.borderStyle).toBe('round')
     expect(byKey(tree, `ho:${FIRST!.id}`)?.props?.label).toBe(FIRST!.tldr)
@@ -143,12 +142,12 @@ describe('handovers pane', () => {
 
   test('◐ show closed: closed handovers join, faint with ✓ CLOSED, x dim on them; the picker and All count them', () => {
     const marks = { ...FRESH_MARKS, showClosed: true }
-    const tree = draw({ marks, page: 1, pick: '2026-09-30-row-counter-ported' }, 120)
+    const tree = draw({ marks, first: 1, pick: '2026-09-30-row-counter-ported' }, 120)
     expect(byKey(tree, 'show-closed')?.props?.label).toBe('◐ show closed')
     expect(byKey(tree, 'phase-field')?.props?.label).toBe(` All  ${SNAP.handoversTotal + 2} ▾ `)
     expect(byKey(draw({ marks, phaseView: overlay() }, 120), `phase-pick:${NO_TASK}`)?.props?.label).toMatch(/^no task +3$/)
     expect(picks(tree)).toContain('ho:2026-09-30-row-counter-ported')
-    expect(picks(draw({ marks, page: 2 }, 120))).toEqual(['ho:2026-09-29-store-spike-notes'])
+    expect(picks(draw({ marks }, 120))).toContain('ho:2026-09-29-store-spike-notes')
     expect(textsOf(tree)).toContain('✓ CLOSED       ')
     expect(byKey(tree, 'close')?.props?.dimColor).toBe(true)
     expect(textsOf(tree)).toContain('5 open · 2 closed · newest 2h ago')
@@ -195,7 +194,7 @@ describe('handovers pane', () => {
   })
 
   test('before its own read the pane draws the snapshot window; every row fits the pane at 72 and 50 columns', () => {
-    expect(picks(draw({ list: null }))).toHaveLength(3)
+    expect(picks(draw({ list: null }))).toHaveLength(5)
     for (const width of [72, 50]) {
       for (const over of [{}, { pick: SECOND!.id, summaryOpen: SECOND!.id }, { marks: { ...FRESH_MARKS, showClosed: true } }]) {
         expect(widthOf(draw(over, width)), `${width}`).toBeLessThanOrEqual(width)

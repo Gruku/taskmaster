@@ -1,14 +1,14 @@
-// User intent: the review pane as a paged card list (spec §8) — which cards, in what order (BLOCKED, ACTION, IN REVIEW, newest
-// first), which page and card hold the focus, what a bulk action may touch and how its outcome is told — as plain functions
-// tested without drawing.
+// User intent: the review pane as a scrolling card list (spec §8) — which cards, in what order (BLOCKED, ACTION, IN REVIEW, newest
+// first), which card holds the focus and where the window starts, what a bulk action may touch and how its outcome is told — as
+// plain functions tested without drawing.
 import type { TmCursor, TmQueueItem, TmReviewList, TmSnapshot, TmTaskDetail } from '../types'
-import { LIST_PAGE_SIZE as PAGE_SIZE, reviewQueue, truncate } from './model'
+import { reviewQueue, truncate } from './model'
 
 export type ReviewKind = 'blocked' | 'action' | 'review'
 export const KIND_WORD: Readonly<Record<ReviewKind, string>> = { blocked: 'blocked', action: 'action', review: 'in review' }
 export const KIND_TONE: Readonly<Record<ReviewKind, 'critical' | 'warning' | 'info'>> = { blocked: 'critical', action: 'warning', review: 'info' }
 export const KINDS: readonly ReviewKind[] = ['blocked', 'action', 'review']
-export const FRESH_REVIEW_LIST: TmReviewList = { page: 0, selected: [], ticking: false, bulk: 'none', bulkIds: [] }
+export const FRESH_REVIEW_LIST: TmReviewList = { first: 0, selected: [], ticking: false, bulk: 'none', bulkIds: [] }
 
 /**
  * A card's kind (spec §8): BLOCKED for what holds a release (a critical task, a P0 issue); ACTION for anything else that asks
@@ -40,30 +40,25 @@ export function reviewItems(s: TmSnapshot, c: TmCursor, details: Readonly<Record
   return sortReview(reviewQueue(s, c, details).filter(item => !c.done.includes(item.id)))
 }
 
-/** One page of the list and its focused card: `index` is the focused card's place in the whole list (-1: none). */
+/** The list's focused card: `index` is its place in the whole list (-1: none). */
 export type ListView = {
-  readonly entries: readonly TmQueueItem[]
-  readonly page: number
-  readonly pages: number
   readonly focused: TmQueueItem | null
   readonly index: number
 }
 
-/** The focused card's page when it is listed; else the stored page (clamped) and its first card. */
-export function listView(items: readonly TmQueueItem[], currentId: string, page: number): ListView {
-  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE))
+/** The focused card when it is listed; else the card at the stored first-visible index (clamped), so a list always has a focus. */
+export function listView(items: readonly TmQueueItem[], currentId: string, first: number): ListView {
   const at = currentId === '' ? -1 : items.findIndex(item => item.id === currentId)
-  const shown = at >= 0 ? Math.floor(at / PAGE_SIZE) : Math.min(Math.max(0, page), pages - 1)
-  const entries = items.slice(shown * PAGE_SIZE, (shown + 1) * PAGE_SIZE)
-  const index = at >= 0 ? at : entries.length > 0 ? shown * PAGE_SIZE : -1
-  return { entries, page: shown, pages, focused: items[index] ?? null, index }
+  const stored = Number.isFinite(first) ? Math.min(Math.max(0, Math.floor(first)), Math.max(0, items.length - 1)) : 0
+  const index = at >= 0 ? at : items.length > 0 ? stored : -1
+  return { focused: items[index] ?? null, index }
 }
 
-/** `j` / `k`: the card `dir` away from the focused one, across pages, with its page; null at either end. */
-export function neighbour(items: readonly TmQueueItem[], view: ListView, dir: -1 | 1): { readonly id: string; readonly page: number } | null {
+/** `j` / `k`: the card `dir` away from the focused one, with its index; null at either end. */
+export function neighbour(items: readonly TmQueueItem[], view: ListView, dir: -1 | 1): { readonly id: string; readonly index: number } | null {
   if (view.index < 0) return null
   const next = items[view.index + dir]
-  return next === undefined ? null : { id: next.id, page: Math.floor((view.index + dir) / PAGE_SIZE) }
+  return next === undefined ? null : { id: next.id, index: view.index + dir }
 }
 
 /** How many cards of each kind the list holds: the `2 BLOCKED  1 ACTION  9 IN REVIEW` row. */

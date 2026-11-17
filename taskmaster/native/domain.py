@@ -79,8 +79,38 @@ def normalize_priority(value: str) -> str:
 
 
 def valid_bundle_slug(value: str) -> bool:
-    """Empty string clears the bundle (descope); otherwise lowercase kebab."""
-    return value == "" or bool(BUNDLE_SLUG_RE.match(value))
+    """Empty string clears the bundle (descope); otherwise lowercase kebab (fullmatch: `$` alone let a trailing
+    newline into the bundle pick's worktree command)."""
+    return value == "" or (isinstance(value, str) and bool(BUNDLE_SLUG_RE.fullmatch(value)))
+
+
+# A task's sub_repo names a directory inside the project; a pick answer splices it into the worktree command the
+# picker's agent runs, and on a team server any member may set it on any task (security review I-2). So it is a plain
+# relative path: letters, digits, `.`, `_`, `/`, `-`; no leading `-` or `/`, no `..` segment, no drive or backslash.
+SUB_REPO_RE = re.compile(r"[A-Za-z0-9._/-]{1,200}")
+SUB_REPO_RULE = ("a relative directory inside the project: letters, digits, `.`, `_`, `/` and `-`, "
+                 "not starting with `-` or `/`, with no `..` segment")
+
+
+def valid_sub_repo(value) -> bool:
+    """Empty clears it; otherwise a plain relative directory (SUB_REPO_RULE)."""
+    if value == "":
+        return True
+    if not isinstance(value, str) or not SUB_REPO_RE.fullmatch(value) or value[0] in "-/":
+        return False
+    return ".." not in value.split("/")
+
+
+def task_path_refusal(before: dict, after: dict) -> str | None:
+    """Why a task write may not store its `sub_repo` or `bundle`, or None. Only a changed value is checked, so a
+    task holding an old value that breaks the rule can still be edited (its pick answer leaves the command out)."""
+    for field, valid, rule in (("sub_repo", valid_sub_repo, SUB_REPO_RULE),
+                               ("bundle", valid_bundle_slug, "lowercase kebab, 2-41 chars")):
+        if field not in after or after[field] == before.get(field) or after[field] is None:
+            continue
+        if not valid(after[field]):
+            return f"invalid {field} {after[field]!r}: {rule}"
+    return None
 
 
 def valid_kebab_id(value: str) -> bool:
@@ -272,6 +302,9 @@ def archive_task_doc(task, *, reason, now=None):
     return doc
 
 
+_COMMIT_SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}")
+
+
 def record_gate_doc(task, *, gate, verdict="", status="", commit_sha="", spec_path="",
                     codex_used=False, critical_count=0, important_count=0, now=None):
     """Stamp one gate record and refresh the slim `gate_state` mirror."""
@@ -284,6 +317,8 @@ def record_gate_doc(task, *, gate, verdict="", status="", commit_sha="", spec_pa
                              f"{', '.join(VALID_GATE_VERDICTS)}, got `{verdict or '(none)'}`")
     elif status != "done":
         raise ValueError(f"status gate `{gate}` requires status=\"done\", got `{status or '(none)'}`")
+    if commit_sha and not _COMMIT_SHA_RE.fullmatch(str(commit_sha)):
+        raise ValueError("commit_sha must be 7 to 64 hexadecimal characters")     # 027 D8: no prose in gate records
     lane = task.get("lane")
     if lane and is_verdict:
         required = blocking_gates(lane)

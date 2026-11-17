@@ -32,3 +32,17 @@ test('h() filters null/false children', () => {
   const el = h('div', {}, [h('span', {}, 'a'), null, false, h('span', {}, 'b')]);
   assert.equal(el.children.length, 2);
 });
+
+test('h() applies a style key through CSSOM, never setAttribute (a strict style-src blocks the attribute)', () => {
+  const calls = [];
+  const original = dom.window.Element.prototype.setAttribute;
+  dom.window.Element.prototype.setAttribute = function (name, value) { calls.push(name); return original.call(this, name, value); };
+  try {
+    const el = h('span', { style: 'width: 40%; position: fixed' });
+    assert.equal(el.style.width, '40%');
+    assert.equal(el.style.position, 'fixed');
+    assert.deepEqual(calls, []);
+  } finally {
+    dom.window.Element.prototype.setAttribute = original;
+  }
+});

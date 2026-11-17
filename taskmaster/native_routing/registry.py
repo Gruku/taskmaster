@@ -4,6 +4,7 @@
 """Tool dispatch for native-authority stores."""
 from __future__ import annotations
 
+import contextvars
 import inspect
 import json
 import threading
@@ -11,6 +12,19 @@ from pathlib import Path
 from typing import Callable
 
 from . import gate, runtime
+
+
+def _client_agent() -> str:
+    import sys
+    server = sys.modules.get('taskmaster.backlog_server')
+    return server.client_agent() if server is not None and hasattr(server, 'client_agent') else ''
+
+
+def _host_session(fallback: str) -> str:
+    """This process's host-local session: merge-stamp replays are host work, never a caller's (D10)."""
+    import sys
+    server = sys.modules.get('taskmaster.backlog_server')
+    return getattr(server, 'SESSION_ID', fallback) if server is not None else fallback
 
 # tool name -> adapter(call, **bound_arguments). Action routers are routed per
 # action: ACTIONS[tool] names the actions its adapter serves.
@@ -71,6 +85,11 @@ JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_claim", "backlog_cont
                          "backlog_linear"})
 
 
+def error_text(tool: str, text: str) -> str:
+    """`text` as this tool's error answer: JSON for the JSON routers, `Error: …` otherwise."""
+    return json.dumps({"error": text}) if tool in JSON_ERRORS else f"Error: {text}"
+
+
 def unrouted_message(tool: str, action: str | None = None) -> str:
     target = f"`{tool}` action `{action}`" if action else f"`{tool}`"
     reason = GUIDANCE.get((tool, action), f"{_NATIVE}, which the legacy writer cannot open, and the "
@@ -92,7 +111,7 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             unknown = UNKNOWN_ACTION.get(tool, lambda action: f"Error: unknown action {action!r}")
             return unknown(arguments["action"])
         return unrouted_message(tool, arguments.get("action"))
-    with runtime.open_call(database, backlog_dir, session) as call:
+    with runtime.open_call(database, backlog_dir, session, agent=_client_agent()) as call:
         outermost = not getattr(_DEPTH, "calls", 0)
         _DEPTH.calls = getattr(_DEPTH, "calls", 0) + 1
         try:
@@ -101,7 +120,7 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             _DEPTH.calls -= 1
         result = _with_flag_notices(call, result) if outermost and tool not in LISTS_OWN_FLAGS else result
     if outermost and tool not in NO_STAMP_REPLAY:
-        _replay_merge_stamps(database, backlog_dir, session)
+        _replay_merge_stamps(database, backlog_dir, _host_session(session))
     return result
 
 
@@ -118,6 +137,11 @@ def _replay_merge_stamps(database, backlog_dir, session):
     a read never starts a coordinator just to replay. One replay per project at a time.
     With no coordinator the queue waits, silently. Advisory: never costs the caller."""
     from . import merge_stamps
+    from taskmaster.coordinator import client as coordinator_client
+    if coordinator_client.serving():
+        # A team server never replays a queue with its own Git (team-server-008 D9): teammates' stamps come in as
+        # commands and are compared in their clones. A queue on the host is drained by the operator.
+        return
     if not merge_stamps.has_pending(backlog_dir):
         return
     if not (Path(backlog_dir) / "local" / "coordinator" / "discovery.json").exists():
@@ -138,7 +162,10 @@ def _replay_merge_stamps(database, backlog_dir, session):
         running = _REPLAYS.get(key)
         if running is not None and running.is_alive():
             return
-        thread = threading.Thread(target=run, name="taskmaster-merge-stamp-replay", daemon=True)
+        # An empty context: on free-threaded 3.14 a thread inherits its starter's context, which would carry
+        # the caller's request into the origin and session providers (team-server-003 D10).
+        thread = threading.Thread(target=contextvars.Context().run, args=(run,),
+                                  name="taskmaster-merge-stamp-replay", daemon=True)
         _REPLAYS[key] = thread
     thread.start()
 

@@ -1,0 +1,69 @@
+# User intent: the systemd unit that runs the team's Taskmaster server on the Hetzner host - loopback only behind
+# Caddy, as an unprivileged sandboxed user, restarted on failure but never in a loop on a refused configuration.
+# Install: /etc/systemd/system/taskmaster.service (root, 0644). See docs/runbooks/team-server-deploy.md.
+# Replace tm.example.com and viewer.tm.example.com with the public domain here AND in the Caddyfile; they must match.
+
+[Unit]
+Description=Taskmaster team server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=taskmaster
+Group=taskmaster
+WorkingDirectory=/srv/taskmaster/project
+# Secrets (TASKMASTER_LINEAR_TOKEN) live only in this root-only file, never in an Environment= line here.
+EnvironmentFile=-/etc/taskmaster/taskmaster.env
+ExecStart=/opt/taskmaster/current/.venv/bin/taskmaster-serve --root /srv/taskmaster/project \
+    --host 127.0.0.1 --port 7470 --allowed-host tm.example.com --viewer-port 7471 \
+    --viewer-origin https://viewer.tm.example.com --linger-bytes 4194304 --export-push backup
+# `backup` is the Git remote of the dedicated backup repository (team-server-013); add it to the host clone before
+# the first start, or the daemon refuses (exit 2). Without a backup, drop the flag and pass --export-interval 0.
+# Exit codes (taskmaster/serve/config.py): 0 clean stop; 2 refused configuration (never restarted);
+# 69 unavailable (restarted, bounded by the start limit); 75 coordinator lost (restarted).
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+# SIGTERM to the daemon alone, so it drains before any git child is killed.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+UMask=0077
+LimitNOFILE=4096
+MemoryMax=1G
+# A backlog_query worker (oom_score_adj 1000) that the kernel kills for memory is one failed query, not a reason to
+# stop the server: systemd's default OOMPolicy=stop would end the whole unit (security re-review 2).
+OOMPolicy=continue
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/srv/taskmaster/project
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# With no Linear and no backup push (013), the daemon needs no egress; then also set:
+#IPAddressDeny=any
+#IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

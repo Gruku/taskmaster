@@ -353,6 +353,24 @@
       },
       "unknown_field_owner": "entity_extensions"
     },
+    "profile": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
     "project": {
       "fields": {
         "_body": "entity_documents",
@@ -1455,7 +1473,7 @@
     },
     "backlog_claim": {
       "category": "simple-command",
-      "documentation": "Keep, give back or inspect the claim a pick took on a task, as JSON.\n\nA claim is what stops two sessions working the same task. `backlog_pick_task`\ntakes one; this keeps it alive across a long session, hands it back when the\nwork pauses, and says who holds what.\n\nA claim expires when its holder's process is known to be gone, or when its TTL\npasses. A holder that cannot be judged — another machine, or a session this\nstore has never heard from — keeps its claim: the cost of guessing wrong is two\nagents editing one task, so an unproven claim is never broken. `release` frees\nan expired claim without stealing; `backlog_pick_task(force=True)` is still the\noverride for one that stands.\n\nArgs:\n    action: renew (extend to now + ttl), release (hand it back), status.\n    task_id: The task to act on. Omit with `status` to list this session's claims.\n    ttl_seconds: How long a renewed claim stands. 0 uses the default (4 hours).",
+      "documentation": "Keep, give back or inspect the claim a pick took on a task, as JSON.\n\nA claim is what stops two sessions working the same task. `backlog_pick_task`\ntakes one; this keeps it alive across a long session, hands it back when the\nwork pauses, and says who holds what.\n\nA claim expires when its holder's process is known to be gone, or when its TTL\npasses. A holder that cannot be judged — another machine, or a session this\nstore has never heard from — keeps its claim: the cost of guessing wrong is two\nagents editing one task, so an unproven claim is never broken. `release` frees\nan expired claim without stealing; `backlog_pick_task(force=True)` is still the\noverride for one that stands. On a shared server, a claim belongs to your session;\nyour own earlier sessions that have disconnected are taken over without force.\n\nArgs:\n    action: renew (extend to now + ttl), release (hand it back), status.\n    task_id: The task to act on. Omit with `status` to list this session's claims.\n    ttl_seconds: How long a renewed claim stands. 0 uses the default (4 hours).",
       "parameters": [
         {
           "mode": "positional",
@@ -2087,7 +2105,7 @@
     },
     "backlog_document_import": {
       "category": "simple-command",
-      "documentation": "Import a task's external documents into the store, so reads stop touching files.\n\nExplicit and caller-initiated: nothing watches the files and nothing imports on\nread. Each named section's file is read once, stored with its content hash, and\nserved from the store from then on — including after the file changes on disk, so\nre-run this when a document is edited. Re-importing unchanged prose does nothing.\n\nArgs:\n    kind: Only \"task\" — task `docs` paths are the external documents the store serves.\n    entity_id: The task ID whose documents to import.\n    sections: Document sections to import (spec, plan, design, analysis, roadmap).\n        Omit to import every document the task declares.",
+      "documentation": "Import a task's external documents into the store, so reads stop touching files.\n\nExplicit and caller-initiated: nothing watches the files and nothing imports on\nread. Each named section's file is read once, stored with its content hash, and\nserved from the store from then on — including after the file changes on disk, so\nre-run this when a document is edited. Re-importing unchanged prose does nothing.\n\nWith `content`, the text you pass is imported instead and no file is read: use it\nwhen the file is on your machine, not the server's (a team server). The task must\nalready declare each section's path. An uploaded document is stored on the team\nserver; a restore of the server keeps it only through the server's state backup\n(team-server-013), so commit the file to the code repository if it must outlive\nboth. Send large documents one section per call (the server caps a request's size).\n\nArgs:\n    kind: Only \"task\" — task `docs` paths are the external documents the store serves.\n    entity_id: The task ID whose documents to import.\n    sections: Document sections to import (spec, plan, design, analysis, roadmap).\n        Omit to import every document the task declares. Not with `content`.\n    content: Section name to that document's text, e.g. `{\"spec\": \"# Spec\\n...\"}`.\n    expected_hash: Section name to the sha256 `content_hash` you expect the store to\n        hold now (\"\" for none), from `backlog_document(provenance=True)`; a section\n        whose stored copy differs is not imported. Pass it when several people import\n        the same task's documents.",
       "parameters": [
         {
           "mode": "positional",
@@ -2108,6 +2126,22 @@
           "name": "sections",
           "required": false,
           "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "content",
+          "required": false,
+          "type": "dict[str, str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "expected_hash",
+          "required": false,
+          "type": "dict[str, str] | None"
         }
       ],
       "returns": "str",
@@ -2387,7 +2421,7 @@
     },
     "backlog_handover_resync": {
       "category": "synchronization",
-      "documentation": "Import hand edits to handover files (a handover-only `backlog_sync`) and rebuild the 30-entry handover index.",
+      "documentation": "Import hand edits to handover files (a handover-only `backlog_sync`) and rebuild the 30-entry handover index.\n\nOn a team server only the host operator can run it.",
       "parameters": [],
       "returns": "str",
       "transactional": true
@@ -2884,7 +2918,7 @@
     },
     "backlog_issue_resync": {
       "category": "synchronization",
-      "documentation": "Import hand edits to issue files (an issue-only `backlog_sync`) and rebuild the issue index.",
+      "documentation": "Import hand edits to issue files (an issue-only `backlog_sync`) and rebuild the issue index.\n\nOn a team server only the host operator can run it.",
       "parameters": [],
       "returns": "str",
       "transactional": true
@@ -3662,7 +3696,7 @@
     },
     "backlog_pick_task": {
       "category": "composite-command",
-      "documentation": "Start working on a task — sets it to in-progress. Idempotent if already in-progress.\n\nPicking takes a claim: the task is locked to this session until it completes,\nthe claim is released, or the claim expires. Keep a long task claimed with\n`backlog_claim(action=\"renew\")`, and give it back with `action=\"release\"`.\n\nArgs:\n    task_id: The task ID to pick (e.g., \"ue-plugin-003\")\n    force: Force-claim the task even if locked by another session. Use when a previous\n           session ended without releasing the lock.\n    ttl_seconds: How long this claim stands without a renew. 0 uses the default\n           (4 hours). A claim also expires as soon as its holder is known to be gone.",
+      "documentation": "Start working on a task — sets it to in-progress. Idempotent if already in-progress.\n\nPicking takes a claim: the task is locked to this session until it completes,\nthe claim is released, or the claim expires. Keep a long task claimed with\n`backlog_claim(action=\"renew\")`, and give it back with `action=\"release\"`.\nOn a shared server, a claim belongs to your session; your own earlier sessions that have\ndisconnected are taken over without force.\n\nArgs:\n    task_id: The task ID to pick (e.g., \"ue-plugin-003\")\n    force: Force-claim the task even if locked by another session. Use when a previous\n           session ended without releasing the lock.\n    ttl_seconds: How long this claim stands without a renew. 0 uses the default\n           (4 hours). A claim also expires as soon as its holder is known to be gone.",
       "parameters": [
         {
           "mode": "positional",
@@ -3861,7 +3895,7 @@
     },
     "backlog_record_merge": {
       "category": "simple-command",
-      "documentation": "Stamp a merge rung on a task: records that the task's branch landed at `rung`\n(e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.\nThe manual fallback for the PostToolUse merge-recorder hook. Not a pipeline gate —\nno ordering is enforced; a rung label outside the ladder (e.g. \"branch:<name>\") is\nstill recorded to preserve the audit trail.\n\nArgs:\n    task_id: Task id.\n    rung: Rung label (ladder label or \"branch:<name>\" for untracked targets).\n    sha: Merge commit SHA.\n    merged_at: ISO timestamp; defaults to now.",
+      "documentation": "Stamp a merge rung on a task: records that the task's branch landed at `rung`\n(e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.\nThe manual fallback for the PostToolUse merge-recorder hook. Not a pipeline gate —\nno ordering is enforced; a rung label outside the ladder (e.g. \"branch:<name>\") is\nstill recorded to preserve the audit trail.\n\nArgs:\n    task_id: Task id.\n    rung: Rung label (ladder label or \"branch:<name>\" for untracked targets).\n    sha: Merge commit SHA.\n    merged_at: ISO timestamp; defaults to now.\n    expect_commit: record only if the rung's current merge commit is this one ('' = none recorded); otherwise refused. Used by team-server hooks.",
       "parameters": [
         {
           "mode": "positional",
@@ -3888,6 +3922,14 @@
           "name": "merged_at",
           "required": false,
           "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "expect_commit",
+          "required": false,
+          "type": "str | None"
         }
       ],
       "returns": "str",
@@ -4048,7 +4090,7 @@
     },
     "backlog_sync": {
       "category": "synchronization",
-      "documentation": "Import hand edits to `.taskmaster/` files into a native store.\n\nA native store never re-reads its projection files on its own, so a hand edit\nto a task, epic, handover, `backlog.yaml` or `project.yaml` takes effect only\nafter this call.\n\nNo arguments syncs every file; `files` syncs only those; `sync_id` checks on a\nsync an earlier call started. Each call returns within ~15 s with \"Sync running\"\n(call again with the sync_id), \"Sync complete\" with counts, or the conflicts and\nquarantined files to settle with `backlog_resolve_conflict`. On a legacy store\nit does nothing (hand edits import on every call).\n\nArgs:\n    files: Paths relative to `.taskmaster/` to sync, e.g. `[\"tasks/core-001.md\"]`\n        (a leading `.taskmaster/` is accepted). Omit to sync every file.\n    sync_id: The id from a \"Sync running\" answer. A finished sync returns its stored\n        result; edits made after it need a fresh `backlog_sync()`.",
+      "documentation": "Import hand edits to `.taskmaster/` files into a native store.\n\nA native store never re-reads its projection files on its own, so a hand edit\nto a task, epic, handover, `backlog.yaml` or `project.yaml` takes effect only\nafter this call.\n\nNo arguments syncs every file; `files` syncs only those; `sync_id` checks on a\nsync an earlier call started. Each call returns within ~15 s with \"Sync running\"\n(call again with the sync_id), \"Sync complete\" with counts, or the conflicts and\nquarantined files to settle with `backlog_resolve_conflict`. On a legacy store\nit does nothing (hand edits import on every call). On a team server only the host\noperator can run it.\n\nArgs:\n    files: Paths relative to `.taskmaster/` to sync, e.g. `[\"tasks/core-001.md\"]`\n        (a leading `.taskmaster/` is accepted). Omit to sync every file.\n    sync_id: The id from a \"Sync running\" answer. A finished sync returns its stored\n        result; edits made after it need a fresh `backlog_sync()`.",
       "parameters": [
         {
           "default_expression": "None",

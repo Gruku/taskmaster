@@ -22,7 +22,7 @@ import uuid
 from typing import NamedTuple
 
 from taskmaster.native import metrics
-from taskmaster.projection_parse import ENTITY_FILE_SPECS, classify
+from taskmaster.projection_parse import ENTITY_FILE_SPECS, classify, path_ident
 from taskmaster.projection_paths import UnsafePath, check_component as _check_component, relative, safe_path
 
 MAX_FILE_BYTES = 1024 * 1024
@@ -105,7 +105,9 @@ def discover(root: Path, scan: "Scan | None" = None) -> Inventory:
             matches = [f"{directory}/{name}" for directory in directories for name in listing(directory)
                        if _visible(name) and fnmatch.fnmatch(name, name_pattern)]
             for rel in sorted(matches, key=os.path.normcase):
-                consider(rel, kind, PurePosixPath(rel).stem)
+                ident = path_ident(kind, PurePosixPath(rel))
+                if ident is not None:
+                    consider(rel, kind, ident)
     return result
 
 
@@ -113,8 +115,11 @@ def _signature(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
-def observe(root: Path, rel: str, *, limit=MAX_FILE_BYTES) -> Observation | None:
-    classify(rel)
+def observe(root: Path, rel: str, *, limit=MAX_FILE_BYTES, authored=True) -> Observation | None:
+    """`authored=False` reads a derived projection (ideas/IDEAS.md) with the same path checks; only an
+    import must be an authored file (conflict reads, team-server-012 D7)."""
+    if authored:
+        classify(rel)
     return _read_observed(root, rel, limit)
 
 

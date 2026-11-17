@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from taskmaster.native import actor, provenance
 from taskmaster.native.queries import Repository
 from .client import Client
 from .protocol import connect
@@ -14,7 +15,9 @@ from .protocol import connect
 
 class NativeCall:
     def __init__(self, connection: sqlite3.Connection, backlog_dir: Path, session: str, *, visibility='native',
-                 autostart=True, client_timeout=None):
+                 autostart=True, client_timeout=None, agent=''):
+        if not isinstance(agent, str):
+            raise ValueError('agent must be text')
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
         self.connection, self.backlog_dir, self.session = connection, backlog_dir, session
@@ -23,6 +26,7 @@ class NativeCall:
         # interpreter and the MCP server would then reuse it).
         self.autostart = autostart
         self.client_timeout = client_timeout  # None: the Client's default
+        self.agent = agent
         self.seq = None
         self.notices = []
         self.receipts = []
@@ -49,14 +53,32 @@ class NativeCall:
             store_id = snapshot.identity['store_id']
         envelope = {'protocol': 2, 'store_id': store_id, 'caller_scope': self.session,
                     'request_id': uuid.uuid4().hex, 'operation': operation,
-                    'arguments': arguments, 'expected_revisions': list(expected or [])}
-        outcome = self.client.execute(envelope)
+                    'arguments': arguments, 'expected_revisions': list(expected or []),
+                    'actor': actor.advisory(self.agent)}
+        clone = self._clone()
+        if clone:
+            envelope['clone'] = clone
+        try:
+            outcome = self.client.execute(envelope)
+        except Exception:
+            # A refusal is built in the coordinator from rows this ledger never saw (027 D2.2).
+            provenance.note_refused()
+            raise
         receipt = outcome['receipt']
+        provenance.note_receipt(receipt)
         self.receipts.append(receipt)
         self._projection(outcome['projection'])
         if receipt['affected']:
             self.seq = receipt['commit_seq']
         return receipt
+
+    @staticmethod
+    def _clone() -> str:
+        """The bound session's clone id (an MCP connection's header, a hook channel's body), or "" (team-server-011 D2)."""
+        from taskmaster import backlog_server
+        bound = backlog_server._bound_session()
+        value = getattr(bound, 'clone', '')
+        return value if isinstance(value, str) else ''
 
     def _projection(self, projection):
         self.projections.append(projection)
@@ -86,10 +108,14 @@ class NativeCall:
 
 @contextmanager
 def open_call(database: Path, backlog_dir: Path, session: str, *, visibility='native', autostart=True,
-              client_timeout=None):
+              client_timeout=None, agent=''):
     backlog_dir = Path(backlog_dir).resolve(strict=True)
     if Path(database).resolve(strict=True) != backlog_dir / 'local/store.db':
         raise ValueError('native database does not belong to the requested backlog directory')
-    with closing(connect(backlog_dir.parent, readonly=True)) as connection:
+    provenance.note_opened()
+    guarded = provenance.current() is not None     # 027: with no statement cache every execution is authorized
+    with closing(connect(backlog_dir.parent, readonly=True, **({'cached_statements': 0} if guarded else {}))) as connection:
+        if guarded:
+            provenance.install_guard(connection)
         yield NativeCall(connection, backlog_dir, session, visibility=visibility, autostart=autostart,
-                         client_timeout=client_timeout)
+                         client_timeout=client_timeout, agent=agent)

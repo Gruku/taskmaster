@@ -151,13 +151,15 @@ def validate(operation, arguments):
         if arguments.get("gate") not in domain_v3.VALID_GATES:
             raise ValueError(f"invalid gate. Valid: {', '.join(domain_v3.VALID_GATES)}")
     elif operation == "task.merge":
-        _keys(arguments, {"id", "rung", "sha", "merged_at", "merge_targets"}, operation)
+        _keys(arguments, {"id", "rung", "sha", "merged_at", "merge_targets", "expect_commit"}, operation)
         _identifier(arguments.get("id"), "task id")
         if not _text(arguments, "rung").strip():
             raise ValueError("rung is required")
         if not _text(arguments, "sha").strip():
             raise ValueError("sha is required")
         _text(arguments, "merged_at")
+        if "expect_commit" in arguments:
+            _text(arguments, "expect_commit")
         targets = arguments.get("merge_targets", [])
         if not isinstance(targets, list) or not all(isinstance(t, dict) for t in targets):
             raise ValueError("merge_targets must be a list of resolved rung objects")
@@ -253,10 +255,11 @@ def validate(operation, arguments):
             raise ValueError(f"status must be one of {domain_v3.THREAD_STATUSES}")
         _text(arguments, "reason")
     elif operation == "project.set":
-        _keys(arguments, {"document", "create_only"}, operation)
+        _keys(arguments, {"document", "create_only", "team_protocol_upgrade"}, operation)
         if not isinstance(arguments.get("document"), dict):
             raise ValueError("project.set requires a manifest object")
         _flag(arguments, "create_only")
+        _flag(arguments, "team_protocol_upgrade")
         # A committed manifest becomes project.yaml, so one the loader cannot
         # parse must be refused here rather than reported as a successful write.
         # The check is pure — it reads the supplied document, never the file.
@@ -269,6 +272,11 @@ def validate(operation, arguments):
             # A malformed section (`"meta": 42`) reaches the validator as an
             # attribute error; admission always refuses with a value error.
             raise ValueError(f"invalid project manifest structure: {exc}") from None
+        from taskmaster.project import invalid_merge_labels
+        bad = invalid_merge_labels(arguments["document"])
+        if bad:
+            raise ValueError("merge ladder labels must be branch-like ([A-Za-z0-9._/-], up to 64 characters, "
+                             "no leading '-'); rename: " + ", ".join(repr(b) for b in bad))
     elif operation == "linear.link":
         _keys(arguments, {"task_id", "external_key", "workspace_alias"}, operation)
         _identifier(arguments.get("task_id"), "task id")
@@ -467,7 +475,8 @@ def progress_key_range(prefix):
     return prefix, prefix[:-1] + "/"
 
 
-def _queue_progress_log(transaction, entry):
+def _queue_progress_log(transaction, entry, ident):
+    transaction.annotate("task", ident, "changelog", {"changelog": entry})
     prefix = progress_pending_key(transaction.seq, 0)[:-4]
     taken = transaction.connection.execute("SELECT COUNT(*) FROM sync_state WHERE key>=? AND key<?",
                                            progress_key_range(prefix)).fetchone()[0]
@@ -479,7 +488,7 @@ def _queue_progress_log(transaction, entry):
 
 def _write_task(transaction, ident, doc, body, *, before_entity, enqueue=True):
     transaction.replace("task", ident, doc, body, before_entity=before_entity)
-    if enqueue:
+    if enqueue and ("task", ident) in transaction.affected:
         _enqueue_linear(transaction, ident, doc)
 
 
@@ -790,7 +799,11 @@ def _task_update(transaction, arguments):
         task[field] = value
     if field in ("notes", "review_instructions"):
         task = _auto_link(transaction, "task", ident, task, body)
-    _write_task(transaction, ident, task, body, before_entity=entity)
+    transaction.named_field = field  # clone_fields.divert: a write of the shared value back still deletes the caller's row
+    try:
+        _write_task(transaction, ident, task, body, before_entity=entity)
+    finally:
+        transaction.named_field = None
     return ident
 
 
@@ -847,6 +860,11 @@ def _task_pick(transaction, arguments):
     locked_by = claims.foreign_holder(task, session)
     if locked_by and not force:
         raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
+    if locked_by:
+        refusal = claims.force_refusal(ident, _claim_state(transaction, task, ident, session),
+                                       getattr(transaction, "requester", None))
+        if refusal:
+            raise Conflict(refusal)
     if status != "in-progress":
         task = domain.pick_task_doc(task, session=session)
     claims.held(task, ttl, session=session)
@@ -865,6 +883,11 @@ def _bundle_pick(transaction, ident, slug, *, session, force, ttl):
         holder = claims.foreign_holder(entities[member]["fields"], session)
         if holder and not force:
             raise Conflict(f"`{member}` is a member of bundle `{slug}` locked by another session ({holder})")
+        if holder:
+            refusal = claims.force_refusal(
+                member, _claim_state(transaction, entities[member]["fields"], member, session), getattr(transaction, "requester", None))
+            if refusal:
+                raise Conflict(refusal)
     branch = f"feature/{slug}"
     worktree = f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}"
     bound = all(entities[m]["fields"].get("status") == "in-progress"
@@ -968,7 +991,7 @@ def _task_complete(transaction, arguments):
                                         dict(task, status=target_status), **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     if arguments.get("changelog", ""):
-        _queue_progress_log(transaction, arguments["changelog"])
+        _queue_progress_log(transaction, arguments["changelog"], ident)
     if target_status == "done":
         _smart_close_handovers(transaction, ident)
         for bug_id in fixed_bugs:
@@ -1013,11 +1036,18 @@ def _task_gate(transaction, arguments):
     return ident
 
 
+def _attributed(transaction, given):
+    """Who a record names as its author: on a team server the key's handle, never the caller's text (security
+    review m-2); host-local and solo callers keep what they passed."""
+    requester = getattr(transaction, "requester", None)
+    return requester.handle if requester is not None else given
+
+
 def _task_gate_skip(transaction, arguments):
     ident = arguments["id"]
     entity = _entity(transaction, "task", ident)
     task = domain.skip_gate_doc(domain.touch(deepcopy(entity["fields"])), gate=arguments["gate"],
-                                reason=arguments["reason"], by=arguments.get("by", "claude"))
+                                reason=arguments["reason"], by=_attributed(transaction, arguments.get("by", "claude")))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity, enqueue=False)
     return ident
 
@@ -1035,10 +1065,22 @@ def _task_gate_clear(transaction, arguments):
 def _task_merge(transaction, arguments):
     ident = arguments["id"]
     entity = _entity(transaction, "task", ident)
+    expected = arguments.get("expect_commit")
+    if expected is not None:
+        # Compare-and-set (team-server-008 D6): inside the write transaction, so it is atomic with the write.
+        current = ((entity["fields"].get("merge_status") or {}).get(arguments["rung"]) or {}).get("merge_commit") or ""
+        if current != expected:
+            raise Conflict(f"rung `{arguments['rung']}` of `{ident}` records {current or 'nothing'}, "
+                           f"not {expected or 'nothing'}")
     task = domain.record_merge_doc(domain.touch(deepcopy(entity["fields"])), rung=arguments["rung"],
                                    sha=arguments["sha"], merged_at=arguments.get("merged_at", ""),
                                    merge_targets=arguments.get("merge_targets", []))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity, enqueue=False)
+    # Provenance (team-server-011 D7): which clone recorded this commit. Never fails the shared stamp.
+    from . import clone_fields
+    stamped = (task.get("merge_status") or {}).get(arguments["rung"]) or {}
+    clone_fields.record_merge(transaction, ident, arguments["rung"], stamped.get("merge_commit", arguments["sha"]),
+                              stamped.get("merged_at", ""))
     return ident
 
 
@@ -1397,15 +1439,19 @@ def _thread_update(transaction, arguments):
 
 
 def _project_set(transaction, arguments):
+    from taskmaster.project import check_team_protocol_change
     document = deepcopy(arguments["document"])
+    upgrade = arguments.get("team_protocol_upgrade", False)
     try:
         entity = _entity(transaction, "project", "__project__")
     except KeyError:
+        check_team_protocol_change(None, document, upgrade=upgrade)
         return transaction.create("project", document, None, requested_id="__project__")
     if arguments.get("create_only", False):
         # The row read inside the writer transaction is the existence check;
         # a projection-file probe let two initializers both scaffold.
         raise ValueError("this project already has a manifest — refusing to overwrite (edit it directly)")
+    check_team_protocol_change(entity["fields"], document, upgrade=upgrade)
     transaction.replace("project", "__project__", document, entity["body"], before_entity=entity)
     return "__project__"
 
@@ -1486,7 +1532,12 @@ def _task_batch_line(transaction, arguments):
                                           lookups, now=domain.now_stamp())
     if outcome.error:
         raise ValueError(outcome.error)
-    transaction.replace("task", ident, outcome.doc, entity["body"], before_entity=entity)
+    # clone_fields.divert: a line that names branch/worktree and writes the shared value back still deletes the row.
+    transaction.named_field = arguments.get("field") if arguments.get("op") == "update" else None
+    try:
+        transaction.replace("task", ident, outcome.doc, entity["body"], before_entity=entity)
+    finally:
+        transaction.named_field = None
     return ident
 
 

@@ -34,7 +34,10 @@ INTERNAL_OPERATIONS = {
     "task.pick": "A claim is taken for this session by `backlog_pick_task`.",
     "task.claim_renew": "A claim is renewed for this session by `backlog_claim(action=\"renew\")`.",
     "task.claim_release": "A claim is released for this session by `backlog_claim(action=\"release\")`.",
-    "document.import": "Documents are imported from their declared files by `backlog_document_import`.",
+    "document.import": ("Documents are imported by `backlog_document_import`, from their declared files or "
+                        "from the text you pass as `content`."),
+    "profile.create": "A profile is created by the coordinator's team identity bootstrap.",
+    "clone.restore": "Branch rows are restored from the state backup by the host operator's export restore.",
 }
 # Arguments a tool supplies from the call itself, never from its caller: who wrote
 # a note, and the merge ladder a task's merge gate is judged against. The native

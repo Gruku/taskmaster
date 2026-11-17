@@ -440,7 +440,9 @@ def test_approve_bypass_and_retry_survives(tmp_path):
     )
 
     # --- A. Touch fresh approval file ---
-    approve_file.touch()
+    # 008 (G8): the approval names the branch it covers, one JSON line per branch, so a bare touch no longer counts.
+    approve_file.write_text(
+        "".join(json.dumps({"branch": b, "at": time.time()}) + "\n" for b in (feature, feature2)), encoding="utf-8")
 
     # --- B. merge-gate must ALLOW via bypass (policy on, no gate, but fresh file) ---
     gr = _run_gate(

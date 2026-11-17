@@ -50,6 +50,10 @@ class Claim:
     holder: str
     live: "bool | None"
     expired: "bool | None" = None
+    # The session asking owns this claim (its own, or one of its person's gone sessions it may
+    # adopt: `native.claims.adoptable`). Set by `ClaimState.as_blocker`; producers without a
+    # ClaimState leave it False and fall back to exact equality.
+    mine: bool = False
 
 
 @dataclass(frozen=True)
@@ -249,7 +253,7 @@ def _handover_blockers(handovers: Sequence[Mapping[str, Any]]) -> list:
 def _claim_blockers(claim: "Claim | None", session: str, task_id: str) -> list:
     if claim is None or not claim.holder:
         return []
-    if claim.holder == session:
+    if claim.mine or claim.holder == session:
         return []
     if claim.expired is None:
         # Liveness alone decided it: an unjudgeable holder is an open question.

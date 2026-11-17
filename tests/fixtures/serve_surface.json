@@ -1,0 +1,666 @@
+{
+ "caddy_public_matcher": [
+  "/mcp",
+  "/mcp/*",
+  "/read/v1",
+  "/read/v1/*",
+  "/write/v1",
+  "/write/v1/*"
+ ],
+ "coordinator": {
+  "METHODS": [
+   "cancel",
+   "execute",
+   "flush",
+   "git_recover",
+   "git_run",
+   "git_status",
+   "linear_bootstrap",
+   "linear_retry",
+   "receipt",
+   "retire",
+   "shutdown",
+   "status",
+   "sync",
+   "sync_job",
+   "sync_status"
+  ],
+  "REMOTE": [
+   "execute",
+   "flush",
+   "status"
+  ],
+  "SERVER_REFUSED": [
+   "retire",
+   "shutdown"
+  ]
+ },
+ "ops": {
+  "area.create": "batch-allowed",
+  "area.update": "batch-allowed",
+  "bug.promote": "batch-allowed",
+  "clone.restore": "internal",
+  "document.import": "internal",
+  "epic.archive": "batch-allowed",
+  "epic.batch_line": "internal",
+  "epic.create": "batch-allowed",
+  "epic.update": "batch-allowed",
+  "linear.link": "batch-allowed",
+  "linear.unlink": "batch-allowed",
+  "link.create": "batch-allowed",
+  "link.remove": "batch-allowed",
+  "phase.advance": "batch-allowed",
+  "phase.create": "batch-allowed",
+  "phase.update": "batch-allowed",
+  "profile.create": "internal",
+  "project.set": "batch-allowed",
+  "task.archive": "batch-allowed",
+  "task.batch_line": "internal",
+  "task.claim_release": "internal",
+  "task.claim_renew": "internal",
+  "task.complete": "batch-allowed",
+  "task.create": "batch-allowed",
+  "task.gate": "batch-allowed",
+  "task.gate_clear": "batch-allowed",
+  "task.gate_skip": "batch-allowed",
+  "task.merge": "batch-allowed",
+  "task.pick": "internal",
+  "task.spec_review": "batch-allowed",
+  "task.spec_review_clear": "batch-allowed",
+  "task.update": "batch-allowed",
+  "task.viewer_archive": "internal",
+  "task.viewer_create": "internal",
+  "task.viewer_update": "internal",
+  "thread.update": "batch-allowed"
+ },
+ "public_prefixes": [
+  "/mcp",
+  "/read/v1",
+  "/write/v1"
+ ],
+ "read_tools": [
+  "backlog_list_tasks",
+  "backlog_issue_list",
+  "backlog_continuity_items",
+  "backlog_handover_list",
+  "backlog_handover_get",
+  "backlog_get_task",
+  "backlog_task_pipeline",
+  "backlog_query"
+ ],
+ "restricted_tables": {
+  "HOST_PRIVATE_TABLES": [
+   "linear_queue",
+   "projection",
+   "sessions"
+  ],
+  "READ_ENDPOINT_TABLES": [
+   "changes",
+   "entities",
+   "entity_fts",
+   "entity_fts_config",
+   "entity_fts_content",
+   "entity_fts_data",
+   "entity_fts_docsize",
+   "entity_fts_idx",
+   "entity_paths",
+   "handover_tasks",
+   "links",
+   "related",
+   "sqlite_master"
+  ]
+ },
+ "routes": [
+  "DELETE,GET,PATCH,POST,PUT /read/{rest:path}",
+  "DELETE,GET,PATCH,POST,PUT /write/{rest:path}",
+  "GET /read/v1/merge-gate",
+  "GET /read/v1/merge-target",
+  "GET /read/v1/meta",
+  "GET /read/v1/paths",
+  "POST /read/v1/tools",
+  "POST /write/v1/merge-stamp"
+ ],
+ "tools": {
+  "backlog_add_epic": {
+   "class": "member",
+   "schema_sha256": "787a572ca55235927edbd3d64ba5c0a4f053d90366fdc778182a8f94fdab0e2a"
+  },
+  "backlog_add_phase": {
+   "class": "member",
+   "schema_sha256": "5859e6723b74aaa51f24049775172b09bd6430702188cecdd4326df4c89b440d"
+  },
+  "backlog_add_task": {
+   "class": "member",
+   "schema_sha256": "c1d8887860e255ea31654871f038e450ad389d360452a05018f19579224c90b9"
+  },
+  "backlog_advance_phase": {
+   "class": "member",
+   "schema_sha256": "1622d1b7610358dc2205b87ae062953f0b2ebbee7b78ffa4135d64dfb26a7ffb"
+  },
+  "backlog_archive_epic": {
+   "class": "member",
+   "schema_sha256": "e07c4d2345518a6985987355253a347e81a2dd5d95bd6e2d51f55c3b540c37a8"
+  },
+  "backlog_archive_task": {
+   "class": "member",
+   "schema_sha256": "f6d2dc68bcefbcb856001d8852b42076f19ff555d2c1669d070835a965e18f9b"
+  },
+  "backlog_area_create": {
+   "class": "member",
+   "schema_sha256": "7ed58f32f055b66f2476634619ca5193faebfb6839277a750f355c0ac8037da7"
+  },
+  "backlog_area_get": {
+   "class": "member",
+   "schema_sha256": "7ad722beaadef1930e2f25b52300ca8144e5b1ff3570edf8e590287eb5bd1e08"
+  },
+  "backlog_area_list": {
+   "class": "member",
+   "schema_sha256": "dbd1844565f3fc03e54c341002da85d35789dfa0ef4437f94519d457699974be"
+  },
+  "backlog_area_update": {
+   "class": "member",
+   "schema_sha256": "f655ae14d36863656d4757516333cbfda613d67a6fd00bb9e705b78b3cc2a8ee"
+  },
+  "backlog_backfill_lanes": {
+   "class": "refused-native",
+   "gate": "native_routing/registry.py GUIDANCE",
+   "schema_sha256": "87fc8eff34db035fd963f4d7744fa5a2cce963cde3c046c7d0d2686d9434b004"
+  },
+  "backlog_batch_preview": {
+   "class": "member",
+   "schema_sha256": "6dba9af935aa64fbeba351cce577c4c2551d0f0dc03c57d050f78c1a96dd1416"
+  },
+  "backlog_batch_update": {
+   "class": "member",
+   "note": "commands= op names bounded by INTERNAL_OPERATIONS (classified in `ops`)",
+   "schema_sha256": "361e6a4f27b8cade4a71e73e81226a72142609011a3a37a8c3d3e0f4f6cee25e"
+  },
+  "backlog_blast_radius": {
+   "class": "member",
+   "note": "mode=evidence is operator-only (served_action_refusal)",
+   "schema_sha256": "4ef15f881cf9aa1154ef34021cb8ae7fbf2b979b5eccfe4ba499988859d1602d"
+  },
+  "backlog_bug_archive": {
+   "class": "member",
+   "schema_sha256": "ad6cf39319d3d8f863f1aa81acee0c11024c160e38fc0599dbd322bcff0a6f63"
+  },
+  "backlog_bug_create": {
+   "class": "member",
+   "schema_sha256": "63568033f5646cb9e7f3c93e24b98ce52694107b331c86ea5ed16325af9c0f85"
+  },
+  "backlog_bug_get": {
+   "class": "member",
+   "schema_sha256": "6361494ee4f0be6eac9ea82e7be501d350a7af0779e1e496ad3632d40f04b79a"
+  },
+  "backlog_bug_list": {
+   "class": "member",
+   "schema_sha256": "c37ac34f187e97a53f766d8d1ed93206f54e9b5b62eb6fe7bf1e4e0defd75377"
+  },
+  "backlog_bug_pattern_scan": {
+   "class": "member",
+   "schema_sha256": "2bc8a902612d758ddb600ee306f7ae3763aa7ac73ac5d5d000b394738cdf1050"
+  },
+  "backlog_bug_promote": {
+   "class": "member",
+   "schema_sha256": "ae11e0f9ae2a22fc342d86a83b68222067a3e66c96f40138e06ba632acfc84af"
+  },
+  "backlog_bug_update": {
+   "class": "member",
+   "schema_sha256": "6ae91f98b345a9230dd91f0e00bdef0ea5c02d2e7e9da82f9fa0139ea5c74b41"
+  },
+  "backlog_canonicalize_layout": {
+   "class": "refused-native",
+   "gate": "native_routing/registry.py GUIDANCE",
+   "schema_sha256": "c94561c03b583f048a109f60d9604674540e7c502af684f046b1ce1b7b81f3ee"
+  },
+  "backlog_changes_since": {
+   "class": "member",
+   "schema_sha256": "b9139c61346577faabf1ec2a58e432d1adb210f18c51e31fd6e8d799a33159b0"
+  },
+  "backlog_claim": {
+   "class": "member",
+   "schema_sha256": "d7174bb54fb284e82f862ed98fb0a3b511f10f77894398a6eab58a901196de42"
+  },
+  "backlog_clear_gate": {
+   "class": "member",
+   "schema_sha256": "a6ae97746b43abe56b3df1b0b2b583bf010c409111cb138fc9e672c49406f06b"
+  },
+  "backlog_clear_spec_review": {
+   "class": "member",
+   "schema_sha256": "002a43a0fb7b244120868a80fb4b2f6cb512bc4d94256b1fdc0ec9bc8e21ede8"
+  },
+  "backlog_complete_task": {
+   "class": "member",
+   "schema_sha256": "76505acdb3a2754ebba86b50f3539fecd3d00fcc548f063fe616983e354ccbcd"
+  },
+  "backlog_context": {
+   "class": "member",
+   "schema_sha256": "7357f548c3e358ebbab877c565b01c35fd2cafd83c4a57c6485bed08277ad0f8"
+  },
+  "backlog_continuity_items": {
+   "class": "member",
+   "schema_sha256": "d720fdff8ddd35d883bb94178cfd36cf70b7fd36a0665266103b67157c7bdc89"
+  },
+  "backlog_decision": {
+   "class": "member",
+   "schema_sha256": "3c2baf93174e24eb1eae0b962b6c919438c0037f5d73ffc05dfb7c7bc165e370"
+  },
+  "backlog_decision_create": {
+   "class": "member",
+   "schema_sha256": "48d9fc30ccdb3028f3f972e126d5e45e1454e622f16607478a638e7b49dd7e1f"
+  },
+  "backlog_dependencies": {
+   "class": "member",
+   "schema_sha256": "cfb8dc3a8a44660a9e1cd4913de7629d0b1993352851d642e5b62d23c1d6179f"
+  },
+  "backlog_document": {
+   "class": "member",
+   "schema_sha256": "1a502dffadcc0372c69a76d5beb2060dfaf273bebe4f9abf1d080f144c7bb742"
+  },
+  "backlog_document_import": {
+   "class": "member",
+   "note": "source other than upload and restore=True are operator-only (allowlist HOST_IMPORT / RESTORE)",
+   "schema_sha256": "fbfe0a71871b8c362deb0658d0e0a7183977b64ed42f68dc1cfd19265b74f636"
+  },
+  "backlog_epic_status": {
+   "class": "member",
+   "schema_sha256": "0c650243ee1257788e9f177523635b98114a34f982664dbbe8277e6df2b17676"
+  },
+  "backlog_get_task": {
+   "class": "member",
+   "schema_sha256": "8baa83ee6db99d7995d060848f3adfb96b946cddc6808661c3a8b1c9abaf8583"
+  },
+  "backlog_handover_create": {
+   "class": "member",
+   "schema_sha256": "6e4ea2b0d617c3c0b75f5d0c9332d887031e54d57d5a9939e3035f6877b772f6"
+  },
+  "backlog_handover_get": {
+   "class": "member",
+   "schema_sha256": "14e11059c657c7ba525755527063a70cc72540795c8e26b06bc3bc7c10c0c145"
+  },
+  "backlog_handover_list": {
+   "class": "member",
+   "schema_sha256": "83f5aaa8efb2cb16653b478898edb6d96a96dfc54d56052c407bb730bd5d0411"
+  },
+  "backlog_handover_resync": {
+   "class": "operator-only",
+   "gate": "native_routing/resync.py via served_action_refusal",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_handover_supersede": {
+   "class": "member",
+   "schema_sha256": "f35ba5c2b99d5de4ad6123daae811ab4221ba75c2d1bbd15d4938159274a1861"
+  },
+  "backlog_handover_update_status": {
+   "class": "member",
+   "schema_sha256": "68f45d98c2ca263c9c3f86b8f7e585145cdeb53bfefaa95b70f052a0a5229422"
+  },
+  "backlog_idea_create": {
+   "class": "member",
+   "schema_sha256": "a389bc4e9739e63eba3e7c33a36d9aef7158ebc78c68dd50df60637d1681c8df"
+  },
+  "backlog_idea_get": {
+   "class": "member",
+   "schema_sha256": "90716a33a6c5a389709cd7d407903a116153037a8462b6eb9f2676354ecf74ce"
+  },
+  "backlog_idea_list": {
+   "class": "member",
+   "schema_sha256": "96b545df9631ee62e6d3b47cef78d51d10e004443c5b5dea6a80cf6246f713a9"
+  },
+  "backlog_idea_update": {
+   "class": "member",
+   "schema_sha256": "582ec1c8a1a5bf2249326ddae3a72e908d5e9473457a34dc7aecadd8f7015daf"
+  },
+  "backlog_index_status": {
+   "class": "member",
+   "schema_sha256": "eda1e3d7cfbd87e31ab0de760039d1e002e15d97a5206019f5608d6ed50fd218"
+  },
+  "backlog_init": {
+   "class": "refused-native",
+   "gate": "native_routing/registry.py GUIDANCE",
+   "schema_sha256": "6737072f56395c14960d43e54bae47fb166cb350ddfb92a62977162e6355133d"
+  },
+  "backlog_issue_create": {
+   "class": "member",
+   "schema_sha256": "2c5cc585b9bd0d948aa3e9bb08e4dc27d9bf09bbcd21cc1fa11434a4abfaa01e"
+  },
+  "backlog_issue_get": {
+   "class": "member",
+   "schema_sha256": "130e1928ec740dd188dc0ec85d99299b9a767f045678e2d5d13d431a842b2e84"
+  },
+  "backlog_issue_list": {
+   "class": "member",
+   "schema_sha256": "4c36d338129a82e537bcbf29b341352a83cf85037cee4a24701310fb3a4f3b5b"
+  },
+  "backlog_issue_resync": {
+   "class": "operator-only",
+   "gate": "native_routing/resync.py via served_action_refusal",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_issue_update": {
+   "class": "member",
+   "schema_sha256": "bc9be312d2d0991cd6c189b45c24fc27704d18132ff6a04fc01f3d264724e1aa"
+  },
+  "backlog_last_session": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_linear": {
+   "class": "member",
+   "note": "probe and bootstrap are operator-only (overview.served_linear_guard); retry is member (caller_scope, 004)",
+   "schema_sha256": "c015d644328cce9ca29e5f6ea97660d5336baacfa6b8de880a6f30c1835cbaf6"
+  },
+  "backlog_link": {
+   "class": "member",
+   "schema_sha256": "ee3becdb35792475fc7f4e9eeb32630e8d1d3026b92b572c6c1bffe764ce91ab"
+  },
+  "backlog_list_tasks": {
+   "class": "member",
+   "schema_sha256": "eff424f5b0bfda45fe208dc9807ef181984df67b7cc2e8bcf9d74146d90d9a29"
+  },
+  "backlog_migrate_v3": {
+   "class": "refused-native",
+   "gate": "native_routing/registry.py GUIDANCE",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_migrate_v4": {
+   "class": "refused-native",
+   "gate": "native_routing/registry.py GUIDANCE",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_next_available": {
+   "class": "member",
+   "schema_sha256": "231747b9a2a166fc5ccfda0ec8c9f747313e0d1b62ea90365cb31804389b2af3"
+  },
+  "backlog_note": {
+   "class": "member",
+   "schema_sha256": "2c47fc42b735c03876954116a8900249bcdc6ea542585e4e0751eaf29995b6d0"
+  },
+  "backlog_open_viewer": {
+   "class": "member",
+   "note": "host action; in serve mode only reports the viewer URL",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_phase_status": {
+   "class": "member",
+   "schema_sha256": "d889a6dd8bbcc5f75fd9d8255494609d54b987e9bb02e6a83103936771423be2"
+  },
+  "backlog_pick_task": {
+   "class": "member",
+   "schema_sha256": "8bbad60f419a76ca326f4106bdc6947b3b23cc752757711852a519a67eec076e"
+  },
+  "backlog_project_error_trace_ladder": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_project_get": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_project_get_field": {
+   "class": "member",
+   "schema_sha256": "a56742e87a94119d41eea7c904dba4b3acdb74e8c13b8489bf759b80c42fbbd2"
+  },
+  "backlog_project_init": {
+   "class": "noop-initialized",
+   "gate": "native_routing/overview.py: create-only, refuses once initialized",
+   "schema_sha256": "e52c1043dd0872809c1645d7745558a83d04582628964fd82503bbd7a0e6ad9d"
+  },
+  "backlog_project_set": {
+   "class": "member",
+   "schema_sha256": "ca50dfda2fad7ac5950d14c0c21dac6406f16fb69140dbedb05881335ae334e1"
+  },
+  "backlog_project_ship_order": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_query": {
+   "class": "member",
+   "note": "SQL; members read only READ_ENDPOINT_TABLES, failing closed (team-server-026); command_receipts is not a table",
+   "schema_sha256": "5d1df5bbc5d1f24a702f603b9f6bf0d0059d5d078d89da88cb0148ccc6aa0f11"
+  },
+  "backlog_record_gate": {
+   "class": "member",
+   "schema_sha256": "644e054882f37b7da4e55a2d744544f6bdcb360ba6e4cd2c56d7ce0f21024a91"
+  },
+  "backlog_record_merge": {
+   "class": "member",
+   "schema_sha256": "dc93072ab857e928a69624d3e674d419b0318dae2d5d065188104e76caa5a934"
+  },
+  "backlog_resolve_conflict": {
+   "class": "member",
+   "schema_sha256": "98e6b4dce974d4da3579d0ffb900a933849253f522b46895dd898b4cdd14ac67"
+  },
+  "backlog_search": {
+   "class": "member",
+   "schema_sha256": "924e732cb9f36a998251c64c78f212e7504cfa3ed23f3354a765fd3311e8f9b9"
+  },
+  "backlog_set_spec_review": {
+   "class": "member",
+   "schema_sha256": "3c4153024b1e4ea7ec95c99caac9abcbd412f335318edaa490facdfe9656fa84"
+  },
+  "backlog_skip_gate": {
+   "class": "member",
+   "schema_sha256": "9a3b9e49b3cd0cb46779722f89384cc471810dafa16c602614dcfd575b5a4b92"
+  },
+  "backlog_status": {
+   "class": "member",
+   "schema_sha256": "5000d898c9da8df37f7e3bd777a09171228192e1d67875529df8e04b6aee417e"
+  },
+  "backlog_store_status": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "backlog_sync": {
+   "class": "operator-only",
+   "gate": "coordinator allowlist (sync is operator-only)",
+   "schema_sha256": "4596532426190debe446951ef9e873b19e5d03c7a67e9876da41362866223534"
+  },
+  "backlog_task_pipeline": {
+   "class": "member",
+   "schema_sha256": "9801caf9d4f7bc5e96f942bb518fb277bfbfaecc09f0af46c782cec3b3e7b26e"
+  },
+  "backlog_thread_list": {
+   "class": "member",
+   "schema_sha256": "e4982233c982612bea3ed9e7fe085a699d1ae3c926f4702a52f67d35a54525b6"
+  },
+  "backlog_thread_resume": {
+   "class": "member",
+   "schema_sha256": "f66f6498690468513aca1bef4f98b75c5b6c08544010fa345c6bb53ff6ce72da"
+  },
+  "backlog_thread_update": {
+   "class": "member",
+   "schema_sha256": "bb51ff14b7f841a3faf17cb50ea6facb3073fc7b21520e4542701bd88a594441"
+  },
+  "backlog_update_epic": {
+   "class": "member",
+   "schema_sha256": "4dc7257e98ff091bef33e75284593758efe6df14a83573b613a1805e2f4c6a63"
+  },
+  "backlog_update_phase": {
+   "class": "member",
+   "schema_sha256": "2c804b42c5b0f833f9435be5b5e134a6e96a4b56fae4400406248d5d30134852"
+  },
+  "backlog_update_task": {
+   "class": "member",
+   "schema_sha256": "8591b04041e619598d0b12ebd4bd927ed2f1a4e59e3dee15146a43fee948829c"
+  },
+  "backlog_validate": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "viewer_prefs_get": {
+   "class": "member",
+   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+  },
+  "viewer_prefs_set": {
+   "class": "member",
+   "schema_sha256": "928252987262b77a320e051d78ecf2530b805a57a9f059c4f544d18a9469984c"
+  }
+ },
+ "viewer": {
+  "api_paths": [
+   "/api/",
+   "/api/backlog",
+   "/api/board",
+   "/api/bugs",
+   "/api/bugs/",
+   "/api/bugs/pattern-scan",
+   "/api/bugs/promote",
+   "/api/continuity",
+   "/api/dashboard/recent-events",
+   "/api/epic/",
+   "/api/ideas",
+   "/api/identity",
+   "/api/issues",
+   "/api/notes",
+   "/api/session",
+   "/api/sessions",
+   "/api/sessions/",
+   "/api/task/",
+   "/api/tasks",
+   "/api/tasks/validate",
+   "/api/threads",
+   "/api/viewer/prefs"
+  ],
+  "caddy_matcher": [
+   "/favicon.ico",
+   "/login",
+   "/logout",
+   "/",
+   "/static/v3/*",
+   "/api/*",
+   "/file/*"
+  ],
+  "cookie_names": [
+   "__Host-tm_session",
+   "tm_session_{port}"
+  ],
+  "csrf_header": "X-Taskmaster-CSRF",
+  "headers_by_kind": {
+   "app": [
+    [
+     "Content-Security-Policy",
+     "default-src 'none'; script-src https://VIEWER_ORIGIN/static/v3/; style-src https://VIEWER_ORIGIN/static/v3/; font-src https://VIEWER_ORIGIN/static/v3/; img-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+    ],
+    [
+     "X-Content-Type-Options",
+     "nosniff"
+    ],
+    [
+     "X-Frame-Options",
+     "DENY"
+    ],
+    [
+     "Referrer-Policy",
+     "same-origin"
+    ],
+    [
+     "Cross-Origin-Opener-Policy",
+     "same-origin"
+    ],
+    [
+     "Cross-Origin-Resource-Policy",
+     "same-origin"
+    ],
+    [
+     "Permissions-Policy",
+     "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+    ]
+   ],
+   "file-md": [
+    [
+     "Content-Security-Policy",
+     "sandbox allow-scripts; default-src 'none'; script-src https://VIEWER_ORIGIN/static/v3/; style-src https://VIEWER_ORIGIN/static/v3/; font-src https://VIEWER_ORIGIN/static/v3/; img-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+    ],
+    [
+     "X-Content-Type-Options",
+     "nosniff"
+    ],
+    [
+     "X-Frame-Options",
+     "DENY"
+    ],
+    [
+     "Referrer-Policy",
+     "same-origin"
+    ],
+    [
+     "Cross-Origin-Opener-Policy",
+     "same-origin"
+    ],
+    [
+     "Permissions-Policy",
+     "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+    ],
+    [
+     "Cache-Control",
+     "no-store"
+    ]
+   ],
+   "file-raw": [
+    [
+     "Content-Security-Policy",
+     "sandbox; default-src 'none'; frame-ancestors 'none'"
+    ],
+    [
+     "X-Content-Type-Options",
+     "nosniff"
+    ],
+    [
+     "X-Frame-Options",
+     "DENY"
+    ],
+    [
+     "Referrer-Policy",
+     "same-origin"
+    ],
+    [
+     "Cross-Origin-Opener-Policy",
+     "same-origin"
+    ],
+    [
+     "Cross-Origin-Resource-Policy",
+     "same-origin"
+    ],
+    [
+     "Cache-Control",
+     "no-store"
+    ]
+   ],
+   "static": [
+    [
+     "Content-Security-Policy",
+     "default-src 'none'; frame-ancestors 'none'"
+    ],
+    [
+     "X-Content-Type-Options",
+     "nosniff"
+    ],
+    [
+     "X-Frame-Options",
+     "DENY"
+    ],
+    [
+     "Referrer-Policy",
+     "same-origin"
+    ]
+   ]
+  },
+  "public_exact": [
+   "/favicon.ico",
+   "/login",
+   "/logout"
+  ],
+  "refused_exact": [
+   "/api/session"
+  ],
+  "route_prefixes": [
+   "/static/v3",
+   "/api",
+   "/file"
+  ],
+  "session_exact": [
+   "/"
+  ]
+ }
+}

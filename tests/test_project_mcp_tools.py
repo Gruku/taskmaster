@@ -187,3 +187,14 @@ def test_init_valid_name_still_creates_manifest(tmp_taskmaster):
     data = backlog_project_get()
     assert data is not None
     assert data["meta"]["name"] == "myproj"
+
+
+def test_project_set_rejects_invalid_team_with_clear_error(tmp_taskmaster):
+    doc = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "x", "slug": "x"},
+        "team": {"sync": {"mode": "sometimes"}},
+    }
+    with pytest.raises(ValueError) as exc:
+        backlog_project_set(yaml.safe_dump(doc))
+    assert "team.sync.mode: 'sometimes' is not one of" in str(exc.value)

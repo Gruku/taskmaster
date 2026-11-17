@@ -1,46 +1,63 @@
 #!/usr/bin/env python3
+# User intent: stop a gated merge from going through when the review-gate is missing or stale, and in a team-server
+# clone never let it through just because the server did not answer; the user's explicit approval is the only bypass
+# (team-server-008). Solo keeps its fail-open behaviour.
 """merge_gate.py — PreToolUse hook for Bash commands.
 
-Python port of merge-gate.sh (behavior-preserving; zero subprocess spawns on
-the hot path — non-matching commands exit 0 having spawned nothing).
+Zero subprocess spawns on the hot path: a command that does not name both `git` and `merge`/`pull` exits 0 having
+spawned nothing. Otherwise `merge_command.parse` finds every branch the command merges (compound commands,
+`-m msg`, octopus merges and `git -C <dir>` included) and each one is decided.
 
-FAIL-OPEN: any uncertainty, error, or exception => allow (exit 0).
-Blocks (exit 2) ONLY when ALL of the following are true:
-  1. The command is a `git merge` of a named branch (not SHA/HEAD~)
-  2. project.yaml has review_gate_required_for_merge: true
-  3. A task with branch == <SRC> exists in backlog.yaml
-  4. skip_merge_gate is not true on that task
-  5. gates["review-gate"] is not a fresh pass for that branch tip
+SOLO (no team-server marker): FAIL-OPEN, as before. Each branch is decided by `merge_gate_decide.py` in a
+subprocess bounded to 9 s; any error, timeout or unrecognized answer allows the merge.
 
-Approval flow (taskmaster's OWN namespace — NOT guard-approve-*):
-  On block the AI calls AskUserQuestion with labels "Approve"/"Deny".
-  taskmaster_merge_approve.py (PostToolUse on AskUserQuestion) writes
-  $HOME/.claude/taskmaster-merge-approve-$SESSION_ID on Approve.
-  This hook reads that file with 60s stat-based freshness — it is NEVER
-  consumed: the window IS the expiry, so a retry within 60s re-uses the
-  approval without re-prompting.
+SERVER MODE (a clone with `.taskmaster-server.json` or its latch): FAIL-CLOSED. The decision runs in this process
+(one interpreter start, one deadline) and ALLOW needs a verdict from a fresh server answer. An unreachable server,
+a malformed answer, a command the reader cannot follow, an exception, or a decision still running 9 s after this
+script started (a watchdog) all block. The host kills a PreToolUse hook at its timeout (30 s in hooks.json), and a
+killed hook lets the command run, so the block has to land inside that time.
+
+Approval flow (taskmaster's OWN namespace — NOT guard-approve-*), the only bypass:
+  On block the AI calls AskUserQuestion with a question starting `[merge-gate <branch>]` and the labels
+  "Approve"/"Deny". taskmaster_merge_approve.py (PostToolUse on AskUserQuestion) appends
+  {"branch": <branch>, "at": <epoch>} to $HOME/.claude/taskmaster-merge-approve-$SESSION_ID on Approve, only for a
+  question of that form and a real session id. This hook honours a line for the branch being merged for 60 s —
+  it is NEVER consumed: the window IS the expiry, so a retry within 60 s re-uses the approval. A Bash command that
+  names the approval file is refused.
 """
 from __future__ import annotations
+
+import time
+
+_STARTED = time.monotonic()      # the watchdog and the read deadline both count from here
 
 import json
 import os
 import re
 import subprocess
 import sys
-import time
+import threading
 from pathlib import Path
 
-# Must be a `git` invocation that reaches `merge` as a subcommand.
-# Tolerates:  git merge …
-#             git -C path merge …
-#             git --no-pager merge …  etc.
-# (ERE from merge-gate.sh: git([[:space:]]+(-[A-Za-z]\S*[[:space:]]+\S+|--[a-z][a-z-]*))*[[:space:]]+merge\b)
-GIT_MERGE_RE = re.compile(r"git(\s+(-[A-Za-z]\S*\s+\S+|--[a-z][a-z-]*))*\s+merge\b")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import merge_command
 
-# Anonymous references: pure hex SHAs (≥7 hex), HEAD~, @{, FETCH_HEAD, ORIG_HEAD, MERGE_HEAD
-ANON_REF_RE = re.compile(
-    r"^[0-9a-fA-F]{7,}$|^HEAD[~^]|^@\{|^FETCH_HEAD$|^ORIG_HEAD$|^MERGE_HEAD$"
-)
+WATCHDOG_SECONDS = 9.0
+SOLO_DECISION_SECONDS = 9.0
+APPROVAL_SECONDS = 60.0
+APPROVAL_MARKER = "taskmaster-merge-approve"
+SESSION_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+FORGERY_TEXT = ("the merge-gate approval file is written only by the approval hook, from the user's answer; "
+                "ask the user instead.")
+WATCHDOG_TEXT = "the merge gate got no answer within 9 s; retry or bypass explicitly."
+
+GUIDANCE = """merge-gate blocked this merge: {reason}
+This project requires a passing review-gate at the branch tip before a tracked task branch merges. Either run the taskmaster:review-gate skill and merge once it passes, or ask the user whether to merge anyway: call AskUserQuestion with one short question that starts with `[merge-gate {branch}]` and says why the merge is gated, and two options labelled "Approve" (merge anyway; the approval lasts 60 s) and "Deny" (don't merge). The approval hook matches those two labels literally and only honours a question that starts with `[merge-gate {branch}]`, so keep both as written. On Approve, rerun the same git merge command unchanged; on Deny or no answer, don't merge. The approval has to come from the user's answer, so don't write the approval file or change the task's merge-gate settings yourself.
+"""
+
+UNAVAILABLE_GUIDANCE = """merge-gate blocked this merge: {reason}
+This clone uses a Taskmaster team server, and without its answer the merge gate can't tell whether this branch's task has a passing review-gate, so it blocks instead of guessing. Either retry the merge once the server answers, or ask the user whether to merge without the gate: call AskUserQuestion with one short question that starts with `[merge-gate {branch}]` and says why, and two options labelled "Approve" (merge anyway; the approval lasts 60 s) and "Deny" (don't merge). The approval hook matches those two labels literally and only honours a question that starts with `[merge-gate {branch}]`, so keep both as written. On Approve, rerun the same git merge command unchanged; on Deny or no answer, don't merge. The approval has to come from the user's answer, so don't write the approval file or change the task's merge-gate settings yourself.
+"""
 
 
 def _home() -> Path:
@@ -49,59 +66,134 @@ def _home() -> Path:
     return Path(h) if h else Path.home()
 
 
-def check_approval(approve_file: Path) -> bool:
-    """60s stat-based freshness (keyed on APPROVE_FILE).
+def approval_path(session_id) -> Path | None:
+    """The approval file of a real session, or None (no session id means no approval can be honoured)."""
+    if not isinstance(session_id, str) or not SESSION_RE.fullmatch(session_id):
+        return None
+    return _home() / ".claude" / f"taskmaster-merge-approve-{session_id}"
 
-    Reads the file — NEVER creates it (that is the writer's job).
+
+def check_approval(approve_file: Path | None, branch: str, now: float | None = None) -> bool:
+    """Whether the user approved merging `branch` in the last 60 s.
+
+    Honours only a line `{"branch": <branch>, "at": <epoch>}` at most 60 s old, in a file whose mtime is inside the
+    window too. Reads the file; never creates it (that is the approval hook's job). A file whose lines have all
+    expired is removed (expiry cleanup, NOT consumption: a fresh approval survives repeated retries).
     """
-    if approve_file.is_file():
+    if approve_file is None:
+        return False
+    try:
+        text = approve_file.read_text(encoding="utf-8", errors="replace")
+        mtime = approve_file.stat().st_mtime
+    except OSError:
+        return False
+    now = time.time() if now is None else now
+    live = approved = False
+    for line in text.splitlines():
         try:
-            mtime = approve_file.stat().st_mtime
-        except OSError:
-            mtime = 0
-        file_age = time.time() - mtime
-        if file_age <= 60:
-            return True
-        # Expiry cleanup ONLY — NOT consumption. The approval file is intentionally
-        # never burned on use (there is no consumer hook); the 60s window IS the
-        # expiry, so a fresh approval survives repeated merge retries. We delete it
-        # here only because it has already aged out (>60s), never because it was used.
+            entry = json.loads(line)
+            at = entry["at"]
+            name = entry["branch"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if isinstance(at, (int, float)) and -2.0 <= now - at <= APPROVAL_SECONDS:
+            live = True
+            approved = approved or name == branch
+    if not live and now - mtime > APPROVAL_SECONDS:
         try:
             approve_file.unlink()
         except OSError:
             pass
-    return False
+        return False
+    return approved and -2.0 <= now - mtime <= APPROVAL_SECONDS
 
 
-def parse_src_branch(command: str) -> str:
-    """Parse source branch from the merge command.
-
-    Strategy (identical to merge-gate.sh): strip everything up to and including
-    "merge" (per line, greedy — mirrors `sed -E 's/.*\\bmerge[[:space:]]*//'`),
-    walk whitespace-split tokens, last non-flag token = branch name.
-    """
-    after_merge = "\n".join(
-        re.sub(r".*\bmerge[ \t\r\f\v]*", "", line) for line in command.splitlines()
-    )
-    src = ""
-    for tok in after_merge.split():
-        if tok.startswith("-"):
-            continue  # flag — skip
-        src = tok
-        # Keep updating: last non-flag token is the branch name
-    return src
+def block_text(reason: str, branch: str) -> str:
+    """The stderr text for a block. `reason` is the decision after `BLOCK:`; a `-` task slot means no verdict."""
+    if reason.startswith("-:"):
+        return UNAVAILABLE_GUIDANCE.format(reason=reason[2:].strip(), branch=branch)
+    return GUIDANCE.format(reason=reason, branch=branch)
 
 
-def block(reason: str, approve_file: Path) -> int:
-    """Emit Approve/Deny prompt to stderr and return 2 (unless already approved)."""
-    if check_approval(approve_file):
+def block(reason: str, branch: str, approve_file: Path | None) -> int:
+    """Emit the Approve/Deny prompt to stderr and return 2 (unless already approved)."""
+    if check_approval(approve_file, branch):
         return 0
-    sys.stderr.write(
-        f"""merge-gate blocked this merge: {reason}
-This project requires a passing review-gate at the branch tip before a tracked task branch merges. Either run the taskmaster:review-gate skill and merge once it passes, or ask the user whether to merge anyway: call AskUserQuestion with one short question saying why the merge is gated and two options labelled "Approve" (merge anyway; the approval lasts 60 s) and "Deny" (don't merge). The approval hook matches those two labels literally, so keep them as written. On Approve, rerun the same git merge command unchanged; on Deny or no answer, don't merge. The approval has to come from the user's answer, so don't write the approval file or change the task's merge-gate settings yourself.
-"""
-    )
+    sys.stderr.write(block_text(reason, branch))
     return 2
+
+
+def _cwd_of(data: dict) -> Path:
+    cwd = data.get("cwd")
+    return Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
+
+
+def _directory(base: Path, merge) -> Path:
+    if merge.directory is None:
+        return base
+    chosen = Path(merge.directory)
+    return chosen if chosen.is_absolute() else base / chosen
+
+
+class _Watchdog:
+    """At `_STARTED + 9 s` with no answer out, a server-mode merge gets a block instead of the host's kill."""
+
+    def __init__(self, cwd: Path, branches: list, approve_file: Path | None):
+        self.cwd, self.branches, self.approve_file = cwd, branches, approve_file
+        self.lock = threading.Lock()
+        self.decided = False
+        self.mode = None                 # None (not known yet), "solo" or "server"
+        self.timer = threading.Timer(max(0.0, _STARTED + WATCHDOG_SECONDS - time.monotonic()), self.fire)
+        self.timer.daemon = True
+        self.timer.start()
+
+    def answer(self) -> bool:
+        """The main thread asks to answer; False when the watchdog already has."""
+        with self.lock:
+            if self.decided:
+                return False
+            self.decided = True
+        self.timer.cancel()
+        return True
+
+    def fire(self) -> None:
+        with self.lock:
+            if self.decided:
+                return
+            if self.mode == "solo":
+                return
+            if self.mode is None and not merge_command.marker_file_above(self.cwd):
+                return
+            self.decided = True
+            if self.branches and all(check_approval(self.approve_file, b) for b in self.branches):
+                code = 0
+            else:
+                code = 2
+                branch = next((b for b in self.branches if not check_approval(self.approve_file, b)), "")
+                sys.stderr.write(block_text(f"-: {WATCHDOG_TEXT}", branch))
+            try:
+                sys.stderr.flush()
+                sys.stdout.flush()
+            finally:
+                os._exit(code)
+
+
+def _solo_decision(decide_script: Path, name: str, directory: str | None, tip_ref: str | None) -> str:
+    """The solo decision in a bounded subprocess. Anything but a recognized BLOCK allows."""
+    argv = [sys.executable or "python", str(decide_script), name]
+    if directory is not None or tip_ref:
+        argv.append(directory or str(Path.cwd()))
+    if tip_ref:
+        argv.append(tip_ref)
+    try:
+        from taskmaster.bounded_run import run_bounded
+        result = run_bounded(argv, timeout=SOLO_DECISION_SECONDS, text=True, encoding="utf-8", errors="replace",
+                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        return "ALLOW"
+    if result.returncode != 0:
+        return "ALLOW"
+    return (result.stdout or "").rstrip("\n")
 
 
 def main() -> int:
@@ -118,53 +210,82 @@ def main() -> int:
         # Bail fast when there is no command at all.
         return 0
 
-    session_id = data.get("session_id")
-    if session_id is None or session_id is False or session_id == "":
-        session_id = "default"
-    approve_file = _home() / ".claude" / f"taskmaster-merge-approve-{session_id}"
+    # Anything that names the approval file is refused, in every mode and before the prefilter: the approval is
+    # the user's answer, not something the agent writes.
+    if APPROVAL_MARKER in command:
+        sys.stderr.write(FORGERY_TEXT + "\n")
+        return 2
 
-    # 1. Short-circuit: command must contain the word "merge" (fast pre-filter).
-    if "merge" not in command:
+    if not merge_command.prefilter(command):
+        return 0
+    parsed = merge_command.parse(command)
+    if not parsed.merges and not parsed.unsure:
         return 0
 
-    # 2. Must be a `git` invocation that reaches `merge` as a subcommand.
-    if not GIT_MERGE_RE.search(command):
-        return 0
-
-    # 3. Parse source branch from the merge command; reject anonymous refs
-    #    (HEAD~N, @{N}, pure hex SHAs).
-    src = parse_src_branch(command)
-    if not src:
-        return 0
-    if ANON_REF_RE.search(src):
-        return 0
-
-    # 4–7. Delegate to python decision module (fail-open on any error).
-    #      The script lives alongside this file in hooks/.
-    decide_script = Path(__file__).parent / "merge_gate_decide.py"
-    if not decide_script.is_file():
-        return 0
-
+    approve_file = approval_path(data.get("session_id"))
+    cwd = _cwd_of(data)
+    targets = [(merge, branch) for merge in parsed.merges for branch in merge.branches]
+    dog = _Watchdog(cwd, [branch for _, branch in targets], approve_file)
     try:
-        result = subprocess.run(
-            [sys.executable or "python", str(decide_script), src],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-    except Exception:
-        return 0
-    if result.returncode != 0:
-        return 0
+        return _gate(data, parsed, targets, approve_file, cwd, dog)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        mode = dog.mode
+        if mode is None:
+            mode = "server" if merge_command.marker_file_above(cwd) else "solo"
+        if mode == "server":
+            # Server mode never fails open: whatever else goes wrong here, the answer is a block (review minor 3).
+            if dog.answer():
+                try:
+                    first = targets[0][1] if targets else ""
+                    import merge_gate_decide as gate
+                    return block(f"-: {gate.unavailable_text('internal', type(exc).__name__)}", first, approve_file)
+                except BaseException:  # noqa: BLE001
+                    return 2
+            return 2
+        dog.answer()
+        return 0  # solo: fail-open on any unexpected error
 
-    decision = (result.stdout or "").rstrip("\n")
-    if decision == "" or decision.startswith("ALLOW"):
+
+def _gate(data, parsed, targets, approve_file, cwd, dog) -> int:
+    import merge_gate_decide as gate
+
+    server = gate.server_clone(cwd)
+    dog.mode = "server" if server else "solo"
+    if parsed.unsure:
+        if not server:
+            dog.answer()
+            return 0       # solo stays fail-open
+        reason = f"-: {gate.unavailable_text('unparsed', parsed.unsure)}"
+        if not dog.answer():
+            time.sleep(60)
+        return block(reason, "(this command)", approve_file)
+
+    decide_script = Path(__file__).parent / "merge_gate_decide.py"
+    if not server and not decide_script.is_file():
+        dog.answer()
         return 0
-    if decision.startswith("BLOCK:"):
-        return block(decision[len("BLOCK:"):], approve_file)
-    return 0  # unrecognized -> fail-open
+    for merge, branch in targets:
+        if check_approval(approve_file, branch):
+            continue
+        where = _directory(cwd, merge)
+        decision = "ALLOW"
+        for name in merge_command.branch_names(branch, where):
+            if server:
+                decision = gate.decide(name, where, started=_STARTED, server=True, tip_ref=branch)
+            else:
+                directory = str(where) if merge.directory is not None else None
+                decision = _solo_decision(decide_script, name, directory, branch if name != branch else None)
+            if decision.startswith("BLOCK:"):
+                break
+        if decision.startswith("BLOCK:"):
+            if not dog.answer():
+                time.sleep(60)
+            return block(decision[len("BLOCK:"):], branch, approve_file)
+    if not dog.answer():
+        time.sleep(60)
+    return 0
 
 
 if __name__ == "__main__":

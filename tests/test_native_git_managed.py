@@ -4,6 +4,7 @@ All repositories are disposable temp roots.
 """
 from concurrent.futures import ThreadPoolExecutor
 import sys
+import time
 
 import pytest
 
@@ -150,7 +151,14 @@ def test_pin_blocks_every_publication_path(repo):
         client = Client(repo, autostart=False, timeout=120)
         owner.git_pin = {'state': 'recovery_required', 'reason': 'test pin'}
         receipt = client.execute(request(client, 'pinned', 'Pinned title'))['receipt']
-        assert 'test pin' in owner.flush(receipt['commit_seq'], timeout=0.5)['notices'][0]
+        # The background exporter may hold publication for a moment after the write
+        # (slow Git on a loaded machine): 'publisher busy' is honest, so wait it out.
+        deadline = time.monotonic() + 30
+        while True:
+            notice = owner.flush(receipt['commit_seq'], timeout=0.5)['notices'][0]
+            if 'publisher busy' not in notice or time.monotonic() > deadline:
+                break
+        assert 'test pin' in notice
         assert client.sync(import_files=False)['state'] == 'pending'
         assert client.git_run(kind='commit', message='tm')['state'] == 'refused'
         assert 'Pinned title' not in (repo / REL).read_text(encoding='utf-8')

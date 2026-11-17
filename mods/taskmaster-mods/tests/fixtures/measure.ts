@@ -37,3 +37,24 @@ export function elementsOf(n: unknown): Drawn[] {
 /** The keys of an element's direct children. */
 export const childKeys = (n: Drawn): string[] =>
   (n.children ?? []).flatMap(c => (isEl(c) && typeof c.props?.key === 'string' ? [c.props.key] : []))
+
+/**
+ * Rows a drawn node takes down the terminal: Text and Button one (a Text counts its newlines), a column Box the sum of its
+ * children plus its border and vertical padding, a row Box its tallest child plus the same. Absolute and display:none nodes
+ * take none. Limit: a Text wider than its box would wrap in the engine; this counts it as one row.
+ */
+export function heightOf(n: unknown): number {
+  if (typeof n === 'string') return n.split('\n').length
+  if (typeof n === 'number') return 1
+  if (!isEl(n)) return 0
+  const p = n.props ?? {}
+  const kids = n.children ?? []
+  if (p.display === 'none' || p.position === 'absolute') return 0
+  if (n.type === 'Text') return Math.max(1, kids.reduce<number>((sum, kid) => sum + (typeof kid === 'string' ? kid.split('\n').length - 1 : 0), 1))
+  if (n.type === 'Button') return 1
+  const frame = (typeof p.borderStyle === 'string' ? 2 : 0) + 2 * num(p.paddingY ?? p.padding) + num(p.paddingTop) + num(p.paddingBottom)
+  const heights = kids.map(heightOf)
+  const column = p.flexDirection === 'column' || p.flexDirection === 'column-reverse'
+  const gap = num(p.rowGap ?? p.gap)
+  return frame + (column ? heights.reduce((s, h) => s + h, 0) + gap * Math.max(0, heights.length - 1) : Math.max(0, ...heights))
+}

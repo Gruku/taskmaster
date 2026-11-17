@@ -32,7 +32,7 @@ def compatibility(database=None, *, if_none_match=None):
             seq = snap.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
         else:
             seq = snap.seq
-        etag = f"c1:{snap.identity}:{seq}:{bs.VERSION}:{bs.SESSION_ID}"
+        etag = f"c1:{snap.identity}:{seq}:{bs.VERSION}:{bs.current_session()}"
         timings = {"rev": (perf_counter() - start) * 1000, "build": 0}
         if dto.matches(if_none_match, etag):
             return 304, None, etag, timings

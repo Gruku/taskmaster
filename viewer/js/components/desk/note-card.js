@@ -6,6 +6,13 @@ import { tiltFor } from '../../lib/desk.js';
 import { formatStamp } from '../../lib/time.js';
 import { mountMarkdown } from '../markdown.js';
 
+// 'claude' and 'user' are the solo literals; on a team server a note names its author's handle (security review m-2).
+export function noteAuthor(author) {
+  if (author === 'claude') return 'Claude';
+  if (!author || author === 'user') return 'You';
+  return String(author);
+}
+
 // User notes are warm paper, Claude notes cool paper; the static tilt comes from the id hash.
 // onPin(note), onArchive(note), onSave(note, text) resolve true when the write went through, false when it was refused.
 // `expanded` opens the note already expanded (when it overflows); onExpand(open) reports each expand and collapse.
@@ -40,7 +47,7 @@ export function createNoteCard({ note, onPin, onArchive, onSave, expanded = fals
   }, icon('archive', { size: 16 }));
 
   const head = h('header', { class: 'dk-note__head' },
-    h('span', { class: 'dk-note__who', id: whoId }, note.author === 'claude' ? 'Claude' : 'You'),
+    h('span', { class: 'dk-note__who', id: whoId }, noteAuthor(note.author)),
     h('time', { class: 'dk-note__when', datetime: note.created || '', title: stamp.title }, stamp.text),
     // One group, so on a narrow note the controls wrap together under the author and time.
     h('div', { class: 'dk-note__tools' }, editBtn, pinBtn, archiveBtn));

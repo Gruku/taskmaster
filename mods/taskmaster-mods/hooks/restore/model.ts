@@ -53,7 +53,7 @@ export const DEFAULT_DAYS = 4
 export const SIGNAL_DAYS = 3
 export const FRESH_RESTORE_DATA: TmRestoreData = { scan: null, refs: null, error: '', days: DEFAULT_DAYS }
 export const FRESH_RESTORE_VIEW: TmRestoreView = {
-  page: 0,
+  first: 0,
   focus: '',
   selected: {},
   modes: {},
@@ -258,8 +258,6 @@ export function phaseCounts(rows: readonly RestoreRow[]): Map<string, number> {
 
 /** Sessions closed within this many minutes of the next one belong to one burst. */
 export const BURST_GAP_MIN = 10
-/** Older sessions page this many at a time, newest first (spec §10, §15.6). */
-export const RESTORE_PAGE_SIZE = 3
 /** Context a resume reopens: warning once heavy, critical near a 1M window's end. */
 export const CTX_WARN = 400_000
 export const CTX_HIGH = 700_000
@@ -365,10 +363,11 @@ const chunks = (rows: readonly RestoreRow[], size: number): RestorePage[] => {
 }
 
 /**
- * Burst-first paging (spec §10): under All, page 1 is the closing burst plus anything closed after it, then the rest newest
- * first, RESTORE_PAGE_SIZE a page. Under a phase, that phase's sessions newest first. Running sessions are on no page.
+ * Burst-first grouping (spec §10): under All, the first page is the closing burst plus anything closed after it, then the rest
+ * newest first, `size` a page (the pane lists them all: one page). Under a phase, that phase's sessions newest first. Running
+ * sessions are on no page.
  */
-export function pagesOf(rows: readonly RestoreRow[], bursts: readonly RestoreBurst[], choice: string, size = RESTORE_PAGE_SIZE): RestorePage[] {
+export function pagesOf(rows: readonly RestoreRow[], bursts: readonly RestoreBurst[], choice: string, size = Number.POSITIVE_INFINITY): RestorePage[] {
   const closed = rows.filter(r => !r.s.running && inPhase(r, choice)).sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
   if (choice !== '' || bursts.length === 0) return chunks(closed, size)
   const at = defaultBurst(bursts)
@@ -410,6 +409,22 @@ export function pageHeader(page: RestorePage, now: number): string {
     .join(' · ')
 }
 
+/**
+ * The pane's list, top to bottom: the closing burst and what closed after it, then the rest newest first, grouped by section
+ * (UNFINISHED, HANDED OFF, IDLE; each section keeps that order). Running sessions are not in it (runningRows).
+ */
+export function listOf(rows: readonly RestoreRow[], bursts: readonly RestoreBurst[], choice: string): RestoreRow[] {
+  return sectionsOf(pagesOf(rows, bursts, choice).flatMap(page => pageRows(rows, page))).flatMap(s => s.rows)
+}
+
+/** The list's one sentence: the closing burst's header while the list starts with one (`· 9 listed` when more follow), else its span. */
+export function listHeader(rows: readonly RestoreRow[], bursts: readonly RestoreBurst[], choice: string, now: number): string {
+  const page = pagesOf(rows, bursts, choice)[0]
+  if (page === undefined) return ''
+  const total = rows.filter(r => !r.s.running && inPhase(r, choice)).length
+  return `${pageHeader(page, now)}${page.isBurst && total > page.ids.length ? ` · ${total} listed` : ''}`
+}
+
 /** Sessions open in another terminal now, most recently active first. */
 export function runningRows(rows: readonly RestoreRow[]): RestoreRow[] {
   return rows.filter(r => r.s.running).sort((a, b) => b.s.closedEpoch - a.s.closedEpoch)
@@ -422,10 +437,19 @@ export function blockedWhy(row: RestoreRow): string {
   return ''
 }
 
-/** Default ticks (spec §10): unfinished, resumable and not yet reopened from here; an explicit toggle wins. */
-export function isTicked(row: RestoreRow, selected: Readonly<Record<string, boolean>>, opened: Readonly<Record<string, number>>): boolean {
+/**
+ * Default ticks (spec §10): unfinished, resumable, not yet reopened from here and `recent` (see recentIds); an explicit toggle
+ * wins. The list scrolls through every session, so an old unfinished one is not ticked for `b` until the person ticks it.
+ */
+export function isTicked(row: RestoreRow, selected: Readonly<Record<string, boolean>>, opened: Readonly<Record<string, number>>, recent = true): boolean {
   if (blockedWhy(row) !== '') return false
-  return selected[row.s.id] ?? (row.status !== 'done' && opened[row.s.id] === undefined)
+  return selected[row.s.id] ?? (recent && row.status !== 'done' && opened[row.s.id] === undefined)
+}
+
+/** The sessions that default to ticked: the closing burst and what closed after it (what page 1 held before the list scrolled). */
+export function recentIds(rows: readonly RestoreRow[]): ReadonlySet<string> {
+  const first = pagesOf(rows, burstsOf(rows), '')[0]
+  return new Set(first?.ids ?? [])
 }
 
 /**

@@ -66,6 +66,20 @@ body:not(.modal-open) .shell { box-sizing: border-box; padding-top: var(--confli
 .sidebar-logo .name { font-family: var(--font-declaration); font-weight: var(--font-declaration-weight); font-size: var(--size-declaration-h5); letter-spacing: var(--tracking-tight); line-height: var(--leading-tight); color: var(--foreground-bold); }
 .sidebar-logo .ver { font-family: var(--font-technical); font-size: var(--size-technical-small); line-height: var(--leading-heading); color: var(--foreground-subtle); }
 
+/* Footer (server mode): Sign out, below the scrolling nav */
+.sidebar-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--border-subtle);
+}
+.sidebar-footer .sidebar-signout { align-self: flex-start; }
+.sidebar-signout-msg { margin: 0; font-size: var(--size-technical-small); color: var(--foreground-subtle); }
+.sidebar-signout-msg:empty { display: none; }
+.shell.sidebar-collapsed .sidebar-footer { display: none; }
+
 /* Nav scroll body — lives below the logo; only this region scrolls */
 .sidebar-nav {
   flex: 1;

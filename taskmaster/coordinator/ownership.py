@@ -95,19 +95,43 @@ def _windows_private(path: Path, *, verify_only=False) -> None:
         kernel.LocalFree(descriptor)
 
 
-def private_directory(root: Path) -> Path:
-    path = root / '.taskmaster' / 'local' / 'coordinator'
-    path.mkdir(mode=0o700, exist_ok=True)
-    if path.is_symlink() or getattr(path, 'is_junction', lambda: False)():
-        raise PermissionError('coordinator directory cannot be a link')
-    if path.resolve().parent != (root / '.taskmaster' / 'local').resolve():
-        raise PermissionError('coordinator directory escapes its local store')
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or getattr(path, 'is_junction', lambda: False)()
+
+
+def _restrict(path: Path, what: str) -> None:
     if os.name == 'nt':
         _windows_private(path)
     else:
         if path.stat().st_uid != os.getuid():
-            raise PermissionError('coordinator directory must be owned by the current user')
+            raise PermissionError(f'{what} must be owned by the current user')
         path.chmod(0o700)
+
+
+def private_directory(root: Path, name: str = 'coordinator') -> Path:
+    if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', name):
+        raise ValueError(f'invalid private directory name: {name!r}')
+    path = root / '.taskmaster' / 'local' / name
+    path.mkdir(mode=0o700, exist_ok=True)
+    if _is_link(path):
+        raise PermissionError('coordinator directory cannot be a link')
+    if path.resolve().parent != (root / '.taskmaster' / 'local').resolve():
+        raise PermissionError('coordinator directory escapes its local store')
+    _restrict(path, 'coordinator directory')
+    return path
+
+
+def private_directory_at(path: Path) -> Path:
+    """`path` as an owner-only directory (created if missing, never through a link), anywhere on disk.
+
+    The same rule `private_directory` applies under `.taskmaster/local/`, for the client's key
+    and cache directories in the user's own config and cache dirs (team-server-007 D9, D11).
+    """
+    path = Path(path)
+    path.mkdir(mode=0o700, exist_ok=True)
+    if _is_link(path):
+        raise PermissionError(f'private directory {path} cannot be a link')
+    _restrict(path, f'private directory {path}')
     return path
 
 
@@ -123,13 +147,15 @@ def verify_private(path: Path):
             raise PermissionError('coordinator discovery permissions are not owner-only')
 
 
-def ownership_held(root: Path) -> bool:
+def ownership_held(root: Path, name: str = 'coordinator', lock_name: str = 'owner.lock') -> bool:
     """Whether some process holds the kernel ownership lock right now.
 
     Probes by taking and immediately releasing the lock. A concurrent startup
-    that loses to the probe exits cleanly; the caller then starts its own."""
+    that loses to the probe exits cleanly; the caller then starts its own.
+    `name`/`lock_name` select another lock of the same kind: the serve host
+    lease is `serve`/`host.lock` (team-server-009)."""
     try:
-        descriptor = os.open(Path(root) / '.taskmaster/local/coordinator/owner.lock', os.O_RDWR)
+        descriptor = os.open(Path(root) / '.taskmaster' / 'local' / name / lock_name, os.O_RDWR)
     except FileNotFoundError:
         return False
     try:
@@ -153,14 +179,17 @@ def ownership_held(root: Path) -> bool:
 
 class Ownership:
     """A held byte/flock, released only by closing our own handle or process exit."""
-    def __init__(self, root: Path):
-        self.directory = private_directory(root)
+    def __init__(self, root: Path, name: str = 'coordinator', lock_name: str = 'owner.lock'):
+        if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}\.lock', lock_name):
+            raise ValueError(f'invalid lock file name: {lock_name!r}')
+        self.directory = private_directory(root, name)
+        self.lock_name = lock_name
         self.descriptor = None
 
     def acquire(self):
         if self.descriptor is not None:
             raise RuntimeError('ownership is already held by this instance')
-        descriptor = os.open(self.directory / 'owner.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        descriptor = os.open(self.directory / self.lock_name, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b'\0')

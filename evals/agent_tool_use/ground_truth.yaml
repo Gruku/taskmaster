@@ -777,3 +777,86 @@ ground_truth:
         sql: "SELECT coalesce(json_extract(doc,'$.locked_by'),'') FROM entities WHERE kind='task' AND id='{t:retag03}'"
         expect: ""
       - log_not_called: backlog_pick_task
+
+  # -- third batch: server mode. Run against a team server (T1 host from tests/test_twohost_evals.py) as ann. The store is
+  # the server's, so these have log checks and a graded answer, no SQL against a run copy. Evidence for the 015 review,
+  # not a gate.
+  - id: s48-local-doc-edit
+    answer: >-
+      The agent imports the edited spec into the store with backlog_document_import, sending the text as `content`
+      (a member has no file path the server can read). It does not call backlog_sync, which a member is refused.
+    acceptable_paths:
+      - "backlog_document_import(kind='task', entity_id=<Build the thing>, content={'spec': <text>})"
+    failure_modes:
+      - "backlog_sync() - refused for a member; the agent reports the edit as picked up anyway"
+      - "edits the task's body through backlog_update_task instead of the document"
+    checks:
+      - log_called: backlog_document_import
+        desc: "used the document import with content"
+      - log_not_called: backlog_sync
+        desc: "did not try the operator-only sync"
+
+  - id: s49-take-over-from-bob
+    answer: >-
+      The agent checks the claim (backlog_claim status), sees bob holds it, and reports back to the user that the task
+      is bob's and what the options are. It does not force-pick it.
+    acceptable_paths:
+      - "backlog_claim(action='status', task_id=<Document the thing>) then report"
+      - "backlog_pick_task(task_id) once, report the refusal"
+    failure_modes:
+      - "backlog_pick_task(force=True): a member cannot, and the agent should not try without asking the user"
+      - "backlog_claim(action='release') on bob's live claim"
+    checks:
+      - log_called: backlog_claim
+        args: {action: status}
+        desc: "checked the claim before acting"
+      - log_not_called: backlog_pick_task
+        args: {force: true}
+        desc: "did not force-pick"
+
+  - id: s50-store-health
+    answer: >-
+      The agent uses a member-callable read (backlog_store_status or backlog_status). If it reaches an operator-only tool
+      it reports the refusal to the user and does not pretend to have checked.
+    acceptable_paths:
+      - "backlog_store_status() or backlog_status()"
+    failure_modes:
+      - "backlog_sync / backlog_validate loops after a refusal"
+      - "reports 'healthy' from a refused call"
+    checks:
+      - log_not_called: backlog_sync
+        desc: "did not call the operator-only sync"
+
+  - id: s51-pick-up-where-left-off
+    answer: >-
+      Ann's earlier (disconnected) session held a task. The agent finds it (backlog_last_session, backlog_thread_resume
+      or backlog_claim status) and picks it up with backlog_pick_task, which adopts the claim and says so, without force.
+    acceptable_paths:
+      - "backlog_last_session / backlog_handover_list -> backlog_pick_task(task_id) (adoption notice)"
+    failure_modes:
+      - "backlog_pick_task(force=True)"
+      - "picks a different task and leaves ann's old claim to lapse"
+    checks:
+      - log_called: backlog_pick_task
+        desc: "picked the task her earlier session held"
+      - log_not_called: backlog_pick_task
+        args: {force: true}
+        desc: "adopted without force"
+
+  - id: s52-close-someone-elses
+    answer: >-
+      The task is bob's: completing it is refused. The agent relays the refusal to the user (locked by bob's session)
+      and does not work around it.
+    acceptable_paths:
+      - "backlog_complete_task(task_id) -> refusal relayed"
+      - "backlog_claim(action='status') first, then relay"
+    failure_modes:
+      - "backlog_update_task(field='status', value='done') as a workaround"
+      - "backlog_pick_task(force=True) then complete"
+    checks:
+      - log_not_called: backlog_update_task
+        args: {field: status}
+        desc: "did not change the status around the refusal"
+      - log_not_called: backlog_pick_task
+        args: {force: true}
+        desc: "did not force-pick"

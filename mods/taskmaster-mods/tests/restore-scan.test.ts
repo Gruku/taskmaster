@@ -53,13 +53,17 @@ describe('runScan', () => {
     expect(scan.sessions.map(s => s.id)).toEqual(['a'])
   })
 
-  test('falls through python, python3 and py; the reason is the last failure', async () => {
+  test('moves past python and python3 only when they did not start; a scanner that ran and failed stands', async () => {
     const tried = hostOf(argv =>
-      argv[0] === 'python' ? new Error('spawn python ENOENT') : argv[0] === 'python3' ? { exitCode: 1, stdout: '', stderr: 'Traceback\nValueError: bad root\n' } : ok({ sessions: [] }),
+      argv[0] === 'python' ? new Error('spawn python ENOENT') : argv[0] === 'python3' ? { exitCode: 9009, stdout: '', stderr: '' } : ok({ sessions: [] }),
     )
     expect((await runScan(tried.rh, { root: ROOT, days: 4, exclude: '' })).sessions).toEqual([])
     expect(tried.runs.map(argv => argv[0])).toEqual(['python', 'python3', 'py'])
     expect(tried.runs[2]).not.toContain('--exclude')
+    // team-server-007 review I3: a crash is reported, not retried under another interpreter.
+    const crashed = hostOf(argv => (argv[0] === 'python' ? { exitCode: 1, stdout: '', stderr: 'Traceback\nValueError: bad root\n' } : ok({ sessions: [] })))
+    await expect(runScan(crashed.rh, { root: ROOT, days: 4, exclude: '' })).rejects.toThrow('ValueError: bad root')
+    expect(crashed.runs.map(argv => argv[0])).toEqual(['python'])
     const none = hostOf(argv => (argv[0] === 'py' ? { exitCode: 9, stdout: '', stderr: '' } : new Error('spawn ENOENT')))
     await expect(runScan(none.rh, { root: ROOT, days: 4, exclude: '' })).rejects.toThrow('py exited 9')
   })

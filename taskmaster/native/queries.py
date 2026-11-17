@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 
-from . import blockers, claims, context as context_shape, cursors, schema
+from . import blockers, claims, context as context_shape, cursors, provenance, schema
 from .budget import Selection
 from .db import verified_snapshot
 from .migrate import encode, rows
@@ -66,6 +66,11 @@ class Snapshot:
         return {"store_id": self.identity["store_id"], "sequence": int(self.identity["event_high_water"]), **data}
 
     def _assemble(self, cores, fields, include_body=False):
+        provenance.note_entities(cores)
+        with provenance.accounted():
+            return self._assemble_accounted(cores, fields, include_body)
+
+    def _assemble_accounted(self, cores, fields, include_body=False):
         self._check()
         fields = _fields(fields)
         if not cores:
@@ -136,8 +141,9 @@ class Snapshot:
         fields = _fields(fields)
         if kind not in schema.KINDS:
             raise ValueError(f"unknown entity kind: {kind}")
-        core = rows(self.connection, "SELECT " + _core_columns(fields) + " FROM entity_core WHERE kind=? AND public_id=?" +
-                    ("" if include_deleted else " AND deleted=0"), (kind, ident))
+        with provenance.accounted():
+            core = rows(self.connection, "SELECT " + _core_columns(fields) + " FROM entity_core WHERE kind=? AND public_id=?" +
+                        ("" if include_deleted else " AND deleted=0"), (kind, ident))
         if not core:
             raise KeyError(f"{kind} {ident} not found")
         return self._assemble(core, fields, include_body)[0]
@@ -187,7 +193,8 @@ class Snapshot:
         if after is not None:
             conditions.append("(c.kind,c.public_id)>(?,?)")
             args.extend(after)
-        cores = rows(self.connection, "SELECT " + _core_columns(fields, "c.") + " FROM entity_core c WHERE " + " AND ".join(conditions) + " ORDER BY c.kind,c.public_id LIMIT ?", args + [limit + 1])
+        with provenance.accounted():
+            cores = rows(self.connection, "SELECT " + _core_columns(fields, "c.") + " FROM entity_core c WHERE " + " AND ".join(conditions) + " ORDER BY c.kind,c.public_id LIMIT ?", args + [limit + 1])
         more, cores = len(cores) > limit, cores[:limit]
         continuation = None
         if more:
@@ -215,8 +222,10 @@ class Snapshot:
         core = self.connection.execute("SELECT entity_key FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (kind, ident)).fetchone()
         if core is None:
             raise KeyError(f"{kind} {ident} not found")
-        values = rows(self.connection, f"SELECT r.ordinal,r.value_json,p.path,r.target_kind,r.target_id,r.target_key FROM {table} r "
-                      "LEFT JOIN paths p USING(path_key) WHERE r.entity_key=? AND r.field=? ORDER BY r.ordinal LIMIT ?", (core[0], field, limit + 1))
+        provenance.note_entity(kind, ident, core[0])
+        with provenance.accounted():
+            values = rows(self.connection, f"SELECT r.ordinal,r.value_json,p.path,r.target_kind,r.target_id,r.target_key FROM {table} r "
+                          "LEFT JOIN paths p USING(path_key) WHERE r.entity_key=? AND r.field=? ORDER BY r.ordinal LIMIT ?", (core[0], field, limit + 1))
         return self._envelope(items=[{"ordinal": v["ordinal"], "value": json.loads(v["value_json"]) if v["value_json"] is not None else v["path"],
                                      "target_kind": v["target_kind"], "target_id": v["target_id"], "resolved": v["target_key"] is not None} for v in values[:limit]],
                               truncated=len(values) > limit)
@@ -373,7 +382,9 @@ class Snapshot:
     def document(self, kind, ident, *, sections=None):
         self._check()
         from .documents import retrieve
-        return retrieve(self, kind, ident, sections=sections)
+        provenance.note_entity(kind, ident)
+        with provenance.accounted():
+            return retrieve(self, kind, ident, sections=sections)
 
     # ── Bounded agent context ───────────────────────────────────────────────
     # One call that answers "what do I need to know to work on X". The blocker
@@ -416,7 +427,11 @@ class Snapshot:
         if blocking_only:
             where.append("COALESCE(TRIM(json_extract(x.value_json,'$')),'')<>''")
         base = self._OPEN_HANDOVERS.format(join=join, where=" AND ".join(where))
-        return self._page(base, args, offset, context_shape.PAGE if limit is None else limit)
+        with provenance.accounted():
+            found, total = self._page(base, args, offset, context_shape.PAGE if limit is None else limit)
+        for row in found:
+            provenance.note_entity("handover", row["id"])
+        return found, total
 
     def _focus_task(self, focus, scope, session):
         """The task this question is about: the one asked for, or the one this
@@ -581,9 +596,13 @@ class Snapshot:
         if not idents:
             return {}
         placeholders = ",".join("?" for _ in idents)
-        return {i: t for i, t in self.connection.execute(
-            "SELECT public_id,json_extract(title_json,'$') FROM entity_core "
-            f"WHERE kind=? AND public_id IN ({placeholders})", [kind] + list(idents))}
+        with provenance.accounted():
+            found = {i: t for i, t in self.connection.execute(
+                "SELECT public_id,json_extract(title_json,'$') FROM entity_core "
+                f"WHERE kind=? AND public_id IN ({placeholders})", [kind] + list(idents))}
+        for ident in found:
+            provenance.note_entity(kind, ident)
+        return found
 
     def context(self, focus="", *, scope="session", budget_bytes=8000, include=None,
                 cursor="", session=""):

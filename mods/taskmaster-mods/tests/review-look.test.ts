@@ -18,22 +18,22 @@ const hotkeys = async (ui: Ui): Promise<Record<string, string[]>> => {
 }
 
 describe('the review pane, as drawn', () => {
-  test('the frame names REVIEW; row 1 is the picker, the pager and u refresh; row 2 the sentence and tallies', DEMO, async ($, on) => {
+  test('the frame names REVIEW; row 1 is the picker, the position and u refresh; row 2 the sentence and tallies', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
-    for (const text of ['REVIEW', 'demo', ' All  5 ▾ ', ' 1 / 2 ', '5 waiting on you · newest 1h ago', '▲ BLOCKED', ' 1', '◆ ACTION', ' 4', '● IN REVIEW', ' 0']) {
+    for (const text of ['REVIEW', 'demo', ' All  5 ▾ ', ' 1–5 of 5 ', '5 waiting on you · newest 1h ago', '▲ BLOCKED', ' 1', '◆ ACTION', ' 4', '● IN REVIEW', ' 0']) {
       expect(await ui.find({ type: 'Text', text }), text).toBeDefined()
     }
     expect((await ui.find({ type: 'Button', key: 'refresh' }))?.props.label).toBe('u refresh')
   })
 
-  test('3 items a page; only the focused one is boxed, its first action the one filled key; collapsed items carry no keys', DEMO, async ($, on) => {
+  test('every card in a tall pane; only the focused one is boxed, its first action the one filled key; collapsed items carry no keys', DEMO, async ($, on) => {
     worldOf(on, mock.clock(on))
     await $.session.start(SESSION)
     const ui = await $.ui.mount({ plugin: PLUGIN, ...WIDE })
     const marks = (await ui.findAll({ type: 'Button' })).filter(b => String(b.props.key).startsWith('sel:'))
-    expect(marks.map(b => b.props.key)).toEqual(['sel:unified-chat-022', 'sel:tm-audit-031', 'sel:docs-012'])
+    expect(marks.map(b => b.props.key)).toEqual(['sel:unified-chat-022', 'sel:tm-audit-031', 'sel:docs-012', 'sel:ISS-7', 'sel:DEC-4'])
     const boxes = elementsOf(await ui.drawn()).filter(e => e.type === 'Box' && e.props?.borderStyle === 'round' && String(e.props?.key ?? '').startsWith('card:'))
     expect(boxes.map(b => b.props?.key)).toEqual(['card:unified-chat-022'])
     for (const [key, hotkey, label] of [

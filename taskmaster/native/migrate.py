@@ -62,6 +62,15 @@ def _put_entity(connection, row):
     kind, ident, doc = row["kind"], row["id"], row["doc"]
     if kind not in schema.KINDS:
         raise ValueError(f"Unclassified entity kind: {kind}")
+    if kind in schema.KIND_SINCE:
+        # An older build would still open a store below this schema, and would
+        # fail on a row of a kind it does not know (D22).
+        needed = schema.KIND_SINCE[kind]
+        stored = connection.execute("SELECT value FROM native_manifest WHERE key='schema_version'").fetchone()
+        current = int(stored[0]) if stored and str(stored[0]).isdigit() else 0
+        if current < needed:
+            raise UnsupportedStoreError(f"{kind} rows need native schema {needed}; this store is at {current}. "
+                                        "They are created once team mode is on. Nothing was written.")
     connection.execute(
         "INSERT INTO entity_core(kind,public_id,revision,last_seq,archived,deleted) VALUES(?,?,?,?,?,?) "
         "ON CONFLICT(kind,public_id) DO UPDATE SET revision=excluded.revision,last_seq=excluded.last_seq,archived=excluded.archived,deleted=excluded.deleted",
@@ -103,7 +112,7 @@ def _reference(connection, field, value, source_kind=None):
         found = connection.execute("SELECT entity_key FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (kind, ident)).fetchone()
         return kind, ident, found[0] if found else None
     # Match the existing ID-only resolution precedence explicitly.
-    found = connection.execute("SELECT kind,entity_key FROM entity_core WHERE public_id=? AND deleted=0 "
+    found = connection.execute("SELECT kind,entity_key FROM entity_core WHERE public_id=? AND deleted=0 AND kind<>'profile' "
                                "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,kind LIMIT 1", (ident,)).fetchone()
     return (found[0], ident, found[1]) if found else ("task", ident, None)
 
@@ -128,32 +137,50 @@ def _put_relations(connection, key, kind, doc):
                                (key, field, ordinal, value_json, target_kind, target_id, target_key, path_key))
 
 
-def reconstruct_entities(connection):
-    """Explicit full-snapshot equivalence oracle, never a normal query path."""
-    result = []
-    for core in rows(connection, "SELECT * FROM entity_core ORDER BY kind,public_id"):
-        key, kind = core["entity_key"], core["kind"]
-        doc = {f: json.loads(core[f + "_json"]) for f in schema.CORE_FIELDS if core[f + "_json"] is not None}
-        documents = rows(connection, "SELECT * FROM entity_documents WHERE entity_key=?", (key,))[0]
-        for field in ("body", "_body"):
-            if documents[field + "_json"] is not None:
-                doc[field] = json.loads(documents[field + "_json"])
-        for table, fields in schema.OPERATIONS.items():
-            if table in schema.KINDS[kind]:
-                values = rows(connection, f"SELECT * FROM {table} WHERE entity_key=?", (key,))[0]
-                doc.update({f: json.loads(values[f + "_json"]) for f in fields if values[f + "_json"] is not None})
-        for table in ("configuration", "entity_extensions"):
-            doc.update({r[0]: json.loads(r[1]) for r in connection.execute(f"SELECT field,value_json FROM {table} WHERE entity_key=?", (key,))})
-        for field, shape in connection.execute("SELECT field,shape FROM field_shapes WHERE entity_key=?", (key,)):
-            table = schema.owner(kind, field)
-            items = connection.execute(f"SELECT r.value_json,p.path FROM {table} r LEFT JOIN paths p USING(path_key) "
-                                       "WHERE r.entity_key=? AND r.field=? ORDER BY ordinal", (key, field)).fetchall()
-            values = [json.loads(item[0]) if item[0] is not None else item[1] for item in items]
-            doc[field] = values if shape == "list" else values[0]
-        compat = rows(connection, "SELECT epic,status FROM compatibility_entity_state WHERE entity_key=?", (key,))[0]
-        result.append(dict(kind=kind, id=core["public_id"], **compat, archived=core["archived"], deleted=core["deleted"],
-                           doc=doc, body=documents["body"], rev=core["revision"], updated_seq=core["last_seq"]))
-    return result
+def reconstruct_entities(connection, *, check=None):
+    """Explicit full-snapshot equivalence oracle, never a normal query path.
+
+    `check`, when given, is called before each entity and may raise to stop the rebuild (a caller's deadline)."""
+    return list(iter_entities(connection, check=check))
+
+
+def iter_entities(connection, *, check=None):
+    """reconstruct_entities one entity at a time, so a caller can stop early without holding every document."""
+    cursor = connection.execute("SELECT * FROM entity_core ORDER BY kind,public_id")
+    names = [d[0] for d in cursor.description]
+    while True:
+        chunk = cursor.fetchmany(256)
+        if not chunk:
+            return
+        for raw in chunk:
+            core = dict(zip(names, raw))
+            if check is not None:
+                check()
+            yield _reconstruct_one(connection, core)
+
+
+def _reconstruct_one(connection, core):
+    key, kind = core["entity_key"], core["kind"]
+    doc = {f: json.loads(core[f + "_json"]) for f in schema.CORE_FIELDS if core[f + "_json"] is not None}
+    documents = rows(connection, "SELECT * FROM entity_documents WHERE entity_key=?", (key,))[0]
+    for field in ("body", "_body"):
+        if documents[field + "_json"] is not None:
+            doc[field] = json.loads(documents[field + "_json"])
+    for table, fields in schema.OPERATIONS.items():
+        if table in schema.KINDS[kind]:
+            values = rows(connection, f"SELECT * FROM {table} WHERE entity_key=?", (key,))[0]
+            doc.update({f: json.loads(values[f + "_json"]) for f in fields if values[f + "_json"] is not None})
+    for table in ("configuration", "entity_extensions"):
+        doc.update({r[0]: json.loads(r[1]) for r in connection.execute(f"SELECT field,value_json FROM {table} WHERE entity_key=?", (key,))})
+    for field, shape in connection.execute("SELECT field,shape FROM field_shapes WHERE entity_key=?", (key,)):
+        table = schema.owner(kind, field)
+        items = connection.execute(f"SELECT r.value_json,p.path FROM {table} r LEFT JOIN paths p USING(path_key) "
+                                   "WHERE r.entity_key=? AND r.field=? ORDER BY ordinal", (key, field)).fetchall()
+        values = [json.loads(item[0]) if item[0] is not None else item[1] for item in items]
+        doc[field] = values if shape == "list" else values[0]
+    compat = rows(connection, "SELECT epic,status FROM compatibility_entity_state WHERE entity_key=?", (key,))[0]
+    return dict(kind=kind, id=core["public_id"], **compat, archived=core["archived"], deleted=core["deleted"],
+                doc=doc, body=documents["body"], rev=core["revision"], updated_seq=core["last_seq"])
 
 
 def _backfill_search(connection):
@@ -239,7 +266,7 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
         else:
             schema.create_schema(connection)
             _invalidation_triggers(connection)
-        _put_manifest(connection, schema_version=schema.VERSION, protocol=schema.PROTOCOL,
+        _put_manifest(connection, schema_version=schema.BASE_VERSION, protocol=schema.PROTOCOL,
                       authority="legacy", state="building", store_id=meta["creation_token"])
         checkpoint("schema")
         source = legacy_entities(connection)

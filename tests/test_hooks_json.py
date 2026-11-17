@@ -41,7 +41,9 @@ def test_ported_hooks_route_through_launcher_with_timeout():
         assert h["command"] == (
             'CLAUDE_HOOK_SCRIPT=%s . "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"'
             % script)
-        assert h["timeout"] == 10
+        # The merge gate's watchdog blocks at 9 s and the host kills a PreToolUse hook at its timeout (a killed hook
+        # lets the command run), so that one hook has 30 s (team-server-008 D3.0); the others keep 10.
+        assert h["timeout"] == (30 if "merge_gate.py" in h["command"] else 10)
     # session-start unchanged
     ss = " ".join(h["command"] for m in d["SessionStart"] for h in m["hooks"])
     assert "session-start.sh" in ss

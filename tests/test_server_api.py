@@ -2,6 +2,7 @@
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 import pytest
 
@@ -139,12 +140,14 @@ def test_root_serves_new_shell_by_default(running_server):
 
 def test_root_ignores_stale_use_v3_pref(running_server):
     base, _ = running_server
-    # The retired use_v3 pref must not affect routing. Even written to false,
-    # root still serves the new shell (the only viewer that ships).
+    # The retired use_v3 pref must not affect routing. Prefs writes are checked against the keys the viewer
+    # uses (security review I-3), so writing it is refused; root still serves the new shell.
     put_body = json.dumps({"use_v3": False}).encode()
     req = urllib.request.Request(f"{base}/api/viewer/prefs", data=put_body, method="PUT",
                                  headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req)
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        urllib.request.urlopen(req)
+    assert refused.value.code == 400
 
     resp = urllib.request.urlopen(f"{base}/")
     assert resp.status == 200

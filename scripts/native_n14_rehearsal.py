@@ -578,7 +578,7 @@ def hook_paths(twin, n=200, globs=20):
     tracked = git(twin, 'ls-files').splitlines()
     chosen = []
     for pattern in patterns:
-        match = next((f for f in tracked if hook._glob_match(pattern, f) and f not in sample), None)
+        match = next((f for f in tracked if hook.hook_reads.glob_match(pattern, f) and f not in sample), None)
         if match and match not in chosen:
             chosen.append(match)
         if len(chosen) >= globs:

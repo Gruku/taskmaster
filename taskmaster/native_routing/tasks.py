@@ -46,6 +46,81 @@ def _committed(call):
     return reads.committed(call.receipts)
 
 
+def _viewer_of():
+    """`(handle, clone)` of a served member's call, or None outside a serve daemon (team-server-011 D5)."""
+    bound = bs._bound_session()
+    handle = getattr(bound, "handle", None)
+    if not isinstance(handle, str) or not handle:
+        return None
+    clone = getattr(bound, "clone", "")
+    return handle, clone if isinstance(clone, str) else ""
+
+
+def overlay_task(snapshot, task):
+    """`task` with `branch` and `worktree` replaced by the caller's own clone row (else their default row)."""
+    who = _viewer_of()
+    if who is None or not isinstance(task, dict) or not task.get("id"):
+        return task
+    from taskmaster.native import clone_fields
+    return clone_fields.overlay(snapshot.connection, task, who[0], who[1], task["id"])
+
+
+def branches_line(snapshot, task_id) -> str:
+    """`Branches by person: ann: feature/x; bob (2 clones): fix/y` from the clone rows: branch names only, never a
+    worktree path (D5). Empty outside a serve daemon and where nobody has a row."""
+    if _viewer_of() is None:
+        return ""
+    from taskmaster.native import clone_fields
+    people: dict = {}
+    for row in clone_fields.rows_for(snapshot.connection, "task", task_id):
+        if row["field"] == "branch" and isinstance(row["value"], str):
+            people.setdefault(row["handle"], {}).setdefault(row["value"], set()).add(row["clone"])
+    if not people:
+        return ""
+    parts = []
+    for handle in sorted(people):
+        names = []
+        for branch in sorted(people[handle]):
+            count = len(people[handle][branch])
+            names.append(branch if count < 2 else f"{branch} ({count} clones)")
+        parts.append(f"{handle}: {', '.join(names)}")
+    return "**Branches by person:** " + "; ".join(parts)
+
+
+def merges_line(snapshot, task_id) -> str:
+    """`Merges from your clone: develop abc1234 (2026-11-07T10:15)` (D7); empty where the caller has none."""
+    who = _viewer_of()
+    if who is None:
+        return ""
+    from taskmaster.native import clone_fields
+    mine = clone_fields.own(snapshot.connection, who[0], who[1], "task", task_id)
+    parts = []
+    for field in sorted(mine):
+        if field.startswith("merge:") and isinstance(mine[field], dict):
+            record = mine[field]
+            parts.append(f"{field[len('merge:'):]} {str(record.get('merge_commit', ''))[:7]} ({record.get('merged_at', '')})")
+    return ("**Merges from your clone:** " + "; ".join(parts)) if parts else ""
+
+
+def clone_note(call, field=None) -> str:
+    """One sentence for a member's branch/worktree write that went to their clone rows, or "" (team-server-011 D4)."""
+    notes = []
+    for receipt in call.receipts:
+        for item in receipt.get("clone_fields") or []:
+            if field is not None and item["field"] != field:
+                continue
+            if item["clone"]:
+                where = f"your clone ({item['clone'][:6]}…; teammates keep their own)"
+            elif item.get("requested_clone"):
+                where = "your default clone (the 64-clone limit was reached; teammates keep their own)"
+            else:
+                where = "your default clone (teammates keep their own)"
+            text = f"{item['field']} {'recorded' if item['value'] else 'cleared'} for {where}"
+            if text not in notes:
+                notes.append(text)
+    return "; ".join(notes)
+
+
 def unchanged_display(call, ident, field, kind="task") -> str:
     """The value a no-op write found stored, from the command's own receipt.
 
@@ -257,12 +332,15 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
         return refusal
     committed = _committed(call)
     document = committed.get(("task", task_id))
+    note = clone_note(call, field)
     if document is None:
+        if note:
+            return call.finish(f"Updated `{task_id}`: {note}")
         return call.finish(f"No change to `{task_id}` field `{field}` — already "
                            f"`{unchanged_display(call, task_id, field)}`")
     expected = document.get(field, bs._MISSING_FIELD)
-    return call.finish(f"Updated `{task_id}` field `{field}` → "
-                       + bs._committed_field_display(committed, task_id, field, expected))
+    text = f"Updated `{task_id}` field `{field}` → " + bs._committed_field_display(committed, task_id, field, expected)
+    return call.finish(f"{text} ({note})" if note else text)
 
 
 def _update_refusal(snapshot, task, epic, task_id, field, value):
@@ -362,7 +440,7 @@ def _dependency_statuses(snapshot, task) -> dict:
 
 @adapter("backlog_pick_task")
 def pick_task(call, *, task_id, force, ttl_seconds):
-    session = bs.SESSION_ID
+    session = call.session
     try:
         ttl = claims.ttl_seconds(ttl_seconds)
     except ValueError as exc:
@@ -372,6 +450,7 @@ def pick_task(call, *, task_id, force, ttl_seconds):
         if not found:
             return f"Error: task `{task_id}` not found"
         task, epic = found
+        task = overlay_task(snapshot, task)
         epic["tasks"] = reads.epic_tasks(snapshot, epic["id"])
         status = task.get("status", "todo")
         slug = task.get("bundle")
@@ -383,11 +462,11 @@ def pick_task(call, *, task_id, force, ttl_seconds):
     context_text = bs._task_context({}, task, epic)
     instruction = bs._build_worktree_instruction(task_id, task.get("sub_repo", ""), task.get("branch", ""),
                                                  task.get("worktree", ""))
+    adopted = _adopted_note(locked_by, session)
     if status == "in-progress":
-        if locked_by and locked_by != session and not force:
-            with call.read() as snapshot:
-                state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
-            return claims.lock_refusal(task_id, state)
+        refused = _claim_refusal(call, task, task_id, session, force, status)
+        if refused:
+            return refused
         bs._set_session_task(task, epic)
         if locked_by == session:
             return call.finish(f"Already in progress: `{task_id}` — {task['title']}\n\n" + context_text + instruction)
@@ -396,13 +475,14 @@ def pick_task(call, *, task_id, force, ttl_seconds):
         if refusal:
             return refusal
         title = bs._committed_task_field(_committed(call), task_id, "title") or bs.NOT_PERSISTED
+        if adopted:
+            return call.finish(f"Picked `{task_id}` — {title} ({adopted})\n\n" + context_text + instruction)
         return call.finish(f"Already in progress: `{task_id}` — {title}\n\n" + context_text + instruction)
     if status not in ("todo", "in-review"):
         return f"Error: task `{task_id}` is `{status}`, expected one of: todo, in-progress, in-review"
-    if claims.foreign_holder(task, session) and not force:
-        with call.read() as snapshot:
-            state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
-        return claims.lock_refusal(task_id, state, status)
+    refused = _claim_refusal(call, task, task_id, session, force, status)
+    if refused:
+        return refused
     warning = ""
     if unmet:
         warning = (f"\n\n⚠️ **Unmet dependencies:** {', '.join(f'`{d}`' for d in unmet)} not yet done. "
@@ -417,8 +497,34 @@ def pick_task(call, *, task_id, force, ttl_seconds):
     if document.get("status") != "in-progress":
         head = f"Picked `{task_id}` — {bs.NOT_PERSISTED}"
     else:
-        head = f"Picked `{task_id}` — {document.get('title', '')} (locked to this session)"
+        head = f"Picked `{task_id}` — {document.get('title', '')} ({adopted or 'locked to this session'})"
     return call.finish(head + warning + "\n\n" + context_text + instruction)
+
+
+def _adopted_note(holder, session) -> str:
+    """D8: say so when a pick takes over the person's own earlier, disconnected session's claim."""
+    if holder and claims.adoptable(holder, session):
+        return f"adopted from your earlier session `{holder}`; locked to this session"
+    return ""
+
+
+def _claim_refusal(call, task, task_id, session, force, status, *, member_of=None):
+    """The pick's refusal of a claim it may not take, or None (D6 E3, D7 E2, today's lock refusal)."""
+    holder = claims.foreign_holder(task, session)
+    if not holder:
+        return None
+    with call.read() as snapshot:
+        state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
+    own = claims.remote_handle(holder) is not None and claims.remote_handle(holder) == claims.remote_handle(session)
+    if not force:
+        if own:
+            return claims.own_open_session_refusal(task_id, state)
+        if member_of:
+            return (f"Error: `{task_id}` is a member of bundle `{member_of}` locked by another session "
+                    f"({holder}). Use force=True to steal.")
+        return claims.lock_refusal(task_id, state, status)
+    text = claims.force_refusal(task_id, state, bs._session_requester())
+    return f"Error: {text} Nothing was changed." if text else None
 
 
 def _bundle_pick(call, task, epic, slug, members, *, session, force, ttl):
@@ -430,9 +536,10 @@ def _bundle_pick(call, task, epic, slug, members, *, session, force, ttl):
     worktree = f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}"
     lane = domain.strictest_lane([m.get("lane") for m in members])
     for member in members:
-        if claims.foreign_holder(member, session) and not force:
-            return (f"Error: `{member['id']}` is a member of bundle `{slug}` "
-                    f"locked by another session ({member['locked_by']}). Use force=True to steal.")
+        refused = _claim_refusal(call, member, member["id"], session, force, member.get("status", "todo"),
+                                 member_of=slug)
+        if refused:
+            return refused
     bound = all(m.get("status") == "in-progress" and m.get("locked_by") == session for m in members)
     if not bound:
         refusal = _run(call, "task.pick", {"id": task["id"], "session": session,
@@ -621,7 +728,7 @@ def _clear_answer(committed, task_id, gate):
 
 
 @adapter("backlog_record_merge")
-def record_merge(call, *, task_id, rung, sha, merged_at):
+def record_merge(call, *, task_id, rung, sha, merged_at, expect_commit=None):
     if not (rung or "").strip():
         return "Error: rung is required"
     if not (sha or "").strip():
@@ -631,8 +738,10 @@ def record_merge(call, *, task_id, rung, sha, merged_at):
         targets = _merge_targets(snapshot)
     if not found:
         return f"Error: task `{task_id}` not found"
-    refusal = _run(call, "task.merge", {"id": task_id, "rung": rung, "sha": sha, "merged_at": merged_at,
-                                         "merge_targets": targets})
+    arguments = {"id": task_id, "rung": rung, "sha": sha, "merged_at": merged_at, "merge_targets": targets}
+    if expect_commit is not None:
+        arguments["expect_commit"] = expect_commit
+    refusal = _run(call, "task.merge", arguments)
     if refusal:
         return refusal
     committed = _committed(call)
@@ -763,6 +872,7 @@ def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
                 return f"Error: {exc}"
             return render_sections(f"## `{task['id']}` — {task['title']}", content,
                                    facts if provenance else None)
+        task = overlay_task(snapshot, task)
         if not verbose:
             # `Snapshot.open_handovers` is the one reader of that question; the
             # slim view names every one, so it asks for the whole list, not a page.
@@ -780,8 +890,11 @@ def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
             for key, value in slim.items():
                 lines.append(f"**{key}:** {value}")
             _links_block(snapshot, lines, task, expand_links=expand_links, peers=backlog.exists())
+            lines.extend(line for line in (branches_line(snapshot, task_id), merges_line(snapshot, task_id)) if line)
             return "\n".join(lines)
-        return _verbose_task(snapshot, task, epic, task_id, expand_links=expand_links)
+        text = _verbose_task(snapshot, task, epic, task_id, expand_links=expand_links)
+        extra = [line for line in (branches_line(snapshot, task_id), merges_line(snapshot, task_id)) if line]
+        return text + ("\n" + "\n".join(extra) if extra else "")
 
 
 def _verbose_task(snapshot, task, epic, task_id, *, expand_links):
@@ -990,7 +1103,7 @@ def next_available(call, *, include_future_phases):
             if active and not include_future_phases and t.get("phase") != active["id"]:
                 continue
             unmet = blockers.unmet_dependencies(t, statuses)
-            holder = claims.foreign_holder(t, bs.SESSION_ID)
+            holder = claims.foreign_holder(t, call.session)
             if unmet:
                 blocked.append((t, ep, unmet))
             elif holder:

@@ -409,8 +409,6 @@ export function isStaleTicks(stored: unknown, now: number): boolean {
   return typeof at !== 'number' || now - at > TICKS_MAX_AGE_MS
 }
 
-/** The rework's lists (spec §15.6): three items a page, review, handovers and restore alike. */
-export const LIST_PAGE_SIZE = 3
 
 const decodeAmp = (text: string): string => text.replace(/&amp;/g, '&')
 
@@ -420,17 +418,16 @@ export function phaseName(p: TmPhase): string {
 }
 
 
-export type HandoverPage = {
-  readonly entries: readonly TmHandover[]
-  readonly page: number
-  readonly pages: number
+export type HandoverFocus = {
+  /** The picked handover's place in the whole list (-1: the list is empty). */
+  readonly index: number
   readonly picked: TmHandover | undefined
 }
 
-/** One page of the handovers list (LIST_PAGE_SIZE a page, out-of-range pages clamped) and the handover its card shows. */
-export function handoverPage(list: readonly TmHandover[], page: number, pick: string): HandoverPage {
-  const pages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE))
-  const at = Math.min(Math.max(0, page), pages - 1)
-  const entries = list.slice(at * LIST_PAGE_SIZE, (at + 1) * LIST_PAGE_SIZE)
-  return { entries, page: at, pages, picked: entries.find(h => h.id === pick) ?? entries[0] }
+/** The handover whose card shows: the picked one when listed, else the one at the stored first-visible index (clamped). */
+export function handoverFocus(list: readonly TmHandover[], first: number, pick: string): HandoverFocus {
+  const at = pick === '' ? -1 : list.findIndex(h => h.id === pick)
+  const stored = Number.isFinite(first) ? Math.min(Math.max(0, Math.floor(first)), Math.max(0, list.length - 1)) : 0
+  const index = at >= 0 ? at : list.length > 0 ? stored : -1
+  return { index, picked: list[index] }
 }

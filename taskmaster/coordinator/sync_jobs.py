@@ -11,14 +11,15 @@ import secrets
 import threading
 import time
 
-from taskmaster.native import contracts, sync
+from taskmaster.native import actor, contracts, sync
+from . import scopes
 from .protocol import SYNC_TIMEOUT, CoordinatorStopping
 
 # The durable caller scope of every job's sync operation; ids are minted here, so no two
 # sessions can name the same operation.
-SCOPE = 'backlog-sync'
+SCOPE = scopes.BACKLOG_SYNC
 # The receipts scope of the jobs' own durable records (native `sync.job`).
-RECORD_SCOPE = 'backlog-sync-job'
+RECORD_SCOPE = scopes.BACKLOG_SYNC_JOB
 RECORD_TIMEOUT = 30
 ID_PATTERN = re.compile(r'\d{8}T\d{6}Z-[0-9a-f]{8}')
 # One round is an ordinary sync under the normal budget (it bounds the publication hold).
@@ -125,7 +126,8 @@ def _write(owner, job, record):
     """The job's durable record (native `sync.job`): replayable after a coordinator restart."""
     envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=RECORD_SCOPE,
                     request_id=f"{job.id}:{record['state']}", operation='sync.job',
-                    arguments={'id': job.id, 'record': record}, expected_revisions=[])
+                    arguments={'id': job.id, 'record': record}, expected_revisions=[],
+                    actor=actor.advisory(actor.INTERNAL_AGENT))
     contracts.validate(envelope)
     owner.submit(envelope).result(timeout=RECORD_TIMEOUT)
 

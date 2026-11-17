@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
+import { HOSTILE } from './fixtures/md-corpus.js';
 
 // The real vendored parser, evaluated against the jsdom window exactly as index.html's classic <script> does.
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'outside-only' });
@@ -43,56 +44,6 @@ function assertInert(host, src) {
   assert.equal(walker.nextNode(), null, `comment survived: ${src}`);
 }
 
-const HOSTILE = [
-  // The brief's six.
-  '<img src=x onerror=alert(1)>',
-  '[a](javascript:alert(1))',
-  '<script>alert(1)</script>',
-  '<a href="data:text/html,x">d</a>',
-  '<iframe src=x>',
-  '<p style="color:red" onclick="x()">t</p>',
-  // Scheme disguised by case, by whitespace and control characters, and by entities.
-  '<a href="JaVaScRiPt:alert(1)">x</a>',
-  '<a href="java\tscript:alert(1)">x</a>',
-  '<a href="java\nscript:alert(1)">x</a>',
-  '<a href=" \u0001javascript:alert(1)">x</a>',
-  '<a href="&#106;avascript:alert(1)">x</a>',
-  '<a href="&#x6A;&#x61;&#x76;&#x61;&#x73;&#x63;&#x72;&#x69;&#x70;&#x74;&#x3A;alert(1)">x</a>',
-  '<a href="javascript&colon;alert(1)">x</a>',
-  '<a href="java&Tab;script:alert(1)">x</a>',
-  '[a](JAVASCRIPT:alert(1))',
-  '[a](<java\tscript:alert(1)>)',
-  '[a](vbscript:msgbox(1))',
-  '[a](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)',
-  '<a href="file:///etc/passwd">x</a>',
-  '<a href="blob:https://x/1">x</a>',
-  // Foreign content and the parser tricks that ride on it.
-  '<svg onload=alert(1)><script>alert(1)</script></svg>',
-  '<svg><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>',
-  '<a xlink:href="javascript:alert(1)">x</a>',
-  '<math><mtext><table><mglyph><style><!--</style><img title="--&gt;&lt;img src=1 onerror=alert(1)&gt;">',
-  '<math><maction actiontype="statusline#http://x" xlink:href="javascript:alert(1)">x</maction></math>',
-  '<svg><style><img src=x onerror=alert(1)></style></svg>',
-  '<noscript><p title="</noscript><img src=x onerror=alert(1)>">',
-  '<template><img src=x onerror=alert(1)></template>',
-  '<textarea><img src=x onerror=alert(1)></textarea>',
-  '<title><img src=x onerror=alert(1)></title>',
-  '<style>@import "http://x/y.css";</style>',
-  '<!-- <img src=x onerror=alert(1)> -->',
-  '<!--><img src=x onerror=alert(1)>-->',
-  // Markdown images, remote loads and page-level elements.
-  '![alt](http://evil.example/pixel.png)',
-  '![alt](x "t" onerror=alert(1))',
-  '<video src=x onerror=alert(1)></video><audio src=x></audio>',
-  '<object data="javascript:alert(1)"></object><embed src=x>',
-  '<link rel=stylesheet href="http://x/y.css"><meta http-equiv=refresh content="0;url=http://x"><base href="http://x/">',
-  '<form action="javascript:alert(1)"><input name=q onfocus=alert(1) autofocus><button formaction="javascript:alert(1)">b</button></form>',
-  '<details open ontoggle=alert(1)><summary>s</summary>x</details>',
-  '<div id="sidebar" name="store" class="modal">clobber</div>',
-  '<a href="https://x" onclick="alert(1)" target="_self" style="position:fixed">x</a>',
-  // Raw HTML tables (review focus): the table may stay, the handlers may not.
-  '<table onclick="alert(1)"><tr><td background="javascript:alert(1)" style="x" onmouseover="alert(1)">c</td></tr></table>',
-];
 
 for (const src of HOSTILE) {
   test(`hostile input renders inert: ${JSON.stringify(src).slice(0, 90)}`, () => {

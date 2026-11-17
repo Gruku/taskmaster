@@ -104,13 +104,14 @@ def test_viewer_prefs_read_matches(twins):
 
 
 def test_viewer_prefs_writes_match(twins):
-    for patch in ('{"theme": "dark", "issues": {"aging": {"warn_days": 3}}}', '{"issues": {"aging": {"stale_days": 9}}}',
-                  "not json", "[1]"):
+    # The last two patches are refused (security review I-3: unknown keys and wrong shapes), alike on both stores.
+    for patch in ('{"theme": "dark", "issues": {"aging": {"High": 3}}}', '{"issues": {"aging": {"Low": 9}}}',
+                  "not json", "[1]", '{"issues": {"aging": {"warn_days": 3}}}', '{"issues": "x"}'):
         twins.same("viewer_prefs_set", patch_json=patch)
         legacy, native = twins.call("viewer_prefs_get")
         assert json.loads(native) == json.loads(legacy)
     aging = json.loads(twins.call("viewer_prefs_get")[1])["issues"]["aging"]
-    assert (aging["warn_days"], aging["stale_days"]) == (3, 9)
+    assert (aging["High"], aging["Low"], "warn_days" in aging) == (3, 9, False)
 
 
 def test_open_viewer_opens_the_native_served_board(twins, monkeypatch):
@@ -119,3 +120,15 @@ def test_open_viewer_opens_the_native_served_board(twins, monkeypatch):
     monkeypatch.setattr(bs, "_start_viewer_server", lambda: 6899)
     legacy, native = twins.same("backlog_open_viewer")
     assert native == "Opened backlog viewer at http://127.0.0.1:6899/" and len(opened) == 2
+
+
+def test_open_viewer_in_serve_mode_answers_the_url_and_opens_no_browser(twins, monkeypatch):
+    """B-110: on a native store the adapter opened a browser on the host even inside `taskmaster serve`."""
+    def forbidden(url):
+        raise AssertionError("a browser was opened on the host")
+    monkeypatch.setattr(bs.webbrowser, "open", forbidden)
+    monkeypatch.setattr(bs, "_start_viewer_server", forbidden)
+    monkeypatch.setenv("TASKMASTER_SERVE", "1")
+    monkeypatch.setattr(bs, "VIEWER_PUBLIC_URL", "https://v.example/")
+    legacy, native = twins.same("backlog_open_viewer")
+    assert native == "The viewer is served at https://v.example/; sign in with your key."

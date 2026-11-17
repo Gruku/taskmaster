@@ -106,6 +106,14 @@ Until then the store keeps its own version. If the exporter later needs to write
 finds it changed on disk, it does not overwrite it: it flags the file, keeps both versions and
 pauses exports to it until you choose one with `backlog_resolve_conflict`.
 
+`backlog_resolve_conflict` reads the flagged file without following a link or junction anywhere on
+its path, and only if it is a regular file of at most 64 MiB; anything else is refused, and the
+file has to be fixed on disk first. `take="store"` keeps the bytes it replaces in the resolution's
+history. Up to about 768 KiB they are kept inline. A larger file that still equals the copy
+captured when it was flagged clears too, because that copy is already kept. A larger file that
+was edited again after it was flagged is refused, because nothing would keep the later edit:
+restore the flagged copy or move the edit elsewhere, then retry.
+
 **For agents:** change backlog state through the tools, not by editing files. If you or the user
 edited a projection file by hand, call `backlog_sync()` (or `backlog_sync(files=[...])` for the
 files you know). Nothing syncs on a schedule: an edit waits until someone asks.
@@ -114,7 +122,7 @@ files you know). Nothing syncs on a schedule: an edit waits until someone asks.
 
 `backlog_sync()` syncs every projection file; `backlog_sync(files=["tasks/core-001.md"])` syncs
 only the named paths (relative to `.taskmaster/`; a leading `.taskmaster/` is accepted). It is
-never run automatically.
+never run automatically. On a team server only the host operator can run it (see Documents).
 
 - **It starts a job and each call returns within about 15 s**: it waits at most 15 s for the
   coordinator, then answers. The coordinator runs the sync to
@@ -574,20 +582,40 @@ whole or by section. `backlog_document_import(kind="task", entity_id, sections=N
 task's declared external documents into the store (1 MiB each, inside the project only). It works
 only on a native store; on legacy it refuses, because the files are read directly there.
 
+**By content.** `content={"spec": "<text>"}` imports the text you pass instead of reading a file, so
+an agent can import a document that exists only on its own machine. The task must already declare
+the section's path; the text is stored against it, with line endings normalized as a file import
+reads them. `expected_hash={"spec": "<sha256>"}` (or `""` for none) refuses a section whose stored
+copy is not the one you expected; without it the last import wins and the answer names whose copy
+was replaced. Provenance marks an upload with `origin: upload` and `imported_by: <handle>`.
+
+**On a team server** (`taskmaster serve`), teammates have no files on the host: they import
+documents with `content`, and a declared path is read only if it is a git-tracked project file.
+Only the host operator runs `backlog_sync`, `backlog_handover_resync` and `backlog_issue_resync`,
+which import hand edits of the host's `.taskmaster/` files; the store's tools change everything
+else. An uploaded document lives only in the store, so it survives a lost disk only through the
+server's state backup (team-server-013), which restores it with its original importer
+(`origin: restore`).
+
 ## Compatibility
 
 | Client | Store | Result |
 |---|---|---|
 | This build | Legacy | Runs as a 6.0.3-compatible bridge client. New tools work, except that `backlog_document_import` refuses with `Error: importing documents requires a native-authority store, which this project does not have. ... Nothing was changed.`, and `backlog_batch_update(commands=...)` refuses with `{"ok": false, "error": "legacy_store", ...}` (the `commands` form needs a native-authority store; use `operations` lines). Nothing is migrated |
 | This build | Native | Routes every tool through the native core and the coordinator |
+| This build | Native schema 3 (solo, or team mode never turned on) | Full read and write. Never upgraded except by turning team mode on |
+| This build | Native schema 4 or 5 (team mode was turned on) | Full read and write |
+| 7.4.x or older 7.x | Native schema 3 | Works as before; downgrading a solo store is supported |
+| 7.4.x or older 7.x | Native schema 4 or 5 | Refuses cleanly: `Error: Unsupported native staging schema or protocol`; nothing is changed |
 | 6.0.3 (bridge) | Native | Refuses cleanly: `Unsupported Taskmaster schema_version=2; this client supports 1. Upgrade the client; the database has not been rebuilt.` |
 | 6.0.2 or older (pre-bridge) | Native | **Not refused cleanly**: 6.0.2 fails with `IntegrityError` and leaves `store.recovery.lock` behind (N15 rehearsal). Stop every such process before the cutover and never start one afterwards |
 | Any bridge client | During a cutover | Refuses: `Taskmaster migration state is 'migrating'; access refused until migration completes.` |
-| A different native build | Native | Must match the store's schema (2) and protocol (2), else `Unsupported native authority schema or protocol`. A running coordinator of another build is retired or refused by the [build handshake](#the-coordinator) |
+| A different native build | Native | Must support the store's native schema (3, 4 or 5), authority schema (2) and protocol (2), else `Unsupported native ... schema or protocol`. A running coordinator of another build is retired or refused by the [build handshake](#the-coordinator) |
 
 **Run one build per project.** Upgrade every host (Claude plugin cache, Codex plugin, manual
 servers) together and restart their sessions. A newer client retires an idle older coordinator
-by itself; an older client refuses until its session is restarted.
+by itself; an older client refuses until its session is restarted. Turning team mode on upgrades the store to native schema 5; 7.4.x
+can't open it after that, and turning team mode off again doesn't revert it.
 
 **Hooks of an older version fail open.** An older build's hooks refuse a native store the same
 way its server does, and the merge-gate hook allows the operation whenever it cannot decide

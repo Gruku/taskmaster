@@ -1,6 +1,6 @@
 // User intent: what the handovers pane's keys do (spec §9, §11), checked on the flows alone — close one or many with one y/n
 // and one toast, refusals kept selected, never a second close in flight, the selection and close row reset by any move, the
-// closed toggle read once, and a handover opened from the band landing on its phase and page.
+// closed toggle read once, and a handover opened from the band landing on its phase and place in the list.
 import { describe, expect, test } from 'claude-code/testing'
 
 import { demoActions, type TmCloseHandover } from '../hooks/actions'
@@ -22,7 +22,7 @@ type Mem = {
   snapshot: TmSnapshot | null
   pick: string
   summaryOpen: string
-  handoverPage: number
+  handoverFirst: number
   handoverList: TmHandoverList | null
   handoverMarks: TmHandoverMarks
   phaseViews: Record<TmPhasePane, TmPhaseView>
@@ -34,7 +34,7 @@ function rig(over: Partial<TmFlowDeps> = {}, mem: Partial<Mem> = {}) {
     snapshot: demoSnapshot(NOW),
     pick: '',
     summaryOpen: '',
-    handoverPage: 0,
+    handoverFirst: 0,
     handoverList: demoHandoverList(NOW),
     handoverMarks: FRESH_MARKS,
     phaseViews: { ...FRESH_PHASE_VIEWS, handovers: { ...FRESH_PHASE_VIEWS.handovers, phases: demoPhases('handovers'), loaded: true } },
@@ -44,7 +44,7 @@ function rig(over: Partial<TmFlowDeps> = {}, mem: Partial<Mem> = {}) {
     snapshot: async change => void (state.snapshot = change(state.snapshot)),
     pick: async id => void (state.pick = id),
     summaryOpen: async change => void (state.summaryOpen = change(state.summaryOpen)),
-    handoverPage: async page => void (state.handoverPage = page),
+    handoverFirst: async first => void (state.handoverFirst = first),
     handoverList: async change => void (state.handoverList = change(state.handoverList)),
     handoverMarks: async change => void (state.handoverMarks = change(state.handoverMarks)),
     phaseView: async (pane, change) => void (state.phaseViews = { ...state.phaseViews, [pane]: change(state.phaseViews[pane]) }),
@@ -189,11 +189,20 @@ describe('selection, moves and the closed toggle', () => {
     expect(state.handoverMarks.selected).toEqual([])
   })
 
-  test('j / k show the page, pick the handover and move the focus to its row', async () => {
+  test('j / k set the window start, pick the handover and move the focus to its row', async () => {
     const { flows, state, seen } = rig()
     await flows.moveTo(1, C)
-    expect([state.handoverPage, state.pick]).toEqual([1, C])
+    expect([state.handoverFirst, state.pick]).toEqual([1, C])
     expect(seen.focus).toEqual([`ho:${C}`])
+  })
+
+  test('the wheel moves the window and picks a handover that scrolled out, without moving the Tab ring', async () => {
+    const { flows, state, seen } = rig()
+    await flows.scrollHandovers(2, C)
+    expect([state.handoverFirst, state.pick]).toEqual([2, C])
+    await flows.scrollHandovers(3, null)
+    expect([state.handoverFirst, state.pick]).toEqual([3, C])
+    expect(seen.focus).toEqual([])
   })
 
   test('◐ closed flips, starts over at the top, and reads the closed ones only when the list holds none', async () => {
@@ -202,10 +211,10 @@ describe('selection, moves and the closed toggle', () => {
       reads.push(closed)
       return { ...demoHandoverList(NOW), closed }
     }
-    const { flows, state } = rig({ readHandoverList }, { handoverList: { ...demoHandoverList(NOW), closed: false }, handoverPage: 1, pick: C })
+    const { flows, state } = rig({ readHandoverList }, { handoverList: { ...demoHandoverList(NOW), closed: false }, handoverFirst: 1, pick: C })
     await flows.toggleClosed()
     expect(state.handoverMarks.showClosed).toBe(true)
-    expect([state.handoverPage, state.pick]).toEqual([0, ''])
+    expect([state.handoverFirst, state.pick]).toEqual([0, ''])
     expect(reads).toEqual([true])
     await flows.toggleClosed()
     await flows.toggleClosed()
@@ -228,27 +237,27 @@ describe('opening the pane', () => {
           return demoHandoverList(NOW)
         },
       },
-      { pick: B, handoverPage: 1, handoverMarks: { ...FRESH_MARKS, selected: [A], ask: { kind: 'one', ids: [A] } } },
+      { pick: B, handoverFirst: 1, handoverMarks: { ...FRESH_MARKS, selected: [A], ask: { kind: 'one', ids: [A] } } },
     )
     await flows.openHandovers()
     expect(seen.opened).toEqual(['tm-handovers'])
-    expect([state.pick, state.handoverPage, state.handoverMarks.selected, state.handoverMarks.ask]).toEqual(['', 0, [], null])
+    expect([state.pick, state.handoverFirst, state.handoverMarks.selected, state.handoverMarks.ask]).toEqual(['', 0, [], null])
     expect(reads).toEqual([])
     await settle()
     expect(reads).toEqual(['phases:handovers', 'list:false'])
   })
 
-  test('band or Session h: the handover lands under its phase (kept for the project) on its page, focused', async () => {
+  test('band or Session h: the handover lands under its phase (kept for the project) in the list, focused', async () => {
     const hang = '2026-10-02-store-read-hang'
     const { flows, state, seen } = rig({ readPhases: async pane => demoPhases(pane), source: 'tm' })
     state.phaseViews = { ...state.phaseViews, handovers: { ...state.phaseViews.handovers, choice: 'patch-1-9' } }
     await flows.openHandover(hang)
     expect(state.phaseViews.handovers.choice).toBe('release-2')
     expect(seen.store.get(phaseKey('handovers', ROOT))).toEqual({ phase: 'release-2' })
-    expect([state.pick, state.handoverPage]).toEqual([hang, 0])
+    expect([state.pick, state.handoverFirst]).toEqual([hang, 0])
     expect(seen.focus.at(-1)).toBe(`ho:${hang}`)
     await flows.openHandover('not-in-the-list')
-    expect([state.pick, state.handoverPage]).toEqual(['', 0])
+    expect([state.pick, state.handoverFirst]).toEqual(['', 0])
     expect(seen.toasts).toEqual(['taskmaster-mods: handover not-in-the-list is not in the open list'])
     expect(state.phaseViews.handovers.choice).toBe('release-2')
   })

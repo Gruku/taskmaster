@@ -90,7 +90,8 @@ class _Render:
                 default_crlf = None
         if default_crlf is None:
             default_crlf = _dominant_crlf(self.backlog_dir)
-        return store._match_line_endings(content, safe_path(self.backlog_dir, job.file), default_crlf)
+        return store._match_line_endings(
+            content, safe_path(self.backlog_dir, job.file), default_crlf, self.backlog_dir)
 
     def _stale(self, rel: str, kinds: tuple[str, ...]) -> int | None:
         placeholders = ",".join("?" for _ in kinds)
@@ -107,7 +108,8 @@ class _Render:
         return snapshot._assemble(cores, None, include_body=True)
 
     def _matched(self, rel: str, content: bytes) -> bytes:
-        return store._match_line_endings(content, safe_path(self.backlog_dir, rel), _dominant_crlf(self.backlog_dir))
+        return store._match_line_endings(
+            content, safe_path(self.backlog_dir, rel), _dominant_crlf(self.backlog_dir), self.backlog_dir)
 
     def derived(self, warnings: list[str]) -> list[tuple[str, str, bytes, int]]:
         """`(file, kind, bytes, seq)` for every stale, unheld derived file, from one read snapshot."""
@@ -299,12 +301,38 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
 # asks here rather than opening the file itself.
 
 
+class UnsafeConflictFile(ValueError):
+    """A flagged file the resolver will not read: a link or junction on its path, not a regular file, too
+    large, or changing under the read. The text is a reason, never a path."""
+
+
 def read_file(backlog_dir: Path, rel: str) -> bytes | None:
-    """The bytes of one projection file now, or None when it is missing."""
+    """The bytes of one projection file now, or None when it is missing.
+
+    Read through sync's own reader (team-server-012 D7): no link or junction on the path is followed, the
+    leaf must be a regular file, and a swap during the read is refused. Raises UnsafeConflictFile."""
+    from taskmaster.coordinator import sync_files
+    from taskmaster.coordinator.git import MAX_PROJECTION_BYTES
+    from taskmaster.projection_paths import UnsafePath
     try:
-        return (backlog_dir / outbox.safe_relative(rel)).read_bytes()
-    except FileNotFoundError:
-        return None
+        # Any flagged path, derived ones (ideas/IDEAS.md) included: the exporter flags those too.
+        outbox.safe_relative(rel)
+        observed = sync_files.observe(backlog_dir, rel, limit=MAX_PROJECTION_BYTES, authored=False)
+    except sync_files.ChangedDuringRead:
+        raise UnsafeConflictFile("it changed while being read; retry") from None
+    except UnsafePath as exc:
+        reason = ("it is not a regular file" if "not a regular file" in str(exc) else
+                  "it is a link or junction" if "linked/reparse" in str(exc) else
+                  "its path leaves the backlog directory")
+        raise UnsafeConflictFile(reason) from None
+    except ValueError as exc:
+        if "byte limit" in str(exc):
+            raise UnsafeConflictFile(f"it is over the {MAX_PROJECTION_BYTES // (1024 * 1024)} MiB projection "
+                                     "limit") from None
+        raise UnsafeConflictFile("its path is not a safe projection path") from None
+    except OSError as exc:
+        raise UnsafeConflictFile(f"it could not be read ({type(exc).__name__})") from None
+    return None if observed is None else observed.content
 
 
 def store_version(connection: sqlite3.Connection, backlog_dir: Path, kind: str, ident: str | None,

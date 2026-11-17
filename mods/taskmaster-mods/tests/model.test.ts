@@ -12,9 +12,8 @@ import {
   handoverPath,
   handoverRefs,
   oneLine,
-  LIST_PAGE_SIZE,
   phaseName,
-  handoverPage,
+  handoverFocus,
   isReady,
   isStaleTicks,
   orderQueue,
@@ -292,22 +291,16 @@ describe('the phase filter', () => {
   })
 })
 
-describe('handover pages', () => {
+describe('handover focus', () => {
   const list = Array.from({ length: 13 }, (_, i) => ({ id: `h${i}` }) as TmHandover)
 
-  test('three to a page, the last one short; a page out of range is clamped', () => {
-    expect(LIST_PAGE_SIZE).toBe(3)
-    expect(handoverPage(list, 0, '').entries.map(h => h.id)).toEqual(['h0', 'h1', 'h2'])
-    const last = handoverPage(list, 4, '')
-    expect([last.page, last.pages, last.entries.map(h => h.id)]).toEqual([4, 5, ['h12']])
-    expect(handoverPage(list, 9, '').page).toBe(4)
-    expect(handoverPage(list, -1, '').page).toBe(0)
-    expect(handoverPage([], 0, '')).toMatchObject({ page: 0, pages: 1, entries: [], picked: undefined })
-  })
-
-  test('the picked handover is the pick when it is on the page, else the page first', () => {
-    expect(handoverPage(list, 1, 'h4').picked?.id).toBe('h4')
-    expect(handoverPage(list, 1, 'h2').picked?.id).toBe('h3')
-    expect(handoverPage(list, 1, '').picked?.id).toBe('h3')
+  test('the pick when it is listed, else the handover at the stored first-visible index (clamped to the list)', () => {
+    expect(handoverFocus(list, 0, '')).toMatchObject({ index: 0, picked: { id: 'h0' } })
+    expect(handoverFocus(list, 4, 'h9')).toMatchObject({ index: 9, picked: { id: 'h9' } })
+    expect(handoverFocus(list, 4, 'gone').picked?.id).toBe('h4')
+    expect(handoverFocus(list, 99, '').picked?.id).toBe('h12')
+    expect(handoverFocus(list, -3, '').index).toBe(0)
+    expect(handoverFocus(list, Number.NaN, '').index).toBe(0)
+    expect(handoverFocus([], 0, '')).toEqual({ index: -1, picked: undefined })
   })
 })

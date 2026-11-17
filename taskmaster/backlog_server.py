@@ -1,13 +1,15 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+# dependencies = ["anyio", "fastmcp>=3.4,<4", "h11>=0.16", "httpx", "mcp>=1.28,<2", "pydantic>=2", "pyyaml", "starlette>=1.0.1,<2", "uvicorn>=0.35,<1"]
 # ///
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import os
 import re
+import shlex
 import socket
 import sqlite3
 import subprocess
@@ -41,6 +43,7 @@ from taskmaster import dependency_chain as _dependency_chain
 from taskmaster.native import claims as _claims
 from taskmaster.native import metrics as _metrics
 from taskmaster.admission import UnsupportedStoreError
+from taskmaster.server_fence import ServerModeRefused
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
     load_config,
@@ -68,6 +71,9 @@ def _guard_legacy_layout(fn):
             result = fn(*args, **kwargs)
         except store.LegacyLayoutError as exc:
             return f"Error: {exc}"
+        except ServerModeRefused as exc:
+            from taskmaster.native_routing import registry as _native_registry
+            return _native_registry.error_text(fn.__name__, str(exc))
         return _attach_conflict_notices(result)
 
     return wrapper
@@ -102,6 +108,18 @@ def _measured_tool(name, call, args, kwargs):
                           **({"outcome": "error", "error": error} if error else {}))
 
 
+def _server_mode_refusal(tool):
+    """The split-brain fence's answer for this tool call (G1a, team-server-009), or None.
+
+    Runs before any tool body, path resolution or scaffold write, so `backlog_init` in a
+    teammate clone creates nothing. Answers in the tool's own error shape.
+    """
+    from taskmaster import server_fence
+    from taskmaster.native_routing import registry as _native_registry
+    text = server_fence.refusal(ROOT)
+    return None if text is None else _native_registry.error_text(tool, text)
+
+
 def _route_native(fn):
     """Serve this tool from the native core when the project's store is native.
 
@@ -113,6 +131,19 @@ def _route_native(fn):
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        # The outermost tool call binds its connection's session once (team-server-003 D3);
+        # every accessor in this call, nested tool calls included, reads that one binding.
+        token = _CALL_BOUND.set(_provided_session()) if _CALL_BOUND.get() is _UNBOUND else None
+        try:
+            return routed(*args, **kwargs)
+        finally:
+            if token is not None:
+                _CALL_BOUND.reset(token)
+
+    def routed(*args, **kwargs):
+        refused = _server_mode_refusal(fn.__name__)
+        if refused is not None:
+            return refused
         if _active_tx() is None:
             try:
                 backlog_path = _backlog_path()
@@ -122,7 +153,7 @@ def _route_native(fn):
                 from taskmaster.native_routing import registry as _native_registry
 
                 answer = _native_registry.route(
-                    fn.__name__, fn, backlog_path, SESSION_ID, args, kwargs
+                    fn.__name__, fn, backlog_path, current_session(), args, kwargs
                 )
                 if answer is not NotImplemented:
                     return answer
@@ -234,6 +265,40 @@ _SERVER_INSTRUCTIONS = (
 
 mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION, instructions=_SERVER_INSTRUCTIONS))
 
+# ── MCP clientInfo capture (team-identity-002) ─────
+from fastmcp.server.middleware import Middleware  # noqa: E402
+from taskmaster.native import actor as _actor  # noqa: E402
+
+_CLIENT_AGENT: str | None = None     # first MCP initialize of this process wins
+
+
+def _capture_client_agent(name) -> None:
+    global _CLIENT_AGENT
+    if _CLIENT_AGENT is None:
+        _CLIENT_AGENT = _actor.agent_for_client(name)
+
+
+def client_agent() -> str:
+    """The agent slug of this call's MCP client: the connection's own on a shared server, else
+    this process's first client ("" before initialize, in CLIs and tests)."""
+    bound = _bound_session()
+    if bound is not None:
+        return getattr(bound, "agent", "") or ""
+    return _CLIENT_AGENT or ""
+
+
+class _ClientInfoCapture(Middleware):
+    async def on_initialize(self, context, call_next):
+        try:
+            name = context.message.params.clientInfo.name
+        except AttributeError:
+            name = ""
+        _capture_client_agent(name)
+        return await call_next(context)
+
+
+mcp.add_middleware(_ClientInfoCapture())   # _GuardedToolRegistrar delegates to FastMCP
+
 # Priority mapping: canonical names ↔ legacy P-codes. The names, the table
 # and every task/epic/phase rule below come from the one shared domain layer
 # (`taskmaster.native.domain`), so the tools, the viewer and the native command
@@ -245,6 +310,8 @@ from taskmaster.native.domain import (
     illegal_transition_message,
     completion_block_reason as _completion_block_reason,
     valid_bundle_slug as _valid_bundle_slug,
+    valid_sub_repo as _valid_sub_repo,
+    SUB_REPO_RULE as _SUB_REPO_RULE,
     strictest_lane as _strictest_lane,
     validate_components as _validate_components,
     now_stamp as _now,
@@ -341,6 +408,8 @@ from taskmaster.taskmaster_v3 import (
     continuity_items as _continuity_items,
     load_viewer_prefs,
     save_viewer_prefs,
+    apply_viewer_prefs_patch,
+    deep_merge,
     list_sessions,
     get_session_detail,
     slim_entity as _slim_entity,
@@ -624,8 +693,42 @@ def _progress_path_for(backlog_doc: dict, backlog: Path, legacy_progress: Path) 
     return legacy_progress
 
 
-# ── Session identity (unique per MCP server process) ─────
+# ── Session identity ─────
+# This process's host-local session: a stdio server's one agent. On a shared server
+# (`taskmaster serve`) every MCP connection has its own session instead, which the
+# daemon's provider derives from the authenticated request (team-server-003 D3).
 SESSION_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+# Callable[[], session object | None]; only the serve daemon assigns it. The object has
+# .session, .agent, .task and .bundle (mutable), and .requester() (a claims.Requester).
+SESSION_PROVIDER = None
+_UNBOUND = object()
+# The outermost tool call's binding (None: host-local). A ContextVar set and reset inside
+# one call, never a per-thread cache: worker threads are reused across connections.
+_CALL_BOUND: "contextvars.ContextVar" = contextvars.ContextVar("taskmaster_call_session", default=_UNBOUND)
+
+
+def _provided_session():
+    provider = SESSION_PROVIDER
+    return provider() if provider is not None else None   # exceptions propagate: fail closed
+
+
+def _bound_session():
+    """The session object this call runs for, or None for the host-local session."""
+    bound = _CALL_BOUND.get()
+    return _provided_session() if bound is _UNBOUND else bound
+
+
+def current_session() -> str:
+    """The session id this call runs for: its connection's on a shared server, else SESSION_ID."""
+    bound = _bound_session()
+    return bound.session if bound is not None else SESSION_ID
+
+
+def _session_requester():
+    """Who this call is for, as a claims.Requester; None for host-local callers (today's rules)."""
+    bound = _bound_session()
+    requester = getattr(bound, "requester", None)
+    return requester() if callable(requester) else None
 
 import copy as _copy
 
@@ -1325,7 +1428,7 @@ def _dependency_statuses(data: dict, task: dict) -> dict[str, str]:
 def _release_claim_on_status_change(task: dict, before: str | None = None) -> None:
     """A status change releases this session's claim, or a peer's proven expired
     one — never a live peer's (`claims.survives_status_change`)."""
-    _claims.after_status_change(task, session=SESSION_ID, connection=_store().connection,
+    _claims.after_status_change(task, session=current_session(), connection=_store().connection,
                                 before=before)
 
 
@@ -1868,7 +1971,7 @@ def _derive_context(data: dict) -> None:
             continue
         # The resolver's answer, not a fourth reading of `depends_on`: an
         # unguarded one here raised on every load for one malformed row.
-        if _blockers.unmet_dependencies(t, task_statuses) or _claims.foreign_holder(t, SESSION_ID):
+        if _blockers.unmet_dependencies(t, task_statuses) or _claims.foreign_holder(t, current_session()):
             continue
         todo_tasks.append((t, epic))
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -2165,18 +2268,7 @@ def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> No
             _log_swallowed_error("Linear enqueue failure logging", log_exc)
 
 
-def _deep_merge(dst: dict, src: dict) -> dict:
-    """Recursively merge *src* into *dst* in-place and return *dst*.
-
-    Dict-valued keys are merged recursively; all other values are replaced
-    with a deep copy of the source value.
-    """
-    for k, v in src.items():
-        if isinstance(v, dict) and isinstance(dst.get(k), dict):
-            _deep_merge(dst[k], v)
-        else:
-            dst[k] = deepcopy(v)
-    return dst
+_deep_merge = deep_merge  # viewer prefs merge; the one copy lives beside the prefs schema in taskmaster_v3
 
 
 def _task_context(data: dict, task: dict, epic: dict) -> str:
@@ -2773,6 +2865,8 @@ def backlog_document_import(
     kind: Literal["task"],
     entity_id: str,
     sections: list[str] | None = None,
+    content: dict[str, str] | None = None,
+    expected_hash: dict[str, str] | None = None,
 ) -> str:
     """Import a task's external documents into the store, so reads stop touching files.
 
@@ -2781,11 +2875,23 @@ def backlog_document_import(
     served from the store from then on — including after the file changes on disk, so
     re-run this when a document is edited. Re-importing unchanged prose does nothing.
 
+    With `content`, the text you pass is imported instead and no file is read: use it
+    when the file is on your machine, not the server's (a team server). The task must
+    already declare each section's path. An uploaded document is stored on the team
+    server; a restore of the server keeps it only through the server's state backup
+    (team-server-013), so commit the file to the code repository if it must outlive
+    both. Send large documents one section per call (the server caps a request's size).
+
     Args:
         kind: Only "task" — task `docs` paths are the external documents the store serves.
         entity_id: The task ID whose documents to import.
         sections: Document sections to import (spec, plan, design, analysis, roadmap).
-            Omit to import every document the task declares.
+            Omit to import every document the task declares. Not with `content`.
+        content: Section name to that document's text, e.g. `{"spec": "# Spec\\n..."}`.
+        expected_hash: Section name to the sha256 `content_hash` you expect the store to
+            hold now ("" for none), from `backlog_document(provenance=True)`; a section
+            whose stored copy differs is not imported. Pass it when several people import
+            the same task's documents.
     """
     return ("Error: importing documents requires a native-authority store, which this project "
             "does not have. On a legacy store `backlog_get_task(sections=...)` and "
@@ -2852,6 +2958,34 @@ def backlog_index_status(rebuild: bool = False, verify: bool = False) -> str:
     return _render_derived_report(st.derived_status(), st.db_path)
 
 
+def _write_text_git(path: Path, text: str, backlog_dir: Path) -> None:
+    """`path.write_text`, in the line endings Git would check out when it has an opinion."""
+    from taskmaster import git_eol
+    if git_eol.crlf_for(backlog_dir, path) is None:
+        path.write_text(text, encoding="utf-8")
+    else:
+        path.write_bytes(store.apply_git_line_endings(text.encode("utf-8"), path, backlog_dir))
+
+
+def _tracked_local_line(backlog_dir: Path) -> str:
+    """B-099: a warning line when Git tracks files under `.taskmaster/local` (machine-local state).
+
+    Never untracks anything; names the one-time fix. Empty when nothing is tracked or Git is unavailable.
+    """
+    from taskmaster import git_eol
+    tracked = git_eol.tracked_local_files(backlog_dir)
+    if not tracked:
+        return ""
+    examples = ", ".join(tracked[:3])
+    more = f" (+{len(tracked) - 3} more)" if len(tracked) > 3 else ""
+    local = tracked[0].rsplit("/local/", 1)[0] + "/local" if "/local/" in tracked[0] else "local"
+    return (
+        f"Tracked local files: {len(tracked)} under {local} are tracked by Git: {examples}{more}. "
+        f"Fix once: `git rm -r --cached {local}`, then commit "
+        f"({local}/.gitignore keeps them out afterwards). Nothing was untracked."
+    )
+
+
 def _render_store_report(status: "store.StoreStatus") -> str:
     """Format a `store.StoreStatus` as the `backlog_store_status` body.
 
@@ -2886,6 +3020,10 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         ),
         f"Warning: {status.warning or 'none'}",
     ]
+
+    tracked_local = _tracked_local_line(status.db_path.parent.parent)
+    if tracked_local:
+        lines.append(tracked_local)
 
     lines.append(f"Sessions: {len(status.live_sessions)} live")
     for session in status.live_sessions:
@@ -3027,7 +3165,8 @@ def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
     sync an earlier call started. Each call returns within ~15 s with "Sync running"
     (call again with the sync_id), "Sync complete" with counts, or the conflicts and
     quarantined files to settle with `backlog_resolve_conflict`. On a legacy store
-    it does nothing (hand edits import on every call).
+    it does nothing (hand edits import on every call). On a team server only the host
+    operator can run it.
 
     Args:
         files: Paths relative to `.taskmaster/` to sync, e.g. `["tasks/core-001.md"]`
@@ -3510,7 +3649,7 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
                 continue
 
             unmet = _blockers.unmet_dependencies(task, task_status)
-            holder = _claims.foreign_holder(task, SESSION_ID)
+            holder = _claims.foreign_holder(task, current_session())
             if unmet:
                 blocked_by_deps.append((task, epic, unmet))
             elif holder:
@@ -3904,7 +4043,7 @@ def _resume_init(project_name: str, legacy_store: bool) -> str | None:
         # The escape hatch: the native store was deleted before anything was written.
         config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         config["store"] = "legacy"
-        CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        _write_text_git(CONFIG_PATH, json.dumps(config, indent=2) + "\n", CONFIG_PATH.parent)
         _write_local_meta_cache(backlog_abs, {"updated": _today()})
         return (
             f"Finished initializing **{project_name}** on the legacy store, as asked: the earlier "
@@ -4072,14 +4211,14 @@ def backlog_init(
     config = {"backlog_path": backlog_rel, "progress_path": progress_rel}
     if v4:
         config["store"] = "legacy" if legacy_store else "native"
-    CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    _write_text_git(CONFIG_PATH, json.dumps(config, indent=2) + "\n", CONFIG_PATH.parent)
     created.append(".taskmaster/taskmaster.json")
     created.append(backlog_rel)
 
     # Create PROGRESS.md
     progress_content = f"# {project_name} Progress\n\n> Auto-generated from backlog.yaml — do not edit manually\n\n## Dashboard\n\n---\n\n## Changelog\n"
     progress_abs.parent.mkdir(parents=True, exist_ok=True)
-    progress_abs.write_text(progress_content, encoding="utf-8")
+    _write_text_git(progress_abs, progress_content, backlog_abs.parent)
     created.append(progress_rel)
 
     if native:
@@ -4858,7 +4997,9 @@ def _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, l
 @mcp.tool()
 @_transactional("backlog_handover_resync")
 def backlog_handover_resync() -> str:
-    """Import hand edits to handover files (a handover-only `backlog_sync`) and rebuild the 30-entry handover index."""
+    """Import hand edits to handover files (a handover-only `backlog_sync`) and rebuild the 30-entry handover index.
+
+    On a team server only the host operator can run it."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -5841,7 +5982,9 @@ def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
 @mcp.tool()
 @_transactional("backlog_issue_resync")
 def backlog_issue_resync() -> str:
-    """Import hand edits to issue files (an issue-only `backlog_sync`) and rebuild the issue index."""
+    """Import hand edits to issue files (an issue-only `backlog_sync`) and rebuild the issue index.
+
+    On a team server only the host operator can run it."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -7082,12 +7225,12 @@ def _legacy_context_answer(connection, focus, scope, sections, budget_bytes, cur
     from taskmaster.native.budget import Selection
     data = _load()
     store_id, sequence = _legacy_context_identity(connection)
-    focus = _legacy_context_focus(data, focus, scope, SESSION_ID)
+    focus = _legacy_context_focus(data, focus, scope, current_session())
     ident = context_shape.identity(store_id=store_id, source_digest=cursors.LEGACY_DIGEST,
                                    sequence=sequence, scope=scope, focus=focus, include=sections)
     try:
         offsets = context_shape.parse(cursor, ident)
-        doc, body, epic, facts = _legacy_context_facts(data, connection, focus, SESSION_ID)
+        doc, body, epic, facts = _legacy_context_facts(data, connection, focus, current_session())
         resolution = (blockers.resolve(facts) if facts is not None
                       else blockers.Resolution(clear=False, blockers=(context_shape.no_focus(),)))
         selections, provenance = [], {}
@@ -7931,11 +8074,10 @@ def viewer_prefs_set(patch_json: str) -> str:
         return f"Error: invalid JSON ({e})"
     if not isinstance(patch, dict):
         return "Error: patch must be a JSON object"
-
-    bp = _backlog_path()
-    prefs = load_viewer_prefs(bp)
-    _deep_merge(prefs, patch)
-    save_viewer_prefs(bp, prefs)
+    try:
+        apply_viewer_prefs_patch(_backlog_path(), patch)
+    except ValueError as exc:
+        return f"Error: {exc}. Nothing was changed."
     return "ok"
 
 
@@ -7976,6 +8118,8 @@ def backlog_add_task(
     anchors = options.get("anchors", "") or ""
     task_id = options.get("task_id", "") or ""
     area = options.get("area", "") or ""
+    if not _valid_sub_repo(sub_repo):
+        return f"Error: invalid sub_repo {sub_repo!r}: {_SUB_REPO_RULE}."
     stage = options.get("stage")
     if isinstance(stage, str):
         stage = stage.strip()
@@ -8164,12 +8308,19 @@ def _build_worktree_instruction(
     key = _path_key or task_id
     branch_name = branch or f"feature/{key}"
 
-    if sub_repo:
-        wt_path = f"{sub_repo}/.worktrees/{key}"
-        cmd = f"cd {sub_repo} && git worktree add .worktrees/{key} -b {branch_name}"
-    else:
-        wt_path = f"<sub-repo>/.worktrees/{key}"
-        cmd = f"git worktree add .worktrees/{key} -b {branch_name}"
+    # The picker's agent runs this block, and on a team server a teammate may have set `sub_repo` (security review
+    # I-2): a stored value that breaks the rule (written before it existed) gets no command at all, and every value
+    # is shell-quoted (a plain value is printed unchanged). A bundle slug stored before its rule was enforced is
+    # suppressed the same way, because POSIX quoting is wrong in PowerShell (re-review m-A).
+    if _path_key is not None and not (_path_key and _valid_bundle_slug(_path_key)):
+        return ("\n\n**Worktree:** this bundle's slug is not lowercase kebab-case, so no worktree command is shown. "
+                "Ask the person to set `bundle` on its tasks to one (e.g. `auth-pair`), then pick again.")
+    if sub_repo and not _valid_sub_repo(sub_repo):
+        return ("\n\n**Worktree:** this task's `sub_repo` is not a plain relative directory, so no worktree command "
+                f"is shown. Ask the person to set it to one ({_SUB_REPO_RULE}) with "
+                f"backlog_update_task({task_id}, sub_repo, <dir>), then pick again.")
+    add = f"git worktree add {shlex.quote(f'.worktrees/{key}')} -b {shlex.quote(branch_name)}"
+    cmd = f"cd {shlex.quote(sub_repo)} && {add}" if sub_repo else add
 
     if branch and not _path_key:
         lead = (
@@ -8197,6 +8348,8 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
     Picking takes a claim: the task is locked to this session until it completes,
     the claim is released, or the claim expires. Keep a long task claimed with
     `backlog_claim(action="renew")`, and give it back with `action="release"`.
+    On a shared server, a claim belongs to your session; your own earlier sessions that have
+    disconnected are taken over without force.
 
     Args:
         task_id: The task ID to pick (e.g., "ue-plugin-003")
@@ -8232,7 +8385,7 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
         lane = _strictest_lane([m.get("lane") for m in members])
         # Check for foreign-session locks on any member
         for m in members:
-            if _claims.foreign_holder(m, SESSION_ID) and not force:
+            if _claims.foreign_holder(m, current_session()) and not force:
                 return (
                     f"Error: `{m['id']}` is a member of bundle `{slug}` "
                     f"locked by another session ({m['locked_by']}). Use force=True to steal."
@@ -8240,14 +8393,14 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
         # Idempotent re-pick: if all members are already in-progress for this session,
         # just return the bundle context without re-mutating.
         all_bound = all(
-            m.get("status") == "in-progress" and m.get("locked_by") == SESSION_ID
+            m.get("status") == "in-progress" and m.get("locked_by") == current_session()
             for m in members
         )
         if not all_bound:
             for m in members:
                 m["status"] = "in-progress"
                 m["started"] = m.get("started") or _now()
-                _claims.held(m, ttl, session=SESSION_ID)
+                _claims.held(m, ttl, session=current_session())
                 m["branch"] = branch
                 m["worktree"] = worktree
                 member_found = _find_task(data, m["id"])
@@ -8278,17 +8431,17 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
     locked_by = task.get("locked_by")
 
     if status == "in-progress":
-        if locked_by and locked_by != SESSION_ID:
+        if _claims.foreign_holder(task, current_session()):
             if not force:
                 return _claims.lock_refusal(task_id, _claims.read(
-                    task, task_id=task_id, session=SESSION_ID, connection=_store().connection))
+                    task, task_id=task_id, session=current_session(), connection=_store().connection))
             # Force-claim: transfer lock to this session
-            _claims.held(task, ttl, session=SESSION_ID)
+            _claims.held(task, ttl, session=current_session())
             _tx_put_task(task, epic)
             _mutate_and_save(data)
         # Idempotent: update session state and lock, return details without mutation
-        if not locked_by:
-            _claims.held(task, ttl, session=SESSION_ID)
+        if not locked_by or _claims.adoptable(locked_by, current_session()):
+            _claims.held(task, ttl, session=current_session())
             _tx_put_task(task, epic)
             _mutate_and_save(data)
         _set_session_task(task, epic)
@@ -8313,9 +8466,9 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
 
     # A peer's claim is not taken silently on a todo or in-review task either:
     # `backlog_context` reports it as held on any status.
-    if _claims.foreign_holder(task, SESSION_ID) and not force:
+    if _claims.foreign_holder(task, current_session()) and not force:
         return _claims.lock_refusal(task_id, _claims.read(
-            task, task_id=task_id, session=SESSION_ID, connection=_store().connection), status)
+            task, task_id=task_id, session=current_session(), connection=_store().connection), status)
 
     # Surface unmet dependencies (B-050). Pick is an explicit override, so we warn
     # rather than block — but we no longer disagree silently with next_available,
@@ -8331,7 +8484,7 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
 
     task["status"] = "in-progress"
     task["started"] = task.get("started") or _now()
-    _claims.held(task, ttl, session=SESSION_ID)
+    _claims.held(task, ttl, session=current_session())
 
     _tx_put_task(task, epic)
     _mutate_and_save(data)
@@ -8375,7 +8528,8 @@ def backlog_claim(
     store has never heard from — keeps its claim: the cost of guessing wrong is two
     agents editing one task, so an unproven claim is never broken. `release` frees
     an expired claim without stealing; `backlog_pick_task(force=True)` is still the
-    override for one that stands.
+    override for one that stands. On a shared server, a claim belongs to your session;
+    your own earlier sessions that have disconnected are taken over without force.
 
     Args:
         action: renew (extend to now + ttl), release (hand it back), status.
@@ -8392,13 +8546,13 @@ def backlog_claim(
     connection = _store().connection
 
     def state_of(task):
-        return _claims.read(task, task_id=str(task.get("id") or ""), session=SESSION_ID,
+        return _claims.read(task, task_id=str(task.get("id") or ""), session=current_session(),
                             connection=connection)
 
     if not task_id:
         held = [state_of(task) for epic in data.get("epics", []) for task in epic.get("tasks", [])
-                if task.get(_claims.HOLDER_FIELD) == SESSION_ID]
-        return json.dumps({"ok": True, "session": SESSION_ID,
+                if task.get(_claims.HOLDER_FIELD) == current_session()]
+        return json.dumps({"ok": True, "session": current_session(),
                            "claims": [state.as_dict() for state in sorted(held, key=lambda s: s.task_id)]})
     found = _tx_task(data, task_id)
     if not found:
@@ -8430,7 +8584,7 @@ def backlog_claim(
             # Renew extends claims and never takes one: a member whose holder was
             # dropped would otherwise be claimed without a pick (§2.5).
             continue
-        _claims.released(target) if action == "release" else _claims.held(target, ttl, session=SESSION_ID)
+        _claims.released(target) if action == "release" else _claims.held(target, ttl, session=current_session())
         # Each member's own epic, as the bundle pick does: a member written with
         # the wrong epic (or none) would move on the board.
         owner = _find_task(data, str(target.get("id") or ""))
@@ -8981,37 +9135,60 @@ def _last_session_text(progress: Path, handover_ids_after=None) -> str:
 _session_task: dict | None = None  # {"id", "title", "epic", "picked_at"}
 
 
+# On a shared server the bound session object carries its own task and bundle
+# (team-server-003 D4); these module globals are the host-local session's.
+
+
+def _get_session_task() -> dict | None:
+    bound = _bound_session()
+    return bound.task if bound is not None else _session_task
+
+
 def _set_session_task(task: dict, epic: dict) -> None:
     global _session_task
-    _session_task = {
+    value = {
         "id": task["id"],
         "title": task["title"],
         "epic": epic["id"],
         "picked_at": datetime.now().isoformat(timespec="seconds"),
     }
+    bound = _bound_session()
+    if bound is not None:
+        bound.task = value
+    else:
+        _session_task = value
 
 
 def _clear_session_task(task_id: str) -> None:
     global _session_task
-    if _session_task and _session_task["id"] == task_id:
-        _session_task = None
+    bound = _bound_session()
+    current = bound.task if bound is not None else _session_task
+    if current and current["id"] == task_id:
+        if bound is not None:
+            bound.task = None
+        else:
+            _session_task = None
 
 
 _session_bundle: dict | None = None  # {"slug","sub_repo","branch","worktree","members":[id],"lane"}
 
 
 def _get_session_bundle() -> dict | None:
-    return _session_bundle
+    bound = _bound_session()
+    return bound.bundle if bound is not None else _session_bundle
 
 
 def _set_session_bundle(b: dict | None) -> None:
     global _session_bundle
-    _session_bundle = b
+    bound = _bound_session()
+    if bound is not None:
+        bound.bundle = b
+    else:
+        _session_bundle = b
 
 
 def _clear_session_bundle() -> None:
-    global _session_bundle
-    _session_bundle = None
+    _set_session_bundle(None)
 
 
 
@@ -9258,6 +9435,10 @@ def backlog_update_task(
             task["design_change"] = True
         else:
             task.pop("design_change", None)
+    elif field == "sub_repo":
+        if not _valid_sub_repo(value):
+            return f"Error: invalid sub_repo {value!r}: {_SUB_REPO_RULE}."
+        task["sub_repo"] = value
     elif field == "bundle":
         if not _valid_bundle_slug(value):
             return f"Error: invalid bundle slug `{value}` (lowercase kebab, 2-41 chars)."
@@ -9417,7 +9598,8 @@ def _resolved_merge_targets() -> list[dict]:
 
 @mcp.tool()
 @_transactional("backlog_record_merge")
-def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "") -> str:
+def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "",
+                         expect_commit: str | None = None) -> str:
     """Stamp a merge rung on a task: records that the task's branch landed at `rung`
     (e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.
     The manual fallback for the PostToolUse merge-recorder hook. Not a pipeline gate —
@@ -9429,6 +9611,7 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
         rung: Rung label (ladder label or "branch:<name>" for untracked targets).
         sha: Merge commit SHA.
         merged_at: ISO timestamp; defaults to now.
+        expect_commit: record only if the rung's current merge commit is this one ('' = none recorded); otherwise refused. Used by team-server hooks.
     """
     if not (rung or "").strip():
         return "Error: rung is required"
@@ -9439,6 +9622,11 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
     if not result:
         return f"Error: task `{task_id}` not found"
     task, _epic = result
+    if expect_commit is not None:
+        current = ((task.get("merge_status") or {}).get(rung) or {}).get("merge_commit") or ""
+        if current != expect_commit:
+            return (f"Error: rung `{rung}` of `{task_id}` records {current or 'nothing'}, "
+                    f"not {expect_commit or 'nothing'}")
     _touch_task(task)
     task.setdefault("merge_status", {})[rung] = {
         "merged_at": merged_at or _now(), "merge_commit": sha,
@@ -10704,7 +10892,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                     "todo, in-progress, in-review"
                 )
                 continue
-            holder = _claims.foreign_holder(task, SESSION_ID)
+            holder = _claims.foreign_holder(task, current_session())
             if holder:
                 errors.append(f"`{task_id}`: {_claims.batch_pick_refusal(task_id, holder)}")
                 continue
@@ -10837,7 +11025,7 @@ def backlog_batch_preview(operations: str) -> str:
                 previews.append(f"- `{task_id}`: Cannot archive — currently `{current_status}`")
 
         elif op == "pick":
-            holder = _claims.foreign_holder(task, SESSION_ID)
+            holder = _claims.foreign_holder(task, current_session())
             if holder and current_status in ("todo", "in-progress", "in-review"):
                 # The refusal the batch line gives, before it is applied.
                 previews.append(f"- `{task_id}`: {_claims.batch_pick_refusal(task_id, holder)}")
@@ -10900,6 +11088,14 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
 
 def _blast_radius_text(data: dict, task_id: str, mode: str, depth_override: str, structured: bool) -> str:
     """`backlog_blast_radius` over any task tree; shared with the native adapter."""
+    if mode == "evidence":
+        # Evidence mode runs git and walks files under a task's free-text worktree/sub_repo, which a
+        # teammate can point at any repository the service user can read: operator only on a team
+        # server (team-server-005 gate finding C3; the D6 pattern). Predictive mode reads only the store.
+        from taskmaster.coordinator import client as coordinator_client
+        refused = coordinator_client.served_action_refusal('backlog_blast_radius(mode="evidence")')
+        if refused is not None:
+            return f"Error: {refused}"
     result = _find_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
@@ -11617,6 +11813,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(503, {"ok": False, **exc.public_payload()})
 
+    # Server-mode seams (team-server-006): the serve daemon's guarded subclass overrides these;
+    # here they keep the solo viewer exactly as it was.
+    def _cors_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+
+    def _index_head_extra(self) -> str:
+        return ""
+
+    def _md_full_path(self, resolved: Path) -> str:
+        return str(resolved).replace("\\", "/")
+
+    def _md_editor_link(self, resolved: Path) -> str:
+        """The markdown page's "Open in VS Code" link. The path goes into an attribute, so it is escaped; the serve
+        guard returns nothing, because a vscode:// link to a host path means nothing to a remote member."""
+        from html import escape
+        return (f'<a href="vscode://file/{escape(self._md_full_path(resolved), quote=True)}" '
+                'class="open-editor">Open in VS Code</a>')
+
+    def _static_rel(self, clean_path: str) -> str:
+        """The path under /static/v3/ to serve. Solo decodes the tail again; the serve guard overrides this."""
+        from urllib.parse import unquote
+        return unquote(clean_path[len("/static/v3/"):])
+
+    def _read_repo_file(self, resolved: Path) -> str:
+        return resolved.read_text(encoding="utf-8")
+
     def _native(self):
         """This request's native database, or None on a legacy store (checked once)."""
         if not hasattr(self, "_native_database"):
@@ -11644,18 +11866,20 @@ class ViewerHandler(BaseHTTPRequestHandler):
             html = html.replace('src="js/', 'src="/static/v3/js/')
             html = html.replace('src="vendor/', 'src="/static/v3/vendor/')
             html = html.replace('href="vendor/', 'href="/static/v3/vendor/')
+            extra = self._index_head_extra()
+            if extra:
+                html = html.replace("</head>", extra + "</head>", 1)
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._cors_headers()
             self.end_headers()
             self.wfile.write(body)
             return
         elif clean_path.startswith("/static/v3/"):
-            from urllib.parse import unquote as _unquote
-            rel = _unquote(clean_path[len("/static/v3/"):])
+            rel = self._static_rel(clean_path)
             viewer_root = (SCRIPT_DIR / "viewer").resolve()
             target = (viewer_root / rel).resolve()
             if not str(target).startswith(str(viewer_root) + os.sep) and target != viewer_root:
@@ -11679,7 +11903,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._cors_headers()
             self.end_headers()
             self.wfile.write(body)
             return
@@ -11831,7 +12055,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             data, etag = snapshot
             prefs = self._prefs()
-            aging_cfg = prefs.get("issues", {}).get("aging", {})
+            issue_prefs = prefs.get("issues") if isinstance(prefs, dict) else None
+            aging_cfg = issue_prefs.get("aging") if isinstance(issue_prefs, dict) else None
+            aging_cfg = aging_cfg if isinstance(aging_cfg, dict) else {}
             issues = []
             for _iid, fm, body in _dict_rows(data, "issue"):
                 if not include_resolved and fm.get("status") in ("fixed", "wontfix"):
@@ -11977,15 +12203,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", f"{content_type}; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._cors_headers()
             self.end_headers()
             self.wfile.write(data)
         except FileNotFoundError:
             self.send_error(HTTPStatus.NOT_FOUND)
 
     def _serve_session(self) -> None:
-        session_data = dict(_session_task) if _session_task else {}
-        session_data["session_id"] = SESSION_ID
+        task = _get_session_task()
+        session_data = dict(task) if task else {}
+        session_data["session_id"] = current_session()
         self._send_json(200, session_data)
 
     def _serve_identity(self) -> None:
@@ -12010,7 +12237,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            content = resolved.read_text(encoding="utf-8")
+            content = self._read_repo_file(resolved)
         except (UnicodeDecodeError, PermissionError):
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -12020,8 +12247,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             from html import escape
             import base64
             b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
-            full_path = str(resolved).replace("\\", "/")
-            html = _MD_TEMPLATE.replace("{{TITLE}}", escape(rel_path)).replace("{{B64CONTENT}}", b64).replace("{{FULL_PATH}}", full_path)
+            values = {"TITLE": escape(rel_path), "B64CONTENT": b64, "EDITOR_LINK": self._md_editor_link(resolved)}
+            # One pass, so a file name that contains a placeholder can never be substituted twice.
+            html = re.sub(r"\{\{(TITLE|B64CONTENT|EDITOR_LINK)\}\}", lambda m: values[m.group(1)], _MD_TEMPLATE)
             body = html.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -12034,7 +12262,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             ct = ext_map.get(resolved.suffix.lower(), "text/plain")
             self.send_header("Content-Type", f"{ct}; charset=utf-8")
 
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -12450,11 +12678,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not isinstance(patch, dict):
                 self._send_json(400, {"ok": False, "error": "patch must be a JSON object"})
                 return
-
-            bp = _backlog_path()
-            prefs = load_viewer_prefs(bp)
-            _deep_merge(prefs, patch)
-            save_viewer_prefs(bp, prefs)
+            try:
+                apply_viewer_prefs_patch(_backlog_path(), patch)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
             self._send_json(200, {"ok": True})
             return
 
@@ -12571,7 +12799,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.send_header("ETag", f'"{etag}"')
         # JSON API responses are intentionally uncached — no Cache-Control header
         # means browsers apply their default heuristic (usually no-store for XHR).
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(body)
         if _metrics.ENABLED:
@@ -12587,7 +12815,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -12597,85 +12825,44 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
 
 _MD_TEMPLATE = """<!DOCTYPE html>
-<html><head>
+<html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{TITLE}}</title>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#141920;color:#d4dae3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.6;padding:0}
-.topbar{background:#1c222b;border-bottom:1px solid #363e4a;padding:10px 24px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:10}
-.topbar a{color:#58a6ff;text-decoration:none;font-size:13px;font-weight:600}
-.topbar a:hover{text-decoration:underline}
-.topbar .path{color:#97a0ad;font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;flex:1}
-.open-editor{background:#232a34;border:1px solid #363e4a;border-radius:4px;padding:4px 10px;font-size:12px !important;white-space:nowrap}
-.open-editor:hover{background:#363e4a}
-.zoom-controls{display:flex;align-items:center;gap:4px}
-.zoom-btn{background:#232a34;border:1px solid #363e4a;border-radius:4px;padding:2px 8px;color:#d4dae3;cursor:pointer;font-size:13px;font-weight:600;line-height:1.4;min-width:26px;text-align:center}
-.zoom-btn:hover{background:#363e4a}
-.zoom-label{color:#97a0ad;font-size:11px;font-family:"SFMono-Regular",Consolas,monospace;min-width:36px;text-align:center}
-.content{max-width:860px;margin:0 auto;padding:32px 24px;transition:font-size 0.15s ease}
-h1,h2,h3,h4{color:#d4dae3;margin:20px 0 10px;line-height:1.3}
-h1{font-size:1.7em;border-bottom:1px solid #363e4a;padding-bottom:8px}
-h2{font-size:1.4em;border-bottom:1px solid #363e4a;padding-bottom:6px}
-h3{font-size:1.15em}h4{font-size:1em;color:#97a0ad}
-p{margin:8px 0}
-a{color:#58a6ff}
-code{font-family:"SFMono-Regular",Consolas,monospace;font-size:0.85em;background:#232a34;border:1px solid #363e4a;padding:1px 5px;border-radius:3px;color:#58a6ff}
-pre{background:#0d1117;border:1px solid #363e4a;border-radius:6px;padding:14px 18px;overflow-x:auto;margin:12px 0}
-pre code{background:none;border:none;padding:0;color:#d4dae3}
-ul,ol{margin:8px 0;padding-left:22px}
-li{margin:3px 0}
-table{width:100%;border-collapse:collapse;margin:12px 0;font-size:0.93em}
-th{text-align:left;padding:8px 12px;background:#232a34;border:1px solid #363e4a;font-weight:600}
-td{padding:8px 12px;border:1px solid #363e4a}
-tr:hover td{background:#1c222b}
-blockquote{border-left:3px solid #58a6ff;padding:6px 14px;margin:10px 0;color:#97a0ad;background:#1c222b;border-radius:0 4px 4px 0}
-hr{border:none;border-top:1px solid #363e4a;margin:20px 0}
-strong{color:#d4dae3}
-img{max-width:100%}
-</style>
+<link rel="stylesheet" href="/static/v3/css/tokens.css">
+<link rel="stylesheet" href="/static/v3/css/components/markdown.css">
+<link rel="stylesheet" href="/static/v3/css/file-page.css">
 </head><body>
 <div class="topbar">
   <a href="/">&larr; Backlog</a>
   <span class="path">{{TITLE}}</span>
   <div class="zoom-controls">
-    <button class="zoom-btn" id="zoom-out" title="Zoom out">&minus;</button>
+    <button class="zoom-btn" id="zoom-out" type="button" title="Zoom out">&minus;</button>
     <span class="zoom-label" id="zoom-label">100%</span>
-    <button class="zoom-btn" id="zoom-in" title="Zoom in">+</button>
-    <button class="zoom-btn" id="zoom-reset" title="Reset zoom">&#x21bb;</button>
+    <button class="zoom-btn" id="zoom-in" type="button" title="Zoom in">+</button>
+    <button class="zoom-btn" id="zoom-reset" type="button" title="Reset zoom">&#x21bb;</button>
   </div>
-  <a href="vscode://file/{{FULL_PATH}}" class="open-editor">&#x1F4DD; Open in VSCode</a>
+  {{EDITOR_LINK}}
 </div>
-<div class="content" id="content"></div>
-<script>
-const raw = decodeURIComponent(atob("{{B64CONTENT}}").split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-document.getElementById('content').innerHTML = marked.parse(raw);
-
-// Zoom
-const ZOOM_KEY = 'taskmaster-docs-zoom';
-const ZOOM_STEP = 10;
-const ZOOM_MIN = 60;
-const ZOOM_MAX = 200;
-const BASE_SIZE = 14;
-let zoomPct = parseInt(localStorage.getItem(ZOOM_KEY) || '100', 10);
-
-function applyZoom() {
-  zoomPct = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomPct));
-  document.getElementById('content').style.fontSize = (BASE_SIZE * zoomPct / 100) + 'px';
-  document.getElementById('zoom-label').textContent = zoomPct + '%';
-  localStorage.setItem(ZOOM_KEY, String(zoomPct));
-}
-
-document.getElementById('zoom-in').addEventListener('click', () => { zoomPct += ZOOM_STEP; applyZoom(); });
-document.getElementById('zoom-out').addEventListener('click', () => { zoomPct -= ZOOM_STEP; applyZoom(); });
-document.getElementById('zoom-reset').addEventListener('click', () => { zoomPct = 100; applyZoom(); });
-applyZoom();
-</script>
+<main id="content" class="md-body" data-b64="{{B64CONTENT}}"></main>
+<script src="/static/v3/vendor/marked.min.js"></script>
+<script src="/static/v3/js/lib/md-safe.js"></script>
+<script src="/static/v3/js/file-page.js"></script>
 </body></html>"""
 
 _viewer_started = False
 VIEWER_PORT = 0
+VIEWER_PUBLIC_URL: str | None = None      # set by the serve daemon (team-server-006)
+
+
+def _serve_mode() -> bool:
+    """True inside `taskmaster serve`, whose daemon owns a guarded viewer (team-server-006 D10.1)."""
+    return os.environ.get("TASKMASTER_SERVE") == "1"
+
+
+def _served_viewer_notice() -> str:
+    """What backlog_open_viewer answers in serve mode: the URL only, never a browser on the host (B-110)."""
+    return (f"The viewer is served at {VIEWER_PUBLIC_URL or f'http://127.0.0.1:{VIEWER_PORT}/'}; "
+            "sign in with your key.")
 
 
 _PORT_BAND = range(6800, 6900)
@@ -12759,6 +12946,11 @@ def _start_viewer_server() -> int:
     If a different project owns the port, move along the band, then to an OS-assigned port.
     """
     global _viewer_started, VIEWER_PORT
+    if _serve_mode():
+        return VIEWER_PORT                    # the serve daemon owns the viewer; never bind an unguarded one
+    from taskmaster import server_fence
+    if server_fence.refusal(ROOT) is not None:
+        return VIEWER_PORT                    # server mode: no local viewer is bound (team-server-009)
     if _viewer_started:
         return VIEWER_PORT
 
@@ -12781,6 +12973,8 @@ _start_viewer_server()
 @mcp.tool()
 def backlog_open_viewer() -> str:
     """Open the backlog kanban board in the default browser. The viewer auto-loads current data."""
+    if _serve_mode():
+        return _served_viewer_notice()
     port = _start_viewer_server()
     url = f"http://127.0.0.1:{port}/"
     webbrowser.open(url)
@@ -12917,10 +13111,13 @@ def _write_project_manifest(
     first export had failed.
     """
     def apply() -> None:
+        from taskmaster.project import check_team_protocol_change
+
         tx = _store_tx()
         try:
-            tx.get("project", "__project__")
+            existing = tx.get("project", "__project__")
         except KeyError:
+            check_team_protocol_change(None, document)
             tx.create("project", document, body=None, requested_id="__project__")
         else:
             if create_only:
@@ -12928,6 +13125,8 @@ def _write_project_manifest(
                     f"{path} already has a project manifest — refusing to "
                     "overwrite (edit it directly)"
                 )
+            existing = {k: v for k, v in existing.items() if k != _BODY_KEY}
+            check_team_protocol_change(existing, document)
             tx.put("project", "__project__", document)
 
     if _active_tx() is not None:
@@ -13036,6 +13235,10 @@ def backlog_linear(
     Native retry returns its request_id/caller_scope; retain both and the target
     to inspect a pending result or recover a lost response without a new push.
     """
+    from taskmaster.native_routing.overview import served_linear_guard
+    token_env, refused = served_linear_guard(action, token_env)   # team server: operator only (005 D6)
+    if refused is not None:
+        return json.dumps({"error": refused})
     if action == "probe":
         return backlog_linear_probe(token_env)
     if action == "bootstrap_apply":

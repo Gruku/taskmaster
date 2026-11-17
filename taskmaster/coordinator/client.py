@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -12,7 +13,10 @@ import time
 import uuid
 
 from taskmaster.admission import UnsupportedStoreError
-from taskmaster.native import contracts, metrics
+from taskmaster.native import claims, contracts, metrics
+from taskmaster.team_identity import IdentityRefused
+from . import allowlist
+from . import scopes
 from .ownership import ownership_held, verify_private
 from .protocol import (CoordinatorStopping, HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT,
                        ServiceUnavailable, build_identity, compare_versions, describe, encode, identify, same_build,
@@ -20,6 +24,8 @@ from .protocol import (CoordinatorStopping, HandshakeError, MAX_RESPONSE_BYTES, 
 
 _START_LOCK = threading.Lock()
 _RETRY_PAUSE = 0.1
+# A child of taskmaster.coordinator, so the serve daemon's log handlers (001) receive its lines.
+LOG = logging.getLogger('taskmaster.coordinator.client')
 
 
 class _ForeignBuild(Exception):
@@ -54,6 +60,47 @@ def _launch(root):
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **flags)
 
 
+# `taskmaster serve` owns its coordinator in-process for the daemon's whole life; in that
+# process no client may launch a replacement or retire another build's owner (team-server-001).
+LOST_CONTEXT_REFUSED = ("Refused: this request names a person's session but carries no authenticated key (it ran "
+                        "outside its request). Nothing was sent.")
+AUTOSTART_ALLOWED = True
+
+# Callable[[], str | None]. Only the serve daemon assigns it (serve.auth.request_key_id): the key
+# of the request being served, which the coordinator turns into the command's actor.
+ORIGIN_PROVIDER = None
+
+
+def serving() -> bool:
+    """Whether this process is a serve daemon (it installed a provider). Never calls the provider."""
+    return ORIGIN_PROVIDER is not None
+
+
+def served_principal() -> tuple[bool, str | None]:
+    """(serving, key id of the request being served or None). A raising provider propagates."""
+    provider = ORIGIN_PROVIDER
+    return (False, None) if provider is None else (True, provider())
+
+
+def served_action_refusal(what: str) -> str | None:
+    """For a tool action that is not a coordinator method but reaches host-only capability (design D6):
+    None outside a serve daemon or for the host operator, else the refusal text."""
+    serving_now, principal = served_principal()
+    return allowlist.action_refusal(what, principal) if serving_now else None
+
+
+def _origin_arguments(arguments: dict) -> dict:
+    """In a serve daemon, `arguments` plus the served request's origin; elsewhere unchanged.
+    Only the client sets an origin there: a caller-supplied one would let tool code claim the operator."""
+    provider = ORIGIN_PROVIDER
+    if provider is None:
+        return arguments
+    if 'origin' in arguments:
+        raise ValueError('origin is set by the serve daemon, never by a caller')
+    principal = provider()
+    return arguments if principal is None else dict(arguments, origin={'principal': principal})
+
+
 class Client:
     def __init__(self, root, *, autostart=True, visibility='native', timeout=30):
         self.root = Path(root).resolve(strict=True)
@@ -61,7 +108,7 @@ class Client:
         self.build = build_identity()
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
-        self.autostart, self.visibility, self.timeout = autostart, visibility, timeout
+        self.autostart, self.visibility, self.timeout = autostart and AUTOSTART_ALLOWED, visibility, timeout
         # An absolute time.monotonic() deadline for the whole connect path, or None (sync_job).
         self._deadline = None
 
@@ -94,7 +141,11 @@ class Client:
             raise HandshakeError('invalid coordinator discovery; inspect service recovery status') from exc
         except PermissionError as exc:
             raise HandshakeError('coordinator discovery permissions are unsafe or inaccessible; no writer fallback') from exc
-        if not isinstance(record, dict) or any(record.get(k) != v for k, v in self.identity.items()):
+        # `schema` is the build's highest native schema, not the store's: another build may
+        # report another one, and the build handshake decides about it (D23).
+        if not isinstance(record, dict) or any(
+                record.get(k) != v for k, v in self.identity.items()
+                if k != 'schema' or same_build(record.get('build'), self.build)):
             raise HandshakeError('discovery root/store/schema/protocol mismatch; no writer fallback')
         if (type(record.get('port')) is not int or not 0 < record['port'] < 65536 or
                 not isinstance(record.get('token'), str) or len(record['token']) != 64 or
@@ -102,10 +153,20 @@ class Client:
             raise HandshakeError('invalid coordinator address or generation')
         return record
 
-    def _send(self, record, method, *, wait=None, **arguments):
+    def _send(self, record, method, *, wait=None, identity=None, **arguments):
         """`wait` extends the reply timeout for a call whose own budget is longer."""
-        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce'], build=self.build), method=method,
-                              **arguments))
+        if ORIGIN_PROVIDER is not None:
+            # The serve daemon's one funnel to its coordinator (team-server-005 D1): with no operator
+            # principal, only the remote-class methods leave this process. A missing principal (a
+            # thread without the request context) is judged as remote, so it fails closed.
+            principal = allowlist.principal_of(arguments.get('origin'))
+            refused = allowlist.refusal(method, arguments, principal)
+            if refused is not None:
+                LOG.warning('refused %s in the serve process for key %s',
+                            allowlist.log_method(method), allowlist.log_key(principal))
+                raise ValueError(refused)
+        payload = encode(dict(identity=dict(identity or self.identity, nonce=record['nonce'], build=self.build),
+                              method=method, **arguments))
         connection = http.client.HTTPConnection('127.0.0.1', record['port'],
                                                 timeout=self.timeout if wait is None else max(self.timeout, wait))
         try:
@@ -133,9 +194,10 @@ class Client:
             if response.status != 200:
                 errors = {'Conflict': contracts.Conflict, 'CancelledBeforeExecution': contracts.CancelledBeforeExecution,
                           'ValueError': ValueError, 'KeyError': KeyError, 'HandshakeError': HandshakeError,
-                          'UnsupportedStoreError': UnsupportedStoreError, 'CoordinatorStopping': CoordinatorStopping}
+                          'UnsupportedStoreError': UnsupportedStoreError, 'CoordinatorStopping': CoordinatorStopping,
+                          'IdentityRefused': IdentityRefused}
                 error = errors.get(value.get('type'), ServiceUnavailable)(value.get('error', 'coordinator refused request'))
-                if isinstance(error, (HandshakeError, CoordinatorStopping)):
+                if isinstance(error, (HandshakeError, CoordinatorStopping, IdentityRefused)):
                     error.may_have_committed = False  # refused before admission
                 raise error
             return value['result']
@@ -279,15 +341,19 @@ class Client:
                                  f'{describe(self.build)}', may_have_committed=False)
         try:
             self._bounded()
-            state = self._send(record, 'retire').get('state')
+            # The running owner's own schema value, so an older build's handshake accepts it.
+            answer = self._send(record, 'retire', identity=dict(self.identity, schema=record.get('schema')))
+            state, reason = answer.get('state'), answer.get('reason')
         except HandshakeError:
             raise
         except (ConnectionError, TimeoutError, http.client.HTTPException, ServiceUnavailable):
             # Re-probe: it may just have exited, its port may now be someone else's
             # (403), or a peer is starting.
-            state = 'unreachable'
+            state, reason = 'unreachable', None
         if state == 'refused':
-            raise HandshakeError(f'coordinator build {describe(theirs)} refused to retire', may_have_committed=False)
+            raise HandshakeError(f'coordinator build {describe(theirs)} refused to retire'
+                                 + (f': {reason}' if isinstance(reason, str) and reason else ''),
+                                 may_have_committed=False)
         if state == 'busy' and order != 1:
             raise ServiceUnavailable(f'coordinator build {describe(theirs)} is busy; this client '
                                      f'({describe(self.build)}, same release, other code) retires it only while idle; '
@@ -306,6 +372,16 @@ class Client:
     def call(self, method, *, wait=None, **arguments):
         # Retain identical arguments across transport retries. In particular,
         # never mint a new command request_id after an ambiguous disconnect.
+        # The origin is resolved once, here, for the same reason (and before any send).
+        arguments = _origin_arguments(arguments)
+        if ORIGIN_PROVIDER is not None and allowlist.principal_of(arguments.get('origin')) is None:
+            # team-server-004 D4: a person's session without that person's key never leaves the daemon
+            # (work handed to a thread that lost its request context); before any probe or connection.
+            named = [s for s in scopes.named_sessions(method, arguments) if claims.remote_handle(s) is not None]
+            if named:
+                LOG.error('refused a %s naming session %s without an authenticated key (lost request context)',
+                          allowlist.log_method(method), scopes.log_session(named[0]))
+                raise IdentityRefused(LOST_CONTEXT_REFUSED)
         deadline = self._clamped(time.monotonic() + self.timeout)
         sent = False  # an earlier attempt reached a coordinator; its outcome is unknown
         while True:
@@ -337,6 +413,7 @@ class Client:
         if request.get('request_id') is None:
             raise ValueError('IPC commands require a durable request_id')
         try:
+            # call() attaches the served request's origin once, before its retry loop.
             return self.call('execute', envelope=request, visibility=self.visibility)
         except ServiceUnavailable as exc:
             # Public adapters may have minted the ID on behalf of the caller;
@@ -372,7 +449,7 @@ class Client:
         return self.call('flush', through=through)
 
     def sync(self, *, import_files=True, through=0, files=None, take_file=False,
-             caller_scope='explicit-sync', request_id=None, worktree=None, timeout=None):
+             caller_scope=scopes.EXPLICIT_SYNC, request_id=None, worktree=None, timeout=None):
         """`worktree` names a linked checkout of this repository: its edits are imported
         against its own bases and the published generation is copied into it.
         `timeout` is the sync's budget (default protocol.SYNC_TIMEOUT); the reply is
@@ -401,10 +478,12 @@ class Client:
         worker thread the caller stops waiting for at the deadline, so no stalled step (a hung
         probe, a start lock held elsewhere) can hold the caller past it."""
         outcome = {}
+        # Here, not in the worker thread below: that thread has no request context.
+        extra = _origin_arguments({})
 
         def attempt():
             try:
-                outcome['value'] = self._sync_job(deadline, sync_id, files, margin)
+                outcome['value'] = self._sync_job(deadline, sync_id, files, margin, extra)
             except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
                 outcome['error'] = exc
 
@@ -417,7 +496,7 @@ class Client:
             raise outcome['error']
         return outcome['value']
 
-    def _sync_job(self, deadline, sync_id, files, margin):
+    def _sync_job(self, deadline, sync_id, files, margin, extra=None):
         self._deadline = deadline
         while True:
             record = None
@@ -430,7 +509,7 @@ class Client:
                                              may_have_committed=False)
                 self.timeout = left
                 return self._send(record, 'sync_job', sync_id=sync_id, files=files,
-                                  wait_seconds=round(max(0.0, left - wait), 3))
+                                  wait_seconds=round(max(0.0, left - wait), 3), **(extra or {}))
             except CoordinatorStopping:
                 # A retiring owner refused it before admission: its successor takes it, in time.
                 if record is not None:
@@ -446,7 +525,7 @@ class Client:
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
 
-    def git_run(self, *, kind, message=None, ref=None, caller_scope='explicit-git', request_id=None, timeout=600,
+    def git_run(self, *, kind, message=None, ref=None, caller_scope=scopes.EXPLICIT_GIT, request_id=None, timeout=600,
                 worktree=None, sync_timeout=None):
         """Managed commit/checkout under the coordinator's publication hold.
 

@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
-from . import documents, graph_repair, linear_outbox, projection, sync, workflow
+from . import clone_fields, documents, graph_repair, linear_outbox, profiles, projection, sync, workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -33,8 +33,9 @@ CREATE_EXTRAS = {"auto_link"}
 AUTO_LINKED = {"issue", "idea", "handover"}
 # `projection.resolve` keeps the store's version of a flagged projection file (N11 S10).
 # `graph.repair` is the explicit graph-table repair maintenance operation (N14).
-OPERATIONS = (ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | linear_outbox.OPERATIONS
-              | sync.OPERATIONS | graph_repair.OPERATIONS | {projection.RESOLVE})
+OPERATIONS = (ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | profiles.OPERATIONS | linear_outbox.OPERATIONS
+              | sync.OPERATIONS | graph_repair.OPERATIONS | {projection.RESOLVE}
+              | clone_fields.OPERATIONS)
 
 
 def _accepts(value, annotation):
@@ -65,6 +66,10 @@ def validate(operation, arguments):
         return workflow.validate(operation, arguments)
     if operation in documents.OPERATIONS:
         return documents.validate(operation, arguments)
+    if operation in clone_fields.OPERATIONS:
+        return clone_fields.validate(operation, arguments)
+    if operation in profiles.OPERATIONS:
+        return profiles.validate(operation, arguments)
     if operation == projection.RESOLVE:
         return projection.validate_resolve(arguments)
     if operation in graph_repair.OPERATIONS:
@@ -153,6 +158,10 @@ def apply(transaction, operation, arguments):
         return workflow.apply(transaction, operation, arguments)
     if operation in documents.OPERATIONS:
         return documents.apply(transaction, operation, arguments)
+    if operation in clone_fields.OPERATIONS:
+        return clone_fields.apply(transaction, operation, arguments)
+    if operation in profiles.OPERATIONS:
+        return profiles.apply(transaction, operation, arguments)
     if operation == projection.RESOLVE:
         return projection.apply_resolve(transaction, arguments)
     if operation in graph_repair.OPERATIONS:

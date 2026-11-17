@@ -62,11 +62,14 @@ class CoordinatorStopping(ServiceUnavailable):
     """Refused before admission because the owner is stopping; a client waits for its successor."""
 
 
-def connect(root: Path, *, readonly=False):
+def connect(root: Path, *, readonly=False, busy_seconds: float = 30, cached_statements: int | None = None):
+    from taskmaster import server_fence          # G3: the split-brain fence (team-server-009)
+    server_fence.check(root)
     path = root / '.taskmaster/local/store.db'
     uri = path.as_uri() + ('?mode=ro' if readonly else '?mode=rw')
-    connection = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=30)
-    connection.execute('PRAGMA busy_timeout=30000')
+    connection = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=busy_seconds,
+                                 **({} if cached_statements is None else {'cached_statements': cached_statements}))
+    connection.execute(f'PRAGMA busy_timeout={max(0, int(busy_seconds * 1000))}')
     if readonly:
         connection.execute('PRAGMA query_only=ON')
     return connection

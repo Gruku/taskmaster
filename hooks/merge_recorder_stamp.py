@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+# dependencies = ["anyio", "fastmcp>=3.4,<4", "h11>=0.16", "httpx", "mcp>=1.28,<2", "pydantic>=2", "pyyaml", "starlette>=1.0.1,<2", "uvicorn>=0.35,<1"]
 # ///
 # User intent: after a merge succeeds, stamp the rung it reached onto the task,
 # through the server's own recorder so the write is v3-correct — and against the
@@ -23,6 +23,13 @@ CARDINAL RULE: NEVER BLOCKS. Wrap the ENTIRE body in try/except so a Python
 exception can never propagate to the shell as a non-zero exit.  The shell hook
 also has `|| true` around this call, but defence-in-depth is correct here.
 
+SERVER MODE (a team-server clone, team-server-008): the stamp is a command. `stamp_remote` POSTs it to the server's
+`/write/v1/merge-stamp` within 4 s; the "is my commit older than the recorded one" question is answered by `git
+merge-base --is-ancestor` in THIS clone (remote/stamps.py), never on the host. A stamp the server can't take is queued in
+`<cache>/remote/<server_id>/stamps/` (owner-only, the solo queue's rules via `merge_stamps.QueueDir`), logged in the
+server's `hooks/hook.log`, and replayed by the next stamp within the hook's 7 s budget; entries older than 30 days are
+rejected. Nothing is created under `.taskmaster/` in the clone.
+
 NATIVE STORES: the write goes to the coordinator with autostart off — hooks never
 bootstrap one. With no coordinator running the stamp is queued durably in
 local/merge-stamps-pending.jsonl and the MCP server applies it on its next native
@@ -40,7 +47,6 @@ cwd=<project> (prod inherits it; tests pass cwd=) targets the right project.
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import sys
@@ -59,14 +65,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 BUSY_TIMEOUT_SECONDS = 30.0
 LOG_MAX_BYTES = 1024 * 1024
 LOG_KEEP_BYTES = 512 * 1024
-
-_TASK_BY_BRANCH_SQL = (
-    "SELECT id, doc FROM entities"
-    " WHERE kind='task' AND deleted=0 AND archived=0"
-    "   AND json_extract(doc,'$.branch')=?"
-    " ORDER BY id"
-)
-
 
 def _log(root: Path, reason: str) -> None:
     """One line saying why no stamp was written. Never raises."""
@@ -116,7 +114,8 @@ def task_id_for_branch(db_file: Path, src: str) -> str | None:
 
     A plain sqlite read, `query_only`, on a database that must already exist:
     `mode=rw` refuses to create one. Going through `backlog_server._load()` for
-    this lookup is what let a PostToolUse hook bootstrap a whole project.
+    this lookup is what let a PostToolUse hook bootstrap a whole project. The
+    lookup itself is the shared view helper, so a team server picks the same task.
     """
     uri = Path(db_file).resolve().as_uri() + "?mode=rw"
     con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
@@ -124,28 +123,15 @@ def task_id_for_branch(db_file: Path, src: str) -> str | None:
         con.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
         con.execute("PRAGMA query_only=ON")
         from taskmaster.native_routing import hook_reads
+        identity = None
         if hook_reads.is_native(con):
             # A native store: live rows, never the frozen legacy tables.
             con.execute("BEGIN")
             identity = hook_reads.admit(con)
-            return hook_reads.task_for_branch(con, identity, src)[0]
-        try:
-            rows = con.execute(_TASK_BY_BRANCH_SQL, (src,)).fetchall()
-        except sqlite3.OperationalError:
-            # An interpreter whose SQLite lacks JSON1 still has to answer.
-            rows = [
-                (ident, doc)
-                for ident, doc in con.execute(
-                    "SELECT id, doc FROM entities"
-                    " WHERE kind='task' AND deleted=0 AND archived=0 ORDER BY id"
-                )
-                if json.loads(doc).get("branch") == src
-            ]
+        chosen = hook_reads.choose_task(hook_reads.tasks_for_branch(con, identity, src))
     finally:
         con.close()
-    for ident, _doc in rows:
-        return ident
-    return None
+    return chosen["task"][0] if chosen["task"] is not None else None
 
 
 def native_ladder(db_file: Path) -> list[dict] | None:
@@ -163,9 +149,7 @@ def native_ladder(db_file: Path) -> list[dict] | None:
         if not hook_reads.is_native(con):
             return None
         con.execute("BEGIN")
-        from taskmaster.native.queries import Snapshot
-        from taskmaster.native_routing.tasks import _merge_targets
-        return _merge_targets(Snapshot(con, hook_reads.admit(con)))
+        return hook_reads.merge_ladder(con, hook_reads.admit(con))
     finally:
         con.close()
 
@@ -195,11 +179,123 @@ def pin_root(cwd: Path) -> None:
 SESSION = "merge-recorder-hook"
 
 
+QUEUE_MAX_AGE_SECONDS = 30 * 86400   # a client entry the server refuses for a month is dropped (D8)
+
+
+def _server_root(cwd: Path) -> Path | None:
+    """The clone's root when it is a team-server clone (009's marker or latch, readable or not), else None."""
+    if os.environ.get("TASKMASTER_ROOT"):
+        root = Path(os.environ["TASKMASTER_ROOT"])
+    else:
+        try:
+            from taskmaster.root import resolve_root as _resolve
+            root = _resolve(Path(cwd)).root
+        except Exception:
+            return None
+    try:
+        from taskmaster import server_marker
+        return root if server_marker.server_mode(root) is not None else None
+    except Exception:
+        return root
+
+
+def _utc_minute() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M", time.gmtime())
+
+
+def _clone_of(root: Path) -> str | None:
+    """This clone's id (team-server-011), or None before that exists or when it can't be read."""
+    try:
+        from taskmaster.remote import clone as clone_id
+        return clone_id.clone_id(root)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def stamp_remote(root: Path, src: str, target: str, sha: str, cwd: Path | None = None) -> None:
+    """A team-server clone: send the stamp to the server as a command (team-server-008 D7, D8).
+
+    The current merge goes first within CURRENT_STAMP_SECONDS; when the server can't take it, it is queued in the
+    user's cache dir and replayed on the next stamp, within what is left of the hook's budget."""
+    from taskmaster.native_routing import hook_reads, merge_stamps
+    from taskmaster.remote import hookside
+    from taskmaster.remote.client import ReadUnavailable, hook_deadline
+    from taskmaster.remote.stamps import remote_apply
+
+    state = None
+
+    def log(text):
+        hookside.append_log(state, "merge_recorder_stamp", text)
+    try:
+        server = hookside.server_of(root)
+        state = hookside.state_dir(server)
+    except Exception as exc:  # noqa: BLE001 - no usable server config: nothing to send to
+        log(f"no server named for this clone ({exc!r}); not recording the merge of {src}")
+        return
+    problem = hook_reads.ref_problem(src) or hook_reads.ref_problem(target)
+    if problem:
+        log(f"not recording the merge of {src} into {target}: {problem}")
+        return
+    try:
+        from taskmaster.root import _git_checkout_root
+        repo = _git_checkout_root(Path(cwd or root)) or root
+    except Exception:  # noqa: BLE001
+        repo = root
+    entry = {"branch": src, "target": target, "sha": sha, "merged_at": _utc_minute(), "repo": str(repo),
+             "queued_at": time.time()}
+    clone = _clone_of(root)
+    if clone:
+        entry["clone"] = clone
+    queue = hookside.stamp_queue(server)
+    try:
+        session = hookside.connect(root, log=log)
+    except ReadUnavailable as failure:
+        session = None
+        outcome = ("queue", f"{failure.kind}: {failure.message}")
+    else:
+        apply = remote_apply(session, log, hook_deadline(CURRENT_STAMP_SECONDS, started=_STARTED))
+        try:
+            outcome = apply(entry)
+        except merge_stamps.Unavailable as exc:
+            outcome = ("queue", str(exc))
+        except Exception as exc:  # noqa: BLE001
+            outcome = ("queue", f"sending failed ({exc!r})")
+        if outcome == "retry":
+            outcome = ("queue", "the recorded merge kept changing under the check")
+    label = f"{src}->{target} {sha}"
+    if isinstance(outcome, tuple) and outcome[0] == "reject":
+        log(f"recording {label} was refused: {outcome[1]}")
+    elif isinstance(outcome, tuple):
+        if queue is None:
+            log(f"{outcome[1]}; no private queue directory, so merge stamp {label} is not recorded")
+            return
+        try:
+            merge_stamps.enqueue(queue, entry)
+        except Exception as exc:  # noqa: BLE001
+            log(f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); not recorded")
+            return
+        log(f"{outcome[1]}; merge stamp {label} queued for the server")
+        return                       # the server did not answer: replaying now would only wait again
+    if session is None or queue is None:
+        return
+    try:
+        merge_stamps.replay_queue(
+            queue, remote_apply(session, log, _STARTED + STAMP_BUDGET_SECONDS), log=log,
+            deadline=_STARTED + STAMP_BUDGET_SECONDS, required=("branch", "target", "sha", "repo"),
+            label=lambda e: f"{e['branch']}->{e['target']} {e['sha'][:12]}", max_age=QUEUE_MAX_AGE_SECONDS)
+    except Exception as exc:  # noqa: BLE001 -- the queue's trouble is not this merge's
+        log(f"replaying queued merge stamps failed ({exc!r}); they stay queued")
+
+
 def stamp(src: str, cwd: Path, target: str, sha: str) -> None:
     """Record merge `sha` of `src` into `target` on the task whose branch is `src`.
 
     Every early return that loses the stamp says why in hook.log.
     """
+    server_root = _server_root(cwd)
+    if server_root is not None:
+        stamp_remote(server_root, src, target, sha, cwd)
+        return
     pin_root(cwd)
     root = resolve_root(cwd)
     if root is None:

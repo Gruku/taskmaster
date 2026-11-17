@@ -56,7 +56,7 @@ export type TmWriter = {
   summaryOpen: (change: (id: string) => string) => Promise<void>
   notice: (change: (n: TmHandoverNotice | null) => TmHandoverNotice | null) => Promise<void>
   phaseView: (pane: TmPhasePane, change: (v: TmPhaseView) => TmPhaseView) => Promise<void>
-  handoverPage: (page: number) => Promise<void>
+  handoverFirst: (first: number) => Promise<void>
   handoverList: (change: (l: TmHandoverList | null) => TmHandoverList | null) => Promise<void>
   handoverMarks: (change: (m: TmHandoverMarks) => TmHandoverMarks) => Promise<void>
   reviewList: (change: (l: TmReviewList) => TmReviewList) => Promise<void>
@@ -270,7 +270,7 @@ export function createFlows(d: TmFlowDeps) {
   const openHandovers = async (): Promise<void> => {
     await d.write.pick('')
     await d.write.summaryOpen(() => '')
-    await d.write.handoverPage(0)
+    await d.write.handoverFirst(0)
     await unmark()
     await open(HANDOVERS, 'Handovers')
     d.host.after(0, () => {
@@ -312,7 +312,7 @@ export function createFlows(d: TmFlowDeps) {
       await d.write.reviewList(() => FRESH_REVIEW_LIST)
     }
     if (pane === 'handovers') {
-      await d.write.handoverPage(0)
+      await d.write.handoverFirst(0)
       await pick('')
       await d.write.handoverMarks(m => ({ ...m, selected: [], ask: null }))
     }
@@ -379,10 +379,10 @@ export function createFlows(d: TmFlowDeps) {
     // The closes stand; a failed re-read leaves the marked list drawn rather than rejecting the y.
     if (d.source !== 'demo') await reloadHandovers().catch(() => undefined)
   }
-  const moveTo = async (page: number, id: string): Promise<void> => {
-    await d.write.handoverPage(page)
+  const moveTo = async (first: number, id: string, ring = true): Promise<void> => {
+    await d.write.handoverFirst(first)
     await pick(id)
-    await d.host.focus(HANDOVERS, `ho:${id}`)
+    if (ring) await d.host.focus(HANDOVERS, `ho:${id}`)
   }
   // What the handovers pane draws from, read through the writers (each change hands its value back unchanged).
   const handoverState = async () => {
@@ -479,7 +479,7 @@ export function createFlows(d: TmFlowDeps) {
     openHandover: async (handoverId: string): Promise<void> => {
       await d.write.pick(handoverId)
       await d.write.summaryOpen(() => '')
-      await d.write.handoverPage(0)
+      await d.write.handoverFirst(0)
       await unmark()
       await open(HANDOVERS, 'Handovers')
       await reloadHandovers()
@@ -492,7 +492,7 @@ export function createFlows(d: TmFlowDeps) {
         return
       }
       if (found.choice !== at.view.choice) await choosePhase('handovers', found.choice)
-      await d.write.handoverPage(found.page)
+      await d.write.handoverFirst(found.index)
       await pick(handoverId)
       await d.host.focus(HANDOVERS, `ho:${handoverId}`)
     },
@@ -594,15 +594,15 @@ export function createFlows(d: TmFlowDeps) {
      * j / k, or the Tab ring landing on a card's box: that card takes the focus and expands; a confirm or refusal on the card
      * left behind goes with it (a y can never land on a card the person moved off). The ring follows to the card's box.
      */
-    focusCard: async (id: string, page: number): Promise<void> => {
+    focusCard: async (id: string, first: number, ring = true): Promise<void> => {
       await d.write.cursor(c => (c.currentId === id ? c : { ...c, currentId: id, mode: 'card', refusal: '' }))
-      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
-      await d.host.focus(REVIEW, `sel:${id}`)
+      await d.write.reviewList(l => ({ ...l, first, ticking: false }))
+      if (ring) await d.host.focus(REVIEW, `sel:${id}`)
     },
-    /** p / n: that page, its first card focused. */
-    turnReviewPage: async (page: number): Promise<void> => {
-      await d.write.cursor(c => ({ ...c, currentId: '', mode: 'card', refusal: '' }))
-      await d.write.reviewList(l => ({ ...l, page, ticking: false }))
+    /** The wheel scrolled the list: the window starts at `first`; a card the focus moved to takes it (the ring is the person's). */
+    scrollReview: async (first: number, id: string | null): Promise<void> => {
+      if (id !== null) await d.write.cursor(c => (c.currentId === id ? c : { ...c, currentId: id, mode: 'card', refusal: '' }))
+      await d.write.reviewList(l => ({ ...l, first, ticking: false }))
     },
     /**
      * `t`: the focused card's checks take the digits 1–9 (the strip lets go of them) until one is ticked, `t` again, `f`, a
@@ -798,7 +798,7 @@ export function createFlows(d: TmFlowDeps) {
         held.show = !m.showClosed
         return { ...m, showClosed: held.show, ask: null }
       })
-      await d.write.handoverPage(0)
+      await d.write.handoverFirst(0)
       await pick('')
       await d.write.handoverList(l => {
         held.has = l?.closed === true
@@ -810,12 +810,17 @@ export function createFlows(d: TmFlowDeps) {
     selectHandover: async (id: string): Promise<void> => {
       await d.write.handoverMarks(m => ({ ...m, ask: null, selected: m.selected.includes(id) ? m.selected.filter(x => x !== id) : [...m.selected, id] }))
     },
-    /** `all` (this page's open ones) and `none` ([]). */
+    /** `all` (every open handover in the list) and `none` ([]). */
     selectHandovers: async (ids: readonly string[]): Promise<void> => {
       await d.write.handoverMarks(m => ({ ...m, ask: null, selected: [...ids] }))
     },
-    /** j / k: show that page and focus that handover. */
+    /** j / k, p / n: the window starts at `first` and that handover is focused (the Tab ring follows). */
     moveTo,
+    /** The wheel scrolled the list: the window starts at `first`; a handover the focus moved to is picked. */
+    scrollHandovers: async (first: number, id: string | null): Promise<void> => {
+      await d.write.handoverFirst(first)
+      if (id !== null) await pick(id)
+    },
     /** `x` on the focused card, or `Close N`: the y/n row comes up, `n` (the safe default) focused. */
     askClose: async (ask: TmCloseAsk): Promise<void> => {
       if (ask.ids.length === 0) return
@@ -842,11 +847,6 @@ export function createFlows(d: TmFlowDeps) {
       mode: 'fresh',
       prompt: resumePrompt(h.id, h.path),
     }),
-    /** n / p: turn to a page and pick its first handover. */
-    turnPage: async (page: number, firstId: string): Promise<void> => {
-      await d.write.handoverPage(page)
-      await pick(firstId)
-    },
     /** Band, Session and handovers `c`: the handover's full Telegram-ready block on the clipboard, and a toast. */
     copyHandover: async (handoverId: string, surface?: RenderSurface): Promise<void> => {
       const found = await handoverText(handoverId)

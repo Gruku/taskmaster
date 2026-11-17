@@ -35,8 +35,9 @@ def _expected(value):
 
 
 class _Overlay:
-    def __init__(self, snapshot):
+    def __init__(self, snapshot, session):
         self.snapshot = snapshot
+        self.session = session   # the call's session (team-server-003 D3), never the process global
         self.tasks: dict = {}
         self.epics: dict = {}
 
@@ -58,10 +59,10 @@ class _Overlay:
             find_phase=lambda value: domain.find_phase(reads.phases(self.snapshot), value),
             area_error=lambda value: reads.validate_area_ref(self.snapshot, value),
             open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0],
-            keeps_claim=self._keeps_claim, session=bs.SESSION_ID)
+            keeps_claim=self._keeps_claim, session=self.session)
 
     def _keeps_claim(self, doc, before):
-        return claims.keeps_claim_through(doc, before, session=bs.SESSION_ID,
+        return claims.keeps_claim_through(doc, before, session=self.session,
                                           connection=self.snapshot.connection)
 
     def cascade(self, epic_id, now):
@@ -155,7 +156,7 @@ def _lines(call, operations):
     errors, reports, commands = [], [], []
     now = domain.now_stamp()
     with call.read() as snapshot:
-        overlay = _Overlay(snapshot)
+        overlay = _Overlay(snapshot, call.session)
         lookups = overlay.lookups()
         for line, op, parts in batch_lines.parse(operations):
             kind = batch_lines.classify(op, parts)
@@ -236,7 +237,7 @@ def batch_preview(call, *, operations):
                 else:
                     previews.append(f"- `{task_id}`: Cannot archive — currently `{current}`")
             elif op == "pick":
-                holder = claims.foreign_holder(task, bs.SESSION_ID)
+                holder = claims.foreign_holder(task, call.session)
                 if holder and current in ("todo", "in-progress", "in-review"):
                     # The refusal the batch line gives, before it is applied.
                     previews.append(f"- `{task_id}`: {claims.batch_pick_refusal(task_id, holder)}")

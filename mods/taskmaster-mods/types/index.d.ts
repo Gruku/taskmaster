@@ -137,11 +137,12 @@ export type TmCursor = {
   readonly refusal: string
 }
 /**
- * The review list (spec §8): the page shown (0 first; the focused card's page wins), the selected task ids, `t`'s tick mode,
- * and the bulk row with the ids it was asked for, so `y` acts on exactly those whatever a refresh draws in between.
+ * The review list (spec §8): the index of the first card the window shows (0 at the top; the focused card is always brought
+ * into view), the selected task ids, `t`'s tick mode, and the bulk row with the ids it was asked for, so `y` acts on exactly
+ * those whatever a refresh draws in between.
  */
 export type TmReviewList = {
-  readonly page: number
+  readonly first: number
   readonly selected: readonly string[]
   /** `t` pressed: the focused card's checks own the digits 1–9 until one is ticked, or `t`, `f`, a move or a page turn. */
   readonly ticking: boolean
@@ -202,11 +203,11 @@ export type TmRefs = { readonly tasks: Readonly<Record<string, TmRefTask>>; read
 export type TmRestoreData = { readonly scan: TmScan | null; readonly refs: TmRefs | null; readonly error: string; readonly days: number }
 export type TmResumeMode = 'fresh' | 'resume'
 /**
- * The restore pane's own state: the page and focused card, explicit ticks and resume modes (absent: the default rule),
+ * The restore pane's own state: the first listed session the window shows and the focused card, explicit ticks and resume modes (absent: the default rule),
  * when each session was reopened, `◐ compact`, the busy line, and per-card busy flags and briefs.
  */
 export type TmRestoreView = {
-  readonly page: number
+  readonly first: number
   readonly focus: string
   readonly selected: Readonly<Record<string, boolean>>
   readonly modes: Readonly<Record<string, TmResumeMode>>
@@ -284,8 +285,8 @@ declare module 'claude-code' {
       phaseViews: Readonly<Record<TmPhasePane, TmPhaseView>>
       /** The review pane's list: page, selection, tick mode and the bulk row (spec §8); reset when the pane opens. */
       reviewList: TmReviewList
-      /** The handovers pane's page (0 first); reset when the pane opens. */
-      handoverPage: number
+      /** The index of the first handover the handovers pane's window shows (0 at the top); reset when the pane opens. */
+      handoverFirst: number
       /** The handovers pane's own list (null until its first read: the pane draws the snapshot's window meanwhile). */
       handoverList: TmHandoverList | null
       /** The handovers pane's selection, its y/n close row and `◐ closed`. */
@@ -296,7 +297,7 @@ declare module 'claude-code' {
       handoverGuard: TmHandoverGuard
       /** The restore pane's last scan, what tm said of it, a scan failure and its window (spec §10). */
       restoreData: TmRestoreData
-      /** The restore pane's page, focus, ticks, resume modes, reopened sessions, compact, busy flags and briefs. */
+      /** The restore pane's first listed row, focus, ticks, resume modes, reopened sessions, compact, busy flags and briefs. */
       restoreView: TmRestoreView
       /** D5, resolved after each refresh, a written or recorded handover, and at start; a newer handover notice wins when drawn. */
       sessionHandover: TmSessionHandover | null

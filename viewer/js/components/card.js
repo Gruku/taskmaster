@@ -9,6 +9,8 @@ import { bindCopy } from '../lib/copy.js';
 import { truncate } from '../lib/text.js';
 import { linkRow } from './link-row.js';
 import { icon } from './icon.js';
+import { isSafeUrl } from './markdown.js';
+import { docLink } from '../lib/doc-link.js';
 import { marker, priorityMarker, statusMarker } from './status.js';
 import { laneBadge, gateStateWords } from './gate-pipeline.js';
 import { renderMergeLadderCompact } from './merge-status.js';
@@ -163,7 +165,8 @@ export function renderCard({ task, density = 'full', epicIndex = new Map(), grou
   const controls = [copyButton('card-id', 'copy-id', `Copy id ${task.id}`, task.id)];
   if (full && task.branch) controls.push(copyButton('card-branch', 'copy-branch', `Copy branch ${task.branch}`, task.branch));
   const docs = full && task.docs ? Object.values(task.docs).filter(Boolean) : [];
-  if (docs.length) {
+  // A doc link is teammate-supplied: a javascript: or data: value gets no button, because window.open would run it.
+  if (docs.length && isSafeUrl(String(docs[0]))) {
     const btn = el('button', 'btn btn--ghost btn--icon btn--sm card-docs');
     btn.type = 'button';
     btn.dataset.focus = 'docs';
@@ -171,7 +174,7 @@ export function renderCard({ task, density = 'full', epicIndex = new Map(), grou
     btn.append(icon('document', { size: 14 }));
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      window.open(docs[0], '_blank', 'noopener');
+      window.open(docLink(docs[0]).href, '_blank', 'noopener');   // a path opens through /file/, as elsewhere
     });
     controls.push(btn);
   }

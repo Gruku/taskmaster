@@ -13,8 +13,9 @@ import json
 import queue
 import threading
 
-from taskmaster.native import contracts
+from taskmaster.native import actor, contracts
 from taskmaster.native.queries import Repository
+from . import scopes
 from .protocol import CoordinatorStopping, ServiceUnavailable
 
 
@@ -58,7 +59,8 @@ class LinearWorker:
 
     def _envelope(self, caller_scope, request_id, operation, arguments):
         return dict(protocol=2, store_id=self.coordinator.identity['store_id'], caller_scope=caller_scope,
-                    request_id=request_id, operation=operation, arguments=arguments, expected_revisions=[])
+                    request_id=request_id, operation=operation, arguments=arguments, expected_revisions=[],
+                    actor=actor.advisory(actor.INTERNAL_AGENT))
 
     def response(self, caller_scope, request_id, target_id=''):
         future = self.submit(caller_scope, request_id, target_id)
@@ -107,7 +109,7 @@ class LinearWorker:
             settle_id = self._owner(envelope['caller_scope'], envelope['request_id']) + ':' + str(item['seq'])
             with closing(self.coordinator._connect(readonly=True)) as connection:
                 prior = connection.execute('SELECT outcome_json FROM command_receipts WHERE store_id=? AND caller_scope=? AND request_id=?',
-                                           (envelope['store_id'], 'linear-settle', settle_id)).fetchone()
+                                           (envelope['store_id'], scopes.LINEAR_SETTLE, settle_id)).fetchone()
                 held = connection.execute('SELECT state,claimed_by FROM linear_queue WHERE seq=?', (item['seq'],)).fetchone()
             if prior:
                 result = json.loads(prior[0])['result']
@@ -116,7 +118,7 @@ class LinearWorker:
                     config = self._config()
                 outcome = self._push(item, config)
                 arguments = dict(outcome, seq=item['seq'], owner=envelope['arguments']['owner'])
-                result = self.coordinator.submit(self._envelope('linear-settle', settle_id, 'linear.settle', arguments)).result()['result']
+                result = self.coordinator.submit(self._envelope(scopes.LINEAR_SETTLE, settle_id, 'linear.settle', arguments)).result()['result']
             else:
                 continue  # A later explicit retry owns this row; never settle it.
             if result.get('applied'):

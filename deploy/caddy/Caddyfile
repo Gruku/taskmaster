@@ -1,0 +1,107 @@
+# User intent: Caddy terminates TLS for the team's Taskmaster server and passes only the app's public paths (MCP, read API, write API) to the loopback
+# daemon, with no setting that would leak keys, trust forged client addresses or open plaintext port 80.
+# Install: /etc/caddy/Caddyfile. Replace tm.example.com and viewer.tm.example.com (here AND in the systemd unit) and ops@example.com.
+# Design: docs/specs/2026-11-01-team-server-016-linux-deploy-design.md §5.3, §6.2. Restart, never reload (admin off).
+{
+	admin off
+	email ops@example.com
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+tm.example.com {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	request_body {
+		max_size 4MiB
+	}
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+	log {
+		output file /var/log/caddy/taskmaster-access.log {
+			roll_interval 24h
+			roll_keep 14
+			roll_keep_for 336h
+		}
+	}
+	@taskmaster path /mcp /mcp/* /read/v1 /read/v1/* /write/v1 /write/v1/*
+	handle @taskmaster {
+		reverse_proxy 127.0.0.1:7470 {
+			transport http {
+				keepalive 4s
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+
+# The viewer site (team-server-028): its own host, so the session cookie never shares a site with the MCP host.
+# Design: docs/specs/2026-11-08-team-server-028-public-viewer-design.md section 2.2. The @viewer forms mirror
+# taskmaster.serve.viewer.caddy_matcher_forms(); tests/test_deploy_files.py pins that.
+viewer.tm.example.com {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	request_body {
+		max_size 1MiB
+	}
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+	log {
+		output file /var/log/caddy/taskmaster-viewer-access.log {
+			roll_interval 24h
+			roll_keep 14
+			roll_keep_for 336h
+		}
+		format filter {
+			request>headers>X-Taskmaster-Csrf delete
+		}
+	}
+	# Public static assets come from the release on disk, never through the buffered proxy: there, an unauthenticated
+	# HTTP/2 stream that never opens its window pins a response buffer holding the whole asset (028 gate, Codex-I).
+	# @static mirrors taskmaster.serve.viewer.static_asset_allowed() and is never wider; anything it refuses falls
+	# through to the app, which answers 404. The headers are the app's for a static answer. tests/test_deploy_files.py
+	# pins all three.
+	rewrite /favicon.ico /static/v3/vendor/favicon.ico
+	@static {
+		path_regexp ^/static/v3/(css|js|vendor)(/[A-Za-z0-9_][A-Za-z0-9_.-]*)+\.(?i:css|js|woff2|woff|svg|ico|png)$
+		not path_regexp (?i:-demo\.js)$|/(_dormant|dev|node_modules|tests)/
+	}
+	handle @static {
+		uri strip_prefix /static/v3
+		root * /opt/taskmaster/current/viewer
+		header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		header X-Content-Type-Options nosniff
+		header X-Frame-Options DENY
+		header Referrer-Policy same-origin
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		file_server
+	}
+	@viewer path /favicon.ico /login /logout / /static/v3/* /api/* /file/*
+	handle @viewer {
+		reverse_proxy 127.0.0.1:7471 {
+			request_buffers 64KiB
+			response_buffers 512KiB
+			transport http {
+				max_conns_per_host 16
+				keepalive off
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}

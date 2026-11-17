@@ -12,7 +12,9 @@ import { platformOf } from '../launch'
 import { RESTORE, restoreHiddenKey } from '../model'
 import { FRESH_NAV, shownRestore, shownSnapshot, type SidebarView, sidebarView } from '../nav'
 import { replyText } from '../parse'
+import { remoteDepsOf, remoteOf } from '../remote'
 import { FRESH_PHASE_VIEWS, withCounts } from '../phases'
+import { wheelMove } from '../scroll-list'
 import { withSidebar } from '../vocab'
 import { restorePaneTree } from './draw'
 import { createRestoreFlows, type RestoreDeps, type RestoreFlows } from './flows'
@@ -57,14 +59,18 @@ export function restoreHostOf($: EngineInterface): RestoreHost {
       const temp = (await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? configDir
       return { configDir, cache: `${temp}/tm-restore-scan-cache.json`, script: `${$.plugin.root}/scanner/scan.py` }
     },
+    now: () => $.clock.now(),
   }
 }
 
 function depsOf($: EngineInterface): RestoreDeps {
+  let remoteFor: ReturnType<typeof remoteOf> | null = null
   return {
     source: rs.source,
     rh: restoreHostOf($),
     tm: {
+      // team-server-007 D14: the refs query goes to the team server's reader in a server-mode clone.
+      remote: async () => (remoteFor ??= remoteOf(remoteDepsOf($)))((await $.session.repo())?.root ?? (await $.session.root())),
       call: async (tool, args) => {
         const r = await $.mcp.call('plugin:taskmaster:tm', tool, args)
         const text = r.content.map(block => (block.type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).join('\n')
@@ -234,21 +240,20 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
     const k = await kitOf($.ui.resolve(e) as unknown as Ui, kitRrOf($), e.surface, sayOf($))
     const tree = restorePaneTree(
       k,
-      { data, view: await read($, VIEW), rows, strip, now: now / 1000, source: rs.source, tabs },
+      { data, view: await read($, VIEW), rows, strip, now: now / 1000, bodyRows: e.props.scroll.bodyRows, source: rs.source, tabs },
       {
         strip: {
-          // A new phase starts at its page 1, as review and handovers do.
+          // A new phase starts at the top of its list, as review and handovers do.
           choose: id => {
             actMain(f => f.choosePhase('restore', id))
-            act(f => f.turnPage(0))
+            act(f => f.top())
           },
           toggleDone: () => actMain(f => f.toggleDone('restore')),
           overlay: open => actMain(f => f.setOverlay('restore', open)),
         },
-        turnPage: page => act(f => f.turnPage(page)),
         rescan: () => actMain(f => f.refresh('restore')),
         toggleCompact: () => act(f => f.toggleCompact()),
-        focus: id => act(f => f.focus(id)),
+        focus: (id, first) => act(f => f.focus(id, first)),
         toggle: id => act(f => f.toggle(id)),
         select: changes => act(f => f.select(changes)),
         toggleMode: id => act(f => f.toggleMode(id)),
@@ -272,6 +277,16 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
       pane => actMain(f => f.goTo(pane)),
     )
   })
+
+  // The wheel over the list scrolls it an item a tick (the pane draws a tree that fits its rows): the window's first item and the
+  // focus are state, kept in view by the render.
+  on('ui.scroll', { requestId: RESTORE }, async ($, e, next) => {
+    if (e.origin.kind !== 'person') return next(e)
+    const flows = flowsOf($)
+    const move = wheelMove('restore', e.by)
+    if (move !== null) await flows.scroll(move.first, move.id)
+    return {}
+  }).catch(($, e, next) => next(e)) // a failed write never holds the wheel up: replay what the chain beneath settled
 
   // Tab onto a card's box focuses that card (opens it), as j / k do.
   on('ui.focus', { requestId: RESTORE }, async ($, e, next) => {

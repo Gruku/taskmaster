@@ -15,6 +15,10 @@ anything queued meanwhile, again under the lock. It never removes a claim anothe
 replayer took over. A lock or claim whose owner is dead, or that is older than
 STALE_SECONDS, is taken over.
 
+The same queue serves a teammate's clone on a team server (team-server-008): `QueueDir(path, log_path)` names a plain
+directory (no `local/` below it) and the log it writes to, and `replay_queue` takes the entry's required keys, a label
+and an age cap, so one set of lock, claim and replay rules covers both.
+
 Whether a queued stamp is still wanted is decided against a snapshot of the task, and
 the write carries that snapshot's task revision as its expected revision, so the
 coordinator refuses it (Conflict) if anything recorded a merge in between; the replayer
@@ -31,6 +35,7 @@ import time
 import uuid
 
 from taskmaster.bounded_run import run_bounded
+from taskmaster.native import actor
 
 PENDING = "merge-stamps-pending.jsonl"
 CLAIM = "merge-stamps.claim"
@@ -47,8 +52,18 @@ class Unavailable(Exception):
     """No coordinator can take the write now; the stamp stays queued."""
 
 
-def _local(backlog_dir) -> Path:
-    return Path(backlog_dir) / "local"
+class QueueDir(os.PathLike):
+    """A queue kept directly in `path` (not in `<backlog>/local`), logging to `log_path`: the client's per-server queue."""
+
+    def __init__(self, path, log_path):
+        self.path, self.log_path = Path(path), Path(log_path)
+
+    def __fspath__(self) -> str:
+        return str(self.path)
+
+
+def _local(where) -> Path:
+    return where.path if isinstance(where, QueueDir) else Path(where) / "local"
 
 
 def pending_path(backlog_dir) -> Path:
@@ -73,7 +88,7 @@ def has_pending(backlog_dir) -> bool:
 def hook_log(backlog_dir, text: str) -> None:
     """Append to the hooks' shared log, capped at LOG_MAX_BYTES. Never raises."""
     try:
-        path = _local(backlog_dir) / "hook.log"
+        path = backlog_dir.log_path if isinstance(backlog_dir, QueueDir) else _local(backlog_dir) / "hook.log"
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
             path.write_bytes(path.read_bytes()[-LOG_KEEP_BYTES:])
@@ -261,11 +276,20 @@ def _finish(backlog_dir, mine, left: list[str], log) -> None:
         _write_atomic(claim, [])
 
 
-def replay_queue(backlog_dir, apply, *, log=None, deadline=None) -> dict:
+def reject(backlog_dir, entry: dict, reason: str, log=None) -> None:
+    """Keep an entry that can never be applied in the rejected file, for a human, and log why."""
+    _reject(backlog_dir, json.dumps(entry, sort_keys=True), reason, log or (lambda text: hook_log(backlog_dir, text)))
+
+
+def replay_queue(backlog_dir, apply, *, log=None, deadline=None, required=REQUIRED, label=None,
+                 max_age=None) -> dict:
     """Apply queued stamps in order through `apply(entry)`, which returns "applied",
     "dropped" (already recorded or superseded), "retry" (keep queued) or
     ("reject", reason), or raises Unavailable. Never raises for a bad entry. At `deadline`
-    (time.monotonic()) it stops taking entries and keeps the rest queued."""
+    (time.monotonic()) it stops taking entries and keeps the rest queued.
+
+    `required` names the keys an entry must carry as non-empty text; `label(entry)` words it in the log (default: the
+    solo task, rung and sha); `max_age` (seconds) rejects an entry queued longer ago than that."""
     log = log or (lambda text: hook_log(backlog_dir, text))
     counts = {"applied": 0, "dropped": 0, "retry": 0, "rejected": 0, "unavailable": False}
     taken = _take(backlog_dir)
@@ -280,13 +304,17 @@ def replay_queue(backlog_dir, apply, *, log=None, deadline=None) -> dict:
         try:
             entry = json.loads(line)
             if not isinstance(entry, dict) or any(not isinstance(entry.get(k), str) or not entry[k]
-                                                  for k in REQUIRED):
-                raise ValueError(f"needs {', '.join(REQUIRED)}")
+                                                  for k in required):
+                raise ValueError(f"needs {', '.join(required)}")
         except ValueError as exc:
             _reject(backlog_dir, line, f"unreadable entry ({exc})", log)
             counts["rejected"] += 1
             continue
-        label = f"{entry['task_id']} {entry['rung']} {entry['sha']}"
+        if max_age is not None and time.time() - float(entry.get("queued_at") or 0) > max_age:
+            _reject(backlog_dir, line, f"queued more than {int(max_age // 86400)} days ago", log)
+            counts["rejected"] += 1
+            continue
+        name = label(entry) if label is not None else             f"{entry.get('task_id') or entry.get('branch')} {entry.get('rung') or entry.get('target')} {entry.get('sha')}"
         try:
             outcome = apply(entry)
         except Unavailable:
@@ -297,10 +325,10 @@ def replay_queue(backlog_dir, apply, *, log=None, deadline=None) -> dict:
             outcome = ("error", repr(exc))
         if outcome == "applied":
             counts["applied"] += 1
-            log(f"queued merge stamp applied: {label}")
+            log(f"queued merge stamp applied: {name}")
         elif outcome == "dropped":
             counts["dropped"] += 1
-            log(f"queued merge stamp {label} is already recorded or superseded; dropped")
+            log(f"queued merge stamp {name} is already recorded or superseded; dropped")
         elif isinstance(outcome, tuple) and outcome[0] == "reject":
             counts["rejected"] += 1
             _reject(backlog_dir, line, f"refused: {outcome[1]}", log)
@@ -332,13 +360,13 @@ def superseded(entry: dict, current: dict | None, is_ancestor) -> bool:
     return bool(verdict)
 
 
-def git_is_ancestor(root: Path):
+def git_is_ancestor(root: Path, timeout: float = 10):
     def check(old: str, new: str):
         if not old or not new:
             return None
         try:
             completed = run_bounded(["git", "-C", str(root), "merge-base", "--is-ancestor", old, new],
-                                    timeout=10,
+                                    timeout=timeout,
                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError):
             return None
@@ -360,7 +388,7 @@ def native_apply(database, backlog_dir, session: str, *, autostart: bool, client
         for _ in range(3):
             try:
                 with runtime.open_call(database, backlog_dir, session, autostart=autostart,
-                                       client_timeout=client_timeout) as call:
+                                       client_timeout=client_timeout, agent=actor.INTERNAL_AGENT) as call:
                     with call.read() as snapshot:
                         entity = reads.get(snapshot, "task", entry["task_id"])
                         targets = _merge_targets(snapshot) if entity is not None else []

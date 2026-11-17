@@ -14,11 +14,9 @@ CARDINAL RULE: PostToolUse is advisory — exit code is IGNORED by the harness,
 but we exit 0 explicitly on every path for defensive correctness.  On any
 error or uncertainty, we silently do nothing and exit 0.
 
-Source-branch parser:
-  Duplicated from merge_gate.py (~10 lines) with a comment cross-link.
-  Both hooks share the same strategy: strip everything up to and including
-  "merge", walk tokens, last non-flag token = branch name.
-  Cross-link: plugins/taskmaster/hooks/merge_gate.py parse_src_branch().
+Source branches come from the shared command parser (hooks/merge_command.py), the one the merge gate uses: every
+branch of an octopus merge gets its own stamp, `git -C <dir> merge` reads HEAD in that directory, and a trailing
+`&& git push` is not a branch.
 """
 from __future__ import annotations
 
@@ -30,16 +28,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
-# Must be a `git` invocation reaching `merge` as a subcommand
-# (same regex as merge_gate.py GIT_MERGE_RE)
-GIT_MERGE_RE = re.compile(r"git(\s+(-[A-Za-z]\S*\s+\S+|--[a-z][a-z-]*))*\s+merge\b")
-
-# Anonymous references: pure hex SHAs (≥7 hex), HEAD~, @{, *_HEAD
-ANON_REF_RE = re.compile(
-    r"^[0-9a-fA-F]{7,}$|^HEAD[~^]|^@\{|^FETCH_HEAD$|^ORIG_HEAD$|^MERGE_HEAD$"
-)
-
 
 # The in-process stamp imports the server, so the hook interpreter must carry the
 # runtime the stamp's PEP 723 header declares (a test pins these to that header). A
@@ -170,24 +158,6 @@ def _git_out(cwd: Path, *args: str):
     return completed.stdout.strip() or None
 
 
-def parse_src_branch(command: str) -> str:
-    """Parse source branch (cross-link: merge_gate.py parse_src_branch).
-
-    Strategy: drop everything up to and including "merge", walk tokens,
-    last non-flag token = branch name.
-    """
-    after_merge = "\n".join(
-        re.sub(r".*\bmerge[ \t\r\f\v]*", "", line) for line in command.splitlines()
-    )
-    src = ""
-    for tok in after_merge.split():
-        if tok.startswith("-"):
-            continue  # flag — skip
-        src = tok
-        # Keep updating: last non-flag token is the branch name
-    return src
-
-
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -201,11 +171,9 @@ def main() -> int:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str) or not command:
         return 0
-    if "merge" not in command:
-        return 0
-
-    # -- Must be a `git` invocation reaching `merge` as a subcommand -------------
-    if not GIT_MERGE_RE.search(command):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import merge_command
+    if not merge_command.prefilter(command):
         return 0
 
     # -- Only act on SUCCESSFUL merges --------------------------------------------
@@ -225,33 +193,39 @@ def main() -> int:
     if str(exit_code) != "0":
         return 0
 
-    # -- Parse source branch; reject anonymous refs --------------------------------
-    src = parse_src_branch(command)
-    if not src:
+    # -- Every branch the command merges (shared parser; anonymous refs are already dropped) ----
+    parsed = merge_command.parse(command)
+    merges = [merge for merge in parsed.merges if merge.kind == "merge"]
+    if not merges:
         return 0
-    if ANON_REF_RE.search(src):
-        return 0
+    base = Path(data["cwd"]) if isinstance(data.get("cwd"), str) and data.get("cwd") else Path.cwd()
+    for merge in merges:
+        where = base / merge.directory if merge.directory else base
+        for src in merge.branches:
+            _stamp_one(src, where)
+    return 0
 
-    # -- Resolve what was merged NOW: the stamp may run seconds later, detached ----
-    cwd = Path(data["cwd"]) if isinstance(data.get("cwd"), str) and data.get("cwd") else Path.cwd()
+
+def _stamp_one(src: str, cwd: Path) -> None:
+    """Resolve what was merged NOW (the stamp may run seconds later, detached) and hand it to the stamp script."""
     root = _project(cwd)
     target = _git_out(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     sha = _git_out(cwd, "rev-parse", "HEAD")
     if not target or target == "HEAD" or not sha:
         _log(root, f"merge of {src} left a detached HEAD or an unreadable one; not recording it")
-        return 0
+        return
 
     # -- Delegate to the stamp (fail-open, but never silent) ------------------------
     stamp_script = Path(__file__).parent / "merge_recorder_stamp.py"
     if not stamp_script.is_file():
         _log(root, f"{stamp_script} is missing; not recording the merge of {src}")
-        return 0
+        return
 
     argv = stamp_command(stamp_script, [src, target, sha, str(cwd)])
     if argv is None:
         _log(root, f"cannot run the merge stamp: {sys.executable} lacks the stamp's runtime and uv is not "
                    f"on PATH; not recording {src} -> {target} {sha}")
-        return 0
+        return
     try:
         run_stamp(argv, detach=argv[0] != (sys.executable or "python"), log=_hook_log(root))
     except subprocess.TimeoutExpired:
@@ -259,8 +233,6 @@ def main() -> int:
                    "queues the current merge first, so see its own lines above")
     except Exception as exc:
         _log(root, f"could not start the merge stamp ({exc!r}); not recording {src} -> {target} {sha}")
-
-    return 0
 
 
 if __name__ == "__main__":

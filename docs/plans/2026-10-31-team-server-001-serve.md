@@ -1,0 +1,922 @@
+<!-- User intent: the executable, test-first plan for team-server-001. `taskmaster serve --root` runs the
+     existing MCP tools over streamable HTTP as a long-lived, token-protected daemon that owns its
+     loopback-only coordinator, so the user can put it behind Caddy on their Hetzner box. -->
+
+# team-server-001: `taskmaster serve` (plan, 2026-10-31)
+
+**Task.** `team-server-001` (server mode, addendum §11 task 1).
+**Design.** `docs/specs/2026-10-31-team-server-001-serve-design.md`. Its decisions D1 to D10 are
+binding here. The source is `docs/specs/2026-10-31-team-server-mode-addendum.md` §2, §4 and §13.
+**Worktree.** `C:\Users\gruku\Files\Claude\taskmaster\.worktrees\team-server-001`, branch
+`feature/team-server-001`, base `ed50d8f`.
+**Executor.** One engineer, test-first. For each step:
+
+1. Write the step's tests.
+2. Run them and watch them fail for the stated reason.
+3. Implement.
+4. Run the step's tests and the regression subset (§5).
+5. Commit with the step's message.
+
+Steps 0 to 7 are ordered by dependency; run them in order. Every decision is already made: if something
+here seems wrong, stop and report it rather than redesigning.
+
+**Done when:**
+
+- `taskmaster_cli.py serve --root <native project>` serves `backlog_server`'s tools over
+  streamable HTTP at `/mcp`.
+- Every request without the operator token is refused with 401, loopback included.
+- A non-loopback bind is refused without `--insecure-bind`.
+- The daemon owns its loopback-only coordinator in-process and never idle-exits.
+- No client in the daemon autostarts or retires a coordinator, and the daemon's coordinator
+  refuses `retire` and `shutdown` from anyone.
+- SIGTERM stops it gracefully.
+- A real MCP tool call over HTTP against a temp store succeeds.
+
+**Out of scope:** everything in the design's §1 table (principals, sessions, allowlist, hardening,
+read endpoint, split-brain marker, packaging). **Not touched:** `taskmaster/backlog_server.py`,
+`taskmaster/coordinator/service.py` and `taskmaster/coordinator/identity_gate.py`. All three are
+team-identity-002's files (design R1).
+
+---
+
+## 1. Files
+
+Create:
+
+| File | Header (`# User intent: …`, first line) |
+|---|---|
+| `taskmaster/serve/__init__.py` | `server mode: one daemon serves a project's Taskmaster tools over HTTP to a team (addendum 2026-10-31).` Body: a docstring only, no imports. |
+| `taskmaster/serve/__main__.py` | `python -m taskmaster.serve is the same CLI as taskmaster_cli.py serve.` Body: `import sys; from .cli import main; sys.exit(main())` |
+| `taskmaster/serve/config.py` | `the daemon's bind policy and settings: loopback by default, plaintext off-host only by explicit, loudly warned opt-in.` |
+| `taskmaster/serve/auth.py` | `nobody reaches the served tools without a token; one operator token now, and a seam so per-person keys (team-server-002) plug in without touching the transport.` |
+| `taskmaster/serve/app.py` | `build the HTTP app around the existing MCP tools so that every route refuses an unauthenticated request before reading its body.` |
+| `taskmaster/serve/daemon.py` | `run the HTTP app and the project's coordinator in one long-lived process that never idle-exits, never yields its coordinator to another build, and stops gracefully on SIGTERM.` |
+| `taskmaster/serve/cli.py` | `the operator's commands: serve --root, and serve token to read or rotate the operator token.` |
+| `tests/serve_helpers.py` | `shared harness for serve tests: run an ASGI app on a real loopback socket, read the daemon's ready line, stop a child process tree.` |
+| `tests/test_serve_config.py` | `the bind policy refuses plaintext off-host binds unless explicitly opted in, before anything is touched.` |
+| `tests/test_serve_auth.py` | `the operator token is owner-only, compared in constant time, rotatable without a restart, and never leaks into the access token.` |
+| `tests/test_serve_app.py` | `every HTTP route refuses a request without a valid token, before its body is read, and the principal reaches the tools.` |
+| `tests/test_serve_coordinator.py` | `the daemon's coordinator stays loopback-only and cannot be retired or shut down, and no client in the daemon starts or retires one.` |
+| `tests/test_serve_daemon.py` | `the in-process daemon serves tools over HTTP, outlives the idle timeout, shuts down gracefully and exits when its coordinator is lost.` |
+| `tests/test_serve_cli.py` | `the serve CLI's refusals and token command, plus one real end-to-end MCP tool call over HTTP in a child process.` |
+
+Modify:
+
+| File | Change |
+|---|---|
+| `pyproject.toml` | add `uvicorn>=0.35,<1`, `starlette>=1.0.1,<2`, `mcp>=1.24,<2` to `dependencies` (Step 0) |
+| `backlog_server.py:3`, `taskmaster/backlog_server.py:3`, `taskmaster_cli.py:3`, `hooks/merge_recorder_stamp.py:3` | the same three in each PEP 723 `dependencies` line, byte-identical list (Step 0). `taskmaster/backlog_server.py:3` is a one-line conflict risk with team-identity-002 (§6 R1) |
+| `uv.lock` | regenerated by `uv lock` (Step 0) |
+| `taskmaster/coordinator/ownership.py:98` | `private_directory(root, name='coordinator')` (Step 2) |
+| `taskmaster/coordinator/client.py:65` | the `AUTOSTART_ALLOWED` gate (Step 4) |
+| `taskmaster/coordinator/client.py:290-297` (`_retire`) | keep the retire answer and append its `reason` to the `refused to retire` error (Step 4) |
+| `taskmaster/coordinator/control_cli.py:82` (`stop`) | catch the `ValueError` a refused `shutdown` raises; report it (Step 4) |
+| `taskmaster_cli.py` | a `"serve"` entry in `COMMANDS`, plus a usage line in the docstring (Step 7) |
+| `tests/test_packaging.py:187-196` | a dispatch parameter for `serve`, plus two never-imports tests (Step 7) |
+
+---
+
+## 2. API (exact)
+
+### 2.1 `taskmaster/serve/config.py`
+
+```python
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 7470
+DEFAULT_PATH = "/mcp"
+GRACEFUL_SECONDS = 10
+DEFAULT_SESSION_IDLE_SECONDS = 1800.0     # design D10; the MCP SDK's recommended value
+EXIT_OK, EXIT_REFUSED, EXIT_UNAVAILABLE, EXIT_COORDINATOR_LOST = 0, 2, 69, 75
+
+class ServeRefused(Exception):
+    exit_code = EXIT_REFUSED
+class BindRefused(ServeRefused): ...
+class ServeUnavailable(ServeRefused):
+    exit_code = EXIT_UNAVAILABLE
+
+INSECURE_BIND_WARNING = (
+    "serving plaintext HTTP on {host}: the bearer token and all backlog data cross the network "
+    "unencrypted, so anyone on the path can read them and replay the token. Bind 127.0.0.1 behind "
+    "a TLS reverse proxy (Caddy) or an encrypted overlay (Tailscale, WireGuard, SSH tunnel) instead.")
+
+@dataclass(frozen=True)
+class ServeConfig:
+    root: Path
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
+    path: str = DEFAULT_PATH
+    allowed_hosts: tuple[str, ...] = ()
+    insecure_bind: bool = False
+    log_level: str = "info"          # one of debug, info, warning
+    session_idle_seconds: float = DEFAULT_SESSION_IDLE_SECONDS
+
+def bind_host(host: str) -> str
+    # "localhost" -> "127.0.0.1". An IP literal is returned as ipaddress.ip_address(host).compressed.
+    # Anything else raises BindRefused("--host must be an IP address or localhost, not {host!r}").
+def check_bind(host: str, *, insecure_bind: bool) -> str | None
+    # Loopback (ip.is_loopback): None.
+    # Not loopback and no flag: BindRefused(f"refusing to bind {host}: it is not a loopback address and "
+    #   "taskmaster serve speaks plaintext HTTP. Bind 127.0.0.1 behind a TLS reverse proxy, or pass "
+    #   "--insecure-bind to accept the risk.").
+    # Not loopback with the flag: INSECURE_BIND_WARNING.format(host=host).
+def validate(config: ServeConfig) -> ServeConfig
+    # port: int, 0..65535.
+    # path: starts with "/", matches ^/[A-Za-z0-9._~/-]*$, not "/rpc".
+    # allowed_hosts: each matches ^[A-Za-z0-9.-]+(:\d{1,5})?$.
+    # log_level: in the set above.
+    # session_idle_seconds: int or float, 1 <= value <= 86400 (tests construct ServeConfig directly
+    #   and may pass smaller values to build_app, never through validate).
+    # Each failure raises ServeRefused naming the option.
+```
+
+### 2.2 `taskmaster/serve/auth.py`
+
+```python
+SERVE_DIR = "serve"                        # .taskmaster/local/serve/
+TOKEN_FILE = "operator.token"
+TOKEN_PREFIX = "tm_op_"
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,256}")
+LOG = logging.getLogger("taskmaster.serve")
+
+@dataclass(frozen=True)
+class Principal:
+    handle: str
+    role: str                              # "operator" | "member"
+OPERATOR = Principal("operator", "operator")
+
+class Authenticator(Protocol):
+    def authenticate(self, token: str) -> Principal | None: ...
+
+def serve_directory(root: Path) -> Path
+    # ownership.private_directory(root, SERVE_DIR). A PermissionError becomes
+    # ServeRefused(f"{root}/.taskmaster/local/serve must be owned by and private to this user: {exc}")
+    # (exit 2, so systemd does not restart-loop on it; review M1).
+def token_path(root: Path) -> Path         # serve_directory(root) / TOKEN_FILE
+def read_operator_token(path: Path) -> str
+    # ownership.verify_private(path); a PermissionError becomes ServeRefused(f"{path} must be
+    # owner-only (chmod 600 on Linux): {exc}"). Read UTF-8 and strip. A value failing TOKEN_RE
+    # raises ServeRefused(f"{path} does not hold a valid operator token; run `taskmaster serve token
+    # --root <root> --rotate`"). FileNotFoundError propagates.
+def ensure_operator_token(root: Path) -> tuple[str, bool]
+    # (token, created). If the file exists, read it. Otherwise _write_token(path, new, exclusive=True);
+    # on FileExistsError (a concurrent creator won) read the winner's file and return (it, False).
+def rotate_operator_token(root: Path) -> str            # _write_token(path, new, exclusive=False)
+def _write_token(path: Path, token: str, *, exclusive: bool) -> None
+    # temp = path.with_name(f"{TOKEN_FILE}.{secrets.token_hex(8)}.tmp")
+    # os.open(temp, O_CREAT|O_EXCL|O_WRONLY, 0o600); write token + "\n"; fsync.
+    # exclusive=True: os.link(temp, path), which raises FileExistsError if path exists (review M5).
+    # exclusive=False: os.replace(temp, path).
+    # The temp is unlinked in finally.
+
+class OperatorTokenAuthenticator:
+    def __init__(self, path: Path): ...
+    def authenticate(self, token: str) -> Principal | None
+        # 1. key = (st_mtime_ns, st_size, st_ino) of path.
+        # 2. If the key changed: digest = sha256(read_operator_token(path)), cached on the key. On
+        #    OSError or ServeRefused, cache digest None, log once per key at ERROR, and return None
+        #    (fail closed).
+        # 3. Return OPERATOR when token is non-empty and
+        #    hmac.compare_digest(hashlib.sha256(token.encode()).digest(), digest); otherwise None.
+        # A threading.Lock guards the cache.
+
+class ServeTokenVerifier(fastmcp.server.auth.TokenVerifier):
+    def __init__(self, authenticator: Authenticator): super().__init__(); self.authenticator = authenticator
+    async def verify_token(self, token: str) -> AccessToken | None
+        # principal = self.authenticator.authenticate(token); None -> None.
+        # Otherwise AccessToken(token="sha256:" + sha256(token).hexdigest()[:16], client_id=principal.handle,
+        #   scopes=[], expires_at=None,
+        #   claims={"taskmaster_principal": principal.handle, "taskmaster_role": principal.role})
+
+def principal_from_access_token(access_token) -> Principal | None   # from claims; None if absent
+def current_principal() -> Principal | None
+    # principal_from_access_token(fastmcp.server.dependencies.get_access_token())
+```
+
+### 2.3 `taskmaster/serve/app.py`
+
+```python
+class RequirePrincipalMiddleware:          # pure ASGI
+    def __init__(self, app): self.app = app
+    async def __call__(self, scope, receive, send):
+        # A non-"http" scope, or isinstance(scope.get("user"), AuthenticatedUser)
+        # (mcp.server.auth.middleware.bearer_auth), goes to self.app.
+        # Otherwise: reason = "invalid" if an authorization header is present, else "missing";
+        # LOG.warning("refused unauthenticated %s %s from %s (%s token)", method, path, client_host, reason);
+        # then send JSONResponse({"error": "authentication required"}, status_code=401,
+        #   headers={"WWW-Authenticate": 'Bearer realm="taskmaster"', "Cache-Control": "no-store"}).
+        # Never calls `receive`.
+
+def build_app(server, authenticator, *, path=DEFAULT_PATH, allowed_hosts=(), middleware=(),
+              session_idle_seconds=DEFAULT_SESSION_IDLE_SECONDS):
+    # app = fastmcp.server.http.create_streamable_http_app(
+    #     server=server, streamable_http_path=path, auth=ServeTokenVerifier(authenticator),
+    #     json_response=False, stateless_http=False, debug=False,
+    #     middleware=[Middleware(RequirePrincipalMiddleware), *middleware],
+    #     host_origin_protection=True, allowed_hosts=list(allowed_hosts), allowed_origins=[])
+    # if not session_idle_seconds > 0: raise ValueError.
+    # asgi = streamable_asgi(app, path)
+    # inner = app.router.lifespan_context
+    # @asynccontextmanager
+    # async def lifespan(a):
+    #     async with inner(a) as state:
+    #         if asgi.session_manager is None: raise RuntimeError(INTERNALS_CHANGED)
+    #         asgi.session_manager.session_idle_timeout = float(session_idle_seconds)   # design D10
+    #         yield state
+    # app.router.lifespan_context = lifespan
+    # return app
+
+INTERNALS_CHANGED = ("fastmcp's streamable-HTTP app no longer has the shape taskmaster serve relies on "
+                     "(MCP route -> RequireAuthMiddleware.app -> StreamableHTTPASGIApp.session_manager); "
+                     "the session idle timeout cannot be set")
+def streamable_asgi(app, path) -> StreamableHTTPASGIApp
+    # route = the one app.routes entry with getattr(route, "path", None) == path;
+    # asgi = getattr(route.endpoint, "app", None); isinstance(asgi, fastmcp.server.http.StreamableHTTPASGIApp)
+    # else RuntimeError(INTERNALS_CHANGED). (Spike-verified on fastmcp 3.4.3.)
+```
+
+### 2.4 `taskmaster/serve/daemon.py`
+
+```python
+# Module-level imports by name, so tests can monkeypatch them on this module:
+#   from .config import (ServeConfig, ServeRefused, ServeUnavailable, validate, check_bind, bind_host, ...)
+#   from .auth import ensure_operator_token, token_path, serve_directory, OperatorTokenAuthenticator
+#   from .app import build_app
+#   from taskmaster.coordinator import client      (module object: daemon sets client.AUTOSTART_ALLOWED)
+# Never import taskmaster.backlog_server at module level; only load_server_module does.
+LOG = logging.getLogger("taskmaster.serve")
+SERVE_RETIRE_REFUSED = ("this coordinator belongs to `taskmaster serve` and is never retired by a client; "
+                        "to upgrade, stop the daemon (systemctl stop taskmaster), install the new build "
+                        "and start it again")
+SERVE_SHUTDOWN_REFUSED = ("this coordinator belongs to `taskmaster serve`; stop the daemon instead "
+                          "(systemctl stop taskmaster, or Ctrl+C)")
+
+class ServeCoordinator(Coordinator):                     # taskmaster.coordinator.service.Coordinator
+    def retire(self, requester):
+        LOG.warning("refused a retire request from build %s", describe(requester))
+        return {"state": "refused", "build": self.build, "reason": SERVE_RETIRE_REFUSED}
+    def dispatch(self, message):
+        if isinstance(message, dict) and message.get("method") == "shutdown":
+            check_handshake(message.get("identity"), self.identity, self.nonce, self.build)
+            raise ValueError(SERVE_SHUTDOWN_REFUSED)
+        return super().dispatch(message)
+
+def load_server_module(root: Path):
+    # name = "taskmaster.backlog_server". If it isn't in sys.modules: set
+    # os.environ["TASKMASTER_ROOT"] = str(root) and os.chdir(root) first. Then import it.
+    # If Path(module.ROOT).resolve() != root: raise ServeRefused(f"the server module is pointed at
+    # {module.ROOT}, not {root}"). Return the module.
+def configure_logging(root: Path, level: str) -> LoggingSetup
+    # Two handlers: a stderr StreamHandler, and RotatingFileHandler(serve_directory(root)/"serve.log",
+    # maxBytes=1 MiB, backupCount=3, encoding="utf-8"). Format "%(asctime)s %(levelname)s %(name)s: %(message)s".
+    # Attach both to "taskmaster.serve" (level), "taskmaster.coordinator" (level; parent of the service,
+    # git, identity_gate and linear_worker loggers), "taskmaster.integrations.linear" (level) and
+    # "uvicorn.error" (WARNING) (review M6). Before changing each logger, record (logger, level, propagate).
+    # Return a LoggingSetup(handlers, saved); close() detaches and closes the handlers and restores
+    # every saved level and propagate flag.
+def bind_socket(host: str, port: int) -> socket.socket
+    # socket.create_server((host, port), family=AF_INET6 if ":" in host else AF_INET).
+    # An OSError raises ServeUnavailable(f"cannot bind {host}:{port}: {exc.strerror or exc}").
+
+class ServeDaemon:
+    def __init__(self, config: ServeConfig, *, authenticator: Authenticator | None = None,
+                 stdout=None, middleware=(), outer_middleware=(), uvicorn_options=None): ...
+        # attributes: config, ready (threading.Event), exit_code = EXIT_OK, coordinator = None,
+        # url = None, port = None, root = None, server_root = None
+        # middleware: after authentication (per-principal; task 6). outer_middleware: ASGI wrappers
+        # around the whole app, outermost first, applied as `for wrap in reversed(outer): app = wrap(app)`;
+        # they see every request before authentication and must pass non-http scopes through
+        # (pre-auth limits; review M3). uvicorn_options: dict merged into uvicorn.Config kwargs last.
+    def start(self) -> "ServeDaemon"
+    def serve(self) -> int
+    def request_stop(self, reason: str = "request") -> None
+    def close(self) -> None                       # idempotent
+    def _on_signal(self, signum, frame) -> None
+```
+
+`start()` runs these steps in this order. On any exception, it undoes what it did (in reverse) and
+re-raises:
+
+1. `validate(config)`, then `warning = check_bind(config.host, insecure_bind=...)`, then
+   `host = bind_host(config.host)`. Nothing has been touched yet.
+2. `root = config.root.resolve(strict=True)`. Then `(root/".taskmaster/local").is_dir()` must hold.
+   A `FileNotFoundError` or a missing directory raises
+   `ServeRefused(f"{root} is not a taskmaster project with a local store")`.
+3. `handlers = configure_logging(root, config.log_level)`. If `warning` is set, print it to stderr
+   and `LOG.warning(warning)`.
+4. `ensure_operator_token(root)`. When it was created, log `operator token created at %s; read it
+   with: taskmaster serve token --root %s` (path and root only). Then `authenticator = authenticator
+   or OperatorTokenAuthenticator(token_path(root))`.
+5. `sock = bind_socket(host, config.port)`; `self.port = sock.getsockname()[1]`;
+   `self.url = f"http://{host if ':' not in host else f'[{host}]'}:{self.port}{config.path}"`.
+6. `self._previous_autostart = client.AUTOSTART_ALLOWED`; `client.AUTOSTART_ALLOWED = False`.
+7. `bs = load_server_module(root)`; `self.server_root = Path(bs.ROOT).resolve()`. **This must come
+   before step 8** (design D2, review I1): the coordinator's exporter thread imports
+   `taskmaster.backlog_server` through `native_routing.projection`, and it must find the module
+   already imported with `TASKMASTER_ROOT` and the cwd set.
+8. `self.coordinator = ServeCoordinator(root).start()`.
+   - `OwnershipUnavailable` becomes `ServeUnavailable(OWNED_TEXT.format(root=root))`, where
+     `OWNED_TEXT = ("another coordinator owns {root}. If it is a session's coordinator, stop it with
+     `taskmaster coordinator stop --root {root}` or wait for its idle exit; if it is another
+     `taskmaster serve`, stop that daemon (coordinator stop is refused there)")` (review M2).
+   - `UnsupportedStoreError` becomes `ServeRefused(f"{root} is not an activated native store: {exc}")`.
+   - `PermissionError` (an unsafe `local/coordinator/`) becomes `ServeRefused(f"{exc}")` (exit 2; review M1).
+9. `app = build_app(bs.mcp._inner, authenticator, path=config.path, allowed_hosts=config.allowed_hosts,
+   middleware=self._middleware, session_idle_seconds=config.session_idle_seconds)`, then apply
+   `outer_middleware`.
+10. `self._server = uvicorn.Server(uvicorn.Config(app, **{"lifespan": "on", "log_config": None,
+    "access_log": False, "server_header": False, "timeout_graceful_shutdown": GRACEFUL_SECONDS,
+    **(uvicorn_options or {})}))`.
+11. `LOG.info("starting: root=%s url=%s pid=%s build=%s", ...)`.
+
+`serve()` (blocks; always calls `close()`):
+
+1. If the current thread is the main thread, install `self._on_signal` for SIGTERM and SIGINT, plus
+   SIGBREAK when `hasattr(signal, "SIGBREAK")`. Remember the previous handlers.
+2. Start `threading.Thread(target=self._server.run, kwargs={"sockets": [sock]},
+   name="taskmaster-serve-http", daemon=True)`.
+3. Loop `while thread.is_alive(): thread.join(0.25)`, checking two things on each turn:
+   - The first time `self._server.started` is true: write one line to `self.stdout` (default
+     `sys.stdout`), `json.dumps({"event": "ready", "url": self.url, "pid": os.getpid(), "root":
+     str(root), "server_root": str(self.server_root), "build": describe(self.coordinator.build),
+     "token_file": str(token_path(root))})`,
+     flush it, and set `self.ready`.
+   - If `self.coordinator.stopping.is_set()` and no stop was requested: `LOG.error("coordinator
+     stopped; exiting so the supervisor restarts the daemon")`, `self.exit_code =
+     EXIT_COORDINATOR_LOST`, then `self.request_stop("coordinator lost")`.
+4. After the loop: if `self.ready` was never set and no stop was requested, set `self.exit_code =
+   EXIT_UNAVAILABLE` and log `http server failed to start`.
+5. `finally`: restore the signal handlers, then `self.close()`. Return `self.exit_code`.
+
+`request_stop(reason)`:
+
+- The first call logs `stop requested (%s)` and sets `self._stop_requested = True` and
+  `self._server.should_exit = True`.
+- Any later call sets `self._server.force_exit = True`.
+
+`_on_signal(signum, frame)` calls `request_stop(signal.Signals(signum).name)`.
+
+`close()`, idempotent:
+
+1. If there is a coordinator: `stop()`, then `close()`.
+2. Close the socket.
+3. Restore `client.AUTOSTART_ALLOWED` if it was saved.
+4. `LOG.info("stopped (exit %s)", self.exit_code)`.
+5. Restore the logging setup (handlers detached and closed; levels and propagate flags restored).
+
+### 2.5 `taskmaster/serve/cli.py`
+
+```python
+def main(argv=None) -> int
+    # argv = sys.argv[1:] if None. If argv[:1] == ["token"], return token_main(argv[1:]);
+    # otherwise return run_main(argv).
+def run_main(argv) -> int
+    # argparse, prog "taskmaster serve", description = the module docstring.
+    # --root (Path, required); --host (default DEFAULT_HOST); --port (int, default DEFAULT_PORT);
+    # --path (default DEFAULT_PATH); --allowed-host (action="append", default []);
+    # --insecure-bind (store_true); --log-level (choices debug|info|warning, default info);
+    # --session-idle-seconds (float, default DEFAULT_SESSION_IDLE_SECONDS).
+    # daemon = ServeDaemon(ServeConfig(...)).
+    # try daemon.start(); except ServeRefused as exc: print(f"taskmaster serve: {exc}", file=sys.stderr)
+    # and return exc.exit_code. Otherwise return daemon.serve().
+def token_main(argv) -> int
+    # --root (required), --rotate. Root must resolve and hold .taskmaster/local, else exit 2 with a message.
+    # Print the token (ensure or rotate) followed by a newline. Return 0. ServeRefused -> stderr, exit_code.
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+The module imports only `argparse`, `sys`, `pathlib` and `.config` at the top. `.daemon` and
+`.auth` are imported inside the functions, so `--help` never imports `taskmaster.backlog_server`.
+The module docstring is the usage text: both command lines from design §2 plus the exit-code table.
+
+---
+
+## 3. TDD steps
+
+New test files start with their `# User intent:` header (§1). Use `tmp_path` and the twins
+fixtures, never the live `.taskmaster/`. Root fixtures come from
+`tests/test_native_service_build.py:22-26` (`root`, `owners`, `forbid_launch`, `request`, `OLD`,
+`NEW`); import them as `test_native_service_process.py:13` does.
+
+### Step 0: declare the direct dependencies (review I2, P1)
+
+Do this first. Every later step imports `uvicorn`, `starlette` or `mcp` directly, and
+`tests/test_packaging.py:62` (`test_every_third_party_import_is_declared`) fails the regression
+subset until they are declared.
+
+- `pyproject.toml` `dependencies` becomes
+  `["fastmcp>=3.4,<4", "httpx", "mcp>=1.24,<2", "pydantic>=2", "pyyaml", "starlette>=1.0.1,<2", "uvicorn>=0.35,<1"]`.
+- Put the same list, in the same order, on line 3 of each of the four PEP 723 headers:
+  `backlog_server.py`, `taskmaster/backlog_server.py`, `taskmaster_cli.py` and
+  `hooks/merge_recorder_stamp.py`.
+- Run `uv lock` from the worktree root (uv 0.7.9 is on PATH; if it needs the network and can't reach
+  it, stop and report). Then `uv lock --check` must pass. The diff to `uv.lock`
+  should be confined to the `taskmaster` package's dependency and metadata lists; the resolved
+  versions stay uvicorn 0.51.0, starlette 1.3.1 and mcp 1.28.1. If any other package version
+  changes, stop and report.
+
+Check, before any new module exists:
+`tests/test_packaging.py -k "script_headers or third_party or lock"` passes. The headers must stay
+identical, which `tests/test_packaging.py:55` enforces.
+
+Commit: `build: declare uvicorn, starlette and mcp, which server mode imports directly`.
+
+### Step 1: bind policy and settings (`taskmaster/serve/config.py`)
+
+Tests in `tests/test_serve_config.py`:
+
+- `test_loopback_hosts_need_no_flag` (parametrized `127.0.0.1`, `127.0.0.5`, `::1`, `localhost`):
+  `check_bind(h, insecure_bind=False) is None`.
+- `test_bind_host_normalizes`: `bind_host("localhost") == "127.0.0.1"` and
+  `bind_host("0:0:0:0:0:0:0:1") == "::1"`.
+- `test_non_loopback_bind_is_refused_without_the_flag` (parametrized `0.0.0.0`, `::`,
+  `192.168.1.10`, `10.0.0.1`, `203.0.113.5`): raises `BindRefused`, whose text contains
+  `--insecure-bind`, `plaintext` and the host.
+- `test_insecure_bind_returns_the_risk_warning`: with `insecure_bind=True`, `0.0.0.0` returns text
+  containing `unencrypted`, `replay the token` and `TLS reverse proxy`.
+- `test_hostnames_are_refused_even_with_the_flag` (parametrized `example.com`, `my-host`):
+  `bind_host` raises `BindRefused` matching `IP address or localhost`.
+- `test_validate_rejects_bad_settings` (parametrized): `port=-1`, `port=65536`, `path="mcp"`,
+  `path="/rpc"`, `path="/a b"`, `allowed_hosts=("https://x",)`, `allowed_hosts=("x/y",)`,
+  `log_level="trace"`, `session_idle_seconds=0`, `session_idle_seconds=86401`. Each raises
+  `ServeRefused`.
+- `test_validate_accepts_defaults_and_port_zero`: `validate(ServeConfig(root=tmp_path, port=0,
+  allowed_hosts=("tm.example.com",)))` returns the config.
+- `test_exit_codes`: `ServeRefused.exit_code == 2`, `BindRefused.exit_code == 2`,
+  `ServeUnavailable.exit_code == 69`, `EXIT_COORDINATOR_LOST == 75`.
+
+Commit: `feat(serve): bind policy and settings; non-loopback plaintext needs --insecure-bind`.
+
+### Step 2: the operator token and the authenticator seam (`taskmaster/serve/auth.py`, `ownership.py`)
+
+Change `taskmaster/coordinator/ownership.py:98`:
+
+- The signature becomes `def private_directory(root: Path, name: str = 'coordinator') -> Path`.
+- The path becomes `root / '.taskmaster' / 'local' / name`.
+- `name` must match `^[a-z][a-z0-9-]{0,31}$`; otherwise raise `ValueError`.
+- All other behaviour and messages stay unchanged. `Ownership.__init__` keeps calling it with one
+  argument.
+
+Tests in `tests/test_serve_auth.py`. The fixture `project` is
+`tmp_path / ".taskmaster" / "local"` created with `mkdir(parents=True)`; it returns `tmp_path`.
+
+- `test_ensure_creates_an_owner_only_token`:
+  - `token, created = ensure_operator_token(project)`.
+  - `created is True`, `token.startswith("tm_op_")` and `TOKEN_RE.fullmatch(token)`.
+  - `ownership.verify_private(token_path(project))` doesn't raise.
+  - On POSIX, `stat().st_mode & 0o777 == 0o600`, and the directory mode is `0o700`.
+  - No `*.tmp` is left in the directory.
+- `test_ensure_is_idempotent`: a second call returns `(token, False)` with the same token.
+- `test_rotate_replaces_the_token`: the new token differs, and `read_operator_token` returns it.
+- `test_loose_permissions_refuse` (POSIX only; `skipif os.name == "nt"`): `chmod 0o644` makes
+  `read_operator_token` raise `ServeRefused` matching `owner-only`.
+- `test_unverifiable_permissions_refuse` (all OSes): monkeypatch `auth.ownership.verify_private` to
+  raise `PermissionError("x")`; `ServeRefused` matches `owner-only`.
+- `test_malformed_token_refuses` (parametrized file content `""`, `"short"`, `"has space " * 8`):
+  `ServeRefused` matches `--rotate`.
+- `test_authenticator_accepts_only_the_current_token`: `authenticate(token) == OPERATOR`. Each of
+  `""`, `"wrong"`, `token[:-1]`, `token + "x"` and `token.upper()` returns `None`.
+- `test_authenticator_uses_constant_time_compare`: wrap `auth.hmac.compare_digest` with a recorder.
+  An `authenticate` call records exactly one call, with two 32-byte digests.
+- `test_rotation_takes_effect_without_restart`:
+  - With one authenticator instance, the old token works.
+  - Rotate, then force a key change with `os.utime(path, ns=(…+1_000_000, …+1_000_000))`,
+    because mtime resolution can hide a same-tick rewrite.
+  - The old token returns `None` and the new one returns `OPERATOR`.
+- `test_authenticator_fails_closed_when_the_file_breaks`: overwrite the file with `"bad"` and bump
+  the mtime. Every token returns `None`, and one ERROR record is logged on `taskmaster.serve` that
+  doesn't contain the old token.
+- `test_verifier_access_token_carries_the_principal_not_the_secret`:
+  - `asyncio.run(ServeTokenVerifier(authn).verify_token(token))` gives `client_id == "operator"`
+    and `claims == {"taskmaster_principal": "operator", "taskmaster_role": "operator"}`.
+  - `access.token.startswith("sha256:")`, and `token not in repr(access)`.
+  - `verify_token("nope")` is `None`.
+- `test_principal_from_access_token`: it round-trips the claims above; it returns `None` for `None`
+  and for an `AccessToken` with no claims.
+- `test_concurrent_ensure_yields_one_token`: 8 threads each call `ensure_operator_token(project)`
+  behind a `threading.Barrier(8)`. All 8 return the same token, exactly one reports
+  `created is True`, and no `*.tmp` is left behind.
+- `test_ensure_never_replaces_an_existing_file`: monkeypatch `auth.os.replace` to raise
+  `AssertionError`; `ensure_operator_token` still creates the token and then reads it back.
+- `test_unsafe_serve_directory_refuses_with_exit_2`: monkeypatch `auth.ownership.private_directory`
+  to raise `PermissionError("not owner")`. `serve_directory(project)` raises `ServeRefused` with
+  `exit_code == 2` and `not owner` in the text.
+- `test_private_directory_names`: `private_directory(tmp, "serve")` ends in `local/serve`, and
+  `private_directory(tmp, "../x")` raises `ValueError`.
+
+Commit: `feat(serve): owner-only operator token and a pluggable authenticator`.
+
+### Step 3: the HTTP app refuses unauthenticated requests on every route (`taskmaster/serve/app.py`)
+
+`tests/serve_helpers.py`:
+
+```python
+@contextmanager
+def running_app(app, host="127.0.0.1"):
+    # sock = socket.create_server((host, 0)); config = uvicorn.Config(app, lifespan="on", log_config=None,
+    # access_log=False); server = uvicorn.Server(config). Start a thread running
+    # server.run(sockets=[sock]) and wait until server.started (10 s, else AssertionError).
+    # Yield f"http://{host}:{port}". Finally: server.should_exit = True; join(15); assert not alive.
+def toy_server() -> FastMCP
+    # FastMCP("toy") with tool `whoami() -> str` returning
+    # json.dumps(dataclasses.asdict(current_principal()) if current_principal() else None)
+def call_tool(url, token, name, arguments=None) -> str
+    # asyncio.run over fastmcp.Client(url, auth=token) (auth=None when token is None):
+    # (await client.call_tool(name, arguments or {})).content[0].text
+def list_tool_names(url, token) -> list[str]
+def raw_initialize(url, token) -> httpx.Response
+    # POST url with Authorization: Bearer <token>, Accept: application/json, text/event-stream, and the
+    # JSON-RPC body {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion":
+    # "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}; never sends a
+    # follow-up, so the session is abandoned.
+```
+
+Tests in `tests/test_serve_app.py`. A `token_file` fixture uses `ensure_operator_token(project)`;
+the app is `build_app(toy_server(), OperatorTokenAuthenticator(path))`.
+
+- **`test_unauthenticated_request_is_refused`.** Each request below (all with
+  `Accept: application/json, text/event-stream`) returns 401, with
+  `WWW-Authenticate: Bearer realm="taskmaster"` and body `{"error": "authentication required"}`:
+  - `httpx.post(url + "/mcp", json={})` with no header;
+  - the same with `Authorization: Bearer wrong`;
+  - the same with `Authorization: Basic Zm9vOmJhcg==`;
+  - `httpx.get(url + "/mcp")`;
+  - `httpx.delete(url + "/mcp")`;
+  - `httpx.post(url + "/anything")`.
+
+  Also, `call_tool(url + "/mcp", None, "whoami")` raises `httpx.HTTPStatusError` with status 401.
+- `test_refusal_never_reads_the_body`: call the middleware directly.
+  `RequirePrincipalMiddleware(app=never_called)` gets a scope `{"type": "http", "method": "POST",
+  "path": "/mcp", "headers": [], "client": ("1.2.3.4", 5)}` and a `receive` that raises
+  `AssertionError`. The captured `send` messages start with `http.response.start` status 401.
+- `test_valid_token_reaches_the_tool_with_the_operator_principal`:
+  `json.loads(call_tool(url + "/mcp", token, "whoami")) == {"handle": "operator", "role": "operator"}`.
+- `test_valid_token_on_an_unknown_route_is_404`: `httpx.post(url + "/rpc", headers=bearer)` returns
+  404. The app has no coordinator passthrough.
+- `test_unknown_host_header_is_misdirected`: with a valid token and `Host: evil.example`, the
+  response is 421. An app built with `allowed_hosts=("tm.example.com",)` accepts
+  `Host: tm.example.com`, so a valid `initialize` POST isn't 421.
+- `test_refusals_are_logged_without_the_token` (caplog on `taskmaster.serve`):
+  - A request with `Authorization: Bearer <token>x` logs one WARNING that contains `invalid token`,
+    `/mcp` and `127.0.0.1`, and not `<token>`.
+  - A request with no header logs `missing token`.
+- **`test_abandoned_sessions_expire`** (design D10, review I3):
+  - App built with `session_idle_seconds=1.0`.
+  - Five `raw_initialize` calls each return 200.
+  - `len(streamable_asgi(app, "/mcp").session_manager._server_instances) >= 1` right after.
+  - Polling every 0.1 s, the count reaches 0 within 6 s.
+- `test_active_session_survives_its_idle_window`: with `session_idle_seconds=1.0`, one
+  `fastmcp.Client` session calls `whoami` every 0.4 s for 2.5 s; every call succeeds. Activity
+  pushes the deadline back.
+- `test_default_session_idle_timeout_is_set`: with an app built with defaults, inside
+  `running_app`, `streamable_asgi(app, "/mcp").session_manager.session_idle_timeout == 1800.0`.
+- `test_build_app_fails_loudly_if_fastmcp_internals_change`: monkeypatch
+  `app_module.create_streamable_http_app` to return a bare `Starlette()` with no routes.
+  `build_app(...)` raises `RuntimeError` matching `no longer has the shape`.
+- `test_extra_middleware_sees_only_authenticated_requests`: pass `middleware=[Middleware(Recorder)]`,
+  where `Recorder` appends `scope["path"]`. After one refused and one authenticated call, the
+  recorder holds only the authenticated path(s).
+
+Commit: `feat(serve): HTTP app with deny-by-default bearer auth before the body is read`.
+
+### Step 4: the daemon's coordinator and the client pin (`daemon.py` part 1, `client.py`)
+
+Change `taskmaster/coordinator/client.py`:
+
+- Above `class Client`, add the constant and its comment:
+
+  ```python
+  # `taskmaster serve` owns its coordinator in-process for the daemon's whole life; in that
+  # process no client may launch a replacement or retire another build's owner (team-server-001).
+  AUTOSTART_ALLOWED = True
+  ```
+
+- At `:65`, use `self.autostart, self.visibility, self.timeout = autostart and AUTOSTART_ALLOWED, visibility, timeout`.
+- In `_retire` (`:288-297`), keep the whole answer: `answer = self._send(...)`, `state =
+  answer.get('state')`, `reason = answer.get('reason')`. In the transport-failure branch, set
+  `reason = None`. The refusal becomes
+  `HandshakeError(f'coordinator build {describe(theirs)} refused to retire' + (f': {reason}' if isinstance(reason, str) and reason else ''), may_have_committed=False)`
+  (review M2).
+
+Change `taskmaster/coordinator/control_cli.py:82` (`stop`): wrap
+`report.update(client._send(record, 'shutdown'))` in `try/except ValueError as exc:`. On the
+exception, set `report['state'] = 'refused'` and `report['detail'] = str(exc)`, then `return 1, report`.
+
+Add `ServeCoordinator`, `SERVE_RETIRE_REFUSED` and `SERVE_SHUTDOWN_REFUSED` to `daemon.py`
+(§2.4). Import `Coordinator` from `taskmaster.coordinator.service`, and `check_handshake` and
+`describe` from `taskmaster.coordinator.protocol`.
+
+Tests in `tests/test_serve_coordinator.py` (fixtures `root` and `owners` from
+`test_native_service_build`). The local helper `serve_owner(root)` starts a `ServeCoordinator`,
+adds a thread that runs `stopping.wait()` and then `close()` (as `owners` does), and registers it
+for teardown.
+
+- `test_serve_coordinator_listens_on_loopback_only`: `owner.server.server_address[0] ==
+  "127.0.0.1"`, and `discovery.json`'s `port` equals `owner.server.server_port`.
+- `test_serve_coordinator_refuses_retire_from_any_build` (parametrized over `NEW`, `OLD` and
+  `{'version': '99.0.0', 'digest': 'c' * 32}`): `owner.retire(build)` returns `state == "refused"`
+  with `"taskmaster serve" in reason`. Afterwards `owner.stopping.is_set()` is False and
+  `Client(root, autostart=False).status()["nonce"] == owner.nonce`.
+- **`test_newer_build_client_cannot_retire_the_daemon_coordinator`**:
+  - `forbid_launch(monkeypatch)`.
+  - `client = Client(root)`, then `client.build = {'version': '99.0.0', 'digest': 'c' * 32}`.
+  - `client.execute(request(client))` raises `HandshakeError` matching `refused to retire`, with
+    `may_have_committed is False`.
+  - The owner isn't stopping, its nonce is unchanged, and a same-build `Client(root,
+    autostart=False)` executes `request(client, key='two')` successfully.
+- `test_shutdown_over_ipc_is_refused`: `Client(root, autostart=False).shutdown()` raises
+  `ValueError` matching `taskmaster serve`. The owner isn't stopping and still answers `status`.
+- `test_shutdown_with_a_bad_handshake_is_refused_first`: `client._send(record, 'shutdown',
+  identity=dict(client.identity, store_id='x'))` raises `HandshakeError`, not `ValueError`.
+- `test_pinned_process_never_autostarts`:
+  - `monkeypatch.setattr(client_module, "AUTOSTART_ALLOWED", False)` and `forbid_launch(monkeypatch)`.
+  - With no owner running, `Client(root).autostart is False`, and `Client(root).execute(request(...))`
+    raises `ServiceUnavailable` (the forbidden `_launch` is never reached).
+- `test_pinned_process_never_retires`: with the flag `False` and an `OLD` owner from `owners`,
+  `Client(root).execute(...)` raises `HandshakeError` matching `differs`, and `old.stopping.is_set()`
+  is False.
+- **`test_newer_client_sees_the_upgrade_guidance`** (review M2): in the retire test above, the
+  `HandshakeError` text also contains `systemctl stop taskmaster` and `install the new build`.
+- `test_retire_refusal_without_a_reason_is_unchanged`: with an `OLD` owner from `owners`, monkeypatch
+  that client's `_send` so a `retire` answers `{"state": "refused"}` (no reason). `execute` raises
+  `HandshakeError` whose text ends `refused to retire`, with no trailing colon.
+- **`test_coordinator_stop_cli_reports_the_serve_refusal`** (review M2): with a `ServeCoordinator`
+  running, `control_cli.main(["stop", "--root", str(root), "--wait", "2"])` returns 1 and raises
+  nothing. Its printed JSON (capsys) has `state == "refused"` and a `detail` containing
+  `stop the daemon`. The owner is still serving.
+- `test_unpinned_default_is_unchanged`: `client_module.AUTOSTART_ALLOWED is True` at import, and
+  `Client(root).autostart is True`.
+
+Commit: `feat(serve): daemon coordinator refuses retire and shutdown; serve process never autostarts`.
+
+### Step 5: the daemon in-process (`daemon.py` part 2)
+
+Implement `load_server_module`, `configure_logging`, `bind_socket` and `ServeDaemon` (§2.4).
+
+Fixture `served` in `tests/test_serve_daemon.py`, built on `root` from `test_native_service_build`
+(twins pointed at the native root):
+
+```python
+@pytest.fixture
+def served(root, monkeypatch):
+    monkeypatch.setattr(client_module, "AUTOSTART_ALLOWED", True)   # restored even if close() fails
+    monkeypatch.setenv("TASKMASTER_SERVICE_IDLE_SECONDS", "0.5")
+    token, _ = ensure_operator_token(root)
+    out = io.StringIO()
+    daemon = ServeDaemon(ServeConfig(root=root, port=0), stdout=out).start()
+    codes = []
+    thread = threading.Thread(target=lambda: codes.append(daemon.serve()), daemon=True)
+    thread.start()
+    assert daemon.ready.wait(30)
+    yield SimpleNamespace(daemon=daemon, token=token, url=daemon.url, out=out, codes=codes, thread=thread, root=root)
+    daemon.request_stop("test teardown")
+    thread.join(30)
+    assert not thread.is_alive()
+```
+
+Tests:
+
+- **`test_tool_call_over_http_against_the_store`**:
+  - `call_tool(url, token, "backlog_add_task", {"title": "Over HTTP", "epic": "test-epic", "phase": "dev"})`
+    returns text that doesn't start with `Error` and contains `[seq `.
+  - `call_tool(url, token, "backlog_get_task", {"task_id": "test-epic-002"})` contains `Over HTTP`.
+- **`test_unauthenticated_mcp_call_is_refused`**: `call_tool(url, None, "backlog_list_tasks")` and
+  `call_tool(url, "tm_op_wrong…", …)` each raise `httpx.HTTPStatusError` with status 401, and the
+  task count is unchanged (`backlog_list_tasks` through a valid call).
+- `test_daemon_owns_the_coordinator_in_process`:
+  - `discovery.json`'s `pid == os.getpid()` and its `nonce == daemon.coordinator.nonce`.
+  - `daemon.coordinator.server.server_address[0] == "127.0.0.1"`.
+  - `ownership_held(root)`.
+- **`test_daemon_outlives_the_idle_timeout`**: first
+  `monkeypatch.setattr(service.Coordinator, "idle_expired", raising)`, where `raising` raises
+  `AssertionError("serve must never consult idle expiry")`. An idle check from any thread would
+  then fail the coordinator visibly. Record the discovery nonce, then `time.sleep(1.5)` (three idle
+  periods of 0.5 s). The coordinator isn't stopping, `ownership_held(root)` holds, the
+  nonce is unchanged, and a `backlog_list_tasks` call succeeds.
+- **`test_remote_client_cannot_trigger_retire`**:
+  1. `list_tool_names(url, token)` contains no name with `retire` or `shutdown`.
+  2. `httpx.post(url_base + "/rpc", headers={"Authorization": f"Bearer {token}"}, json={"method":
+     "retire"})` returns 404.
+  3. The serve process's own clients are pinned: `Client(root).autostart is False`.
+  4. A newer build's client (as a separate session process would be) is refused:
+     - `forbid_launch(monkeypatch)`; `newer = Client(root)`; `newer.autostart = True` (as in its own
+       process); `newer.build = {'version': '99.0.0', 'digest': 'c' * 32}`.
+     - `newer.execute(request(newer))` raises `HandshakeError` matching `refused to retire`.
+  5. The daemon still serves: the nonce is unchanged and `backlog_list_tasks` over HTTP succeeds.
+- `test_ready_line_is_json_without_the_token`: the first line of `out` parses as JSON with `event ==
+  "ready"`, `url == daemon.url`, `pid == os.getpid()` and `token_file` ending in `operator.token`,
+  and `token not in out.getvalue()`.
+- `test_serve_log_records_start_and_refusals_without_tokens`: after one unauthenticated call,
+  `.taskmaster/local/serve/serve.log` contains `starting:` and `missing token`, and not the token.
+- `test_signal_stops_gracefully`:
+  - `daemon._on_signal(signal.SIGINT, None)`; the thread ends within 30 s.
+  - `codes == [0]`, `ownership_held(root)` is False, and `daemon.coordinator.stopping.is_set()`.
+  - `client_module.AUTOSTART_ALLOWED is True` (restored).
+  - `serve.log` contains `stop requested (SIGINT)` and `stopped (exit 0)`.
+  - The fixture teardown's `request_stop` is then a harmless no-op on a closed daemon:
+    `request_stop` must tolerate a finished server.
+- `test_committed_write_survives_graceful_stop`:
+  - Submit a `request(client)` envelope through `Client(root, autostart=False)` (it returns once
+    committed), then `daemon.request_stop()` and join.
+  - Start a fresh `Coordinator(root)` in a `with` block.
+    `Client(root, autostart=False).receipt('build-tests', 'one')` then answers `state == "committed"`.
+- **`test_lost_coordinator_exits_75`**: `daemon.coordinator.stop()`. The thread ends within 30 s,
+  `codes == [75]`, the log contains `coordinator stopped`, and `ownership_held(root)` is False.
+
+- `test_ready_line_reports_the_server_root`: the ready line's `root` and `server_root` both equal
+  `str(root.resolve())`.
+- `test_outer_middleware_sees_requests_before_auth`: this needs its own daemon instead of the
+  fixture. Use `ServeDaemon(..., outer_middleware=[Recorder])`, where `Recorder` is a pure ASGI
+  wrapper that appends `scope["path"]` for http scopes and passes every scope through. One
+  unauthenticated POST to `/mcp` is recorded and refused with 401.
+
+Non-fixture tests, in the same file:
+
+- **`test_server_module_is_loaded_before_the_coordinator_starts`** (review I1): monkeypatch
+  `daemon.load_server_module` and `daemon.ServeCoordinator.start` with wrappers that append
+  `"server"` and `"coordinator"` to a list and then call through. After `start()` (then `close()`),
+  the list is `["server", "coordinator"]`.
+- `test_close_restores_logging`: record the levels, propagate flags and handler counts of
+  `taskmaster.serve`, `taskmaster.coordinator`, `taskmaster.integrations.linear` and `uvicorn.error`.
+  After a `start()` and `close()`, all are back to the recorded values.
+- `test_logging_captures_coordinator_child_loggers`: during a started daemon,
+  `logging.getLogger("taskmaster.coordinator.git").warning("probe-xyz")` lands in `serve.log`.
+
+- **`test_non_loopback_bind_is_refused_before_touching_the_store`**:
+  `ServeDaemon(ServeConfig(root=root, host="0.0.0.0", port=0)).start()` raises `BindRefused`.
+  Afterwards `(root/".taskmaster/local/serve").exists()` is False, `ownership_held(root)` is False,
+  and `client_module.AUTOSTART_ALLOWED is True`.
+- `test_insecure_bind_starts_with_a_warning`:
+  - Monkeypatch `daemon.bind_socket` to bind `127.0.0.1:0` whatever host it gets, so the test never
+    opens a LAN port.
+  - Then `ServeDaemon(ServeConfig(root=root, host="0.0.0.0", port=0, insecure_bind=True)).start()`
+    succeeds. capsys stderr contains `unencrypted`, and `serve.log` has the WARNING.
+  - Then `close()`.
+- `test_start_refuses_when_another_coordinator_owns_the_store`: with a plain `Coordinator(root)`
+  started, `start()` raises `ServeUnavailable` (`exit_code == 69`) matching `another coordinator`.
+  The text contains both `taskmaster coordinator stop --root` and `stop that daemon`. Afterwards
+  the flag is restored and the plain owner is still serving.
+- `test_start_refuses_a_root_without_a_store(tmp_path)`: raises `ServeRefused` matching `not a
+  taskmaster project`.
+- `test_server_module_must_point_at_the_root`: `monkeypatch.setattr(bs, "ROOT", tmp_path / "elsewhere")`
+  makes `start()` raise `ServeRefused` matching `pointed at`. Afterwards no ownership is held and
+  the flag is restored.
+- `test_failed_start_undoes_everything`: monkeypatch `daemon.build_app` to raise `RuntimeError`.
+  `start()` re-raises it; ownership is released, the socket is closed (rebinding the same port
+  succeeds), the flag is restored, and the log handlers are detached (`taskmaster.serve` has none
+  of the daemon's handlers).
+
+Commit: `feat(serve): ServeDaemon hosts the MCP tools over HTTP with an in-process coordinator`.
+
+### Step 6: the CLI (`taskmaster/serve/cli.py`, `__main__.py`)
+
+Tests in `tests/test_serve_cli.py`, in-process through `cli.main([...])` unless marked:
+
+- `test_root_is_required`: `cli.main([])` raises `SystemExit` with code 2 (argparse).
+- `test_non_loopback_bind_is_refused_without_the_flag(tmp_path, capsys)`:
+  - `cli.main(["--root", str(tmp_path), "--host", "0.0.0.0"]) == 2`.
+  - stderr contains `--insecure-bind`.
+  - `tmp_path` is still empty: the bind check runs before the root check.
+- `test_token_prints_and_rotates(tmp_path, capsys)`:
+  - Create `.taskmaster/local`.
+  - `cli.main(["token", "--root", str(tmp_path)]) == 0`; stdout is the token, and a second call
+    prints the same one.
+  - `["token", "--root", …, "--rotate"]` prints a different token, which `read_operator_token`
+    returns.
+- `test_token_refuses_a_non_project(tmp_path, capsys)`: returns 2 and writes no file.
+- `test_start_refusal_maps_to_its_exit_code(monkeypatch, tmp_path)`: monkeypatch
+  `daemon.ServeDaemon.start` to raise `ServeUnavailable("x")`; `cli.main(["--root", str(tmp_path)])`
+  returns 69, and stderr starts with `taskmaster serve: x`.
+- **`test_end_to_end_mcp_tool_call_over_http`** (`@pytest.mark.slow`,
+  `@pytest.mark.xdist_group("heavy_processes")`; fixture `root` from `test_native_service_build`):
+  1. `token, _ = ensure_operator_token(root)`. `elsewhere = tmp_path / "elsewhere"` (mkdir): an
+     unrelated cwd, so a root taken from the cwd would show (review P2). Also pop `TASKMASTER_ROOT`
+     from the child's env.
+  2. Start the child:
+     `child = subprocess.Popen([sys.executable, str(REPO / "taskmaster_cli.py"), "serve", "--root",
+     str(root), "--port", "0"], stdout=PIPE, stderr=<tmp_path/"serve.stderr" opened "wb">,
+     env=dict(os.environ, TASKMASTER_SERVICE_IDLE_SECONDS="1"), cwd=str(elsewhere),
+     creationflags=CREATE_NEW_PROCESS_GROUP on Windows else 0, start_new_session=(os.name != "nt"))`.
+  3. `ready = serve_helpers.read_ready_line(child, timeout=90)`. A reader thread puts stdout lines
+     on a queue; the helper fails with the stderr file's tail when the child exits first or time
+     runs out.
+  4. `Path(ready["root"]) == root.resolve()` and `Path(ready["server_root"]) == root.resolve()`.
+     Then `time.sleep(2.5)`, past the child's 1 s idle timeout.
+  5. `call_tool(ready["url"], token, "backlog_add_task", {...})` contains `[seq `, and
+     `call_tool(..., "backlog_get_task", {"task_id": "test-epic-002"})` contains `Over HTTP`.
+  6. `call_tool(ready["url"], None, "backlog_list_tasks")` raises `HTTPStatusError` 401.
+  7. `discovery.json`'s `pid == ready["pid"]`. Compare with the ready line, not `child.pid`, because
+     on Windows the venv `python.exe` is a launcher.
+  8. Stop the child:
+     - POSIX: `child.send_signal(SIGTERM)`, `child.wait(30) == 0`, and the stderr file contains
+       `stopped (exit 0)`.
+     - Windows: `serve_helpers.stop_tree(child)` (`taskkill /F /T /PID`, then `wait(10)`; it mirrors
+       `tests/conftest.py`'s `_kill_tree`, copied rather than imported from conftest).
+  9. Within 15 s, `ownership_held(root)` is False.
+  10. `finally`: `stop_tree(child)` if it's still alive, and close the reader thread's pipe.
+
+Commit: `feat(serve): serve CLI with the token command and an end-to-end HTTP test`.
+
+### Step 7: the packaged front door (`taskmaster_cli.py`)
+
+Changes to `taskmaster_cli.py`:
+
+- Add `"serve": "taskmaster.serve.cli"` to `COMMANDS`.
+- Add the docstring usage line `uv run <plugin>/taskmaster_cli.py serve --root <project> [--host 127.0.0.1] [--port 7470]`.
+- Add this docstring sentence after "The server module is never imported…": *"`serve` is the
+  exception: it imports the server module to host it, but only after its settings are validated,
+  so `serve --help` stays import-free."*
+
+Changes to `tests/test_packaging.py`:
+
+- Add `("serve", "--insecure-bind")` to `test_cli_dispatches_to_each_module`'s parameters.
+- Add `test_serve_help_never_imports_the_server`: a copy of `test_cli_never_imports_the_server` with
+  `'serve', '--help'`, which prints `CLEAN`.
+- Add `test_serve_daemon_import_never_imports_the_server`: a child `sys.executable -c` that
+  inserts the repo root on `sys.path`, runs `import taskmaster.serve.daemon, taskmaster.serve.cli`,
+  and prints whether `taskmaster.backlog_server` is in `sys.modules`. It must print `False`
+  (design D2).
+- Update `test_cli_rejects_an_unknown_command` to also assert `"serve" in result.stderr`.
+
+Commit: `feat(serve): taskmaster_cli.py serve`.
+
+---
+
+## 4. Order of work inside a step
+
+Write the tests first, and confirm they fail for the right reason:
+
+- Step 0: `test_every_third_party_import_is_declared` passes both before and after (no new import
+  yet). The check is that the header and lock tests stay green with the new list.
+- Steps 1-3 and 5-6: `ImportError` or `AttributeError` on the new module.
+- Step 4: the retire is accepted and the shutdown stops the owner.
+- Step 7: the parameter fails with exit 2.
+
+Don't edit sources while a run is in progress: the build fingerprint changes and real-coordinator
+tests fail spuriously (about 13 of them).
+
+## 5. Commands
+
+Run from the worktree root (`C:\Users\gruku\Files\Claude\taskmaster\.worktrees\team-server-001`)
+with the repo venv's interpreter. Bare `python` on this machine is the wrong interpreter.
+`<scratch>` is a fresh directory under
+`C:\Users\gruku\AppData\Local\Temp\claude\C--Users-gruku-Files-Claude-taskmaster\61ce6188-067d-457b-9867-7d06bd264a21\scratchpad\`.
+
+Step tests:
+
+```bash
+/c/Users/gruku/Files/Claude/taskmaster/.venv/Scripts/python -m pytest tests/test_serve_config.py \
+  tests/test_serve_auth.py tests/test_serve_app.py tests/test_serve_coordinator.py tests/test_serve_daemon.py \
+  tests/test_serve_cli.py -q -p no:cacheprovider --basetemp="<scratch>/srv001"
+```
+
+Regression subset (after steps 0, 2, 4, 5 and 7, and before reporting done):
+
+```bash
+/c/Users/gruku/Files/Claude/taskmaster/.venv/Scripts/python -m pytest tests/test_native_service.py \
+  tests/test_native_service_build.py tests/test_native_service_process.py tests/test_packaging.py \
+  tests/test_server_instructions.py tests/test_native_init.py tests/test_native_quiesce.py \
+  tests/test_native_service_identity.py -n 3 -q -p no:cacheprovider --basetemp="<scratch>/srv001-reg"
+```
+
+Leave the full suite to the review gate.
+
+## 6. Risks (detail in design §11-§12)
+
+- **R1. Merge overlap with team-identity-002.** No shared module edits. The overlap is
+  `ServeCoordinator` overriding `Coordinator.retire` and `dispatch`, and 002's
+  `Middleware.on_initialize` on `bs.mcp`, which then also runs over HTTP. The second branch to
+  land re-runs Steps 4 and 5.
+- **R1a. Header-line conflict.** The Step 0 header edit on `taskmaster/backlog_server.py:3` is a
+  one-line textual conflict if team-identity-002 also touches the top of that file. Keep 002's code
+  and this task's dependency list.
+- **R2. FastMCP and SDK coupling.** This task uses `create_streamable_http_app`, `bs.mcp._inner`,
+  and the session-manager shape D10 relies on (`streamable_asgi`, `session_idle_timeout`). If a
+  fastmcp update inside `<4` or an mcp update inside `<2` changes them,
+  `test_build_app_fails_loudly_if_fastmcp_internals_change` and `test_abandoned_sessions_expire`
+  fail first.
+- **R3. Windows signals.** The child-process test hard-stops on Windows; the graceful path is
+  tested in-process (Step 5). A Linux SIGTERM run is task 16.
+- **R4. Port 7470 may collide** with something on the host. It's only a default; the unit passes
+  `--port`.
+- **R5. Shared session.** Every HTTP caller shares `SESSION_ID` until task 3, so only the operator
+  should hold a token until then (addendum §13 go-live order).
+
+## 6a. Rollback
+
+- Revert the step commits, newest first.
+- Delete `.taskmaster/local/serve/` from any project where `serve` ran.
+- On a host, run `systemctl disable --now taskmaster`.
+
+No store schema, data or projection file is changed, so nothing else needs undoing.
+
+## 7. Left for later tasks (mention, don't build)
+
+- `add-user`/`revoke-user` and a member-aware `Authenticator`; reserving the `operator` handle; the
+  operator's own remote agent gets its own key instead of the host bootstrap token (002; review M4).
+- Pre-auth limits through `outer_middleware` and `uvicorn_options` (006; review M3).
+- `current_principal()` consumers: the actor seam, `SESSION_ID` and `caller_scope` (002, 003).
+- Rate-limit and timeout middleware passed through `build_app(middleware=...)`; error sanitizing (006).
+- `--force-upgrade` for the retire fence; refusing host-local sessions (009).
+- A `[project.scripts] taskmaster` entry; declaring `uvicorn` explicitly; shipping the systemd unit,
+  the Caddyfile and the how-to; a Linux lane (016).

@@ -3,6 +3,7 @@
 import type { RenderSurface } from 'claude-code'
 
 import type { LaunchEnv } from './launch'
+import type { TmRemote } from './remote'
 
 export type TmReply = { readonly text: string; readonly isError: boolean }
 export type TmCopyResult = { readonly isCopied: boolean; readonly reason: string }
@@ -34,4 +35,9 @@ export type TmHost = {
   launchEnv: () => Promise<LaunchEnv>
   /** A command by its argv, bounded to `timeoutMs`; null when it could not start or timed out (both read as not opened). */
   run: (argv: readonly string[], timeoutMs: number) => Promise<{ readonly exitCode: number; readonly stdout: string } | null>
+  /**
+   * The team server's reader for this session's repo root (team-server-007 D14): null in solo (no marker, no latch), and
+   * absent in rigs that never read a server; reads then go to `call` one at a time, as before.
+   */
+  remote?: () => Promise<TmRemote | null>
 }

@@ -79,7 +79,12 @@ def stop(client, wait):
         return 0, report
     if not report.get('same_build'):
         return 1, report
-    report.update(client._send(record, 'shutdown'))  # {'state': 'stopping'}
+    try:
+        report.update(client._send(record, 'shutdown'))  # {'state': 'stopping'}
+    except ValueError as exc:  # a `taskmaster serve` coordinator refuses shutdown
+        report['state'] = 'refused'
+        report['detail'] = str(exc)
+        return 1, report
     deadline = time.monotonic() + wait
     while ownership_held(client.root):
         if time.monotonic() >= deadline:
@@ -107,6 +112,18 @@ def main(argv=None):
     from .client import Client
     from taskmaster.root import resolve_root
     root = args.root or resolve_root(Path.cwd()).root
+    from taskmaster import server_fence
+    server_text = server_fence.refusal(root)
+    if server_text is not None:       # never builds a Client, never opens the store (team-server-009)
+        from .ownership import ownership_held
+        if args.command == 'stop':
+            print(json.dumps({'state': 'refused', 'root': str(root), 'detail': (
+                server_text + ' Stop the daemon itself (for example `systemctl stop taskmaster`).')}, indent=1))
+            return 1
+        print(json.dumps({'state': 'server-mode', 'root': str(root), 'detail': server_text,
+                          'host_lease_held': server_fence.host_lease_held(root),
+                          'owner_held': ownership_held(Path(root))}, indent=1))
+        return 0
     client = Client(root, autostart=False, timeout=15)
     code, report = status(client) if args.command == 'status' else stop(client, args.wait)
     report.setdefault('root', str(client.root))

@@ -4,6 +4,7 @@
 import type { TmBinding } from '../types'
 import type { TmHost } from './host'
 import { claimOk, firstParagraph, isRefusal, stripSeq } from './parse'
+import { unframe } from './untrusted'
 
 export const TM_TOOL_PREFIX = 'mcp__plugin_taskmaster_tm__'
 export const STALE_MS = 30 * 24 * 3_600_000
@@ -38,12 +39,13 @@ export function bindingChange(call: TmCall, bound: string | null): BindingChange
 }
 
 export function ranText(ran: TmRan): string {
-  if (typeof ran.text === 'string') return ran.text
-  if (typeof ran.result === 'string') return ran.result
+  // team-server-027: a framed refusal ("Error: ..." inside untrusted-data) must still read as a refusal.
+  if (typeof ran.text === 'string') return unframe(ran.text)
+  if (typeof ran.result === 'string') return unframe(ran.result)
   const content = (ran.result as { content?: unknown } | null | undefined)?.content
   if (!Array.isArray(content)) return ''
   return content
-    .map(block => (typeof block === 'object' && block !== null && 'text' in block ? String((block as { text: unknown }).text) : ''))
+    .map(block => (typeof block === 'object' && block !== null && 'text' in block ? unframe(String((block as { text: unknown }).text)) : ''))
     .join('\n')
 }
 

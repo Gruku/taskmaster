@@ -32,7 +32,7 @@ const NOTICE: TmHandoverNotice = { id: 'h-new', tldr: 'Wrote it', path: 'C:\\p\\
 
 /** Flows over a recording host and an in-memory writer; `exits` answers each command by argv[0] (absent: cannot start). */
 function rig(a: { source?: 'tm' | 'demo'; notice?: TmHandoverNotice | null; exits?: Record<string, number>; copies?: boolean; read?: TmHandover | null } = {}) {
-  const seen = { opened: [] as string[], toasts: [] as string[], copies: [] as string[], runs: [] as string[][], focus: [] as string[], page: -1, pick: '' }
+  const seen = { opened: [] as string[], toasts: [] as string[], copies: [] as string[], runs: [] as string[][], focus: [] as string[], first: -1, pick: '' }
   let notice = a.notice ?? null
   let snapshot: TmSnapshot | null = SNAP
   const host = new Proxy(
@@ -69,8 +69,8 @@ function rig(a: { source?: 'tm' | 'demo'; notice?: TmHandoverNotice | null; exit
     snapshot: async (change: (s: TmSnapshot | null) => TmSnapshot | null) => {
       snapshot = change(snapshot)
     },
-    handoverPage: async (page: number) => {
-      seen.page = page
+    handoverFirst: async (first: number) => {
+      seen.first = first
     },
     pick: async (id: string) => {
       seen.pick = id
@@ -96,12 +96,12 @@ describe('opening panes', () => {
     expect(seen.opened).toEqual(['tm-review', 'tm-handovers', 'tm-session', 'tm-restore'])
   })
 
-  test('one handover opens the pane on its page, picked and focused; one not listed opens page 1 and says so', async () => {
+  test('one handover opens the pane with it in view, picked and focused; one not listed opens at the top and says so', async () => {
     const { flows, seen } = rig()
     await flows.openHandover('h-7')
-    expect([seen.page, seen.pick, seen.opened, seen.focus]).toEqual([2, 'h-7', ['tm-handovers'], ['tm-handovers/ho:h-7']])
+    expect([seen.first, seen.pick, seen.opened, seen.focus]).toEqual([6, 'h-7', ['tm-handovers'], ['tm-handovers/ho:h-7']])
     await flows.openHandover('h-99')
-    expect([seen.page, seen.pick]).toEqual([0, ''])
+    expect([seen.first, seen.pick]).toEqual([0, ''])
     expect(seen.toasts).toEqual(['taskmaster-mods: handover h-99 is not in the open list'])
   })
 })

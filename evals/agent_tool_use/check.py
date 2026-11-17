@@ -12,7 +12,7 @@ The scenario is taken from the run id's `-sNN` suffix (e.g. `b2-s18` -> `s18-...
     sql + expect_min    first column of the first row is >= `expect_min`
     sql + expect_rows   all rows equal `expect_rows`
     log_called          a tool that must have been called without error (optional `args` subset)
-    log_not_called      a tool that must not have been called successfully
+    log_not_called      a tool that must not have been called successfully (optional `args` subset)
 """
 from __future__ import annotations
 
@@ -55,7 +55,9 @@ def run_check(check: dict, con: sqlite3.Connection | None, calls: list[dict]) ->
                 and all((c.get("args") or {}).get(k) == v for k, v in wanted.items())]
         return bool(hits), f"{len(hits)} matching successful call(s)"
     if "log_not_called" in check:
-        hits = [c for c in calls if c["tool"] == check["log_not_called"]]
+        wanted = check.get("args") or {}
+        hits = [c for c in calls if c["tool"] == check["log_not_called"]
+                and all((c.get("args") or {}).get(k) == v for k, v in wanted.items())]
         return not hits, f"{len(hits)} successful call(s)"
     return False, "unknown check type"
 

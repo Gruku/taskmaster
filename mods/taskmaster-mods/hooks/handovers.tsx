@@ -1,13 +1,14 @@
 // User intent: the handovers pane in the rework's vocabulary (spec §9, §15.6–15.7, Handovers.dc.html) — the phase picker with
-// ◐ show closed, one sentence, a bulk close row, three 3-line items a page (title / slug · branch · linked tasks / next), the
-// focused one boxed with its linked tasks' live status and `r resume handover here` filled, `x close handover` last.
+// ◐ show closed, one sentence, a bulk close row, a list of 3-line items (title / slug · branch · linked tasks / next) that fills
+// the pane and scrolls, the focused one boxed with its linked tasks' live status and `r resume handover here` filled, `x close handover` last.
 // JSX compiles to h(...): never name a variable `h` in this file (it would shadow the factory).
 import type { RenderNode, RenderSurface } from 'claude-code'
 
 import type { TmCloseAsk, TmHandover, TmHandoverList, TmHandoverMarks, TmHandoverSummary, TmLinkedTask, TmPhase, TmPhaseView, TmSnapshot } from '../types'
 import { allCount, closableSelection, isClosed, listedHandovers, moveTarget, phaseHandovers, tallyLine } from './handover-list'
 import type { Kit, StripHandlers, StripView } from './kit'
-import { ageLabel, CONNECTING, dateOf, handoverPage, LIST_PAGE_SIZE, oneLine, phaseName } from './model'
+import { ageLabel, CONNECTING, dateOf, handoverFocus, oneLine, phaseName } from './model'
+import { pagedBy, positionLabel, rememberScroll, type ScrollWindow, windowOf } from './scroll-list'
 import type { TmPane } from './flows'
 import type { SidebarView } from './nav'
 import { ALL, emptyLine, orderPhases, withClosed } from './phases'
@@ -22,13 +23,18 @@ import {
   fieldSegs,
   focusedItem,
   footer,
+  footerRows,
+  frameRows,
+  focusedRows,
+  bulkRows,
+  scrollEntries,
+  scrollListing,
   type FooterItem,
   type HeadSpec,
   type Health,
   item,
   itemLine,
   type ListEntry,
-  listing,
   offlineRow,
   pagerPiece,
   paneFrame,
@@ -51,7 +57,10 @@ export type HandoversView = {
   readonly marks: TmHandoverMarks
   readonly phaseView: TmPhaseView
   readonly pick: string
-  readonly page: number
+  /** The index of the first handover the window shows. */
+  readonly first: number
+  /** Rows the pane body may show (Pane `scroll.bodyRows`); absent: the whole list is drawn. */
+  readonly rows?: number
   readonly summaries: Readonly<Record<string, TmHandoverSummary>>
   readonly summaryOpen: string
   readonly now: number
@@ -67,12 +76,10 @@ export type HandoversView = {
 
 export type HandoversHandlers = {
   readonly pick: (id: string) => void
-  /** j / k: show this page and focus this handover. */
-  readonly move: (page: number, id: string) => void
-  /** p / n: show this page and pick its first handover. */
-  readonly turnPage: (page: number, firstId: string) => void
+  /** j / k, p / n: focus this handover; `first` is the list's first visible handover then. */
+  readonly move: (first: number, id: string) => void
   readonly select: (id: string) => void
-  /** `all` (this page's open ones) and `none` ([]). */
+  /** `all` (every open handover in the list) and `none` ([]). */
   readonly selectOnly: (ids: readonly string[]) => void
   readonly toggleSummary: (handover: TmHandover, open: boolean) => void
   readonly resume: (handover: TmHandover) => void
@@ -149,7 +156,7 @@ function handoverEntry(k: Kit, v: HandoversView, on: HandoversHandlers, ho: TmHa
     pick: { key: `ho:${ho.id}`, onPress: () => on.pick(ho.id) },
   }
   const lines: Seg[][] = [refsSegs(k, ho), fieldSegs(k, 'next', oneLine(ho.nextAction) || '—')]
-  if (!focused) return { focused: false, nodes: item(k, head, lines, width) }
+  if (!focused) return { focused: false, nodes: item(k, head, lines, width), rows: 1 + lines.length }
   const room = cardInner(width)
   const ids = Array.isArray(ho.taskIds) ? ho.taskIds : []
   const open = v.summaryOpen === ho.id
@@ -169,7 +176,8 @@ function handoverEntry(k: Kit, v: HandoversView, on: HandoversHandlers, ho: TmHa
           ],
           room - 1,
         )
-  return { focused: true, nodes: [focusedItem(k, { id: ho.id, head, lines, extra, actions }, width)] }
+  const spec = { id: ho.id, head, lines, extra, actions }
+  return { focused: true, nodes: [focusedItem(k, spec, width)], rows: focusedRows(spec) }
 }
 
 /** The handovers pane (spec §9, §15.7), one frame. */
@@ -194,7 +202,7 @@ export function handoversPaneTree(k: Kit, v: HandoversView, on: HandoversHandler
   const tasks = v.list?.tasks ?? {}
   const listed = listedHandovers(v.list, s, showClosed)
   const shown = phaseHandovers(listed, v.phaseView.choice, tasks)
-  const pg = handoverPage(shown, v.page, v.pick)
+  const pg = handoverFocus(shown, v.first, v.pick)
   const picked = pg.picked
   const strip: StripView = {
     pane: 'handovers',
@@ -204,26 +212,31 @@ export function handoversPaneTree(k: Kit, v: HandoversView, on: HandoversHandler
     digits: true,
     empty: showClosed ? 'No handovers' : 'No open handovers',
   }
-  const top = paneToolbar(k, {
-    left: phasePicker(k, strip, on.strip),
-    right: [
-      togglePiece(k, { id: 'show-closed', label: '◐ show closed', on: showClosed, onPress: on.toggleClosed }),
-      pagerPiece(k, { page: pg.page, pages: pg.pages, onTurn: n => on.turnPage(n, shown[n * LIST_PAGE_SIZE]?.id ?? '') }),
-      refreshPiece(k, { label: 'refresh', onPress: on.refresh }),
-    ],
-    width: inner,
-  })
+  // The list: every handover, drawn into the rows the pane has left once the pinned rows are counted (spec §15.6).
+  const entries = picked === undefined ? [] : shown.map(ho => handoverEntry(k, v, on, ho, ho.id === picked.id, tasks, inner))
+  const scroll = scrollEntries(entries)
+  // Set once the rows are known (below); the keys only run after the frame is drawn.
+  const place: { win: ScrollWindow; room: number } = { win: windowOf({ entries: [], room: 1, first: 0, focus: -1 }), room: 1 }
+  const step = (dir: -1 | 1): void => {
+    const to = moveTarget(shown, place.win.start, picked?.id ?? '', dir)
+    if (to === null) k.say(dir === 1 ? 'Already on the last handover' : 'Already on the first handover')
+    else on.move(windowOf({ entries: scroll, room: place.room, first: place.win.start, focus: to.index }).start, to.id)
+  }
+  const turn = (dir: -1 | 1): void => {
+    const to = pagedBy({ entries: scroll, room: place.room, first: place.win.start, focus: pg.index, dir })
+    const id = shown[to.focus]?.id
+    if (id === undefined || (to.focus === pg.index && to.first === place.win.start)) k.say(dir === 1 ? 'Already at the end' : 'Already at the top')
+    else on.move(to.first, id)
+  }
   const ask = v.marks.ask
   const asking = ask !== null
-  const down = picked === undefined ? null : moveTarget(shown, pg.page, picked.id, 1)
-  const up = picked === undefined ? null : moveTarget(shown, pg.page, picked.id, -1)
   const keys: FooterItem[] = [
     {
       keys: 'j/k',
       word: 'move',
       press: [
-        { id: 'move-down', key: 'j', onPress: () => (down === null ? k.say('Already on the last handover') : on.move(down.page, down.id)) },
-        { id: 'move-up', key: 'k', onPress: () => (up === null ? k.say('Already on the first handover') : on.move(up.page, up.id)) },
+        { id: 'move-down', key: 'j', onPress: () => step(1) },
+        { id: 'move-up', key: 'k', onPress: () => step(-1) },
       ],
     },
     {
@@ -249,35 +262,55 @@ export function handoversPaneTree(k: Kit, v: HandoversView, on: HandoversHandler
             keys: 'p/n',
             word: 'page',
             press: [
-              { key: 'p', onPress: () => (pg.page === 0 ? k.say('Already on the first page') : on.turnPage(pg.page - 1, shown[(pg.page - 1) * LIST_PAGE_SIZE]?.id ?? '')) },
-              { key: 'n', onPress: () => (pg.page >= pg.pages - 1 ? k.say('Already on the last page') : on.turnPage(pg.page + 1, shown[(pg.page + 1) * LIST_PAGE_SIZE]?.id ?? '')) },
+              { key: 'p', onPress: () => turn(-1) },
+              { key: 'n', onPress: () => turn(1) },
             ],
           },
         ]),
     { keys: 'u', word: 'refresh', press: [{ key: 'u', onPress: on.refresh }] },
     ...tail,
   ]
+  // The window over the list in the room left, remembered for the wheel; and the toolbar that says where it stands.
+  const placed = (pinned: number): RenderNode => {
+    place.room = v.rows === undefined ? Number.POSITIVE_INFINITY : v.rows - pinned
+    place.win = windowOf({ entries: scroll, room: place.room, first: v.first, focus: pg.index })
+    rememberScroll('handovers', { entries: scroll, ids: shown.map(ho => ho.id), room: place.room, first: place.win.start, focus: pg.index })
+    return paneToolbar(k, {
+      left: phasePicker(k, strip, on.strip),
+      right: [
+        togglePiece(k, { id: 'show-closed', label: '◐ show closed', on: showClosed, onPress: on.toggleClosed }),
+        ...(shown.length === 0 ? [] : [pagerPiece(k, { position: positionLabel(place.win, shown.length), atTop: pg.index <= 0, atEnd: pg.index >= shown.length - 1, onPage: turn })]),
+        refreshPiece(k, { label: 'refresh', onPress: on.refresh }),
+      ],
+      width: inner,
+    })
+  }
+  // The rows around the list: the frame, the tab row and its blank, the toolbar, a blank above the footer and the footer.
+  const around = frameRows(k) + (tabs.length === 0 ? 0 : 2) + 1 + 1 + footerRows(keys, inner)
   if (picked === undefined) {
+    const top = placed(around)
     const tab = orderPhases(strip.view.phases, strip.allCount, strip.view.choice).find(x => x.id === strip.view.choice)
     const way = strip.view.choice === ALL ? null : actionKey(k, { id: 'phase-all', key: '0', label: 'show all phases', onPress: () => on.strip.choose(ALL) })
     return frame([top, ...withPhaseMenu(k, strip, on.strip, [<Text> </Text>, emptyRow(k, emptyLine(strip.empty, tab), way, inner)]), <Text> </Text>, footer(k, keys, inner)])
   }
   const closable = closableSelection(v.marks.selected, shown)
-  const openIds = pg.entries.filter(x => !isClosed(x)).map(x => x.id)
+  // `all` takes every open handover in the list (the phase's, as listed), not a page's.
+  const openIds = shown.filter(x => !isClosed(x)).map(x => x.id)
   const n = closable.length
+  const bulkSpec = {
+    keys: [actionKey(k, { id: 'close-selected', key: 'b', label: `close ${plural(n, 'handover')}`, onPress: () => on.askClose({ kind: 'bulk', ids: closable }), ...(n === 0 ? { dim: 'Nothing selected to close' } : {}) })],
+    scopes: [
+      { id: 'select-all', label: 'all', onPress: () => on.selectOnly(openIds) },
+      { id: 'select-none', label: 'none', onPress: () => on.selectOnly([]) },
+    ],
+    width: inner,
+  }
   const bulk: RenderNode[] =
     ask !== null && ask.kind === 'bulk'
       ? askRow(k, { id: 'bulk-close', question: `close ${plural(ask.ids.length, 'handover')}?`, onYes: on.confirmClose, onNo: on.cancelClose, width: inner })
-      : [
-          bulkRow(k, {
-            keys: [actionKey(k, { id: 'close-selected', key: 'b', label: `close ${plural(n, 'handover')}`, onPress: () => on.askClose({ kind: 'bulk', ids: closable }), ...(n === 0 ? { dim: 'Nothing selected to close' } : {}) })],
-            scopes: [
-              { id: 'select-all', label: 'all', onPress: () => on.selectOnly(openIds) },
-              { id: 'select-none', label: 'none', onPress: () => on.selectOnly([]) },
-            ],
-            width: inner,
-          }),
-        ]
-  const entries = pg.entries.map(ho => handoverEntry(k, v, on, ho, ho.id === picked.id, tasks, inner))
-  return frame([top, ...withPhaseMenu(k, strip, on.strip, [summaryRow(k, tallyLine(shown, v.now), [], inner), ...bulk, <Text> </Text>, ...listing(k, entries, inner)]), <Text> </Text>, footer(k, keys, inner)])
+      : [bulkRow(k, bulkSpec)]
+  const bulkHeight = ask !== null && ask.kind === 'bulk' ? bulk.length : bulkRows(k, bulkSpec)
+  // Over the list: the summary, the bulk row and a blank row.
+  const top = placed(around + 1 + bulkHeight + 1)
+  return frame([top, ...withPhaseMenu(k, strip, on.strip, [summaryRow(k, tallyLine(shown, v.now), [], inner), ...bulk, <Text> </Text>, ...scrollListing(k, entries, place.win, inner)]), <Text> </Text>, footer(k, keys, inner)])
 }

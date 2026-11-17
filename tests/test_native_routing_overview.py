@@ -101,6 +101,49 @@ def test_project_manifest_tools_match(twins):
     _check(twins)
 
 
+FULL_TEAM = {"protocol": 1, "sync": {"mode": "manual", "remote": "upstream", "state_branch": "team/state",
+                                     "debounce_s": 10, "claim_wait_s": 2, "linger_s": 60},
+             "plan": {"fade_days": 14}, "linear_clone": "clone-abc", "ref_roots": ["docs/a"]}
+
+
+def test_team_block_round_trips_through_both_stores(twins):
+    from taskmaster.project import load_project_manifest
+
+    twins.same("backlog_project_set", yaml_content=yaml.safe_dump({**MANIFEST, "team": FULL_TEAM}))
+    twins.same("backlog_project_get")
+    for path in ("team.sync.mode", "team.ref_roots[0]", "team.plan.fade_days"):
+        twins.same("backlog_project_get_field", path=path)
+    _check(twins)
+    for root in (twins.legacy, twins.native):
+        assert load_project_manifest(root).team.sync.mode == "manual"
+
+
+def test_manifest_without_team_reads_team_defaults_on_both_stores(twins):
+    twins.same("backlog_project_set", yaml_content=yaml.safe_dump(MANIFEST))
+    twins.same("backlog_project_get")
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert bs.backlog_project_get()["team"]["sync"]["mode"] == "off"
+    twins.same("backlog_project_get_field", path="team")
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert bs.backlog_project_get_field(path="team") is None
+
+
+def test_team_protocol_guard_matches_on_both_stores(twins):
+    twins.same("backlog_project_set", yaml_content=yaml.safe_dump({**MANIFEST, "team": {"protocol": 1}}))
+    bump = yaml.safe_dump({**MANIFEST, "team": {"protocol": 2}})
+    wanted = "team.protocol changes only through 'init-team upgrade' (stored 1, requested 2)"
+    with twins.at(twins.legacy), pytest.raises(ValueError) as caught:
+        bs.backlog_project_set(yaml_content=bump)
+    assert wanted in str(caught.value)
+    # The native tool reports a refused write as an "Error: ..." answer instead of raising.
+    with twins.at(twins.native):
+        answer = bs.backlog_project_set(yaml_content=bump)
+    assert answer.startswith("Error:") and wanted in answer
+    _check(twins)
+
+
 def test_merge_ladder_reads_the_native_manifest(twins):
     twins.same("backlog_project_set", yaml_content=yaml.safe_dump(MANIFEST))
     twins.same("backlog_record_merge", task_id="test-epic-001", rung="develop", sha="abcdef123")

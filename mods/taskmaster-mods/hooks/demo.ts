@@ -24,9 +24,9 @@ import { NO_TASK } from './phases'
  * thread, for the copy block's Resume line; 4: phases gained dates and per-pane counts, seeded with the snapshot; 5: the
  * session was resumed from a handover and its tasks carry their phase, for the band and the Session tab; 7: the handovers
  * pane's own list, with closed handovers and linked tasks, seeded beside the snapshot; 8: the restore pane's sessions, refs
- * and brief).
+ * and brief; 9: the review and restore lists and the handovers pane hold the first visible item, not a page).
  */
-export const DEMO_SEED = 8
+export const DEMO_SEED = 9
 export const DEMO_REASON = `demo:${DEMO_SEED}`
 
 /** Any demo seed, of any version (tm mode never draws one). */
