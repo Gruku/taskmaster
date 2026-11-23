@@ -198,10 +198,11 @@ class RequestGuard:
 class PrincipalLimits:
     """Per-key in-flight cap, then token bucket (design D7). Runs after RequirePrincipalMiddleware."""
 
-    def __init__(self, app, *, limiter: KeyedLimiter, inflight: InFlight):
+    def __init__(self, app, *, limiter: KeyedLimiter, inflight: InFlight, keyer=None):
         self.app = app
         self.limiter = limiter
         self.inflight = inflight
+        self.keyer = keyer      # local profile: (scope, key) -> the bucket key (a bridge's discriminator, not "operator")
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -218,6 +219,8 @@ class PrincipalLimits:
             return
         principal = principal_from_access_token(token)
         handle = log_safe(principal.handle if principal else "-")
+        if self.keyer is not None:
+            key = self.keyer(scope, key)
         if not self.inflight.acquire(key):
             LOG.info("too many concurrent requests key=%s principal=%s ref=%s", log_safe(key), handle, rid)
             await _send_json(send, 429, {"error": "too many concurrent requests"}, [(b"retry-after", b"1")])

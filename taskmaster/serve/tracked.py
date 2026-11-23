@@ -126,8 +126,11 @@ def read_checked(root: Path, checked: Path) -> bytes:
 
 
 def _read_regular(fd: int) -> bytes:
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
         raise PermissionError("not a regular file")
+    if info.st_nlink > 1:                  # team-server-019: judged on the opened handle, not the path
+        raise PermissionError("hard-linked file")
     chunks = []
     while chunk := os.read(fd, 1 << 16):
         chunks.append(chunk)

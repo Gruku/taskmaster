@@ -268,12 +268,22 @@ def _child_process_guard(request):
 
 
 @pytest.fixture(autouse=True)
+def _query_snapshot_spacing(monkeypatch):
+    """The cache spaces builds 0.25-1 s apart under write churn; tests that write then query would wait that long."""
+    from taskmaster.native import query_snapshots  # noqa: PLC0415
+
+    monkeypatch.setattr(query_snapshots, "BUILD_MIN_INTERVAL_TEAM", 0.0)
+    monkeypatch.setattr(query_snapshots, "BUILD_MIN_INTERVAL_LOCAL", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _query_workers():
     """backlog_query keeps idle worker processes for reuse; a test's own end reaps them for the child guard."""
     yield
-    from taskmaster.native import query_worker  # noqa: PLC0415
+    from taskmaster.native import query_snapshots, query_worker  # noqa: PLC0415
 
     query_worker.POOL.close()
+    query_snapshots.close_all()                      # snapshot files and their lock handles, before tmp_path goes
 
 
 @pytest.fixture(autouse=True)

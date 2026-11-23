@@ -19,3 +19,13 @@ def test_initialize_result_carries_instructions():
     assert "backlog_sync" in result.instructions
     assert "backlog_store_status" in result.instructions
     assert "export_pending" in result.instructions
+    assert "hand edit" in result.instructions
+    # ServeDaemon rewrites the shared mcp object's instructions in-process, so check the stdio wording at its source.
+    assert "operator-only" not in bs.server_instructions(server_mode=False)
+
+
+def test_server_mode_instructions_say_members_cannot_sync():
+    text = bs.server_instructions(server_mode=True)
+    assert "operator-only" in text and "Members cannot run backlog_sync" in text
+    assert "takes effect only after backlog_sync()" not in text
+    assert "backlog_store_status" in text and "[seq N]" in text

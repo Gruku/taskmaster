@@ -18,6 +18,10 @@ PUBLIC_PREFIXES = (DEFAULT_PATH, READ_PREFIX, WRITE_PREFIX)
 GRACEFUL_SECONDS = 10
 DEFAULT_SESSION_IDLE_SECONDS = 1800.0     # design D10; the MCP SDK's recommended value
 EXIT_OK, EXIT_REFUSED, EXIT_UNAVAILABLE, EXIT_COORDINATOR_LOST = 0, 2, 69, 75
+EXIT_STORE_OWNED_BUSY = 68          # local profile: a busy session coordinator holds the store (plan section 0)
+PROFILE_TEAM, PROFILE_LOCAL = "team", "local"
+DEFAULT_LOCAL_IDLE_EXIT = 600.0     # seconds after the last bridge stream closes (local profile)
+LOCAL_SESSION_NOTE = "the local profile keeps a bridge's transport for the bridge's whole life"
 
 # team-server-006 hardening (design D8). Defaults are flags; the rest are constants, named so 015 can challenge them.
 DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -75,6 +79,15 @@ class ServeUnavailable(ServeRefused):
     exit_code = EXIT_UNAVAILABLE
 
 
+class ServeLeaseHeld(ServeUnavailable):
+    """Another serve process won the host lease (exit 69); a local launcher re-reads discovery."""
+
+
+class StoreOwnedBusy(ServeRefused):
+    """Local profile: a busy session coordinator still owns the store (exit 68); the bridge falls back."""
+    exit_code = EXIT_STORE_OWNED_BUSY
+
+
 INSECURE_BIND_WARNING = (
     "serving plaintext HTTP on {host}: the bearer token and all backlog data cross the network "
     "unencrypted, so anyone on the path can read them and replay the token. Bind 127.0.0.1 behind "
@@ -110,6 +123,22 @@ class ServeConfig:
     # team-server-009: replace a running older daemon of this root (host-local; needs the operator token).
     force_upgrade: bool = False
     upgrade_timeout: float = 120.0
+    # local-server-002: "local" is the one-per-project server that every Claude Code session on a store shares
+    # through the stdio bridge (docs/specs/2026-11-22-local-server-design.md section 2). Everything below is
+    # ignored by the team profile.
+    profile: str = PROFILE_TEAM
+    idle_exit_seconds: float = DEFAULT_LOCAL_IDLE_EXIT     # 0 = never exit when idle
+    result_file: Path | None = None                       # where the launch outcome goes (stdout is DEVNULL)
+    plugin_dir: Path | None = None                        # the plugin directory this server was launched from
+    # Whether backlog_query refuses the served-only SQL functions (zeroblob, hex, printf...). None = by profile: on for
+    # a team server, off for the local one (stdio parity). team-server-034 reads it from here.
+    deny_functions: bool | None = None
+    # local-server-004: the local profile's guarded viewer on the project's hashed band port (viewer_port stays None there).
+    viewer_band: bool = False
+
+    def __post_init__(self):
+        if self.deny_functions is None:
+            object.__setattr__(self, "deny_functions", self.profile != PROFILE_LOCAL)
 
 
 DEFAULT_EXPORT_INTERVAL = 900
@@ -142,7 +171,45 @@ def check_bind(host: str, *, insecure_bind: bool) -> str | None:
     return INSECURE_BIND_WARNING.format(host=host)
 
 
+def validate_local(config: ServeConfig) -> ServeConfig:
+    """The local profile's own checks: loopback only, no override, none of the team profile's public surface."""
+    ip = ipaddress.ip_address(bind_host(config.host))
+    if not ip.is_loopback:
+        raise BindRefused(f"the local profile binds loopback only, not {config.host}")
+    if config.insecure_bind or config.allowed_hosts:
+        raise BindRefused("the local profile takes no --insecure-bind or --allowed-host: it serves 127.0.0.1 only")
+    if config.force_upgrade:
+        raise ServeRefused("--force-upgrade is a team-profile option; the local server is replaced through the bridge's retire")
+    idle = config.idle_exit_seconds
+    if isinstance(idle, bool) or not isinstance(idle, (int, float)) or not 0 <= idle <= 86400 * 7:
+        raise ServeRefused(f"--idle-exit must be 0 (never) or seconds up to a week, not {idle!r}")
+    if config.port != 0:
+        raise ServeRefused(f"the local profile takes an OS-chosen port, not {config.port!r}")
+    if config.viewer_port is not None or config.viewer_origins:
+        raise ServeRefused("the local profile's viewer takes the project's hashed port: it has no --viewer-port or "
+                           "--viewer-origin")
+    if config.export_interval != 0 or config.export_push is not None:
+        raise ServeRefused("the local profile runs no state export (export_interval must be 0; None would switch it on in a Git checkout)")
+    _check_range("--max-body-bytes", config.max_body_bytes, 65536, 67108864, integer=True)
+    _check_range("--header-timeout", config.header_timeout, 1, 120)
+    _check_range("--body-timeout", config.body_timeout, 1, 600)
+    _check_range("--linger-seconds", config.linger_seconds, 0, 10)
+    _check_range("--linger-bytes", config.linger_bytes, 0, 16 * 1024 * 1024, integer=True)
+    _check_range("--max-connections", config.max_connections, 8, 10000, integer=True)
+    _check_range("--rate-limit", config.rate_per_minute, 1, 100000, integer=True)
+    _check_range("--rate-burst", config.rate_burst, 1, 100000, integer=True)
+    _check_range("--max-inflight", config.max_inflight, 1, 10000, integer=True)
+    if config.max_inflight >= config.max_connections:
+        raise ServeRefused(f"--max-inflight {config.max_inflight} must be below --max-connections "
+                           f"{config.max_connections}")
+    return config
+
+
 def validate(config: ServeConfig) -> ServeConfig:
+    if config.profile not in (PROFILE_TEAM, PROFILE_LOCAL):
+        raise ServeRefused(f"profile must be {PROFILE_TEAM} or {PROFILE_LOCAL}, not {config.profile!r}")
+    if config.profile == PROFILE_LOCAL:
+        return validate_local(config)
     timeout = config.upgrade_timeout
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout < float("inf"):
         raise ServeRefused(f"--upgrade-timeout must be a finite number of seconds above 0, not {timeout!r}")

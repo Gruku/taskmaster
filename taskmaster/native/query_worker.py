@@ -3,21 +3,23 @@
 # SQLite does inside one step (security review I-1, fix round 2).
 """The SQL worker: one short-lived or reused child process per running `backlog_query` statement.
 
-The parent (`native.compatibility.query`) builds the private snapshot database, serializes it, and hands it here with
-the statement. `run_statement` is the one place a statement is executed, with every SQLite limit, the authorizer and
-the progress handler; the child calls it, the parent never runs a statement itself. The child imports only the
-standard library and `taskmaster.query_guard`, so it starts in tens of milliseconds and is reused between statements
-that finished normally; a child that ran past the deadline, failed, or answered something unexpected is killed.
+The parent (`native.compatibility.query`) leases a read-only snapshot file (`native.query_snapshots`, one per store
+revision, shared by every call) and hands the child its path with the statement. `run_statement` is the one place a
+statement is executed, with every SQLite limit, the authorizer and the progress handler; the child calls it, the parent
+never runs a statement itself. The child imports only the standard library and `taskmaster.query_guard`, so it starts
+in tens of milliseconds and is reused between statements that finished normally; a child that ran past the deadline,
+failed, or answered something unexpected is killed.
 
-Wire format, both directions: 4-byte big-endian length, then a JSON object; a request is followed by an 8-byte length
-and the serialized database. Results never travel as pickle: a child running hostile SQL must not be able to run code
-in the daemon by what it answers.
+Wire format, both directions: 4-byte big-endian length, then a JSON object. A request names the snapshot file and
+may carry an overlay (the caller's host-table rows, at most OVERLAY_MAX_BYTES). Results never travel as pickle: a child
+running hostile SQL must not be able to run code in the daemon by what it answers.
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import re
 import sqlite3
 import struct
 import sys
@@ -45,21 +47,30 @@ RESULT_MAX_BYTES = 4 * 1024 * 1024
 PROGRESS_INSTRUCTIONS = 1_000
 # The snapshot's values may come to at most this (native.compatibility refuses the store past it, while copying).
 SNAPSHOT_MAX_BYTES = 32 * 1024 * 1024
-# The child's address-space cap on Linux (RLIMIT_AS): this much for the interpreter, the statement and its answer,
-# plus WORKER_MEMORY_PER_STORE_BYTE times the snapshot (the received bytes and SQLite's copy while it loads), so at
-# most WORKER_MEMORY_MAX. The child volunteers for the OOM killer before the daemon (oom_score_adj), and the unit's
-# OOMPolicy=continue keeps the server up when the kernel takes one.
+# The child's address-space cap on Linux (RLIMIT_AS): fixed, because the snapshot is a file it opens read-only with
+# mmap off and an 8 MiB page cache, so no store size reaches its memory. The child volunteers for the OOM killer before
+# the daemon (oom_score_adj), and the unit's OOMPolicy=continue keeps the server up when the kernel takes one.
 #
-# Memory budget on the unit (MemoryMax=1G, Linux), per heavy call at the snapshot limit S = 32 MiB:
-#   daemon copy: the in-memory target (~1.1 S) + one copy batch (4 MiB) + the serialized bytes (S)  ~ 75 MiB
-#     (then only the serialized bytes until the child has them, then the answer: <= 32 MiB of JSON + its rows)
-#   worker: WORKER_MEMORY_BYTES + 2 S                                                                 = 160 MiB
-#   per call ~ 235 MiB; serve.config.HEAVY_TOTAL = 2 calls                                            = 470 MiB
-#   daemon baseline: 207 MiB measured (re-review 2, in-process daemon under pytest); budgeted as        300 MiB
-#   total 770 MiB of 1,024: 254 MiB (25%) left for ordinary reads, writes and the viewer.
+# Memory budget on the unit (MemoryMax=1G, Linux), at the snapshot limit S = 32 MiB:
+#   daemon: the builder streams batches into the file, one build at a time: a 4 MiB batch + 8 MiB cache    ~ 12-27 MiB
+#   per heavy call: worker WORKER_MEMORY_BYTES (96) + its answer frame (<= 32) + rows (8)                   ~ 136 MiB
+#   serve.config.HEAVY_TOTAL = 2 calls                                                                      = 272 MiB
+#   daemon baseline: 207 MiB measured (re-review 2, in-process daemon under pytest); budgeted as              300 MiB
+#   total ~ 600 MiB of 1,024. HEAVY_TOTAL stays 2 until the Linux (WSL) lane re-measures with file snapshots.
 WORKER_MEMORY_BYTES = 96 * 1024 * 1024
-WORKER_MEMORY_PER_STORE_BYTE = 2
-WORKER_MEMORY_MAX = WORKER_MEMORY_BYTES + WORKER_MEMORY_PER_STORE_BYTE * SNAPSHOT_MAX_BYTES
+WORKER_MEMORY_MAX = WORKER_MEMORY_BYTES
+# What a statement's temp files (a sort or DISTINCT that spills) may grow to, Linux (RLIMIT_FSIZE).
+WORKER_TEMP_FILE_MAX = 256 * 1024 * 1024
+# The most the host-table overlay may come to (JSON bytes), and the request frame cap that carries it with the
+# statement (MAX_SQL_BYTES, escaped up to 6x) and the rest of the envelope.
+OVERLAY_MAX_BYTES = 4 * 1024 * 1024
+REQUEST_MAX_BYTES = OVERLAY_MAX_BYTES + 1024 * 1024
+# Statements running at once; the rest wait for a free slot up to their own deadline.
+MAX_CONCURRENT = 4
+SNAPSHOT_PAGE_CACHE_KIB = 8 * 1024
+# A published snapshot, and no other path, may be opened: <...>/query-snapshots/p-<pid>-<nonce>/r<revision>-<nonce>.db
+_SNAPSHOT_NAME = re.compile(r"r\d+-[0-9a-f]{8,32}\.db")
+_SNAPSHOT_PROCESS = re.compile(r"p-\d+-[0-9a-f]{8,32}")
 # How long past the deadline the parent waits for a child's answer before killing it.
 KILL_GRACE_SECONDS = 0.5
 # A child answers at most this much (RESULT_MAX_BYTES of values, JSON-escaped up to 6x, plus framing); anything
@@ -73,10 +84,29 @@ class WorkerStopped(sqlite3.OperationalError):
     """The child died or was killed without answering (deadline, memory cap, crash)."""
 
 
-def run_statement(connection, statement, *, limit, authorizer, deadline, result_max_bytes=RESULT_MAX_BYTES):
+def load_overlay(connection, overlay, readable):
+    """Put the caller's host-table rows into TEMP tables of the same names (they resolve before the empty tables in
+    the snapshot). Only a table the caller may read is accepted, whatever the parent sent."""
+    for table, data in (overlay or {}).items():
+        if table not in query_guard.HOST_PRIVATE_TABLES or table not in readable:
+            raise ValueError(f"the overlay may not carry {table}")
+        columns = [r[1] for r in connection.execute(f'PRAGMA main.table_info("{table}")')]
+        if list(data["columns"]) != columns:
+            raise ValueError(f"the overlay for {table} does not match the snapshot's columns")
+        quoted = ",".join('"' + c.replace('"', '""') + '"' for c in columns)
+        connection.execute(f'CREATE TEMP TABLE "{table}"({quoted})')
+        connection.executemany(f'INSERT INTO temp."{table}" VALUES({",".join("?" for _ in columns)})',
+                               [[_decode(v) for v in row] for row in data["rows"]])
+
+
+def run_statement(connection, statement, *, limit, authorizer, deadline, result_max_bytes=RESULT_MAX_BYTES,
+                  overlay=None):
     """Run `statement` on `connection` (the private snapshot) under every limit; the answer's columns, rows (at most
     `limit`) and whether more rows existed. Raises sqlite3 errors and ValueError as the tool reports them."""
-    connection.execute("PRAGMA temp_store=FILE")            # sorts and DISTINCT/UNION sets spill to a file
+    # Sorts and DISTINCT/UNION sets spill to a file. Set before the overlay's TEMP tables exist: changing temp_store
+    # deletes the temp tables that are already there.
+    connection.execute("PRAGMA temp_store=FILE")
+    load_overlay(connection, overlay, authorizer.readable)
     connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, VALUE_LENGTH_LIMIT)
     connection.setlimit(sqlite3.SQLITE_LIMIT_COLUMN, MAX_COLUMNS)
     connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES)
@@ -106,10 +136,13 @@ def run_statement(connection, statement, *, limit, authorizer, deadline, result_
 # ── wire ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def _encode(value):
+def encode_value(value):
     if isinstance(value, bytes):
         return {"b": base64.b64encode(value).decode("ascii")}
     return value
+
+
+_encode = encode_value
 
 
 def _decode(value):
@@ -146,9 +179,9 @@ def _write_json(stream, payload):
 # ── child ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def memory_cap(database_bytes):
-    """The child's address-space cap for one statement over a snapshot of `database_bytes`."""
-    return min(WORKER_MEMORY_MAX, WORKER_MEMORY_BYTES + WORKER_MEMORY_PER_STORE_BYTE * database_bytes)
+def memory_cap(database_bytes=0):
+    """The child's address-space cap for one statement: fixed (`database_bytes` is kept for old callers)."""
+    return WORKER_MEMORY_MAX
 
 
 def _cap_memory(soft, hard=None):
@@ -162,7 +195,30 @@ def _cap_memory(soft, hard=None):
     return True
 
 
+def _cap_temp_files():
+    """A statement's spilling sort fails with "disk I/O error" (the EFBIG from the cap surfaces as SQLITE_IOERR) instead of filling the disk (Linux)."""
+    try:
+        import resource
+        import signal
+    except ImportError:
+        return
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)       # the write then fails with EFBIG, not a killed child
+    hard = resource.getrlimit(resource.RLIMIT_FSIZE)[1]
+    limit = WORKER_TEMP_FILE_MAX if hard == resource.RLIM_INFINITY else min(WORKER_TEMP_FILE_MAX, hard)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+
+def _snapshot_uri(path):
+    """The read-only, immutable URI of a published snapshot file; refuses any other path."""
+    path = Path(path)
+    if not (path.is_absolute() and _SNAPSHOT_NAME.fullmatch(path.name) and _SNAPSHOT_PROCESS.fullmatch(path.parent.name)
+            and path.parent.parent.name == "query-snapshots"):
+        raise ValueError("not a query snapshot path")
+    return path.as_uri() + "?mode=ro&immutable=1"
+
+
 def _start_child(hard):
+    _cap_temp_files()
     if not _cap_memory(hard, hard):
         return
     try:
@@ -173,29 +229,33 @@ def _start_child(hard):
 
 
 def _serve_one(stdin, stdout):
-    request = _read_json(stdin, 1024 * 1024)
-    size = struct.unpack(">Q", _read_exact(stdin, 8))[0]
-    _cap_memory(memory_cap(size))            # the soft cap for this statement; the hard cap was set at start
-    database = _read_exact(stdin, size)
+    request = _read_json(stdin, REQUEST_MAX_BYTES)
     authorizer = query_guard.Authorizer(frozenset(request["declared"]), readable=frozenset(request["readable"]),
                                         deny_functions=bool(request.get("deny_functions", True)))
     deadline = query_guard.Deadline(float(request["seconds"]))
-    connection = sqlite3.connect(":memory:", isolation_level=None)
+    connection = None
     try:
-        connection.deserialize(database)
-        del database
-        result = run_statement(connection, request["statement"], limit=int(request["limit"]),
-                               authorizer=authorizer, deadline=deadline,
-                               result_max_bytes=min(int(request.get("result_max_bytes", RESULT_MAX_BYTES)),
-                                                    RESULT_MAX_BYTES))
-        answer = {"ok": True, "columns": result["columns"], "truncated": result["truncated"],
-                  "rows": [[_encode(v) for v in row] for row in result["rows"]]}
+        try:
+            connection = sqlite3.connect(_snapshot_uri(request["snapshot"]), uri=True, isolation_level=None)
+            connection.execute("PRAGMA mmap_size=0")                 # the file must not count against RLIMIT_AS
+            connection.execute(f"PRAGMA cache_size=-{SNAPSHOT_PAGE_CACHE_KIB}")
+            connection.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+        except (sqlite3.Error, ValueError, OSError) as exc:
+            answer = {"ok": False, "type": "SnapshotMissing", "error": str(exc)}
+        else:
+            result = run_statement(connection, request["statement"], limit=int(request["limit"]),
+                                   authorizer=authorizer, deadline=deadline, overlay=request.get("overlay"),
+                                   result_max_bytes=min(int(request.get("result_max_bytes", RESULT_MAX_BYTES)),
+                                                        RESULT_MAX_BYTES))
+            answer = {"ok": True, "columns": result["columns"], "truncated": result["truncated"],
+                      "rows": [[_encode(v) for v in row] for row in result["rows"]]}
     except MemoryError:
         answer = {"ok": False, "type": "MemoryError", "error": "out of memory"}
     except (sqlite3.Error, ValueError) as exc:
         answer = {"ok": False, "type": type(exc).__name__, "error": str(exc)}
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     # A child whose address space stayed large (a heap that did not shrink back) would fail the next, smaller
     # statement's cap: it answers, then retires.
     retire = _address_space() > WORKER_MEMORY_BYTES // 2
@@ -264,8 +324,9 @@ class _Worker:
 class WorkerPool:
     """Idle children kept for reuse; a child is taken by one statement at a time."""
 
-    def __init__(self, max_idle=WORKER_MAX_IDLE):
+    def __init__(self, max_idle=WORKER_MAX_IDLE, max_concurrent=MAX_CONCURRENT):
         self.max_idle = max_idle
+        self._slots = threading.BoundedSemaphore(max_concurrent)
         self._idle: list[_Worker] = []
         self._lock = threading.Lock()
 
@@ -290,13 +351,22 @@ class WorkerPool:
         for worker in idle:
             worker.kill()
 
-    def run(self, snapshot: list, statement, *, limit, readable, declared, seconds,
-            result_max_bytes=RESULT_MAX_BYTES, deny_functions=True):
-        """The child's answer dict; raises WorkerStopped when it died or was killed at `seconds` plus the grace.
-        `snapshot` is a one-item list holding the serialized database; it is emptied once the bytes are written, so
-        the daemon does not hold them while the statement runs."""
-        database = snapshot.pop()
-        size = len(database)
+    def run(self, snapshot, statement, *, limit, readable, declared, seconds,
+            result_max_bytes=RESULT_MAX_BYTES, deny_functions=True, overlay=None):
+        """The child's answer dict; raises WorkerStopped when it died or was killed at `seconds` plus the grace, or
+        when no slot freed up within `seconds`. `snapshot` is the path of a published snapshot file."""
+        started = time.monotonic()
+        if not self._slots.acquire(timeout=max(0.0, seconds)):
+            raise WorkerStopped("interrupted")
+        try:
+            return self._run(str(snapshot), statement, limit=limit, readable=readable, declared=declared,
+                             seconds=max(0.0, seconds - (time.monotonic() - started)),
+                             result_max_bytes=result_max_bytes, deny_functions=deny_functions, overlay=overlay)
+        finally:
+            self._slots.release()
+
+    def _run(self, snapshot, statement, *, limit, readable, declared, seconds, result_max_bytes, deny_functions,
+             overlay):
         worker = self._take()
         worker.uses += 1
         box = {}
@@ -312,21 +382,17 @@ class WorkerPool:
         try:
             _write_json(worker.process.stdin, {"statement": statement, "limit": limit, "seconds": seconds,
                                                "readable": sorted(readable), "declared": sorted(declared),
-                                               "result_max_bytes": result_max_bytes,
-                                               "deny_functions": bool(deny_functions)})
-            worker.process.stdin.write(struct.pack(">Q", size))
-            worker.process.stdin.write(database)
-            worker.process.stdin.flush()
+                                               "result_max_bytes": result_max_bytes, "snapshot": snapshot,
+                                               "overlay": overlay, "deny_functions": bool(deny_functions)})
         except OSError:
             pass                       # the child is gone; the reader reports it
-        del database
         reader.join(max(0.0, seconds) + KILL_GRACE_SECONDS)
         if reader.is_alive() or "answer" not in box:
             killed = reader.is_alive()
             worker.kill()
             reader.join(5)
             raise WorkerStopped("interrupted" if killed else "the query process stopped without answering "
-                                f"(it may have reached its {memory_cap(size) // 2**20} MiB memory cap)")
+                                f"(it may have reached its {memory_cap() // 2**20} MiB memory cap)")
         answer = box["answer"]
         if answer.get("ok"):
             answer["rows"] = [tuple(_decode(v) for v in row) for row in answer["rows"]]

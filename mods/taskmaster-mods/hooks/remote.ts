@@ -41,8 +41,72 @@ export type RemoteDeps = {
   readonly run: PyRun
   readonly now: () => Promise<number>
   readonly log: (text: string) => void
-  /** tm_read.py: taskmaster's hooks/, two levels above this mod's root. */
+  /** tm_read.py: taskmaster's hooks/, two levels above this mod's root (a checkout, or a plugin-dir run from one). */
   readonly script: string
+  /** Where else an installed taskmaster plugin keeps it (the desktop upload copy and the marketplace cache hold the mod alone), or null. */
+  readonly locate?: () => Promise<string | null>
+}
+
+/** What the reader search needs from the engine's file system. */
+export type ReaderFs = {
+  readonly exists: (path: string) => Promise<boolean>
+  readonly read: (path: string) => Promise<string>
+  readonly list: (path: string) => Promise<readonly string[]>
+}
+
+const slash = (path: string): string => path.replace(/\\/g, '/')
+/** 7.5.0 above 7.5.0-rc.1 above 7.4.9; anything unparsable sorts last. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (v: string): [number[], boolean] => [(v.split('-')[0] ?? '').split('.').map(n => (/^\d+$/.test(n) ? Number(n) : -1)), v.includes('-')]
+  const [pa, ra] = parts(a)
+  const [pb, rb] = parts(b)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return ra === rb ? 0 : ra ? -1 : 1
+}
+
+/**
+ * tm_read.py in an installed taskmaster plugin, for a mod that ships without the checkout around it (the desktop upload copy, the
+ * marketplace cache). The plugins directory is read off this mod's own root; then the install paths Claude Code records for
+ * `taskmaster@*`, then the newest cached version. Null when none holds the reader.
+ */
+export async function locateReader(fs: ReaderFs, pluginRoot: string): Promise<string | null> {
+  const root = slash(pluginRoot)
+  const at = root.lastIndexOf('/plugins/')
+  if (at < 0) return null
+  const plugins = root.slice(0, at + '/plugins'.length)
+  const reader = (dir: string): string => `${slash(dir).replace(/\/$/, '')}/hooks/tm_read.py`
+  // A mod installed from a marketplace cache looks for taskmaster in that same marketplace only: a same-named plugin from
+  // another one must not become the reader that runs with the member's key in reach. A mod outside the cache (a desktop
+  // upload) has no marketplace to prefer, so any one is searched.
+  const own = /\/cache\/([^/]+)\/taskmaster-mods\/[^/]+\/?$/.exec(root)?.[1] ?? null
+  try {
+    const recorded = JSON.parse(await fs.read(`${plugins}/installed_plugins.json`)) as { plugins?: Record<string, { installPath?: unknown }[]> }
+    for (const [key, installs] of Object.entries(recorded.plugins ?? {})) {
+      if (!key.startsWith('taskmaster@') || (own !== null && key !== `taskmaster@${own}`) || !Array.isArray(installs)) continue
+      for (const install of installs) {
+        if (typeof install.installPath === 'string' && (await fs.exists(reader(install.installPath)))) return reader(install.installPath)
+      }
+    }
+  } catch {
+    // No record, or an unreadable one: the cache scan below.
+  }
+  try {
+    for (const marketplace of await fs.list(`${plugins}/cache`)) {
+      if (own !== null && marketplace !== own) continue
+      let newest: string | null = null
+      for (const version of await fs.list(`${plugins}/cache/${marketplace}/taskmaster`).catch(() => [])) {
+        if (newest !== null && compareVersions(version, newest) <= 0) continue
+        if (await fs.exists(reader(`${plugins}/cache/${marketplace}/taskmaster/${version}`))) newest = version
+      }
+      if (newest !== null) return reader(`${plugins}/cache/${marketplace}/taskmaster/${newest}`)
+    }
+  } catch {
+    // No cache directory.
+  }
+  return null
 }
 
 /** 009's marker in the clone, then its latch in `.git/`. */
@@ -92,13 +156,14 @@ export function remoteOf(deps: RemoteDeps): (root: string) => Promise<TmRemote |
     return false
   }
   const read = async (root: string, calls: readonly TmCall[]): Promise<RemoteRead> => {
-    if (!(await deps.exists(deps.script))) throw new RemoteFailure(`tm_read.py not found at ${deps.script}`, 'offline', 'config')
+    const script = (await deps.exists(deps.script)) ? deps.script : ((await deps.locate?.()) ?? null)
+    if (script === null) throw new RemoteFailure(`tm_read.py not found at ${deps.script}, nor in an installed taskmaster plugin`, 'offline', 'config')
     const useFresh = fresh
     fresh = false
     const started = await deps.now()
     let ran: Awaited<ReturnType<typeof runPython>>
     try {
-      ran = await runPython(deps.run, deps.script, ['tools', '--root', root, ...(useFresh ? ['--fresh'] : [])], {
+      ran = await runPython(deps.run, script, ['tools', '--root', root, ...(useFresh ? ['--fresh'] : [])], {
         timeoutMs: TM_REMOTE_TIMEOUT_MS,
         stdin: JSON.stringify({ calls }),
         now: deps.now,
@@ -168,5 +233,20 @@ export function remoteDepsOf($: EngineInterface): RemoteDeps {
     now: () => $.clock.now(),
     log: text => $.ui.log(text, { to: 'debug' }),
     script: `${$.plugin.root}/../../hooks/tm_read.py`,
+    locate: () =>
+      locateReader(
+        {
+          exists: async path => {
+            try {
+              return await $.fs.exists(path)
+            } catch {
+              return false
+            }
+          },
+          read: path => $.fs.read(path) as Promise<string>,
+          list: async path => (await $.fs.list(path)).map(entry => entry.name),
+        },
+        $.plugin.root,
+      ),
   }
 }

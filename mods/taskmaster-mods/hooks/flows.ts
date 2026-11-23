@@ -553,6 +553,8 @@ export function createFlows(d: TmFlowDeps) {
         }
         await disarm(id)
         await d.write.cursor(c => ({ ...c, mode: 'card', refusal: out.refusal, currentId: id }))
+        // A write the bridge lost the answer to may have landed: read where the task stands.
+        if (out.mayHaveMoved === true && out.pending === undefined) d.afterWrite(id, 'failed')
         return holdOf(out)
       }),
     askNote: async (id: string): Promise<void> => {

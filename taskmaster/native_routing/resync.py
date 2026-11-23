@@ -18,6 +18,7 @@ from taskmaster.projection_parse import classify
 from .handovers import _backlog_document
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _host_sync_refused() -> str | None:
@@ -104,7 +105,7 @@ def _resync(call, kind: str, headline) -> str:
 
 @adapter("backlog_handover_resync")
 def handover_resync(call):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     return _resync(call, "handover", lambda data: (
         f"Handover index resynced — {len(data.get('handovers') or [])} entries in `backlog.yaml`."))
@@ -112,7 +113,7 @@ def handover_resync(call):
 
 @adapter("backlog_issue_resync")
 def issue_resync(call):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     return _resync(call, "issue", lambda data: f"Issue index resynced — {len(data.get('issues') or [])} entries.")
 
@@ -255,7 +256,7 @@ def _render(call, answer) -> str:
 
 @adapter("backlog_sync")
 def backlog_sync(call, *, files=None, sync_id=""):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     refused = _host_sync_refused()
     if refused is not None:

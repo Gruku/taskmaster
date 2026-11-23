@@ -103,6 +103,53 @@ def test_task_create_rolls_back_every_unresolved_reference(workspace, arguments)
         assert connection.execute("SELECT COUNT(*) FROM id_reservations WHERE public_id='demo-003'").fetchone()[0] == 0
 
 
+# ── Over-long anchors (team-server-023) ─────────────────────────────────────
+
+
+def test_over_long_anchors_are_refused_at_write_time_by_all_four_writers(workspace):
+    from taskmaster.native_routing.hook_reads import MAX_GLOB_CHARS
+    long_anchor = "a" * (MAX_GLOB_CHARS + 1)
+    ok_anchor = "b" * MAX_GLOB_CHARS
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        base = {"title": "X", "epic": "demo", "phase": "foundation"}
+        with pytest.raises(ValueError, match="longest an anchor can be"):
+            run(connection, "task.create", {**base, "anchors": [long_anchor]}, "t1")
+        with pytest.raises(ValueError, match="longest an anchor can be"):
+            run(connection, "task.update", {"id": "demo-001", "field": "anchors", "value": long_anchor}, "t2")
+        with pytest.raises(ValueError, match="longest an anchor can be"):
+            run(connection, "area.create", {"area_id": "other", "name": "O", "anchors": [long_anchor]}, "t3")
+        with pytest.raises(ValueError, match="longest an anchor can be"):
+            run(connection, "area.update", {"id": "viewer", "field": "anchors",
+                                            "value": json.dumps([long_anchor])}, "t4")
+        run(connection, "task.update", {"id": "demo-001", "field": "anchors", "value": ok_anchor}, "t5")
+        assert fields(connection, "task", "demo-001")["anchors"] == [ok_anchor]
+
+
+@pytest.mark.parametrize("op,args", [
+    ("task.batch_line", {"id": "demo-001", "op": "update", "field": "anchors", "value": "LONG"}),
+    ("task.viewer_update", {"id": "demo-001", "patch": {"anchors": ["LONG"]}, "if_match": ""}),
+    ("task.viewer_create", {"epic": "demo", "payload": {"title": "V", "anchors": ["LONG"]}}),
+])
+def test_over_long_anchors_are_refused_on_the_other_writers_too(workspace, op, args):
+    from taskmaster.native_routing.hook_reads import MAX_GLOB_CHARS
+    long_anchor = "a" * (MAX_GLOB_CHARS + 1)
+    args = json.loads(json.dumps(args).replace("LONG", long_anchor))
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        before = fields(connection, "task", "demo-001").get("anchors")
+        with pytest.raises(ValueError, match="longest an anchor can be"):
+            run(connection, op, args, "probe")
+        assert fields(connection, "task", "demo-001").get("anchors") == before
+
+
+def test_a_batch_anchors_line_stores_a_list_like_update_task(workspace):
+    # hardening review (023): the batch line used to store the raw string.
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.batch_line", {"id": "demo-001", "op": "update", "field": "anchors", "value": "a/**, b/*.py"}, "b1")
+        assert fields(connection, "task", "demo-001")["anchors"] == ["a/**", "b/*.py"]
+        run(connection, "task.batch_line", {"id": "demo-001", "op": "update", "field": "anchors", "value": "none"}, "b2")
+        assert "anchors" not in fields(connection, "task", "demo-001")
+
+
 # ── Claims and pick eligibility ─────────────────────────────────────────────
 
 

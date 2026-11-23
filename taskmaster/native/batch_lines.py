@@ -251,6 +251,12 @@ def _update(doc, ident, field, value, lookups, now):
             if error:
                 return Outcome(f"`{ident}`: {error}")
             doc["area"] = value
+    elif field == "anchors":
+        # Same shape as backlog_update_task: a comma list, stored as a list (a raw string never matched a path).
+        if value == "" or value.lower() == "none":
+            doc.pop("anchors", None)
+        else:
+            doc["anchors"] = [item.strip() for item in value.split(",") if item.strip()]
     else:
         doc[field] = value
     return Outcome(doc=doc, report=("field", field, _expected(doc, field)))

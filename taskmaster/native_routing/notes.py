@@ -8,6 +8,7 @@ from taskmaster.taskmaster_v3 import apply_note_updates, build_note_doc, note_pa
 
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _note(call, note_id: str):
@@ -45,7 +46,7 @@ def _records(call, include_archived: bool) -> list[dict]:
 def backlog_note(call, *, action, note_id, text, pinned, include_archived, limit):
     if action == "create":
         return _create(call, text, bool(pinned))
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     if action == "list":
         return bs._render_note_list(_records(call, include_archived), limit)
@@ -61,7 +62,7 @@ def backlog_note(call, *, action, note_id, text, pinned, include_archived, limit
 
 def _create(call, text: str, pinned: bool) -> str:
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     try:
         build_note_doc(text=text, author="claude", pinned=pinned)

@@ -229,10 +229,46 @@ def test_status_move_rule_spares_own_expired_and_unclaimed(db, write, story):
     apply_write(db, write, scope=ANN, requester=MEMBER)
 
 
-def test_non_terminal_move_keeps_a_teammates_claim(db):
+@pytest.mark.parametrize("status", ["blocked", "todo"])
+def test_member_cannot_move_a_teammates_live_claimed_task_to_any_status(db, status):
+    # team-server-033: the claim would survive a non-terminal move, but the status may not change.
     pick(db, "demo-001", BOB)
+    before = fields(db, "demo-001")
+    with pytest.raises(Conflict, match="Only bob or an operator can change its status"):
+        run(db, "task.update", {"id": "demo-001", "field": "status", "value": status}, scope=ANN, requester=MEMBER)
+    assert fields(db, "demo-001") == before
+
+
+NON_TERMINAL_WRITES = {
+    "batch-line": ("task.batch_line", {"op": "status", "status": "blocked"}),
+    "viewer-update": ("task.viewer_update", {"patch": {"status": "blocked"}, "if_match": ""}),
+}
+
+
+@pytest.mark.parametrize("write", sorted(NON_TERMINAL_WRITES))
+def test_member_cannot_move_a_teammates_claimed_task_to_a_non_terminal_status_by_any_writer(db, write):
+    # 033 review M-6: the status refusal holds on the batch and viewer paths too, not only task.update.
+    operation, arguments = NON_TERMINAL_WRITES[write]
+    pick(db, "demo-001", BOB)
+    before, count = fields(db, "demo-001"), receipts(db)
+    with pytest.raises(Conflict, match="Only bob or an operator can change its status"):
+        run(db, operation, {"id": "demo-001", **arguments}, scope=ANN, requester=MEMBER)
+    assert fields(db, "demo-001") == before and receipts(db) == count
+
+
+@pytest.mark.parametrize("requester", [OPERATOR_ROLE, None], ids=["operator-role", "stdio-no-principal"])
+def test_operator_and_principal_less_callers_may_move_a_claimed_tasks_status(db, requester):
+    pick(db, "demo-001", BOB)
+    run(db, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"},
+        scope="opal@" + "0" * 16, requester=requester)
+    assert fields(db, "demo-001")["status"] == "blocked" and fields(db, "demo-001")["locked_by"] == BOB
+
+
+def test_the_holders_person_and_unclaimed_tasks_move_freely(db):
+    pick(db, "demo-001", ANN_LIVE)
     run(db, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"}, scope=ANN, requester=MEMBER)
-    assert fields(db, "demo-001")["locked_by"] == BOB
+    assert fields(db, "demo-001")["status"] == "blocked"
+    run(db, "task.update", {"id": "demo-002", "field": "status", "value": "blocked"}, scope=ANN, requester=MEMBER)
 
 
 @pytest.mark.parametrize("patch", [{"remove": ["locked_by"]}, {"set": {"claim_expires": "2000-01-01T00:00:00Z"}}])

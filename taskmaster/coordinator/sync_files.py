@@ -115,15 +115,16 @@ def _signature(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
-def observe(root: Path, rel: str, *, limit=MAX_FILE_BYTES, authored=True) -> Observation | None:
+def observe(root: Path, rel: str, *, limit=MAX_FILE_BYTES, authored=True, refuse_hard_links=False) -> Observation | None:
     """`authored=False` reads a derived projection (ideas/IDEAS.md) with the same path checks; only an
-    import must be an authored file (conflict reads, team-server-012 D7)."""
+    import must be an authored file (conflict reads, team-server-012 D7). `refuse_hard_links` (team-server-019)
+    refuses a file whose opened handle has more than one link, so a flagged name can't expose a file elsewhere."""
     if authored:
         classify(rel)
-    return _read_observed(root, rel, limit)
+    return _read_observed(root, rel, limit, refuse_hard_links)
 
 
-def _read_observed(root: Path, rel: str, limit: int) -> Observation | None:
+def _read_observed(root: Path, rel: str, limit: int, refuse_hard_links=False) -> Observation | None:
     path = safe_path(root, rel)
     try:
         before = _check_component(path)
@@ -133,6 +134,8 @@ def _read_observed(root: Path, rel: str, limit: int) -> Observation | None:
             raise ValueError(f"projection exceeds byte limit ({limit}): {rel}")
         with path.open("rb") as handle:
             opened = os.fstat(handle.fileno())
+            if refuse_hard_links and opened.st_nlink > 1:
+                raise UnsafePath(f"projection is hard-linked: {rel}")
             # read(n) preallocates n bytes: ask for the observed size (+1 to see growth,
             # which the signature check below then refuses), never the whole limit.
             content = handle.read(min(limit, opened.st_size) + 1)

@@ -16,7 +16,11 @@ set -uo pipefail
 CADDY_VERSION=2.11.7
 CADDY_SHA512=a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7
 
-SERVE_TESTS=(tests/test_serve_*.py tests/test_viewer_serve_hooks.py tests/test_packaging.py tests/test_deploy_files.py)
+# Patterns, not expanded here: this runs before the clone exists, in the caller's cwd, where an unmatched glob stays a
+# literal word and a matched one names the caller's files (B-111: the serve tier ran 146 tests in one run, 1596 in another).
+# They are expanded inside the clone by expand_tests.
+SERVE_TESTS=(tests/test_serve_*.py tests/test_viewer_serve_hooks.py tests/test_packaging.py tests/test_deploy_files.py
+  tests/test_store_integrity.py tests/test_store_status_tool.py)   # the POSIX startup check lives here (team-server-029)
 REGRESSION_TESTS=(tests/test_native_service*.py tests/test_identity_gate.py tests/test_team_identity.py
   tests/test_native_claims.py tests/test_native_routing_claims.py tests/test_bounded_run.py tests/test_server_fence.py
   tests/test_server_api.py tests/test_server_etag.py tests/test_server_instructions.py tests/test_server_task_write.py
@@ -31,9 +35,11 @@ TWOHOST_TESTS=(tests/test_twohost_principals.py tests/test_twohost_claims.py tes
 # gating tier fails the lane (design §3.2): matching reason words alone would let a new "needs fcntl" skip through.
 ALLOWED_SKIPS='
 tests.test_serve_viewer::test_a_real_browser_can_sign_in::@playwright/test is not installed
+tests.test_serve_viewer_browser::test_the_viewer_sweeps_clean_under_its_csp_and_hostile_text_never_runs::@playwright/test is not installed
 tests.test_native_service_sync::test_junctioned_sample_directory_does_not_block_unrelated_publication::_winapi
 tests.test_native_service_sync::test_junctioned_job_file_is_a_per_job_refusal_not_a_drain_failure::_winapi
 tests.test_deploy_files::test_actionlint_accepts_the_workflow_when_installed::actionlint is not installed
+tests.test_store_integrity::test_the_startup_check_never_runs_on_windows::Windows-only assertion
 tests.test_twohost_migration::test_p_acl_the_windows_bundle_acl_grants_a_principal_beyond_owner_system_and_administrators::the DACL pin is Windows-only
 '
 
@@ -81,6 +87,12 @@ echo "linux_lane: testing $SHA in $RUN (tiers: ${TIERS[*]})"
 git clone -q --no-checkout "$COMMON" "$RUN/repo" || die 3 "clone failed"
 git -C "$RUN/repo" checkout -q --detach "$SHA" || die 3 "checkout of $SHA failed"
 cd "$RUN/repo" || die 3 "no checkout"
+# The test lists live in this script. Run from another checkout's copy it silently drops or adds tests (B-111 follow-up:
+# 1632 collected vs 1603, the older script lacked two files), so the copy that runs must be the ref's own.
+SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"   # absolute: $0 may be relative and the cwd is now the clone
+if [ -f scripts/linux_lane.sh ] && ! cmp -s <(tr -d '\r' < "$SELF") <(tr -d '\r' < scripts/linux_lane.sh); then
+  die 2 "this script ($SELF) differs from scripts/linux_lane.sh at $SHA; run the ref's own copy so its test lists apply"
+fi
 export LANG=C.UTF-8 PYTHONIOENCODING=utf-8 UV_PROJECT_ENVIRONMENT="$RUN/repo/.venv"
 uv sync --frozen --extra dev --python "$PY" -q > "$RUN/uv-sync.log" 2>&1 || { cat "$RUN/uv-sync.log" >&2; die 3 "uv sync failed"; }
 PYVER=$(.venv/bin/python -c 'import sys; print(sys.version.split()[0])')
@@ -104,7 +116,26 @@ fetch_caddy() {
   export TASKMASTER_CADDY="$cache/caddy-$CADDY_VERSION/caddy"
 }
 
-existing() { local f; for f in "$@"; do [ -e "$f" ] && echo "$f"; done; }
+# Expand patterns inside the clone (cwd), sorted. A pattern that matches nothing is a hole in the lane, not a smaller
+# lane: it is reported on stderr and makes the caller fail the tier.
+EXPAND_MISSING=0
+expand_tests() {
+  local p matches
+  EXPAND_MISSING=0
+  for p in "$@"; do
+    mapfile -t matches < <(compgen -G "$p" | LC_ALL=C sort)
+    if [ ${#matches[@]} -eq 0 ]; then echo "linux_lane: pattern matched no test file: $p" >&2; EXPAND_MISSING=1; continue; fi
+    printf '%s\n' "${matches[@]}"
+  done
+}
+
+# The number of tests pytest collects for the given arguments; non-zero exit (a collection error drops tests) is fatal.
+collect_count() {
+  local out rc
+  out=$(.venv/bin/python -m pytest --collect-only -q -p no:cacheprovider "$@" 2>&1); rc=$?
+  if [ $rc -ne 0 ]; then echo "$out" | tail -n 30 >&2; return 1; fi
+  echo "$out" | grep -c '::'
+}
 
 check_skips() {  # $1 = junit xml; prints unexpected skips, returns 1 if any
   ALLOWED_SKIPS="$ALLOWED_SKIPS" .venv/bin/python - "$1" <<'PY'
@@ -146,24 +177,42 @@ SUMMARY="$RUN/summary.txt"
 for tier in "${TIERS[@]}"; do
   args=(-q -p no:cacheprovider --timeout=900 -rs --basetemp="$RUN/bt-$tier" --junitxml="$RUN/junit-$tier.xml")
   case "$tier" in
-    serve) mapfile -t files < <(existing "${SERVE_TESTS[@]}" | grep -vx 'tests/test_serve_deploy_smoke.py') ;;  # that file runs in tier deploy, with Caddy
-    regression) mapfile -t files < <(existing "${REGRESSION_TESTS[@]}") ;;
+    serve) mapfile -t files < <(expand_tests "${SERVE_TESTS[@]}" | grep -vx 'tests/test_serve_deploy_smoke.py') ;;  # that file runs in tier deploy, with Caddy
+    regression) mapfile -t files < <(expand_tests "${REGRESSION_TESTS[@]}") ;;
     deploy)
       fetch_caddy || { echo "deploy: setup failed (Caddy $CADDY_VERSION fetch or hash)" | tee -a "$SUMMARY"; STATUS=1; continue; }
-      mapfile -t files < <(existing "${DEPLOY_TESTS[@]}") ;;
+      mapfile -t files < <(expand_tests "${DEPLOY_TESTS[@]}") ;;
     twohost)
       # S13 through Caddy (Step 15) needs the real Caddy: a missing one is a setup failure, not a silent skip.
       fetch_caddy || { echo "twohost: setup failed (Caddy $CADDY_VERSION fetch or hash)" | tee -a "$SUMMARY"; STATUS=1; continue; }
-      mapfile -t files < <(existing "${TWOHOST_TESTS[@]}"); args+=(-m twohost -p no:randomly -n 0) ;;
+      mapfile -t files < <(expand_tests "${TWOHOST_TESTS[@]}"); args+=(-m twohost -p no:randomly -n 0) ;;
     full) files=(tests); args+=(-n 3) ;;
   esac
+  # A mapfile'd subshell hides EXPAND_MISSING; recompute it here so a pattern that matched nothing fails the tier.
   if [ ${#files[@]} -eq 0 ]; then echo "$tier: no test files" | tee -a "$SUMMARY"; STATUS=1; continue; fi
-  echo "linux_lane: tier $tier (${#files[@]} paths)"
+  missing=0
+  case "$tier" in
+    serve) expand_tests "${SERVE_TESTS[@]}" > /dev/null || true; missing=$EXPAND_MISSING ;;
+    regression) expand_tests "${REGRESSION_TESTS[@]}" > /dev/null || true; missing=$EXPAND_MISSING ;;
+    deploy) expand_tests "${DEPLOY_TESTS[@]}" > /dev/null || true; missing=$EXPAND_MISSING ;;
+    twohost) expand_tests "${TWOHOST_TESTS[@]}" > /dev/null || true; missing=$EXPAND_MISSING ;;
+  esac
+  echo "linux_lane: tier $tier (${#files[@]} files)"
+  collected=""
+  if [ "$tier" != full ]; then
+    collected=$(collect_count -p no:randomly "${files[@]}") || { echo "$tier: collection failed (tests would be dropped)" | tee -a "$SUMMARY"; STATUS=1; continue; }
+    echo "linux_lane: tier $tier collects $collected tests"
+  fi
   .venv/bin/python -m pytest "${args[@]}" "${files[@]}" > "$RUN/$tier.log" 2>&1
   rc=$?
   tail -n 25 "$RUN/$tier.log"
-  line="$tier: pytest exit $rc"
+  line="$tier: pytest exit $rc; ${#files[@]} files, $collected collected"
   [ -f "$RUN/junit-$tier.xml" ] && line="$line; $(counts "$RUN/junit-$tier.xml")"
+  if [ -n "$collected" ] && [ -f "$RUN/junit-$tier.xml" ]; then
+    ran=$(.venv/bin/python -c 'import sys, xml.etree.ElementTree as ET; r = ET.parse(sys.argv[1]).getroot(); print(sum(int(s.get("tests", 0)) for s in ([r] if r.tag == "testsuite" else r.iter("testsuite"))))' "$RUN/junit-$tier.xml")
+    if [ "$ran" != "$collected" ]; then line="$line; COUNT MISMATCH (ran $ran)"; missing=1; fi
+  fi
+  [ "$missing" -ne 0 ] && line="$line; INCOMPLETE LANE"
   if [ "$tier" = full ]; then
     echo "$line (informational)" | tee -a "$SUMMARY"
     grep -E '^(FAILED|ERROR) ' "$RUN/$tier.log" > "$RUN/full-failures.txt" || true
@@ -174,7 +223,7 @@ for tier in "${TIERS[@]}"; do
     check_skips "$RUN/junit-$tier.xml" > "$RUN/skips-$tier.txt" || skips_ok=1
     cat "$RUN/skips-$tier.txt"
   fi
-  if [ $rc -ne 0 ] || [ $skips_ok -ne 0 ]; then STATUS=1; line="$line; FAIL"; else line="$line; ok"; fi
+  if [ $rc -ne 0 ] || [ $skips_ok -ne 0 ] || [ "$missing" -ne 0 ]; then STATUS=1; line="$line; FAIL"; else line="$line; ok"; fi
   echo "$line" | tee -a "$SUMMARY"
 done
 

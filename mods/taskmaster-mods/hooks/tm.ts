@@ -43,6 +43,7 @@ export const FAULT_LINE: Readonly<Record<TmFault, string | undefined>> = {
  * server's first reads), or the engine saying the server is not connected yet (it connects seconds after session start).
  * `pending`: on the mod's own timeout, the call itself, still running (a write may still land); settles when it does.
  * `unreadable`: the team server's reader answered, but not readably (the unreadable fault, not offline).
+ * `committed`: the plugin's bridge cut the connection while the call ran and says it may have been applied (a write may have landed).
  */
 export class TmUnreachable extends Error {
   constructor(
@@ -50,6 +51,7 @@ export class TmUnreachable extends Error {
     readonly transient: boolean = false,
     readonly pending?: Promise<unknown>,
     readonly unreadable: boolean = false,
+    readonly committed: boolean = false,
   ) {
     super(message)
   }
@@ -58,6 +60,8 @@ export class TmUnreachable extends Error {
 // The engine's words for a server that has not connected (yet): `$.mcp.call: no connected MCP tool "<tool>" on a server
 // named "<server>"`. Matched narrowly: any other error stays a fault at once.
 const NOT_CONNECTED = /\bno connected MCP tool "[^"]+" on a server named "[^"]+"/
+// The bridge's words for a call it sent and lost the answer to (tm_bridge.py may_have_committed_text); tests/fixtures/bridge-text.ts pins both.
+const MAY_HAVE_COMMITTED = /\bthe call may have committed\b/
 
 export type TmScope = { readonly waitingOnly: boolean; readonly phase: string }
 export type TmIo = {
@@ -98,7 +102,7 @@ async function bounded(host: Pick<TmHost, 'call' | 'sleep'>,tool: string, args: 
   if (first === 'timeout' || first === 'cancelled') throw new TmUnreachable(`${tool}: no reply within ${ms / 1000} s`, true, work)
   if ('error' in first) {
     const message = String(first.error).split('\n')[0] ?? ''
-    throw new TmUnreachable(`${tool}: ${message}`, NOT_CONNECTED.test(message))
+    throw new TmUnreachable(`${tool}: ${message}`, NOT_CONNECTED.test(message), undefined, false, MAY_HAVE_COMMITTED.test(message))
   }
   return first.reply
 }

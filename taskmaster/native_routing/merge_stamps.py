@@ -49,7 +49,12 @@ REQUIRED = ("task_id", "rung", "sha")
 
 
 class Unavailable(Exception):
-    """No coordinator can take the write now; the stamp stays queued."""
+    """No coordinator can take the write now; the stamp stays queued. `refused` marks a coordinator that answered and said
+    no (another build, local-server-004): the stamp still queues, but the hook says so instead of staying quiet."""
+
+    def __init__(self, *args, refused: bool = False):
+        super().__init__(*args)
+        self.refused = refused
 
 
 class QueueDir(os.PathLike):
@@ -377,7 +382,7 @@ def git_is_ancestor(root: Path, timeout: float = 10):
 def native_apply(database, backlog_dir, session: str, *, autostart: bool, client_timeout=None):
     """`apply` for a native store: decide from a snapshot, write with that snapshot's
     task revision as the expected revision, re-decide on a Conflict."""
-    from taskmaster.coordinator.protocol import ServiceUnavailable
+    from taskmaster.coordinator.protocol import HandshakeError, ServiceUnavailable
     from taskmaster.native.contracts import Conflict
     from taskmaster.native_routing import reads, runtime
     from taskmaster.native_routing.tasks import _merge_targets
@@ -402,6 +407,8 @@ def native_apply(database, backlog_dir, session: str, *, autostart: bool, client
                                  expected=[{"kind": "task", "id": entry["task_id"],
                                             "revision": entity["revision"]}])
                     return "applied"
+            except HandshakeError as exc:
+                raise Unavailable(str(exc), refused=True) from exc
             except ServiceUnavailable as exc:
                 raise Unavailable(str(exc)) from exc
             except Conflict:

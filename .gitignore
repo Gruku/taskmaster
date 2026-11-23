@@ -10,3 +10,5 @@ test-results/
 .playwright-cli/
 .worktrees/
 .taskmaster/
+# mangled --basetemp paths from bash on Windows (D:\scratchbook\... lost its separators)
+/scratchbook*/

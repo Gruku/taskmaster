@@ -12,15 +12,13 @@ def _get(url, method="GET"):
         return resp.status, resp.headers, resp.read()
 
 
-def test_solo_cors_header_unchanged(running_server):  # noqa: F811
+def test_solo_sends_no_cors_grant(running_server):  # noqa: F811
     base, _ = running_server
     for path in ("/api/identity", "/api/viewer/prefs", "/v3", "/static/v3/js/main.js"):
         _, headers, _ = _get(base + path)
-        assert headers.get("Access-Control-Allow-Origin") == "*", path
+        assert not [h for h in headers if h.lower().startswith("access-control-")], path   # local-server-006
     status, headers, _ = _get(base + "/api/x", method="OPTIONS")
-    assert status == 204 and headers["Access-Control-Allow-Origin"] == "*"
-    assert headers["Access-Control-Allow-Methods"] == "GET, PUT, POST, OPTIONS"
-    assert headers["Access-Control-Allow-Headers"] == "Content-Type"
+    assert status == 204 and not [h for h in headers if h.lower().startswith("access-control-")]
 
 
 def test_solo_index_html_unchanged(running_server):  # noqa: F811

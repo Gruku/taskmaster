@@ -154,8 +154,13 @@ def ownership_held(root: Path, name: str = 'coordinator', lock_name: str = 'owne
     that loses to the probe exits cleanly; the caller then starts its own.
     `name`/`lock_name` select another lock of the same kind: the serve host
     lease is `serve`/`host.lock` (team-server-009)."""
+    return lock_file_held(Path(root) / '.taskmaster' / 'local' / name / lock_name)
+
+
+def lock_file_held(path: Path) -> bool:
+    """`ownership_held` for any lock file path (the query snapshot cache keeps one per process)."""
     try:
-        descriptor = os.open(Path(root) / '.taskmaster' / 'local' / name / lock_name, os.O_RDWR)
+        descriptor = os.open(path, os.O_RDWR)
     except FileNotFoundError:
         return False
     try:
@@ -177,6 +182,28 @@ def ownership_held(root: Path, name: str = 'coordinator', lock_name: str = 'owne
     return False
 
 
+def take_lock_file(path: Path) -> int:
+    """Create `path` if needed and take its kernel lock; the open descriptor holds it until closed or the process
+    exits. Raises OwnershipUnavailable when another handle holds it."""
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b'\0')
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(descriptor)
+        if exc.errno in (errno.EACCES, errno.EAGAIN, 13, 36):
+            raise OwnershipUnavailable('repository coordinator ownership is already held') from exc
+        raise
+    return descriptor
+
+
 class Ownership:
     """A held byte/flock, released only by closing our own handle or process exit."""
     def __init__(self, root: Path, name: str = 'coordinator', lock_name: str = 'owner.lock'):
@@ -189,22 +216,7 @@ class Ownership:
     def acquire(self):
         if self.descriptor is not None:
             raise RuntimeError('ownership is already held by this instance')
-        descriptor = os.open(self.directory / self.lock_name, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b'\0')
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            if os.name == 'nt':
-                import msvcrt
-                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            os.close(descriptor)
-            if exc.errno in (errno.EACCES, errno.EAGAIN, 13, 36):
-                raise OwnershipUnavailable('repository coordinator ownership is already held') from exc
-            raise
+        descriptor = take_lock_file(self.directory / self.lock_name)
         self.descriptor = descriptor
         return self
 

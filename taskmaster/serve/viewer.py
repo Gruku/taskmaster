@@ -116,7 +116,11 @@ class ViewerGuard:
     def __init__(self, *, authenticator, origins: tuple[str, ...], root: Path, max_body_bytes: int,
                  header_timeout: float, principals: KeyedLimiter, inflight: InFlight, failures: KeyedLimiter,
                  tracked: TrackedFiles, viewer_port: int, clock=time.monotonic,
-                 body_timeout: float = DEFAULT_BODY_TIMEOUT, auth_adapter: ViewerAuth | None = None):
+                 body_timeout: float = DEFAULT_BODY_TIMEOUT, auth_adapter: ViewerAuth | None = None,
+                 charge_anonymous: bool = True):
+        # False (local profile): requests with no session (404s, bad Hosts, anonymous 401s) never spend the budget; any
+        # page in the person's browser can send them from 127.0.0.1 (local-server-004 review I2).
+        self.charge_anonymous = charge_anonymous
         self.authenticator = authenticator
         self.body_timeout = float(body_timeout)
         self.root = Path(root)
@@ -195,9 +199,13 @@ class ViewerGuard:
 
     def _refuse(self, handler, status: int, payload: dict | None, *, headers=(), peer: str | None = None,
                 html_body: bytes | None = None, log: bool = True, charge: bool = True) -> bool:
+        charge = charge and (self.charge_anonymous or status not in CHARGED_WITHOUT_SESSION)
+        if status == 401 and not self.charge_anonymous and not self.auth.presents_credential(handler):
+            charge = False
         peer = peer if peer is not None else self.peer(handler)
         if log:
-            LOG.info("viewer refused %s %s %s from %s", status, log_safe(handler.command),
+            # DEBUG: with nothing charged (local profile) a page could roll the log with refused requests.
+            LOG.log(logging.INFO if self.charge_anonymous else logging.DEBUG, "viewer refused %s %s %s from %s", status, log_safe(handler.command),
                      log_safe(urlparse(handler.path).path), log_safe(peer))
         # Charge before answering, so a client that reads the refusal never sees the budget unspent.
         if charge and (status in ALWAYS_CHARGED
@@ -390,6 +398,7 @@ def make_guarded_handler(base: type, guard: ViewerGuard) -> type:
         viewer_kind = "app"
         server_version = "taskmaster"
         sys_version = ""
+        _solo_frame_headers = False       # response_headers() below sends them
 
         def version_string(self):
             return self.server_version        # the stdlib joins in sys_version, leaving a trailing space
@@ -407,6 +416,9 @@ def make_guarded_handler(base: type, guard: ViewerGuard) -> type:
 
         def _cors_headers(self):
             return None
+
+        def _solo_admit(self):
+            return True          # the guard's admit() is this viewer's gate (login, Origin, CSRF token)
 
         def _index_head_extra(self):
             identity = self.viewer_identity

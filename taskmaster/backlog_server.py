@@ -254,14 +254,30 @@ VERSION = _plugin_version(SCRIPT_DIR)
 
 # `version` is what the MCP handshake reports as serverInfo.version; without it FastMCP
 # reports its own version.
-_SERVER_INSTRUCTIONS = (
-    "Write tools end with a receipt: `[seq N]` means committed; `(export pending: …)` means "
-    "committed with only the file export queued; `No change … already …` without a seq means "
-    "the value was already stored. On a native store the database is the authority: a hand edit "
+_SYNC_LOCAL = (
+    "On a native store the database is the authority: a hand edit "
     "to a .taskmaster/ file takes effect only after backlog_sync(). backlog_store_status shows "
-    "dirty or quarantined files. JSON results carry the same receipt as \"seq\" and "
-    "\"export_pending\" fields; a result starting \"Error:\" with no seq wrote nothing."
+    "dirty or quarantined files. "
 )
+# team-server-021: members of a team server cannot run backlog_sync; only the operator imports hand edits.
+_SYNC_SERVER = (
+    "On a team server the server's database is the authority: edit through the tools, not .taskmaster/ files. "
+    "Members cannot run backlog_sync (operator-only); ask the operator to import a hand edit. "
+    "backlog_store_status shows dirty or quarantined files. "
+)
+
+
+def server_instructions(server_mode: bool = False) -> str:
+    return (
+        "Write tools end with a receipt: `[seq N]` means committed; `(export pending: …)` means "
+        "committed with only the file export queued; `No change … already …` without a seq means "
+        "the value was already stored. " + (_SYNC_SERVER if server_mode else _SYNC_LOCAL) +
+        "JSON results carry the same receipt as \"seq\" and "
+        "\"export_pending\" fields; a result starting \"Error:\" with no seq wrote nothing."
+    )
+
+
+_SERVER_INSTRUCTIONS = server_instructions()
 
 mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION, instructions=_SERVER_INSTRUCTIONS))
 
@@ -658,7 +674,7 @@ def _resolve_paths() -> tuple[Path, Path]:
             except (json.JSONDecodeError, KeyError):
                 pass
 
-    if (ROOT / ".taskmaster" / "backlog.yaml").exists():
+    if _canonical_layout_present(ROOT):   # not backlog.yaml alone: B-111, see the helper
         return ROOT / ".taskmaster" / "backlog.yaml", ROOT / ".taskmaster" / "PROGRESS.md"
     if (ROOT / ".claude" / "backlog.yaml").exists():
         _warn_legacy_layout("backlog at .claude/backlog.yaml")
@@ -667,6 +683,7 @@ def _resolve_paths() -> tuple[Path, Path]:
     return ROOT / "backlog.yaml", ROOT / "PROGRESS.md"
 
 
+from taskmaster.taskmaster_v3 import canonical_layout_present as _canonical_layout_present
 from taskmaster.taskmaster_v3 import warn_legacy_layout as _warn_legacy_layout
 from taskmaster.taskmaster_v3 import dependency_ids as _dependency_ids
 from taskmaster.taskmaster_v3 import dependency_shape as _dependency_shape
@@ -3042,8 +3059,26 @@ def _render_store_report(status: "store.StoreStatus") -> str:
     return "\n".join(lines)
 
 
+def _integrity_section(db_path: Path, deep: bool) -> str:
+    """The `Integrity:` line; `deep` runs the full check now. Operator-only on a team server: members get the stored line."""
+    from taskmaster import store_integrity
+    note = ""
+    if deep:
+        requester = _session_requester()
+        if requester is not None and not requester.may_force_any:
+            deep, note = False, "\nDeep integrity check is a host operator action on a team server; the stored result is shown"
+    if deep:
+        try:
+            record = store_integrity.run_check(db_path)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic reports, it does not raise
+            return f"Integrity: deep check could not run ({type(exc).__name__}: {exc})"
+        extra = f"; foreign_key_check rows: {record.get('foreign_keys', 0)}" if "foreign_keys" in record else ""
+        return store_integrity.line(record) + extra
+    return store_integrity.line(store_integrity.read_marker(db_path)) + note
+
+
 @mcp.tool()
-def backlog_store_status() -> str:
+def backlog_store_status(deep: bool = False) -> str:
     """Report the state of the SQLite store (`.taskmaster/local/store.db`).
 
     The store is the authority: root and how it was resolved, schema version,
@@ -3054,13 +3089,18 @@ def backlog_store_status() -> str:
 
     Read-only: a missing or damaged store is reported on the `Warning:` line,
     not created or moved aside.
+
+    Args:
+        deep: Run the full `integrity_check` now (seconds on a large store) instead of showing the stored result of
+            the one-time check. On a team server only the operator may; members see the stored line.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"no backlog found at {bp}"
     # No `_configure_store_derivers()`: nothing here exports or regenerates, so
     # the read does not need the derivation hooks and does not install them.
-    return _render_store_report(store.read_only_status(bp))
+    status = store.read_only_status(bp)
+    return _render_store_report(status) + "\n" + _integrity_section(status.db_path, deep)
 
 
 @mcp.tool()
@@ -11784,6 +11824,34 @@ def _load_related_for_task(task_id: str) -> dict | None:
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _solo_refusal(method: str, headers, port: int) -> str | None:
+    """Why the solo viewer refuses this request, or None. Pure so the HTTP tests and the handler share it."""
+    from urllib.parse import urlparse
+    own_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+    if (headers.get("Host") or "").strip().lower() not in own_hosts:
+        return "host not allowed"
+    if method not in _WRITE_METHODS:
+        return None
+    own_origins = {f"http://{h}" for h in own_hosts}
+    origin = headers.get("Origin")
+    if origin is not None:
+        if origin.strip().lower() not in own_origins:
+            return "cross-origin write refused"
+    else:
+        referer = headers.get("Referer")
+        if referer:
+            parts = urlparse(referer)
+            if f"{parts.scheme}://{parts.netloc}".lower() not in own_origins:
+                return "cross-origin write refused"
+    ctype = (headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
+        return "writes must be application/json"
+    return None
+
+
 class ViewerHandler(BaseHTTPRequestHandler):
     """Serves the backlog viewer HTML and YAML data."""
 
@@ -11816,7 +11884,35 @@ class ViewerHandler(BaseHTTPRequestHandler):
     # Server-mode seams (team-server-006): the serve daemon's guarded subclass overrides these;
     # here they keep the solo viewer exactly as it was.
     def _cors_headers(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # No CORS: the viewer's own pages are same-origin, so no other origin is ever granted access (local-server-006).
+        return None
+
+    def parse_request(self) -> bool:
+        return super().parse_request() and self._solo_admit()
+
+    # The solo viewer refuses framing (clickjacking of its own UI writes); the serve daemon's guarded subclass sends
+    # the same headers itself through response_headers and switches this off.
+    _solo_frame_headers = True
+
+    def end_headers(self) -> None:
+        if self._solo_frame_headers:
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+        super().end_headers()
+
+    def _solo_admit(self) -> bool:
+        """Solo viewer gate (local-server-006): a loopback Host naming this port (DNS rebinding), a same-origin
+        Origin/Referer on writes (CSRF), and application/json on writes (a cross-site form or text/plain POST is
+        a CORS "simple" request that skips preflight). The serve daemon's guarded subclass overrides this: it has
+        its own login, Origin and CSRF-token checks."""
+        refusal = _solo_refusal(
+            self.command, self.headers, self.server.server_address[1])
+        if refusal is None:
+            return True
+        self.close_connection = True  # a refused body stays unread
+        self._send_json(403, {"ok": False, "error": refusal})
+        return False
 
     def _index_head_extra(self) -> str:
         return ""
@@ -12225,7 +12321,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         # Security: prevent path traversal
         try:
             resolved = (ROOT / rel_path).resolve()
-            if not str(resolved).startswith(str(ROOT.resolve())):
+            if not resolved.is_relative_to(ROOT.resolve()):
                 self.send_error(HTTPStatus.FORBIDDEN, "Path traversal blocked")
                 return
         except (ValueError, OSError):
@@ -12807,7 +12903,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                           output_bytes=len(body), **{f"{key}_ms": value for key, value in timing.items()})
 
     def do_OPTIONS(self):
-        """Allow cross-origin preflight for /api/* endpoints only."""
+        """A preflight is answered with no Access-Control-* grant, so a browser refuses the cross-origin request."""
         from urllib.parse import urlparse
         clean_path = urlparse(self.path).path
         if not clean_path.startswith("/api/"):
@@ -12816,8 +12912,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         self.send_response(204)
         self._cors_headers()
-        self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
@@ -12859,8 +12954,61 @@ def _serve_mode() -> bool:
     return os.environ.get("TASKMASTER_SERVE") == "1"
 
 
+# The local profile's guarded viewer (local-server-004): the daemon sets VIEWER_LINK_MINTER to a callable returning a
+# one-time sign-in URL, or VIEWER_LOCAL_OFF to why there is no viewer. Both stay None in the team profile.
+VIEWER_LINK_MINTER = None
+VIEWER_LOCAL_OFF: str | None = None
+
+
+REDIRECT_FILE_LIFETIME_SECONDS = 90.0
+
+
+def _open_via_redirect_file(url: str) -> bool:
+    """Open the browser on an owner-only temporary page that forwards to the one-time link, so the secret is never in a
+    process command line (a world-readable /proc/<pid>/cmdline on Linux; local-server-004 review I3). The file is
+    deleted shortly after, longer than the link lives."""
+    import html as _html
+    import shutil
+    import tempfile
+    folder = Path(tempfile.mkdtemp(prefix="taskmaster-viewer-"))      # mode 0700 on POSIX
+    page = folder / "open-viewer.html"
+    escaped = _html.escape(url, quote=True)
+    fd = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(f'<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={escaped}">'
+                     f'<title>Opening the backlog viewer</title><script>location.replace("{escaped}")</script>'
+                     f'<p>Opening the backlog viewer...</p>')
+    timer = threading.Timer(REDIRECT_FILE_LIFETIME_SECONDS, shutil.rmtree, args=(folder,), kwargs={"ignore_errors": True})
+    timer.daemon = True
+    timer.start()
+    try:
+        return bool(webbrowser.open(page.as_uri()))
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _open_local_viewer() -> str:
+    """The shared local server is on this person's own machine: open their browser on a one-time sign-in link."""
+    url = VIEWER_LINK_MINTER()
+    home = f"http://127.0.0.1:{VIEWER_PORT}/"
+    try:
+        opened = _open_via_redirect_file(url)
+    except Exception:  # noqa: BLE001 - no browser here is an answer, not a failure
+        opened = False
+    if opened:
+        return f"Opened the backlog viewer at {home} (signed in; the sign-in link was single-use)."
+    return (f"No browser could be opened on this machine. Open this single-use link within a minute to sign in to the "
+            f"viewer: {url}")
+
+
 def _served_viewer_notice() -> str:
-    """What backlog_open_viewer answers in serve mode: the URL only, never a browser on the host (B-110)."""
+    """What backlog_open_viewer answers in serve mode: the URL only, never a browser on the host (B-110); the local
+    profile opens its guarded viewer with a one-time link instead."""
+    if VIEWER_LINK_MINTER is not None:
+        return _open_local_viewer()
+    if VIEWER_LOCAL_OFF is not None:
+        return VIEWER_LOCAL_OFF
     return (f"The viewer is served at {VIEWER_PUBLIC_URL or f'http://127.0.0.1:{VIEWER_PORT}/'}; "
             "sign in with your key.")
 

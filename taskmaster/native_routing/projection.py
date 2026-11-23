@@ -317,11 +317,13 @@ def read_file(backlog_dir: Path, rel: str) -> bytes | None:
     try:
         # Any flagged path, derived ones (ideas/IDEAS.md) included: the exporter flags those too.
         outbox.safe_relative(rel)
-        observed = sync_files.observe(backlog_dir, rel, limit=MAX_PROJECTION_BYTES, authored=False)
+        observed = sync_files.observe(backlog_dir, rel, limit=MAX_PROJECTION_BYTES, authored=False,
+                                      refuse_hard_links=True)
     except sync_files.ChangedDuringRead:
         raise UnsafeConflictFile("it changed while being read; retry") from None
     except UnsafePath as exc:
         reason = ("it is not a regular file" if "not a regular file" in str(exc) else
+                  "it is hard-linked to another name" if "hard-linked" in str(exc) else
                   "it is a link or junction" if "linked/reparse" in str(exc) else
                   "its path leaves the backlog directory")
         raise UnsafeConflictFile(reason) from None

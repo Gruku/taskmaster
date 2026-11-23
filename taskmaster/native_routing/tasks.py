@@ -32,6 +32,7 @@ from taskmaster.taskmaster_v3 import (
 from . import reads
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 def _run(call, operation, arguments):
     """Execute, turning a core refusal into the tools' `Error: …` sentence."""
@@ -515,7 +516,8 @@ def _claim_refusal(call, task, task_id, session, force, status, *, member_of=Non
         return None
     with call.read() as snapshot:
         state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
-    own = claims.remote_handle(holder) is not None and claims.remote_handle(holder) == claims.remote_handle(session)
+    own = (claims.remote_handle(holder) is not None and claims.remote_handle(holder) == claims.remote_handle(session)
+           and claims.connected(holder))      # a disconnected one is not "open": local profile, where nothing is adopted
     if not force:
         if own:
             return claims.own_open_session_refusal(task_id, state)
@@ -877,7 +879,7 @@ def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
             # `Snapshot.open_handovers` is the one reader of that question; the
             # slim view names every one, so it asks for the whole list, not a page.
             handovers = ([row["id"] for row in snapshot.open_handovers(task_id, limit=-1)[0]]
-                         if backlog.exists() else [])
+                         if _layout_present(backlog) else [])
             slim = slim_entity(task, kind="task", open_handovers=handovers or None)
             if expand_links:
                 for link_field in ("depends_on", "related_issues"):
@@ -889,7 +891,7 @@ def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
             lines = [f"## `{slim.pop('id')}` — {slim.pop('title', task.get('title', ''))}\n"]
             for key, value in slim.items():
                 lines.append(f"**{key}:** {value}")
-            _links_block(snapshot, lines, task, expand_links=expand_links, peers=backlog.exists())
+            _links_block(snapshot, lines, task, expand_links=expand_links, peers=_layout_present(backlog))
             lines.extend(line for line in (branches_line(snapshot, task_id), merges_line(snapshot, task_id)) if line)
             return "\n".join(lines)
         text = _verbose_task(snapshot, task, epic, task_id, expand_links=expand_links)

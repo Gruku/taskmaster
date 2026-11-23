@@ -457,6 +457,12 @@ def test_shutdown_and_retire_keep_001s_refusals(root, serve_owner):  # noqa: F81
         client.call("shutdown", origin={"principal": MEMBER})
     assert str(caught.value) == SERVE_SHUTDOWN_REFUSED
     record = client._discovery()
+    # shutdown_if_idle is for session coordinators: a serve coordinator refuses it for a member and for no origin alike
+    for origin in ({"principal": MEMBER}, None):
+        kwargs = {} if origin is None else {"origin": origin}
+        with pytest.raises(ValueError) as caught:
+            client.call("shutdown_if_idle", **kwargs)
+        assert str(caught.value) == SERVE_SHUTDOWN_REFUSED
     answer = client._send(record, "retire", origin={"principal": MEMBER})
     assert answer["state"] == "refused" and answer["reason"] == SERVE_RETIRE_REFUSED
     client.build = FUTURE

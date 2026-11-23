@@ -577,7 +577,7 @@ def test_daemon_viewer_requires_login_and_sends_no_cors(served):
     if solo:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{solo}/api/identity", timeout=2) as resp:
-                assert resp.headers["Access-Control-Allow-Origin"] == "*"
+                assert resp.headers["Access-Control-Allow-Origin"] != "*"      # local-server-006: no wildcard CORS
         except OSError:
             pass                              # the test process's solo viewer may not be running
 

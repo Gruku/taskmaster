@@ -25,6 +25,7 @@ from taskmaster.native import projection as outbox
 from . import reads
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _run(call, operation, arguments):
@@ -178,11 +179,12 @@ def _exporter_lease(lease: dict, now: float | None = None) -> str:
 
 
 @adapter("backlog_store_status")
-def store_status(call):
+def store_status(call, *, deep=False):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"no backlog found at {backlog}"
-    return bs._render_store_report(_native_status(call))
+    status = _native_status(call)
+    return bs._render_store_report(status) + "\n" + bs._integrity_section(status.db_path, deep)
 
 
 # ── Project manifest ────────────────────────────────────────────────────────
@@ -321,12 +323,12 @@ def linear(call, *, action, task_id, external_key, workspace_alias, token_env, t
         return bs.backlog_linear_probe(token_env)
     backlog = bs._backlog_path()
     if action == "list":
-        if not backlog.exists():
+        if not _layout_present(backlog):
             return json.dumps({"trackers": []})
         with call.read() as snapshot:
             return bs._linear_list_text(reads.rows_only(snapshot))
     if action == "show":
-        if not backlog.exists():
+        if not _layout_present(backlog):
             return json.dumps({"error": "No backlog found."})
         with call.read() as snapshot:
             return bs._linear_show_text(reads.rows_only(snapshot), tracker_id)
@@ -341,7 +343,7 @@ def linear(call, *, action, task_id, external_key, workspace_alias, token_env, t
                                                       request_id=request_id or None, target_id=target_id))
         except (ValueError, KeyError) as exc:
             return json.dumps({'error': str(exc)})
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return json.dumps({"error": "No backlog found."})
     if action == "unlink":
         return _linear_unlink(call, task_id)
@@ -360,7 +362,7 @@ def _linear_bootstrap(call, workspace_alias, team_id, token_env, status_mapping,
 
 
 def _linear_status(call, backlog):
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return bs._linear_status_text([], 0, None)
     with call.read() as snapshot:
         rows = [store.linear_row(dict(zip(
@@ -464,7 +466,7 @@ def index_status(call, *, rebuild, verify):
     """
     from taskmaster.native import graph_repair
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"no backlog found at {backlog}"
     report = None
     if rebuild:

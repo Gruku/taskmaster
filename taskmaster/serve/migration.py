@@ -36,7 +36,7 @@ INIT_JOURNAL = "init.json"
 MAX_TRIES = 3
 SEQ_SQL = "SELECT COALESCE(MAX(seq),0) FROM domain_events"
 REFUSE_TEXT = "the backlog moved to the team server at {url}; nothing was written"
-LOCAL_SKIP = frozenset({"store.db", "store.db-wal", "store.db-shm", "PROGRESS.md", "serve", "coordinator"})
+LOCAL_SKIP = frozenset({"store.db", "store.db-wal", "store.db-shm", "PROGRESS.md", "serve", "coordinator", "integrity-check.json"})
 IN_PROGRESS = ("MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")
 
 FENCE_RELEASE: str | None = None        # set to the release that ships the split-brain fence (design O5)
@@ -637,7 +637,7 @@ def _not_migrated(root: Path, git, tip: str, files) -> dict:
     left = sorted(name for name in tracked if name not in carried and not name.startswith("local/"))
     local_dir = root / ".taskmaster" / "local"
     local = sorted((entry.name + ("/" if entry.is_dir() else "")) for entry in local_dir.iterdir()
-                   if entry.name not in LOCAL_SKIP and not entry.name.startswith("store.db"))
+                   if entry.name not in LOCAL_SKIP and not entry.name.startswith(("store.db", "integrity-check.json")))
     result: dict = {}
     bundles.capped(left, "tracked_total", result, "tracked")
     bundles.capped(local, "local_total", result, "local")

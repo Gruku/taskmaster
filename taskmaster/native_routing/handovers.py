@@ -13,6 +13,7 @@ from taskmaster import taskmaster_v3 as v3
 from . import derived, reads
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _run(call, operation, arguments):
@@ -55,7 +56,7 @@ def handover_create(call, *, tldr, next_action, body, task_ids, session_kind, th
     context_size_at_write = options.get("context_size_at_write", "") or ""
     review_reason = options.get("review_reason", "") or ""
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     arguments = {"tldr": tldr, "next_action": next_action, "body": body, "task_ids": task_ids or [],
                  "session_kind": session_kind, "context_size_at_write": context_size_at_write or None,
@@ -117,7 +118,7 @@ def handover_create(call, *, tldr, next_action, body, task_ids, session_kind, th
 @adapter("backlog_handover_list")
 def handover_list(call, *, task_id, session_kind, since, status, limit, verbose, thread, until, latest_per_thread,
                   include_archived, format):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return json.dumps({"error": "No backlog found."}) if format == "json" else "No backlog found."
     with call.read() as snapshot:
         return bs._handover_list_text(_backlog_document(snapshot), task_id, session_kind, since, status, limit, verbose,
@@ -127,7 +128,7 @@ def handover_list(call, *, task_id, session_kind, since, status, limit, verbose,
 @adapter("backlog_handover_get")
 def handover_get(call, *, handover_id, verbose, sections, expand_links):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._handover_get_text(reads.rows_only(snapshot), handover_id, verbose, sections, expand_links,
@@ -136,7 +137,7 @@ def handover_get(call, *, handover_id, verbose, sections, expand_links):
 
 @adapter("backlog_handover_supersede")
 def handover_supersede(call, *, old_id, new_id):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         taken = snapshot.connection.execute(
@@ -155,7 +156,7 @@ def handover_supersede(call, *, old_id, new_id):
 
 @adapter("backlog_handover_update_status")
 def handover_update_status(call, *, handover_id, status, reason):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         entity = reads.get(snapshot, "handover", handover_id)
@@ -173,7 +174,7 @@ def handover_update_status(call, *, handover_id, status, reason):
 
 @adapter("backlog_thread_list")
 def thread_list(call, *, include_closed, include_archived):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._thread_list_text(_backlog_document(snapshot, archived_only_threads=True), include_closed,
@@ -183,7 +184,7 @@ def thread_list(call, *, include_closed, include_archived):
 @adapter("backlog_thread_resume")
 def thread_resume(call, *, ref):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return "No backlog found."
     with call.read() as snapshot:
         def find_handover(ident):
@@ -196,7 +197,7 @@ def thread_resume(call, *, ref):
 @adapter("backlog_thread_update")
 def thread_update(call, *, name, status, reason):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return "No backlog found."
     with call.read() as snapshot:
         data = _backlog_document(snapshot, archived_only_threads={v3.normalize_thread_name(name)})
@@ -216,7 +217,7 @@ def thread_update(call, *, name, status, reason):
 @adapter("backlog_continuity_items")
 def continuity_items(call, *, view, include_auto_stage, limit, action_class):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return json.dumps({"items": [], "view": view, "error": "no backlog"})
     with call.read() as snapshot:
         tree = reads.tree(snapshot)

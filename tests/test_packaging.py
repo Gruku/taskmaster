@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Scripts `uv run` executes in script mode: each carries its own PEP 723 header.
 SCRIPT_ENTRIES = ("backlog_server.py", "taskmaster/backlog_server.py", "taskmaster_cli.py",
-                  "hooks/merge_recorder_stamp.py")
+                  "hooks/merge_recorder_stamp.py", "tm_bridge.py")
 # Import name -> distribution name, where they differ.
 DISTRIBUTION = {"yaml": "pyyaml"}
 
@@ -430,9 +430,11 @@ def test_a_release_candidate_heading_does_not_satisfy_the_final_version(tmp_path
 
 
 def test_the_build_is_fixed_when_the_package_is_imported():
-    """A process reports the code it loaded: the digest is taken at import, not at the first
-    Client(), so an in-place upgrade after import cannot change what it claims to run."""
+    """A process reports the code it loaded: the digest is taken when the coordinator client/service is imported
+    (protocol alone is lazy, for the stdlib-only bridge), not at the first Client(), so an in-place upgrade after
+    import cannot change what it claims to run."""
     code = ("from taskmaster.coordinator import protocol\n"
+            "import taskmaster.coordinator.client  # the process-owning modules freeze the build at import\n"
             "def unread(*a, **k):\n"
             "    raise SystemExit('digest read after import')\n"
             "protocol.package_digest = unread\n"

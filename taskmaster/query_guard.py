@@ -188,6 +188,16 @@ def serving() -> bool:
     return bool(client is not None and getattr(client, "ORIGIN_PROVIDER", None) is not None)
 
 
+# Whether a serving process (ORIGIN_PROVIDER installed) refuses DENIED_FUNCTIONS. The team profile does; the local
+# profile does not (it behaves like stdio: hex and printf work). Set by the serve daemon from ServeConfig.deny_functions.
+DENY_FUNCTIONS_WHEN_SERVING = True
+
+
+def functions_denied() -> bool:
+    """Whether a statement run in this process has DENIED_FUNCTIONS refused by default."""
+    return serving() and DENY_FUNCTIONS_WHEN_SERVING
+
+
 class Authorizer:
     """Callable sqlite3 authorizer: read the store tables, nothing else.
 
@@ -212,7 +222,7 @@ class Authorizer:
         self.excluded = READABLE_TABLES - self.readable
         self.denial: str | None = None
         # DENIED_FUNCTIONS guard a shared server's memory; a solo session keeps them (hex, printf, ...).
-        self.deny_functions = serving() if deny_functions is None else bool(deny_functions)
+        self.deny_functions = functions_denied() if deny_functions is None else bool(deny_functions)
 
     def __call__(self, action: int, arg1, arg2, dbname, source) -> int:  # noqa: ARG002
         if (action == sqlite3.SQLITE_FUNCTION and self.deny_functions and isinstance(arg2, str)

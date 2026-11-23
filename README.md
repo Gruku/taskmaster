@@ -8,7 +8,7 @@ Taskmaster is a local-first task and backlog system for AI-assisted software
 projects. It gives Claude Code and Codex a shared MCP core, disciplined workflow
 playbooks, durable session continuity, and a fast browser-based project board.
 
-[![Version](https://img.shields.io/badge/version-7.5.0-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
+[![Version](https://img.shields.io/badge/version-7.6.0-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-d97706?style=flat-square)](https://docs.anthropic.com/en/docs/claude-code)
@@ -223,6 +223,16 @@ imported only at an explicit sync, and `.taskmaster/` is committed with the mana
 The agent-facing tools `backlog_context`, `backlog_changes_since`, `backlog_claim`,
 `backlog_document` and `backlog_document_import` are new in this release and work on both
 stores except `backlog_document_import`, which needs a native store.
+
+## Local server mode
+
+One hidden taskmaster server runs per project and every Claude Code session on that project shares it. The plugin's `tm` entry is a small relay that finds the server, starts it if needed and passes calls through, so each session costs about 58 MB on Windows (the relay plus its uv launcher) instead of a whole backlog server of about 119 MB (8 sessions: about 550 MB instead of about 950 MB). It is automatic: no command to run, and no console window opens. The taskmaster Claude mod uses the same server. If the server cannot start, the relay falls back to the per-session server.
+
+- **Opt out:** set `TASKMASTER_LOCAL_SERVER=0` (every project), or `local_server: off` in `.taskmaster/local/settings.json` (one project; applies from the next session).
+- **Files:** `.taskmaster/local/serve/` holds `local.json` (where the server listens) and `serve.log`. Look at `serve.log` to see what the server did.
+- **Stopping it:** it exits by itself a while after the last session leaves.
+- **Team clones:** the plugin's `tm` forwards to the team server with the member key, so a separate http MCP entry for the team server is now optional.
+- **Troubleshooting:** run with `TASKMASTER_LOCAL_SERVER=0` to go back to the per-session server and see whether the problem is the shared server. The viewer answers 403 on a forwarded port or another host name; open it with `backlog_open_viewer`.
 
 ## Built-in workflows
 

@@ -88,11 +88,11 @@ def test_put_viewer_prefs_rejects_non_object(running_server):
     assert exc.value.code == 400
 
 
-def test_api_endpoints_set_cors_header(running_server):
+def test_api_endpoints_send_no_cors_header(running_server):
     base, _ = running_server
     for path in ["/api/identity", "/api/viewer/prefs"]:
         resp = urllib.request.urlopen(f"{base}{path}")
-        assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+        assert resp.headers.get("Access-Control-Allow-Origin") is None  # local-server-006: no wildcard CORS
 
 
 def test_get_v3_returns_index_html(running_server):

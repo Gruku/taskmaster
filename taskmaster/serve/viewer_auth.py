@@ -25,7 +25,7 @@ from .app import log_safe
 from .auth import Principal
 from .config import (LOGIN_ALARM_PER_MINUTE, VIEWER_LOGIN_MAX_BYTES, VIEWER_MAX_SESSIONS, VIEWER_MAX_SESSIONS_PER_KEY,
                      VIEWER_SESSION_IDLE_SECONDS, VIEWER_SESSION_MAX_SECONDS)
-from .limits import InFlight, KeyedLimiter, retry_after
+from .limits import InFlight, KeyedLimiter, failure_budget, retry_after
 
 LOG = logging.getLogger("taskmaster.serve")
 COOKIE_SECURE = "__Host-tm_session"
@@ -92,8 +92,9 @@ class Reply:
         self._refuse, self._redirect, self._write, self._read_body = refuse, redirect, write, read_body
 
     def refuse(self, status: int, payload: dict | None, *, headers=(), html_body: bytes | None = None,
-               log: bool = True) -> None:
-        self._refuse(self.handler, status, payload, headers=headers, peer=self.peer, html_body=html_body, log=log)
+               log: bool = True, charge: bool = True) -> None:
+        self._refuse(self.handler, status, payload, headers=headers, peer=self.peer, html_body=html_body, log=log,
+                     charge=charge)
 
     def redirect(self, location: str, headers=()) -> None:
         self._redirect(self.handler, location, headers)
@@ -199,6 +200,8 @@ class SessionStore:
             return len(self._sessions)
 
 
+USED_LINK_PAGE = (b"<!DOCTYPE html><html><head><meta charset=utf-8><title>Taskmaster</title></head><body>"
+                  b"<p>This sign-in link was already used or has expired. Ask Claude to open the viewer again.</p></body></html>")
 LOGIN_PAGE = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -368,6 +371,10 @@ class CookieLogin:
             LOG.warning("viewer refused operator token from %s: not host-local", log_safe(peer))
             reply.write(403, json.dumps({"error": OPERATOR_OFF_HOST}).encode(), "application/json; charset=utf-8")
             return
+        self._establish(key, principal, origin, peer, reply)
+
+    def _establish(self, key: str, principal: Principal, origin: str, peer: str, reply: Reply, *, hop: bool = False) -> None:
+        """A login (token form or, in the local profile, the one-time link) becomes a session cookie."""
         # A login spends the key's in-flight slot and rate budget like any request (006 review I4).
         if not self.inflight.acquire(principal.key_id):
             reply.refuse(429, {"error": "too many concurrent requests"}, headers=(("Retry-After", "1"),), log=False)
@@ -389,6 +396,11 @@ class CookieLogin:
             cookie = f"{COOKIE_PLAIN.format(port=self.viewer_port)}={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400"
         LOG.info("viewer login key=%s principal=%s from %s", log_safe(principal.key_id), log_safe(principal.handle),
                  log_safe(peer))
+        if hop:
+            # A link opened from a file: page is a cross-site navigation, and a 303 to "/" would stay cross-site, so a
+            # SameSite=Strict cookie would not be sent. A 200 page on this origin starts the next navigation itself.
+            reply.write(200, HOP_PAGE, "text/html; charset=utf-8", (("Set-Cookie", cookie),))
+            return
         reply.redirect("/", (("Set-Cookie", cookie),))
 
     @staticmethod
@@ -431,3 +443,82 @@ class CookieLogin:
                    # Origin-scoped on purpose: "cookies" would clear the whole registrable domain (028 I1).
                    ("Clear-Site-Data", CLEAR_SITE_DATA))
         reply.redirect(self.sign_in_location(handler), expired)
+
+
+LINK_PATH = "/login/link"
+HOP_PAGE = (b'<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">'
+            b'<meta http-equiv="refresh" content="0;url=/"><title>Signing in</title></head>'
+            b'<body><p><a href="/">Continue to the backlog</a></p></body></html>')
+LINK_TTL_SECONDS = 60.0
+LINK_MAX_PENDING = 8
+
+
+class LocalLinkLogin(CookieLogin):
+    """The local profile's login (local-server-004): the cookie login plus a one-time, short-lived sign-in link that
+    `backlog_open_viewer` mints for the operator, so a person on their own machine is never asked for a token.
+
+    Only a digest of each link's secret is kept, a link works once (it is removed on first use, valid or not expired),
+    and it is honoured only on a loopback connection whose Host is one of the viewer's own origins."""
+
+    PUBLIC_PATHS = (*CookieLogin.PUBLIC_PATHS, LINK_PATH)
+
+    def __init__(self, *, operator_key: Callable[[], str], ttl: float = LINK_TTL_SECONDS, **kwargs):
+        super().__init__(**kwargs)
+        self._operator_key = operator_key
+        self._ttl = float(ttl)
+        self._links: dict[str, float] = {}
+        # Bound on wrong links only. The 256-bit secret cannot be guessed; the bound keeps a flood of bad links from
+        # filling the log and costing CPU. It is this viewer's own and never touches the MCP app's budget, and a valid
+        # link is honoured even when it is spent (so a hostile page cannot lock the person out of their own link).
+        self._guesses = failure_budget(self._clock)
+        self._links_lock = threading.Lock()
+
+    @staticmethod
+    def _digest(secret: str) -> str:
+        return hashlib.sha256(secret.encode("utf-8", "replace")).hexdigest()
+
+    def mint_link(self) -> str:
+        """A fresh link secret, valid for `ttl` seconds and one use; the oldest pending ones are dropped past the cap."""
+        secret = secrets.token_urlsafe(32)
+        now = self._clock()
+        with self._links_lock:
+            self._links = {d: until for d, until in self._links.items() if until > now}
+            while len(self._links) >= LINK_MAX_PENDING:
+                self._links.pop(next(iter(self._links)))
+            self._links[self._digest(secret)] = now + self._ttl
+        return secret
+
+    def _take_link(self, secret: str) -> bool:
+        with self._links_lock:
+            until = self._links.pop(self._digest(secret), None)     # one use, whatever the outcome
+        return until is not None and until > self._clock()
+
+    def answer_public(self, handler, path: str, peer: str, reply: Reply) -> None:
+        if path != LINK_PATH:
+            super().answer_public(handler, path, peer, reply)
+            return
+        if handler.command != "GET":
+            reply.refuse(405, None, headers=(("Allow", "GET"),))
+            return
+        secrets_sent = parse_qs(urlparse(handler.path).query, max_num_fields=4).get("t") or []
+        if not auth.is_host_local(handler_scope(handler)):
+            reply.refuse(403, {"error": "sign-in links work on this machine only"})
+            return
+        if len(secrets_sent) != 1 or not self._take_link(secrets_sent[0]):
+            self._guesses.take(peer)
+            if self._guesses.blocked(peer) > 0:
+                reply.refuse(429, {"error": "too many invalid sign-in links"}, log=False, charge=False)
+                return
+            reply.refuse(401, None, html_body=USED_LINK_PAGE, charge=False)
+            return
+        host = (handler.headers.get("Host") or "").strip().lower()
+        principal = None
+        try:
+            key = self._operator_key()
+            principal = self.authenticator.authenticate(key)
+        except Exception:  # noqa: BLE001 - an unreadable or rotated token signs no one in
+            principal = None
+        if principal is None or principal.key_id != auth.OPERATOR_KEY_ID:
+            reply.refuse(401, {"error": "this sign-in link is not valid or has expired; ask for a new one"}, charge=False)
+            return
+        self._establish(key, principal, f"http://{host}", peer, reply, hop=True)

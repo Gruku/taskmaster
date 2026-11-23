@@ -8,6 +8,7 @@
                           [--linger-seconds 2] [--linger-bytes 65536]
                           [--max-connections 128] [--rate-limit 240] [--rate-burst 120] [--max-inflight 32]
                           [--viewer-port 7471 | --no-viewer] [--viewer-origin https://viewer.example]...
+  taskmaster_cli.py serve --local --root <project> --result-file FILE [--idle-exit 600] [--plugin-dir DIR]
   taskmaster_cli.py serve token --root <project> [--rotate]
   taskmaster_cli.py serve add-user    <handle> --root <project> [--name "Ann Lee"] [--email a@b.c]...
                                       [--role member|operator] [--key-file PATH]
@@ -22,6 +23,12 @@
   taskmaster_cli.py serve init pack --root <project> --url https://tm.example.com/mcp --out FILE [--branch B]... [--json]
   taskmaster_cli.py serve init pack --undo --not-pushed --root <project> [--json]
   taskmaster_cli.py serve init --root <host clone> --from FILE [--export-branch B] [--export-push REMOTE | --no-export] [--json]
+
+The local profile (--local, local-server-002) is the one hidden server per project that the plugin's stdio bridge starts
+and every Claude Code session on that project shares: loopback and an OS-chosen port, the operator token only, its own
+guarded viewer on the project's hashed 6800-6899 port (--no-viewer turns it off; `backlog_open_viewer` opens it with a
+one-time link), no state export, no add-user, and an exit after --idle-exit seconds with no bridge connected. Its launch outcome
+is written to --result-file (ready, lease_held, store_owned_busy, refused or error), because stdout is not read.
 
 State export (team-server-013): the daemon commits the store's export to the taskmaster-state branch every
 --export-interval seconds and, with --export-push REMOTE, pushes it fast-forward to a dedicated backup repo.
@@ -50,7 +57,12 @@ from .config import (DEFAULT_BODY_TIMEOUT, DEFAULT_HEADER_TIMEOUT, DEFAULT_HOST,
                      DEFAULT_LINGER_SECONDS, DEFAULT_MAX_BODY_BYTES,
                      DEFAULT_MAX_CONNECTIONS, DEFAULT_MAX_INFLIGHT, DEFAULT_PATH, DEFAULT_PORT, DEFAULT_RATE_BURST,
                      DEFAULT_RATE_PER_MINUTE, DEFAULT_SESSION_IDLE_SECONDS, DEFAULT_VIEWER_PORT, EXIT_REFUSED,
-                     EXIT_UNAVAILABLE, ServeConfig, ServeRefused)
+                     EXIT_UNAVAILABLE, DEFAULT_LOCAL_IDLE_EXIT, PROFILE_LOCAL, ServeConfig, ServeLeaseHeld, ServeRefused,
+                     ServeUnavailable, StoreOwnedBusy)
+
+# The local profile serves ~10 sessions plus the mods from one process; a bucket is one bridge (serve/local.limit_key).
+LOCAL_RATE_PER_MINUTE = 1200
+LOCAL_RATE_BURST = 400
 
 
 def main(argv=None) -> int:
@@ -117,6 +129,15 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--export-branch", default="taskmaster-state", help="default taskmaster-state")
     export.add_argument("--export-push", default=None, metavar="REMOTE",
                         help="push the branch fast-forward to this configured Git remote (a dedicated backup repo)")
+    local = parser.add_argument_group("local profile")
+    local.add_argument("--local", action="store_true",
+                       help="run as the project's shared local server (loopback, operator token, guarded viewer on the project's hashed port, no export)")
+    local.add_argument("--result-file", type=Path, default=None, metavar="FILE",
+                       help="where the launch outcome is written (owner-only JSON); the bridge reads only this")
+    local.add_argument("--idle-exit", type=_idle_seconds, default=DEFAULT_LOCAL_IDLE_EXIT, metavar="SECONDS",
+                       help="exit this long after the last bridge disconnects (default 600; 0 = never)")
+    local.add_argument("--plugin-dir", type=Path, default=None, metavar="DIR",
+                       help="the plugin directory this server runs from (recorded in the discovery file)")
     upgrade = parser.add_argument_group("upgrade")
     upgrade.add_argument("--force-upgrade", action="store_true",
                          help="replace a running older daemon of this root: ask it to retire (host-local, proved "
@@ -126,33 +147,112 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _idle_seconds(text: str):
+    """A non-number is kept as text so the local profile's own validation refuses it and the launch result file says so
+    (argparse would exit 2 with no result, and the bridge would wait out its timeout)."""
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _team_flags_given(args) -> list[str]:
+    """Team-profile options present on a --local command line (local-server-002 M6): refused, not silently ignored."""
+    given = []
+    checks = (("--host", args.host != DEFAULT_HOST), ("--port", args.port != DEFAULT_PORT),
+              ("--allowed-host", bool(args.allowed_host)), ("--insecure-bind", args.insecure_bind),
+              ("--session-idle-seconds", args.session_idle_seconds != DEFAULT_SESSION_IDLE_SECONDS),
+              ("--viewer-port", args.viewer_port != DEFAULT_VIEWER_PORT), ("--viewer-origin", bool(args.viewer_origin)),
+              ("--export-interval", args.export_interval is not None), ("--export-branch", args.export_branch != "taskmaster-state"),
+              ("--export-push", args.export_push is not None), ("--force-upgrade", args.force_upgrade),
+              ("--upgrade-timeout", args.upgrade_timeout != 120.0))
+    return [name for name, present in checks if present]
+
+
+def _local_flags_given(args) -> list[str]:
+    """Local-profile options present on a team command line: refused, not silently ignored (review 004 m6)."""
+    checks = (("--idle-exit", args.idle_exit != DEFAULT_LOCAL_IDLE_EXIT), ("--result-file", args.result_file is not None),
+              ("--plugin-dir", args.plugin_dir is not None))
+    return [name for name, present in checks if present]
+
+
+def _local_config(args) -> ServeConfig:
+    """The local profile's settings: loopback, an OS-chosen port, the guarded viewer on the project's hashed port (unless
+    --no-viewer), no export, no session idle timeout."""
+    return ServeConfig(
+        root=args.root, host=DEFAULT_HOST, port=0, path=args.path, log_level=args.log_level, profile=PROFILE_LOCAL,
+        max_body_bytes=args.max_body_bytes, header_timeout=args.header_timeout, body_timeout=args.body_timeout,
+        linger_seconds=args.linger_seconds, linger_bytes=args.linger_bytes, max_connections=args.max_connections,
+        rate_per_minute=LOCAL_RATE_PER_MINUTE if args.rate_per_minute == DEFAULT_RATE_PER_MINUTE else args.rate_per_minute,
+        rate_burst=LOCAL_RATE_BURST if args.rate_burst == DEFAULT_RATE_BURST else args.rate_burst,
+        max_inflight=args.max_inflight, viewer_port=None, viewer_band=not args.no_viewer, export_interval=0,
+        idle_exit_seconds=args.idle_exit, result_file=args.result_file, plugin_dir=args.plugin_dir)
+
+
+def _local_result(args, status: str, reason: str) -> None:
+    """Record a launch outcome that the daemon itself could not (it never got as far as ready). Best effort."""
+    if args.result_file is None:
+        return
+    from taskmaster import localserve
+    try:
+        args.result_file.parent.mkdir(parents=True, exist_ok=True)
+        localserve.write_result(args.result_file, status, reason)
+    except OSError:
+        pass
+
+
 def run_main(argv) -> int:
     args = build_parser().parse_args(argv)
     from .daemon import ServeDaemon
-    daemon = ServeDaemon(ServeConfig(force_upgrade=args.force_upgrade, upgrade_timeout=args.upgrade_timeout,
-                                     
-        root=args.root, host=args.host, port=args.port, path=args.path,
-        allowed_hosts=tuple(args.allowed_host), insecure_bind=args.insecure_bind,
-        log_level=args.log_level, session_idle_seconds=args.session_idle_seconds,
-        max_body_bytes=args.max_body_bytes, header_timeout=args.header_timeout, body_timeout=args.body_timeout,
-        linger_seconds=args.linger_seconds, linger_bytes=args.linger_bytes,
-        max_connections=args.max_connections, rate_per_minute=args.rate_per_minute, rate_burst=args.rate_burst,
-        max_inflight=args.max_inflight, viewer_port=None if args.no_viewer else args.viewer_port,
-        viewer_origins=tuple(args.viewer_origin), export_interval=args.export_interval,
-        export_branch=args.export_branch, export_push=args.export_push))
+    local = args.local
+    if local:
+        team_flags = _team_flags_given(args)
+        if team_flags:
+            reason = f"--local takes no team option: {', '.join(team_flags)}"
+            print(f"taskmaster serve: {reason}", file=sys.stderr)
+            _local_result(args, "refused", reason)
+            return EXIT_REFUSED
+        config = _local_config(args)
+    else:
+        local_flags = _local_flags_given(args)
+        if local_flags:
+            print(f"taskmaster serve: {', '.join(local_flags)} only apply with --local", file=sys.stderr)
+            return EXIT_REFUSED
+        config = ServeConfig(force_upgrade=args.force_upgrade, upgrade_timeout=args.upgrade_timeout,
+            root=args.root, host=args.host, port=args.port, path=args.path,
+            allowed_hosts=tuple(args.allowed_host), insecure_bind=args.insecure_bind,
+            log_level=args.log_level, session_idle_seconds=args.session_idle_seconds,
+            max_body_bytes=args.max_body_bytes, header_timeout=args.header_timeout, body_timeout=args.body_timeout,
+            linger_seconds=args.linger_seconds, linger_bytes=args.linger_bytes,
+            max_connections=args.max_connections, rate_per_minute=args.rate_per_minute, rate_burst=args.rate_burst,
+            max_inflight=args.max_inflight, viewer_port=None if args.no_viewer else args.viewer_port,
+            viewer_origins=tuple(args.viewer_origin), export_interval=args.export_interval,
+            export_branch=args.export_branch, export_push=args.export_push)
+    daemon = ServeDaemon(config)
     try:
         daemon.start()
     except ServeRefused as exc:
         print(f"taskmaster serve: {exc}", file=sys.stderr)
+        if local:
+            status = ("lease_held" if isinstance(exc, ServeLeaseHeld) else "store_owned_busy"
+                      if isinstance(exc, StoreOwnedBusy) else "error" if isinstance(exc, ServeUnavailable) else "refused")
+            _local_result(args, status, str(exc))
         return exc.exit_code
     except RuntimeError as exc:
         # e.g. fastmcp internals changed: retrying cannot help, so systemd must not restart-loop.
         print(f"taskmaster serve: {exc}", file=sys.stderr)
+        if local:
+            _local_result(args, "error", str(exc))
         return EXIT_REFUSED
     except OSError as exc:
         print(f"taskmaster serve: cannot start: {exc.strerror or exc}", file=sys.stderr)
+        if local:
+            _local_result(args, "error", f"cannot start: {exc.strerror or exc}")
         return EXIT_UNAVAILABLE
-    return daemon.serve()
+    code = daemon.serve()
+    if local and not daemon.ready.is_set():
+        _local_result(args, "error", "the http server failed to start")
+    return code
 
 
 def token_main(argv) -> int:
@@ -358,6 +458,19 @@ def _hand_over(handle: str, key: str, key_file) -> None:
         print(f"key for {handle} written to {key_file} (owner-only)", flush=True)
 
 
+def _refuse_while_local(root) -> None:
+    """add-user is refused for a project a local server is serving (local-server-002 ruling): the local profile accepts
+    the operator token only, so a key minted now would belong to no server. Team mode is a separate serve deployment."""
+    from taskmaster import localserve
+    try:
+        serving = localserve.read_discovery(root) is not None
+    except PermissionError:
+        serving = False
+    if serving:
+        raise ServeRefused("a local taskmaster server is serving this project; it takes the operator token only and has "
+                           "no users. A team server runs as its own deployment (docs/runbooks/team-server-deploy.md)")
+
+
 def add_user_main(argv) -> int:
     parser = _user_parser("add-user", "Mint an API key for a teammate; it is printed once.")
     parser.add_argument("--name", help="the person's name (default: the handle)")
@@ -369,6 +482,7 @@ def add_user_main(argv) -> int:
     def action():
         from . import principals
         root = _project(args.root)
+        _refuse_while_local(root)
         principals.check_person(args.handle, args.name or args.handle, list(args.email), args.role)
         from taskmaster import server_fence
         if server_fence.refusal(root) is not None:

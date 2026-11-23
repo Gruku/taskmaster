@@ -7,7 +7,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { TmReply } from '../hooks/host'
 import { parseHandovers } from '../hooks/parse'
 import { didNotStart, PYTHONS, type RunOut } from '../hooks/python'
-import { markerPaths, type RemoteDeps, RemoteFailure, remoteOf, SLOW_START_MS, TM_REMOTE_TIMEOUT_MS, type TmCall } from '../hooks/remote'
+import { compareVersions, locateReader, markerPaths, type ReaderFs, type RemoteDeps, RemoteFailure, remoteOf, SLOW_START_MS, TM_REMOTE_TIMEOUT_MS, type TmCall } from '../hooks/remote'
 import { runScan } from '../hooks/restore/scan'
 import { readMany } from '../hooks/tm'
 import { pane, PLUGIN, SESSION, waitingOf } from './fixtures/inputs'
@@ -116,7 +116,7 @@ describe('a batch read', () => {
 
   test('without tm_read.py beside the mod the clone is offline, saying where it looked', async () => {
     const err = await failure((await fakeOf([], [MARKER]).remote(ROOT))!.read(CALLS))
-    expect(err).toMatchObject({ fault: 'offline', message: `tm_read.py not found at ${SCRIPT}` })
+    expect(err).toMatchObject({ fault: 'offline', message: `tm_read.py not found at ${SCRIPT}, nor in an installed taskmaster plugin` })
   })
 })
 
@@ -311,5 +311,74 @@ describe('host paths and the restore scanner', () => {
       'ValueError: bad root',
     )
     expect(runs).toEqual(['python'])
+  })
+})
+
+describe('finding the reader beside a mod that ships alone (desktop upload, marketplace cache)', () => {
+  const PLUGINS = 'C:/Users/me/.claude/plugins'
+  const UPLOAD = `${PLUGINS}/marketplaces/local-desktop-app-uploads/taskmaster-mods`
+  const CACHED = `${PLUGINS}/cache/gruku-tools/taskmaster-mods/0.2.7`
+  const fsOf = (files: Record<string, string>, dirs: Record<string, string[]>): ReaderFs => ({
+    exists: async path => path in files,
+    read: async path => files[path] ?? Promise.reject(new Error('ENOENT')),
+    list: async path => dirs[path] ?? Promise.reject(new Error('ENOENT')),
+  })
+  const record = (installPath: string) => JSON.stringify({ plugins: { 'taskmaster@gruku-tools': [{ installPath }] } })
+
+  test('the install path Claude Code records for taskmaster wins, backslashes and all', async () => {
+    const reader = 'C:/Users/me/.claude/plugins/cache/gruku-tools/taskmaster/7.5.0/hooks/tm_read.py'
+    const fs = fsOf({ [reader]: '', [`${PLUGINS}/installed_plugins.json`]: record('C:\\Users\\me\\.claude\\plugins\\cache\\gruku-tools\\taskmaster\\7.5.0') }, {})
+    expect(await locateReader(fs, UPLOAD.replace(/\//g, '\\'))).toBe(reader)
+    expect(await locateReader(fs, CACHED)).toBe(reader)
+  })
+
+  test('no record: the newest cached taskmaster that holds the reader (a pre-release is older than its release)', async () => {
+    const hooks = (v: string) => `${PLUGINS}/cache/gruku-tools/taskmaster/${v}/hooks/tm_read.py`
+    const fs = fsOf(
+      { [hooks('7.4.0')]: '', [hooks('7.5.0-rc.1')]: '', [hooks('7.5.0')]: '' },
+      { [`${PLUGINS}/cache`]: ['gruku-tools'], [`${PLUGINS}/cache/gruku-tools/taskmaster`]: ['7.4.0', '7.5.0', '7.5.0-rc.1', '7.6.0'] },
+    )
+    expect(await locateReader(fs, UPLOAD)).toBe(hooks('7.5.0'))
+  })
+
+  test('a recorded path that is gone falls to the cache; nothing anywhere, or a root outside plugins/, is null', async () => {
+    const hooks = `${PLUGINS}/cache/gruku-tools/taskmaster/7.5.0/hooks/tm_read.py`
+    const fs = fsOf({ [hooks]: '', [`${PLUGINS}/installed_plugins.json`]: record('C:/gone') }, { [`${PLUGINS}/cache`]: ['gruku-tools'], [`${PLUGINS}/cache/gruku-tools/taskmaster`]: ['7.5.0'] })
+    expect(await locateReader(fs, UPLOAD)).toBe(hooks)
+    expect(await locateReader(fsOf({}, {}), UPLOAD)).toBeNull()
+    expect(await locateReader(fs, 'C:/work/dev-mods/taskmaster-mods')).toBeNull()
+  })
+
+  test('a mod from a marketplace cache looks for taskmaster in that marketplace only', async () => {
+    const theirs = 'C:/Users/me/.claude/plugins/cache/other-market/taskmaster/9.9.9/hooks/tm_read.py'
+    const ours = `${PLUGINS}/cache/gruku-tools/taskmaster/7.5.0/hooks/tm_read.py`
+    const rec = JSON.stringify({ plugins: { 'taskmaster@other-market': [{ installPath: 'C:/Users/me/.claude/plugins/cache/other-market/taskmaster/9.9.9' }] } })
+    const dirs = { [`${PLUGINS}/cache`]: ['other-market', 'gruku-tools'], [`${PLUGINS}/cache/other-market/taskmaster`]: ['9.9.9'], [`${PLUGINS}/cache/gruku-tools/taskmaster`]: ['7.5.0'] }
+    const fs = fsOf({ [theirs]: '', [ours]: '', [`${PLUGINS}/installed_plugins.json`]: rec }, dirs)
+    expect(await locateReader(fs, CACHED)).toBe(ours)
+    expect(await locateReader(fs, UPLOAD)).toBe(theirs)
+  })
+
+  test('version order', () => {
+    expect(['7.4.9', '7.5.0-rc.1', '7.5.0', '7.10.0'].sort(compareVersions)).toEqual(['7.4.9', '7.5.0-rc.1', '7.5.0', '7.10.0'])
+  })
+
+  test('the reader runs from where it was found when the checkout path holds none', async () => {
+    const OTHER = 'C:/Users/me/.claude/plugins/cache/gruku-tools/taskmaster/7.5.0/hooks/tm_read.py'
+    const ran: string[][] = []
+    const deps: RemoteDeps = {
+      exists: async path => path === MARKER,
+      run: async argv => {
+        ran.push([...argv])
+        return answered(['one', 'two'])
+      },
+      now: async () => 0,
+      log: () => undefined,
+      script: SCRIPT,
+      locate: async () => OTHER,
+    }
+    const read = (await remoteOf(deps)(ROOT))?.read(CALLS)
+    expect((await read)?.replies).toHaveLength(2)
+    expect(ran[0]?.[2]).toBe(OTHER)
   })
 })

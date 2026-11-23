@@ -12,12 +12,12 @@ OPERATOR = "operator"                          # == serve.auth.OPERATOR_KEY_ID (
 SERVER_LINEAR_TOKEN_ENV = "TASKMASTER_LINEAR_TOKEN"
 
 METHODS = frozenset({"retire", "status", "sync", "sync_job", "sync_status", "linear_bootstrap", "linear_retry",
-                     "receipt", "execute", "flush", "cancel", "git_run", "git_status", "git_recover", "shutdown"})
+                     "receipt", "execute", "flush", "cancel", "git_run", "git_status", "git_recover", "shutdown", "shutdown_if_idle"})
 # `sync` and `sync_job` import host files, which only the operator can have hand-edited (team-server-012 D1).
 # linear_retry is the operator's on a team server (user ruling on the security review's m-7: Linear link/retry).
 REMOTE = frozenset({"status", "execute", "flush"})
 # 001 refuses these for every caller on a serve coordinator; the gate passes them through (design D5).
-SERVER_REFUSED = frozenset({"shutdown", "retire"})
+SERVER_REFUSED = frozenset({"shutdown", "shutdown_if_idle", "retire"})
 OPERATOR_ONLY = METHODS - REMOTE - SERVER_REFUSED
 
 ADMIN_REFUSED = ("{what} is a host operator action on a team server: run it on the host (the taskmaster CLI, "

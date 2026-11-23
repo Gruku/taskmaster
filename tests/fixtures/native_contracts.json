@@ -4083,8 +4083,17 @@
     },
     "backlog_store_status": {
       "category": "targeted-query",
-      "documentation": "Report the state of the SQLite store (`.taskmaster/local/store.db`).\n\nThe store is the authority: root and how it was resolved, schema version,\ndatabase and WAL size, the last 20 changes, dirty and quarantined\nprojection files, live sessions, any filesystem warning, merge conflicts in\nthe last 24 hours, databases an earlier recovery moved aside, and the\npending Linear push count.\n\nRead-only: a missing or damaged store is reported on the `Warning:` line,\nnot created or moved aside.",
-      "parameters": [],
+      "documentation": "Report the state of the SQLite store (`.taskmaster/local/store.db`).\n\nThe store is the authority: root and how it was resolved, schema version,\ndatabase and WAL size, the last 20 changes, dirty and quarantined\nprojection files, live sessions, any filesystem warning, merge conflicts in\nthe last 24 hours, databases an earlier recovery moved aside, and the\npending Linear push count.\n\nRead-only: a missing or damaged store is reported on the `Warning:` line,\nnot created or moved aside.\n\nArgs:\n    deep: Run the full `integrity_check` now (seconds on a large store) instead of showing the stored result of\n        the one-time check. On a team server only the operator may; members see the stored line.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "deep",
+          "required": false,
+          "type": "bool"
+        }
+      ],
       "returns": "str",
       "transactional": false
     },

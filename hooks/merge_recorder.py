@@ -38,6 +38,7 @@ PYDANTIC_MIN = 2
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 HOOK_SECONDS = 10  # hooks.json timeout for this hook; the host kills it after that
 LOG_MAX_BYTES = 1024 * 1024
+VISIBLE_PREFIX = "taskmaster merge recorder:"   # merge_recorder_stamp.VISIBLE_PREFIX: lines the stamp wants shown
 
 
 def _release(text):
@@ -83,16 +84,18 @@ def stamp_command(stamp_script: Path, stamp_args: list, *, in_process: bool | No
     return [uv, "run", "--script", str(stamp_script), *stamp_args] if uv else None
 
 
-def run_stamp(argv: list, *, detach: bool, log: Path | None = None) -> None:
+def run_stamp(argv: list, *, detach: bool, log: Path | None = None) -> list:
     """Run the stamp. A `uv run` stamp may first build its environment (seconds), so it
     is started detached to keep the hook inside its hooks.json timeout, with its output
     appended to hook.log. On Windows it breaks away from the host's job when the job
     allows it, so a kill-on-close job ending with the session does not kill it."""
     if not detach:
-        # The stamp records the current merge first and budgets its replay inside this.
-        subprocess.run(argv, capture_output=True, timeout=HOOK_SECONDS - 1,
-                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        return
+        # The stamp records the current merge first and budgets its replay inside this. The lines it prints with
+        # the VISIBLE prefix (a coordinator refused the write) are returned for the hook to show.
+        done = subprocess.run(argv, capture_output=True, timeout=HOOK_SECONDS - 1,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        text = (done.stdout or b"").decode("utf-8", "replace") if isinstance(done.stdout, bytes) else (done.stdout or "")
+        return [line.strip() for line in text.splitlines() if line.startswith(VISIBLE_PREFIX)]
     sink = subprocess.DEVNULL
     if log is not None:
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +104,7 @@ def run_stamp(argv: list, *, detach: bool, log: Path | None = None) -> None:
         common = dict(stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, close_fds=True)
         if sys.platform != 'win32':
             subprocess.Popen(argv, start_new_session=True, **common)
-            return
+            return []
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
             subprocess.Popen(argv, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB, **common)
@@ -111,6 +114,7 @@ def run_stamp(argv: list, *, detach: bool, log: Path | None = None) -> None:
     finally:
         if sink is not subprocess.DEVNULL:
             sink.close()
+    return []        # a detached stamp's lines go to hook.log only
 
 
 def _project(cwd: Path):
@@ -199,40 +203,46 @@ def main() -> int:
     if not merges:
         return 0
     base = Path(data["cwd"]) if isinstance(data.get("cwd"), str) and data.get("cwd") else Path.cwd()
+    shown = []
     for merge in merges:
         where = base / merge.directory if merge.directory else base
         for src in merge.branches:
-            _stamp_one(src, where)
+            shown.extend(_stamp_one(src, where))
+    if shown:
+        text = "\n".join(dict.fromkeys(shown))
+        sys.stdout.write(json.dumps({"systemMessage": text, "hookSpecificOutput": {
+            "hookEventName": "PostToolUse", "additionalContext": text}}))
     return 0
 
 
-def _stamp_one(src: str, cwd: Path) -> None:
+def _stamp_one(src: str, cwd: Path) -> list:
     """Resolve what was merged NOW (the stamp may run seconds later, detached) and hand it to the stamp script."""
     root = _project(cwd)
     target = _git_out(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     sha = _git_out(cwd, "rev-parse", "HEAD")
     if not target or target == "HEAD" or not sha:
         _log(root, f"merge of {src} left a detached HEAD or an unreadable one; not recording it")
-        return
+        return []
 
     # -- Delegate to the stamp (fail-open, but never silent) ------------------------
     stamp_script = Path(__file__).parent / "merge_recorder_stamp.py"
     if not stamp_script.is_file():
         _log(root, f"{stamp_script} is missing; not recording the merge of {src}")
-        return
+        return []
 
     argv = stamp_command(stamp_script, [src, target, sha, str(cwd)])
     if argv is None:
         _log(root, f"cannot run the merge stamp: {sys.executable} lacks the stamp's runtime and uv is not "
                    f"on PATH; not recording {src} -> {target} {sha}")
-        return
+        return []
     try:
-        run_stamp(argv, detach=argv[0] != (sys.executable or "python"), log=_hook_log(root))
+        return list(run_stamp(argv, detach=argv[0] != (sys.executable or "python"), log=_hook_log(root)) or [])
     except subprocess.TimeoutExpired:
         _log(root, f"merge stamp for {src} -> {target} {sha} was stopped at the hook limit; it records or "
                    "queues the current merge first, so see its own lines above")
     except Exception as exc:
         _log(root, f"could not start the merge stamp ({exc!r}); not recording {src} -> {target} {sha}")
+    return []
 
 
 if __name__ == "__main__":

@@ -208,6 +208,19 @@ class Transaction:
         self.connection.execute("INSERT INTO projection_jobs(entity_key,revision,commit_seq,file,effect,input_json,expected_hash) VALUES(?,?,?,?,?,?,?)",
                                 (key, entity["revision"], self.seq, file, "write", encode(entity), projected[0] if projected else None))
 
+    @staticmethod
+    def _check_anchor_lengths(before, after):
+        """team-server-023: an anchor longer than the read endpoint's glob cap would be stored and never match.
+        Every task and area write passes create/replace, so the check lives here and only fires when anchors change."""
+        anchors = after.get("anchors")
+        if anchors is None or anchors == before.get("anchors"):
+            return
+        from taskmaster.native_routing.hook_reads import MAX_GLOB_CHARS
+        for anchor in ([anchors] if isinstance(anchors, str) else anchors):
+            if isinstance(anchor, str) and len(anchor) > MAX_GLOB_CHARS:
+                raise ValueError(f"anchor is {len(anchor)} characters; the longest an anchor can be is {MAX_GLOB_CHARS} "
+                                 f"(longer ones never match a path): {anchor[:40]}...")
+
     def create(self, kind, doc, body=None, requested_id=None):
         if body is not None and not isinstance(body, str):
             raise ValueError("document body must be text or null")
@@ -218,6 +231,8 @@ class Transaction:
             doc[ATTRIBUTION_FIELDS[kind]] = self.requester.handle
         if kind == "task":
             _check_task_paths({}, doc)
+        if kind in ("task", "area"):
+            self._check_anchor_lengths({}, doc)
         ident = _reserve_id(self.connection, kind, doc, requested_id)
         # The store stamps the id on every document it creates, the project
         # manifest included (a later replace may drop it, as the tool's put does).
@@ -242,6 +257,8 @@ class Transaction:
             raise ValueError("document body must be text or null")
         entity = before_entity if before_entity is not None else self.snapshot.get(kind, ident, include_body=True)
         before = entity["fields"]
+        if kind in ("task", "area"):
+            self._check_anchor_lengths(before, after)
         if kind == "task":
             _check_task_paths(before, after)
             self._check_new_dependencies(ident, before, after)
@@ -250,6 +267,10 @@ class Transaction:
             from . import claims
             refusal = claims.move_refusal(ident, before, after, session=self.request.get("caller_scope", ""),
                                           connection=self.connection, requester=self.requester)
+            if refusal:
+                raise Conflict(refusal)
+            refusal = claims.status_refusal(ident, before, after, session=self.request.get("caller_scope", ""),
+                                            connection=self.connection, requester=self.requester)
             if refusal:
                 raise Conflict(refusal)
             from . import clone_fields

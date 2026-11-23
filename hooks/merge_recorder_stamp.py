@@ -79,6 +79,19 @@ def _log(root: Path, reason: str) -> None:
         pass
 
 
+VISIBLE_PREFIX = "taskmaster merge recorder:"
+
+
+def _surface(root: Path, text: str) -> None:
+    """A write the coordinator refused is not a quiet queue: hook.log keeps it, and a line on stdout lets the merge
+    recorder hook (which runs this script in-process and captures it) show it to the person and to Claude."""
+    _log(root, text)
+    try:
+        print(f"{VISIBLE_PREFIX} {text}", flush=True)
+    except Exception:  # noqa: BLE001 - a closed stdout costs the line, never the stamp
+        pass
+
+
 def resolve_root(cwd: Path) -> Path | None:
     """The checkout whose `.taskmaster/` owns this merge, or None.
 
@@ -390,20 +403,23 @@ def _stamp_native(root: Path, db_file: Path, tid: str, rung: str, sha: str, merg
         outcome = merge_stamps.native_apply(db_file, backlog_dir, SESSION, autostart=False,
                                             client_timeout=CURRENT_STAMP_SECONDS)(entry)
     except merge_stamps.Unavailable as exc:
-        outcome = ("queue", f"no coordinator reachable ({exc})")
+        outcome = (("queue", f"the coordinator refused the write ({exc})", True) if exc.refused
+                   else ("queue", f"no coordinator reachable ({exc})"))
     except Exception as exc:  # noqa: BLE001
         outcome = ("queue", f"recording failed ({exc!r})")
     if outcome == "retry":
         outcome = ("queue", "the task kept changing under the write")
     if isinstance(outcome, tuple) and outcome[0] == "reject":
-        _log(root, f"recording {label} was refused: {outcome[1]}")
+        _surface(root, f"recording {label} was refused: {outcome[1]}")
     elif isinstance(outcome, tuple):
+        loud = len(outcome) > 2 and outcome[2]
+        say = _surface if loud else _log
         try:
             merge_stamps.enqueue(backlog_dir, entry)
         except Exception as exc:  # noqa: BLE001
-            _log(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); not recorded")
+            _surface(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); not recorded")
             return
-        _log(root, f"{outcome[1]}; merge stamp {label} queued for the MCP server")
+        say(root, f"{outcome[1]}; merge stamp {label} queued for the MCP server")
         return  # no coordinator answered: replaying now would only wait again
     # A queued stamp older than this one is dropped by ancestry when it is replayed.
     try:

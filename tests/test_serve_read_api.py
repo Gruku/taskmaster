@@ -22,6 +22,7 @@ from serve_helpers import call_tool
 from taskmaster import backlog_server as bs
 from taskmaster.coordinator import client as client_module
 from taskmaster.coordinator import identity_gate, protocol
+from taskmaster.native.commands import Transaction
 from taskmaster.native_routing import hook_reads
 from taskmaster.serve import read_api
 from taskmaster.serve.config import ServeConfig, ServeRefused, validate
@@ -439,8 +440,15 @@ def test_a_known_view_with_the_wrong_method_is_405(serve):
 def test_a_huge_star_anchor_cannot_outrun_the_view(serve):
     """Round-2 I1: 240,000 `*` as a member's anchor took 11.7 s on a 255-char path, past the 5 s deadline."""
     world = serve()
-    added = call_tool(world.url, world.keys["ann"], "backlog_add_task",
-                      {"title": "Star bomb", "epic": "test-epic", "phase": "dev", "options": {"anchors": "*" * 240_000}})
+    star_bomb = {"title": "Star bomb", "epic": "test-epic", "phase": "dev", "options": {"anchors": "*" * 240_000}}
+    # team-server-023: the normal write path now refuses an over-long anchor ...
+    refused = call_tool(world.url, world.keys["ann"], "backlog_add_task", star_bomb)
+    assert "longest an anchor can be" in refused, refused
+    # ... but stores written before 023 still carry them, so seed one the way old data exists (the write-time check
+    # off for this call only) and keep proving the read side is bounded.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Transaction, "_check_anchor_lengths", staticmethod(lambda before, after: None))
+        added = call_tool(world.url, world.keys["ann"], "backlog_add_task", star_bomb)
     assert "[seq " in added, added
     started = time.monotonic()
     reply = get(world, "paths", {"path": "a" * 255})

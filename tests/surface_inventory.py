@@ -34,6 +34,7 @@ TOOL_OVERRIDES = {
 }
 # Member tools with an operator-gated mode: the class stays `member`, the gated mode is recorded.
 TOOL_NOTES = {
+    "backlog_store_status": "deep=True (a full integrity_check) is operator-only on a team server (backlog_server._integrity_section)",
     "backlog_blast_radius": "mode=evidence is operator-only (served_action_refusal)",
     "backlog_linear": "probe and bootstrap are operator-only (overview.served_linear_guard); retry is member (caller_scope, 004)",
     "backlog_document_import": "source other than upload and restore=True are operator-only (allowlist HOST_IMPORT / RESTORE)",
@@ -55,6 +56,28 @@ def tool_hashes() -> dict[str, str]:
         scratch = Path(name)
         env = dict(os.environ, TASKMASTER_ROOT=str(scratch), PYTHONPATH=str(REPO))
         done = subprocess.run([sys.executable, "-c", _LIST_TOOLS], cwd=scratch, env=env, capture_output=True, text=True,
+                              timeout=120, check=True)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+HANDSHAKE = REPO / "tm_bridge_handshake.json"
+_HANDSHAKE_CODE = (
+    "import asyncio,json;from taskmaster.backlog_server import mcp;"
+    "o=mcp._mcp_server.create_initialization_options();"
+    "print(json.dumps({'initialize': {'capabilities': o.capabilities.model_dump(mode='json', exclude_none=True),"
+    " 'serverInfo': {'name': o.server_name, 'version': o.server_version}, 'instructions': o.instructions},"
+    " 'tools': [t.to_mcp_tool().model_dump(mode='json', exclude_none=True, by_alias=True) for t in asyncio.run(mcp.list_tools())]},"
+    " sort_keys=True))")
+
+
+def handshake_snapshot() -> dict:
+    """What a connecting client is told before any tool call (initialize result minus protocolVersion, and tools/list), from a child
+    process so no test mock leaks in. tm_bridge.py serves this file when it has no cache of a live connect (first-ever run)."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="tm-handshake-root-") as name:
+        scratch = Path(name)
+        env = dict(os.environ, TASKMASTER_ROOT=str(scratch), PYTHONPATH=str(REPO))
+        done = subprocess.run([sys.executable, "-c", _HANDSHAKE_CODE], cwd=scratch, env=env, capture_output=True, text=True,
                               timeout=120, check=True)
     return json.loads(done.stdout.strip().splitlines()[-1])
 
@@ -217,6 +240,10 @@ def fixture_sha256() -> str:
 
 
 if __name__ == "__main__":
+    if "--write-handshake" in sys.argv:
+        HANDSHAKE.write_text(json.dumps(handshake_snapshot(), sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        print(f"wrote {HANDSHAKE}")
+        sys.exit(0)
     if "--write" not in sys.argv:
         sys.exit("usage: python tests/surface_inventory.py --write   (review the diff: classes decide what members may call)")
     old = json.loads(FIXTURE.read_text(encoding="utf-8")) if FIXTURE.exists() else None

@@ -183,7 +183,9 @@ def test_sorting_and_set_operations_spill_to_disk_and_stop_near_the_deadline(sna
     sql = (f"WITH RECURSIVE {BIG_CTES}, r(i, s) AS (SELECT 0, z FROM c UNION SELECT i + 1, s || i FROM r "
            "WHERE i < 100000) SELECT count(*) FROM r")
     started = time.monotonic()
-    with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+    # Linux: the 256 MiB temp-file cap (RLIMIT_FSIZE, EFBIG -> "disk I/O error") can stop the spill before the 1 s
+    # deadline on a fast disk; either stop is the bounded outcome this test guards.
+    with pytest.raises(sqlite3.OperationalError, match="interrupt|disk I/O error"):
         snapshot.sql(sql, timeout=1.0)
     assert time.monotonic() - started < 3.0
 
@@ -311,8 +313,12 @@ def test_the_caps_fit_the_units_memory():
     # query_worker.py's budget: the daemon's copies plus HEAVY_TOTAL capped workers fit MemoryMax=1G with margin.
     unit = Path(__file__).resolve().parents[1] / "deploy" / "systemd" / "taskmaster.service"
     assert "MemoryMax=1G" in unit.read_text(encoding="utf-8") and "OOMPolicy=continue" in unit.read_text(encoding="utf-8")
-    per_call = (2.2 * compatibility.SNAPSHOT_MAX_BYTES + compatibility.COPY_BATCH_BYTES) + query_worker.WORKER_MEMORY_MAX
-    assert 300 * 2**20 + config.HEAVY_TOTAL * per_call < 0.8 * 2**30
+    # team-server-034: the daemon holds no snapshot (one build streams into a file: a batch plus the page cache); a
+    # call is its worker at the fixed cap, the answer frame the daemon reads back, and the rows it decodes.
+    build = compatibility.COPY_BATCH_BYTES + 8 * 2**20
+    per_call = query_worker.WORKER_MEMORY_MAX + query_worker.MAX_ANSWER_BYTES + 8 * 2**20
+    assert 300 * 2**20 + build + config.HEAVY_TOTAL * per_call < 0.8 * 2**30
+    assert query_worker.WORKER_MEMORY_MAX == query_worker.WORKER_MEMORY_BYTES        # fixed, never a function of the store
 
 
 def test_a_store_members_grew_is_refused_without_growing_the_daemon(launch):  # noqa: F811

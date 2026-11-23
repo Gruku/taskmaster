@@ -1427,12 +1427,15 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
 )
 
 
+from taskmaster.root import canonical_layout_present  # noqa: E402  the one layout probe (B-111)
+
+
 def _detect_layout_sources(project_root: Path) -> list[tuple[str, Path]]:
-    """Return all layouts that hold a backlog.yaml. Order: claude, canonical, root."""
+    """Return all layouts that hold a backlog (a backlog.yaml, or for the canonical layout a native store.db). Order: claude, canonical, root."""
     found: list[tuple[str, Path]] = []
     if (project_root / ".claude" / "backlog.yaml").exists():
         found.append(("claude", project_root / ".claude"))
-    if (project_root / ".taskmaster" / "backlog.yaml").exists():
+    if canonical_layout_present(project_root):
         found.append(("canonical", project_root / ".taskmaster"))
     if (project_root / "backlog.yaml").exists():
         found.append(("root", project_root))
@@ -1520,7 +1523,7 @@ def canonicalize_layout(
         return summary
 
     if canonical_present and legacy:
-        # Both layouts hold a backlog.yaml — refuse, the caller has to pick one.
+        # Both layouts hold a backlog — refuse, the caller has to pick one.
         summary["status"] = "ambiguous"
         summary["sources_found"] = ["canonical"] + [k for k, _ in legacy]
         return summary

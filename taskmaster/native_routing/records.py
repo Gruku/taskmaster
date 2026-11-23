@@ -10,6 +10,7 @@ from taskmaster import taskmaster_v3 as v3
 from . import reads
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _run(call, operation, arguments):
@@ -43,7 +44,7 @@ def _row(call, kind, ident):
 @adapter("backlog_bug_create")
 def bug_create(call, *, title, found_in, discovered_by, severity, components, location, body):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     arguments = {"title": title, "found_in": found_in or None, "discovered_by": discovered_by,
                  "severity": severity or None, "components": components or [], "location": location or []}
@@ -60,7 +61,7 @@ def bug_create(call, *, title, found_in, discovered_by, severity, components, lo
 
 @adapter("backlog_bug_list")
 def bug_list(call, *, status, found_in, limit, include_archive, path):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._bug_list_text(reads.rows_only(snapshot), status, found_in, limit, include_archive, path)
@@ -68,7 +69,7 @@ def bug_list(call, *, status, found_in, limit, include_archive, path):
 
 @adapter("backlog_bug_get")
 def bug_get(call, *, bug_id, verbose):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._bug_get_text(reads.rows_only(snapshot), bug_id, verbose)
@@ -76,7 +77,7 @@ def bug_get(call, *, bug_id, verbose):
 
 @adapter("backlog_bug_update")
 def bug_update(call, *, bug_id, field, value):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     if field not in bs.BUG_UPDATE_FIELDS:
         return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(bs.BUG_UPDATE_FIELDS))}"
@@ -101,7 +102,7 @@ def bug_update(call, *, bug_id, field, value):
 
 @adapter("backlog_bug_archive")
 def bug_archive(call, *, bug_id):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     entity = _row(call, "bug", bug_id)
     if entity is None:
@@ -120,7 +121,7 @@ def bug_archive(call, *, bug_id):
 def bug_pattern_scan(call, *, mode):
     if mode not in {"all", "open_only", "end_of_task"}:
         return f"Error: invalid mode {mode!r} (expected all|open_only|end_of_task)"
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._bug_pattern_text(reads.rows_only(snapshot), mode)
@@ -129,7 +130,7 @@ def bug_pattern_scan(call, *, mode):
 @adapter("backlog_bug_promote")
 def bug_promote(call, *, bug_ids, title, severity, evidence_text, components, body):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     bug_ids = list(bug_ids or [])
     if not bug_ids:
@@ -171,7 +172,7 @@ def bug_promote(call, *, bug_ids, title, severity, evidence_text, components, bo
 def issue_create(call, *, title, severity, evidence, impact, components, location, related_tasks,
                  discovered_by, body, tldr):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     if severity not in v3.ISSUE_SEVERITIES:
         return f"Error: severity must be one of {v3.ISSUE_SEVERITIES}"
@@ -196,7 +197,7 @@ def issue_create(call, *, title, severity, evidence, impact, components, locatio
 
 @adapter("backlog_issue_list")
 def issue_list(call, *, severity, status, limit, verbose, path):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._issue_list_text(reads.rows_only(snapshot), severity, status, limit, verbose, path)
@@ -205,7 +206,7 @@ def issue_list(call, *, severity, status, limit, verbose, path):
 @adapter("backlog_issue_get")
 def issue_get(call, *, issue_id, verbose, sections, expand_links):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._issue_get_text(reads.rows_only(snapshot), issue_id, verbose, sections, expand_links, backlog,
@@ -214,7 +215,7 @@ def issue_get(call, *, issue_id, verbose, sections, expand_links):
 
 @adapter("backlog_issue_update")
 def issue_update(call, *, issue_id, field, value):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     if field not in bs.ISSUE_UPDATE_FIELDS:
         return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(bs.ISSUE_UPDATE_FIELDS))}"
@@ -245,7 +246,7 @@ def issue_update(call, *, issue_id, field, value):
 @adapter("backlog_idea_create")
 def idea_create(call, *, title, body, tags, status, related_tasks, related_issues, created_by, tldr):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     autogen = False
     if not tldr:
@@ -267,7 +268,7 @@ def idea_create(call, *, title, body, tags, status, related_tasks, related_issue
 
 @adapter("backlog_idea_list")
 def idea_list(call, *, idea_id, status, tag, archived, related_task, related_issue, limit, verbose):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._idea_list_text(reads.rows_only(snapshot), idea_id, status, tag, archived, related_task,
@@ -277,7 +278,7 @@ def idea_list(call, *, idea_id, status, tag, archived, related_task, related_iss
 @adapter("backlog_idea_get")
 def idea_get(call, *, idea_id, verbose, sections, expand_links):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return "No backlog found."
     if sections is not None and not sections:
         return ("Error: sections=[] requested no sections; pass sections=None for the slim view "
@@ -291,7 +292,7 @@ def idea_get(call, *, idea_id, verbose, sections, expand_links):
 
 @adapter("backlog_idea_update")
 def idea_update(call, *, idea_id, field, value):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     if field not in bs.IDEA_UPDATE_FIELDS:
         return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(bs.IDEA_UPDATE_FIELDS))}"
@@ -323,7 +324,7 @@ def idea_update(call, *, idea_id, field, value):
 @adapter("backlog_decision_create")
 def decision_create(call, *, title, options, recommendation, task_id, related_issues, branch, raised_in, body):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     arguments = {"title": title, "options": options, "recommendation": recommendation, "task_id": task_id,
                  "related_issues": related_issues or [], "branch": branch, "raised_in": raised_in}
@@ -342,7 +343,7 @@ def decision_create(call, *, title, options, recommendation, task_id, related_is
 def decision(call, *, action, decision_id, status, task_id, limit, resolved_with, rationale, resolved_in, reason,
              title, options, recommendation, body):
     if action == "list":
-        if not bs._backlog_path().exists():
+        if not _layout_present(bs._backlog_path()):
             return "No backlog found."
         with call.read() as snapshot:
             return bs._decision_list_text(reads.rows_only(snapshot), status, task_id, limit)

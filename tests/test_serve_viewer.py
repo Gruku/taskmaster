@@ -993,3 +993,22 @@ def test_viewer_500s_carry_a_ref_not_the_exception_text(v, monkeypatch):
     resp = prefs_put(v, session_headers(v, cookie, csrf))
     error = json.loads(resp.body)["error"]
     assert resp.status == 500 and error.startswith("internal error in the viewer (ref ") and "secret" not in error
+
+
+def test_a_hard_linked_tracked_file_is_refused_on_the_opened_handle(work_tree, tmp_path_factory):
+    # team-server-019: the link count is read from the opened handle (fstat), on Windows and POSIX alike.
+    from taskmaster.serve.tracked import read_checked, read_tracked_file
+    outside = tmp_path_factory.mktemp("secret") / "secret.txt"
+    outside.write_text("secret", encoding="utf-8")
+    target = work_tree / "docs" / "a.md"
+    assert read_tracked_file(work_tree, "docs/a.md") is not None
+    alias = work_tree / "docs" / "alias-hard.md"
+    try:
+        os.link(target, alias)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable here: {exc}")
+    with pytest.raises(PermissionError, match="hard-linked"):
+        read_checked(work_tree, target.resolve())
+    assert read_tracked_file(work_tree, "docs/a.md") is None
+    alias.unlink()
+    assert read_tracked_file(work_tree, "docs/a.md") is not None

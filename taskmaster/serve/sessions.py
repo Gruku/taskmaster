@@ -19,6 +19,8 @@ import secrets
 import threading
 import time
 
+from mcp.server.streamable_http import GET_STREAM_KEY
+
 from taskmaster.native import claims
 from taskmaster.native.claims import Requester
 from taskmaster.coordinator import scopes
@@ -57,6 +59,12 @@ class RemoteSession:
     bundle: dict | None = None
     clone: str = ""            # the connection's X-Taskmaster-Clone, read once at bind (team-server-011 D2)
     announced: bool = False    # the adoption notice (team-server-010 D7) has been shown on this connection
+    # Local profile (local-server-002): the bridge that owns this session. The discriminator is the Claude Code session
+    # id (or a bridge-lifetime random id), the nonce tells two processes of one discriminator apart.
+    discriminator: str = ""
+    nonce: str = ""
+    cwd: str = ""
+    opened: float = 0.0        # monotonic time of the last bind (a new transport has a moment to open its GET stream)
 
     def requester(self) -> Requester:
         return Requester(self.handle, self.role == "operator")
@@ -101,12 +109,23 @@ def _header_clone(request) -> str:
     return ""
 
 
+LOCAL_STREAM_GRACE_SECONDS = 10.0   # a new transport's window to open its GET stream before it reads as gone
+LOCAL_RETAINED_MAX = 512      # bridge processes whose per-session state is kept across a transport re-initialize
+
+
 class SessionRegistry:
-    def __init__(self, principals: PrincipalRegistry | None = None):
+    def __init__(self, principals: PrincipalRegistry | None = None, *, local_key: bytes | None = None,
+                 clock=time.monotonic):
         self.principals = principals if principals is not None else PrincipalRegistry(None)
         self._lock = threading.Lock()
         self._by_transport: dict[str, RemoteSession] = {}
         self._by_session: dict[str, RemoteSession] = {}
+        # Local profile: sessions are derived from the bridge's discriminator, and a bridge's liveness is its open
+        # GET stream (a hard-killed bridge sends no DELETE; with the idle timeout off its transport would live forever).
+        self.local_key = local_key
+        self._clock = clock
+        self._procs: dict[tuple[str, str], RemoteSession] = {}      # (discriminator, nonce) -> its session
+        self._primary: dict[str, RemoteSession] = {}                 # discriminator -> the session with the derived id
         self._manager = None
         self.on_disconnect: list = []   # 010 seam; runs on the event loop: never block
 
@@ -121,7 +140,84 @@ class SessionRegistry:
         """Whether the transport manager is attached: only then does `connected` mean anything (team-server-010)."""
         return self._manager is not None
 
+    @property
+    def local(self) -> bool:
+        return self.local_key is not None
+
     # ── binding ──
+    def bind_scope(self, transport_id: str, scope) -> "RemoteSession | None":
+        """Bind a transport at its first request from the ASGI scope's bridge headers (local profile). A request
+        without a discriminator (not a bridge) is left for the first tool call, which mints a transport-bound session."""
+        from . import local as local_profile
+        user = scope.get("user")
+        principal = auth.principal_from_access_token(getattr(user, "access_token", None))
+        if principal is None or not self.local:
+            return None
+        discriminator, nonce, cwd = local_profile.bridge_headers(scope)
+        if not discriminator:
+            return None
+        return self.bind_local(transport_id, principal, discriminator, nonce, cwd)
+
+    def bind_local(self, transport_id: str, principal, discriminator: str, nonce: str = "", cwd: str = "",
+                   agent: str = "") -> RemoteSession:
+        """The session of a bridge's transport. The id is `<handle>@<16 hex>` derived from the discriminator under the
+        per-store key, so a restarted server or a re-initialized transport gives the same holder. A discriminator
+        that already has a live bridge with another nonce (two processes, one id) gets a fresh random session instead
+        of a merge. The per-session state (task, bundle) follows the (discriminator, nonce) across transports."""
+        from . import local as local_profile
+        with self._lock:
+            entry = self._by_transport.get(transport_id)
+            if entry is not None:
+                if entry.key_id != principal.key_id:
+                    raise PermissionError("session belongs to another key")
+                return entry
+            entry = self._procs.get((discriminator, nonce))
+            if entry is not None and entry.key_id != principal.key_id:
+                raise PermissionError("session belongs to another key")
+            if entry is None:
+                primary = self._primary.get(discriminator)
+                if primary is not None and self._alive(primary):
+                    session = f"{principal.handle}@{secrets.token_hex(8)}"        # a second live process: never a merge
+                    while session in self._by_session:
+                        session = f"{principal.handle}@{secrets.token_hex(8)}"
+                else:
+                    session = local_profile.derive_session_id(self.local_key, principal.handle, discriminator)
+                assert claims.REMOTE_SESSION_RE.fullmatch(session), session
+                entry = RemoteSession(session, principal.handle, principal.key_id, principal.role, transport_id, agent,
+                                      time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                      discriminator=discriminator, nonce=nonce, cwd=cwd)
+                if primary is None or session == local_profile.derive_session_id(self.local_key, principal.handle,
+                                                                                 discriminator):
+                    self._primary[discriminator] = entry
+                self._procs[(discriminator, nonce)] = entry
+                for old in list(self._procs):
+                    if len(self._procs) <= LOCAL_RETAINED_MAX:
+                        break
+                    if not self._alive(self._procs[old]):
+                        self._procs.pop(old)
+            else:
+                self._by_transport.pop(entry.transport_id, None)       # a re-initialized transport: same session
+                entry.transport_id = transport_id
+                entry.announced = False
+            entry.cwd = cwd or entry.cwd
+            entry.opened = self._clock()
+            self._by_transport[transport_id] = entry
+            self._by_session[entry.session] = entry
+        LOG.info("session %s opened for %s (bridge %s, transport %s)", _log_safe(entry.session),
+                 _log_safe(principal.handle), _log_safe(discriminator[:12]), _log_safe(transport_id[:8]))
+        return entry
+
+    def close_streams(self) -> None:
+        """Close every transport's GET stream (drain). Must run on the HTTP event loop."""
+        manager = self._manager
+        if manager is None:
+            return
+        for transport in list(manager._server_instances.values()):
+            try:
+                transport.close_standalone_sse_stream()
+            except Exception as exc:  # noqa: BLE001 - a transport mid-close is already closing
+                LOG.debug("could not close a GET stream: %s", type(exc).__name__)
+
     def bind(self, transport_id: str, principal, agent: str, clone: str = "") -> RemoteSession:
         with self._lock:
             entry = self._by_transport.get(transport_id)
@@ -179,6 +275,11 @@ class SessionRegistry:
             transport_id = request.headers.get("mcp-session-id")
             if not transport_id or not TRANSPORT_ID_RE.fullmatch(transport_id):
                 raise PermissionError("MCP session id missing")
+            if self.local:
+                entry = self.by_transport(transport_id) or self.bind_scope(transport_id, request.scope)
+                if entry is not None:
+                    entry.agent = entry.agent or _client_agent()
+                    return entry
             return self.bind(transport_id, principal, _client_agent(), clone=_header_clone(request))
         key_id = auth.VIEWER_KEY_ID.get()
         if key_id is None:
@@ -199,7 +300,12 @@ class SessionRegistry:
         if manager is None:
             return False
         transport = manager._server_instances.get(entry.transport_id)
-        return transport is not None and not getattr(transport, "is_terminated", False)
+        if transport is None or getattr(transport, "is_terminated", False):
+            return False
+        if self.local:
+            # A bridge is alive while its GET stream is open; a fresh transport gets a few seconds to open one.
+            return GET_STREAM_KEY in transport._request_streams or self._clock() - entry.opened < LOCAL_STREAM_GRACE_SECONDS
+        return True
 
     def connected(self, session: str) -> bool:
         """Installed as native.claims.CONNECTED. Read from any thread: one atomic dict lookup each."""

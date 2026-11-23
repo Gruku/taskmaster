@@ -116,6 +116,9 @@ def _compute_build():
 
 
 def _build():
+    global _BUILD
+    if _BUILD is None:
+        _BUILD = _compute_build()
     return _BUILD
 
 
@@ -141,9 +144,11 @@ def build_identity() -> dict:
     return {'version': version, 'digest': digest}
 
 
-# Taken at import, not at the first Client(): a process reports the code it loaded, even if
-# the files are upgraded in place while it runs.
-_BUILD = _compute_build()
+# Computed on first use: the stdlib-only bridge imports this module but needs a digest only when it compares
+# builds, and hashing every source file at import cost it several MB. The processes that must report the code they
+# loaded even if the files are upgraded in place (coordinator client/service; serve upgrade does so only because it
+# imports coordinator.client) call build_identity() at their own import, which freezes it as before.
+_BUILD = None
 
 
 def valid_build(value) -> bool:
@@ -196,6 +201,11 @@ def check_handshake(value, identity, nonce, build, *, any_build=False):
         raise HandshakeError('coordinator root/store/schema/protocol/generation mismatch; reconnect explicitly')
     if same_build(value.get('build'), build) or (any_build and valid_build(value.get('build'))):
         return
+    if valid_build(value.get('build')) and compare_versions(value['build'], build) == -1:
+        raise HandshakeError(
+            f"taskmaster was upgraded: restart this session. This client is build {describe(value['build'])}; the running "
+            f"coordinator is build {describe(build)}, which only runs commands from its own build (reload the plugin).",
+            may_have_committed=False)
     raise HandshakeError(
         f"coordinator build {describe(build)} differs from the client build {describe(value.get('build'))}; "
         'the request was refused. A newer client retires an idle older coordinator; an older client must restart '

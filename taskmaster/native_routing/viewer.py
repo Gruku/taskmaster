@@ -15,6 +15,7 @@ from taskmaster import taskmaster_v3 as v3
 from taskmaster.native.contracts import Conflict
 
 from . import derived, gate, reads, runtime
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def database():
@@ -52,7 +53,7 @@ def _materialized(snapshot, data: dict) -> dict:
 
 def snapshot(database):
     """`(data, etag)` for one request, as `_load_snapshot` answers on a legacy store."""
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return None
     with _open(database) as call, call.read() as snap:
         return _materialized(snap, reads.tree(snap)), _etag(snap)
@@ -67,14 +68,14 @@ def prefs(database) -> dict:
 
 def task_full(database, task_id):
     backlog_path = bs._backlog_path()
-    if not backlog_path.exists():
+    if not _layout_present(backlog_path):
         return None, ""
     data, etag = snapshot(database)
     return bs._task_full_from(data, etag, backlog_path, task_id)
 
 
 def epic_full(database, epic_id):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return None, ""
     data, etag = snapshot(database)
     return bs._epic_full_from(data, etag, epic_id)
@@ -98,7 +99,7 @@ def threads(database) -> dict:
 def related(database, task_id):
     """`_load_related_for_task` from rows: what the tool's top-level file globs reach."""
     backlog_path = bs._backlog_path()
-    if not backlog_path.exists():
+    if not _layout_present(backlog_path):
         return None
     with _open(database) as call, call.read() as snap:
         dependencies, unblocks = _related_dependencies(snap, task_id)
@@ -249,7 +250,7 @@ def _idea_create(handler, database):
         handler._send_json(400, {"ok": False, "error": "title is required"})
         return
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         handler._send_json(400, {"ok": False, "error": f"no backlog at {backlog}"})
         return
     arguments = {"title": title, "tags": payload.get("tags") or [], "status": payload.get("status", ""),
@@ -278,7 +279,7 @@ def _note_create(handler, database):
         handler._send_json(400, {"ok": False, "error": "text is required"})
         return
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         handler._send_json(400, {"ok": False, "error": f"no backlog at {backlog}"})
         return
     call, refusal = _execute(handler, database, "note.create",
@@ -539,7 +540,7 @@ def _bug_create(handler, database):
         handler._send_json(400, {"ok": False, "error": "title is required"})
         return
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         handler._send_json(400, {"ok": False, "error": f"no backlog at {backlog}"})
         return
     arguments = {"title": title, "found_in": payload.get("found_in") or None,

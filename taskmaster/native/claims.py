@@ -181,6 +181,10 @@ REMOTE_SESSION_RE = re.compile(
 # the serve daemon (`SessionRegistry.connected`); None means no server, so no
 # connection can be open.
 CONNECTED = None
+# Whether a person's disconnected earlier session's claim may be adopted by their other sessions. The local server
+# (local-server-002) turns it off: every local session shares the handle "operator", so adoption by handle would let
+# any session take over another's claim; there a claim frees only by expiry (the claim keeper) or by force.
+ADOPT_ACROSS_SESSIONS = True
 
 
 def remote_handle(session) -> "str | None":
@@ -209,6 +213,8 @@ def adoptable(holder, session) -> bool:
     (handle), and the holder's connection is gone. A channel session (the
     person's viewer) sees all of the person's sessions as its own. One person's
     two open connections stay protected from each other (design D6, Q2)."""
+    if not ADOPT_ACROSS_SESSIONS:
+        return False
     if not holder or holder == session:
         return False
     handle = remote_handle(holder)
@@ -415,6 +421,27 @@ def move_refusal(task_id: str, before: dict, after: dict, *, session: str, conne
     return (f"task `{task_id}` is claimed by {who} (`{state.holder}`){until}. This change would release or "
             f"move that claim, and only an operator can do that to a teammate's claim. Ask {who} to release "
             f"it first, or wait until it expires. Nothing was changed.")
+
+
+def status_refusal(task_id: str, before: dict, after: dict, *, session: str, connection,
+                   requester: "Requester | None", now=None) -> "str | None":
+    """Why a write may not change the status of a teammate's claimed task, or None (team-server-033).
+
+    Only the holder's person or an operator moves a live claimed task. An expired or released claim, the
+    person's own other sessions and host-local callers (requester None) are unaffected."""
+    if requester is None or requester.may_force_any or before.get("status") == after.get("status"):
+        return None
+    if not _holder_of(before):
+        return None
+    state = read(before, task_id=task_id, session=session, connection=connection, now=now)
+    if not _protected_from(state, requester):
+        return None
+    who = _whose(state.holder)
+    only = who if remote_handle(state.holder) else f"that session (`{state.holder}`)"
+    until = f" until {state.expires_at}" if state.expires_at else ""
+    return (f"task `{task_id}` is claimed by {who} (`{state.holder}`){until}. Only {only} or an operator can "
+            f"change its status. Ask {who} to release the claim first, or wait until it expires. "
+            f"Nothing was changed.")
 
 
 def survives_status_change(doc, *, session: str, connection, now=None) -> bool:

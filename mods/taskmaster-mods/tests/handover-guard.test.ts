@@ -18,6 +18,7 @@ import {
   parseForkHandover,
   REFRESH_PROMPT,
 } from '../hooks/handover-guard'
+import { bridgeMayHaveCommitted } from './fixtures/bridge-text'
 import { PLUGIN } from './fixtures/inputs'
 import { RR_STUB } from './fixtures/rr-stub'
 import { stateOf, type World, worldOf } from './fixtures/world'
@@ -242,6 +243,21 @@ describe('handover guard: in a session', () => {
     await clock.advance(56 * MIN)
     expect(g.forks).toHaveLength(1)
     expect(g.compacts).toEqual([])
+  })
+
+  test('a handover create cut by a bridge restart (may have committed) is no handover: no compaction, no second try', ON, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = worldOf(on, clock)
+    const g = guardWorld(on, world, 300_000)
+    world.mcp = tool => ({ deny: bridgeMayHaveCommitted(tool) })
+    await $.turn.complete(TURN_END)
+    await clock.advance(55 * MIN)
+    expect(created(world)).toHaveLength(1)
+    expect(g.compacts).toEqual([])
+    await $.turn.complete(TURN_END)
+    await clock.advance(56 * MIN)
+    expect(g.forks).toHaveLength(1)
+    expect(created(world)).toHaveLength(1)
   })
 
   test('a turn that starts while the fork runs keeps the handover but skips the compaction', ON, async ($, on) => {

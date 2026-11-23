@@ -14,6 +14,7 @@ from taskmaster.native import domain
 from . import reads
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def _run(call, operation, arguments):
@@ -230,7 +231,7 @@ def _validate(snapshot):
 @adapter("backlog_area_create")
 def area_create(call, *, area_id, name, description, anchors):
     backlog = bs._backlog_path()
-    if not backlog.exists():
+    if not _layout_present(backlog):
         return f"Error: no backlog found at {backlog}. Run `backlog_init` first."
     try:
         anchors = bs._anchor_items(anchors)
@@ -261,7 +262,7 @@ def area_create(call, *, area_id, name, description, anchors):
 
 @adapter("backlog_area_list")
 def area_list(call, *, limit):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         return bs._area_list_text(reads.rows_only(snapshot), limit)
@@ -269,7 +270,7 @@ def area_list(call, *, limit):
 
 @adapter("backlog_area_get")
 def area_get(call, *, area_id):
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         epics = reads.epics(snapshot)
@@ -288,7 +289,7 @@ def area_get(call, *, area_id):
 def area_update(call, *, area_id, field, value):
     if field not in domain.ALLOWED_AREA_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(domain.ALLOWED_AREA_FIELDS))}"
-    if not bs._backlog_path().exists():
+    if not _layout_present(bs._backlog_path()):
         return "No backlog found."
     with call.read() as snapshot:
         entity = reads.get(snapshot, "area", area_id)

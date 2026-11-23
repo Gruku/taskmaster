@@ -121,6 +121,7 @@ def test_g_instructions_end_with_server_note(web):
             return client.initialize_result.instructions
     instructions = asyncio.run(go())
     assert instructions.endswith(u.SERVER_NOTE)
+    assert "Members cannot run backlog_sync" in instructions
     from taskmaster import backlog_server as bs
     assert u.SERVER_NOTE not in bs._SERVER_INSTRUCTIONS
 

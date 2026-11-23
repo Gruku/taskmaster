@@ -135,8 +135,8 @@ async def _sweep(manager, registry, seconds, sessions=None) -> None:
 def build_app(server, authenticator: Authenticator, *, path=DEFAULT_PATH, allowed_hosts=(), middleware=(),
               session_idle_seconds=DEFAULT_SESSION_IDLE_SECONDS, registry=None,
               sweep_seconds=REVOCATION_SWEEP_SECONDS, sessions=None, routes=()):
-    if not session_idle_seconds > 0:
-        raise ValueError("session_idle_seconds must be positive")
+    if session_idle_seconds is not None and not session_idle_seconds > 0:
+        raise ValueError("session_idle_seconds must be positive (or None: no idle timeout, the local profile)")
     app = create_streamable_http_app(
         server=server, streamable_http_path=path, auth=ServeTokenVerifier(authenticator),
         json_response=False, stateless_http=False, debug=False, routes=list(routes) or None,
@@ -152,7 +152,7 @@ def build_app(server, authenticator: Authenticator, *, path=DEFAULT_PATH, allowe
                 raise RuntimeError(INTERNALS_CHANGED)
             manager = asgi.session_manager
             check_session_internals(manager)
-            manager.session_idle_timeout = float(session_idle_seconds)  # design D10
+            manager.session_idle_timeout = None if session_idle_seconds is None else float(session_idle_seconds)  # design D10
             if sessions is not None:
                 sessions.attach(manager)            # team-server-003: `connected` reads the manager's table
             sweeper = (asyncio.get_running_loop().create_task(_sweep(manager, registry, sweep_seconds, sessions))

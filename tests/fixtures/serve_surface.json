@@ -20,6 +20,7 @@
    "receipt",
    "retire",
    "shutdown",
+   "shutdown_if_idle",
    "status",
    "sync",
    "sync_job",
@@ -32,7 +33,8 @@
   ],
   "SERVER_REFUSED": [
    "retire",
-   "shutdown"
+   "shutdown",
+   "shutdown_if_idle"
   ]
  },
  "ops": {
@@ -449,7 +451,8 @@
   },
   "backlog_store_status": {
    "class": "member",
-   "schema_sha256": "fdca8d9bd184204ba64c1fc764daac2f6f3024639325dd78169fd703c270775a"
+   "note": "deep=True (a full integrity_check) is operator-only on a team server (backlog_server._integrity_section)",
+   "schema_sha256": "0b5acede065a671428398524d95d830878a68730a3f2e6b457c2b0b5c1d0ab11"
   },
   "backlog_sync": {
    "class": "operator-only",

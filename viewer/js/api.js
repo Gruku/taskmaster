@@ -211,7 +211,7 @@ export async function getBug(bugId) {
 }
 
 export async function archiveBug(bugId) {
-  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}/archive`, { method: 'POST' });
+  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}/archive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   if (!r.ok) throw new Error(`archiveBug ${bugId} failed: ${r.status}`);
   return r.json();
 }

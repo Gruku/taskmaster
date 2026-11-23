@@ -697,6 +697,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def upsert_session_row(connection: sqlite3.Connection, *, session: str, current_tool: str | None = None,
+                       cwd: str | None = None) -> None:
+    """Insert or refresh one `sessions` heartbeat row for this process. The local server (serve --local) writes one
+    per bridge session through this, with the bridge's cwd; a stdio store writes its own through Store._register_session."""
+    now = _now()
+    connection.execute(
+        "INSERT INTO sessions(session,pid,host,started,last_seen,cwd,current_tool) "
+        "VALUES(?,?,?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET "
+        "pid=excluded.pid,host=excluded.host,last_seen=excluded.last_seen,"
+        "cwd=excluded.cwd,current_tool=excluded.current_tool",
+        (session, os.getpid(), socket.gethostname(), now, now, cwd or str(Path.cwd().resolve()), current_tool),
+    )
+
+
 def _close_connections(connections: dict[Path, sqlite3.Connection]) -> None:
     for connection in tuple(connections.values()):
         try:
@@ -2291,22 +2305,7 @@ class Store:
         current_tool: str | None,
         session_id: str | None = None,
     ) -> None:
-        now = _now()
-        connection.execute(
-            "INSERT INTO sessions(session,pid,host,started,last_seen,cwd,current_tool) "
-            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET "
-            "pid=excluded.pid,host=excluded.host,last_seen=excluded.last_seen,"
-            "cwd=excluded.cwd,current_tool=excluded.current_tool",
-            (
-                session_id or self.session,
-                os.getpid(),
-                socket.gethostname(),
-                now,
-                now,
-                str(Path.cwd().resolve()),
-                current_tool,
-            ),
-        )
+        upsert_session_row(connection, session=session_id or self.session, current_tool=current_tool)
 
     def _try_register_session(
         self,

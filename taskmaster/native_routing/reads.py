@@ -10,6 +10,7 @@ from copy import deepcopy
 from taskmaster import backlog_server as bs
 from taskmaster.native.queries import MAX_PAGE
 from taskmaster.taskmaster_v3 import BODY_KEY
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def page(snapshot, kind, *, fields=None, **filters) -> list[dict]:
@@ -331,7 +332,7 @@ class NativeLinks:
 
     def peer(self, target):
         from taskmaster.taskmaster_v3 import resolve_link_kind
-        if not self._backlog_path.exists():
+        if not _layout_present(self._backlog_path):
             return None
         # By lookup, as the legacy `read_entity_anywhere` resolves it: a task's
         # id carries its epic's prefix, not a kind's.

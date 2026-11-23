@@ -27,6 +27,8 @@ _RETRY_PAUSE = 0.1
 # A child of taskmaster.coordinator, so the serve daemon's log handlers (001) receive its lines.
 LOG = logging.getLogger('taskmaster.coordinator.client')
 
+build_identity()  # freeze this process's build at import (protocol computes it lazily)
+
 
 class _ForeignBuild(Exception):
     """A live coordinator of another build holds this repository."""
@@ -333,7 +335,8 @@ class Client:
                 '.taskmaster/local/coordinator/discovery.json', may_have_committed=False)
         order = compare_versions(self.build, theirs)
         if order == -1:
-            raise HandshakeError(f'a newer taskmaster build ({describe(theirs)}) runs this repository\'s coordinator; '
+            raise HandshakeError('taskmaster was upgraded: restart this session. '
+                                 f'A newer taskmaster build ({describe(theirs)}) runs this repository\'s coordinator; '
                                  f'this client ({describe(self.build)}) will not downgrade it; restart this session '
                                  'to load the updated plugin', may_have_committed=False)
         if not self.autostart:

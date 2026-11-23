@@ -47,6 +47,8 @@ export function tmActions(call: (tool: string, args: Record<string, unknown>) =>
       const reason = error instanceof Error ? error.message : String(error)
       // The mod's own write timeout: the call runs on and the server may still save it.
       const pending = error instanceof TmUnreachable ? error.pending : undefined
+      // The bridge cut the connection after sending: the call may have landed, though nothing is still running.
+      if (pending === undefined && error instanceof TmUnreachable && error.committed) return { ok: false, refusal: `Taskmaster unreachable: ${reason}`, mayHaveMoved: true }
       if (pending === undefined) return { ok: false, refusal: `Taskmaster unreachable: ${reason}` }
       const refusal = `Taskmaster unreachable: ${reason} — it may still have been saved: check before pressing again`
       return { ok: false, refusal, mayHaveMoved: true, pending }

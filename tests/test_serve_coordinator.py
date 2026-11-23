@@ -144,3 +144,18 @@ def test_serve_coordinator_sanitizes_over_ipc(root, serve_owner, monkeypatch):  
     with pytest.raises(ServiceUnavailable) as exc:
         Client(root, autostart=False).status()
     assert "internal error in the coordinator (ref c" in str(exc.value) and "secret" not in str(exc.value)
+
+
+def test_shutdown_if_idle_never_stops_the_serve_coordinator_and_the_hand_over_leaves_it(root, serve_owner):
+    # local-server-004 review I1: shutdown_if_idle is for session coordinators; the daemon's own is never stopped by it
+    from taskmaster.serve import local as local_profile
+    from taskmaster.serve.local import StoreOwnedBusy
+    owner = serve_owner(root)
+    with pytest.raises(ValueError):
+        Client(root, autostart=False).call("shutdown_if_idle")
+    with pytest.raises(ValueError):
+        Client(root, autostart=False).call("shutdown_if_idle", origin={"principal": "a" * 16})
+    assert not owner.stopping.is_set()
+    with pytest.raises(StoreOwnedBusy):
+        local_profile.hand_over_session_coordinator(root, wait=0.6)
+    assert not owner.stopping.is_set()

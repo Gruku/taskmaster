@@ -30,6 +30,7 @@ from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, CoordinatorStoppin
 from .actor_resolver import LOCAL, ActorResolver, LocalCloneSource, Origin
 
 LOG = logging.getLogger(__name__)
+build_identity()  # freeze this process's build at import (protocol computes it lazily)
 
 
 def _without_actor(request):
@@ -564,6 +565,8 @@ class Coordinator:
         if method == 'shutdown':
             self.stop()
             return {'state': 'stopping'}
+        if method == 'shutdown_if_idle':
+            return self.shutdown_if_idle()
         raise ValueError('unsupported coordinator method')
 
     def _busy(self):
@@ -574,6 +577,35 @@ class Coordinator:
         # A backlog_sync job is busy between its rounds too, when active_syncs is 0.
         return bool(self.pending or self.linear.jobs or self.active_syncs or self.git_active is not None
                     or running(self) is not None)
+
+    def busy_now(self):
+        """Whether any work is in flight (the real predicate behind idle expiry and retire), taken under the guards;
+        True when the guards cannot be had in a moment (something holds them: it is busy)."""
+        if not self.guard.acquire(timeout=0.25):
+            return True
+        try:
+            if not self.linear.guard.acquire(timeout=0.25):
+                return True
+            try:
+                return self._busy()
+            finally:
+                self.linear.guard.release()
+        finally:
+            self.guard.release()
+
+    def shutdown_if_idle(self):
+        """Check and stop as one step under the guards (local-server-002 M2): a busy owner is left running."""
+        if not self.publication.acquire(timeout=0.25):
+            return {'state': 'busy'}
+        try:
+            with self.guard, self.linear.guard:
+                if not self.stopping.is_set() and self._busy():
+                    return {'state': 'busy'}
+                self.stopping.set()
+        finally:
+            self.publication.release()
+        self.stop()
+        return {'state': 'stopping'}
 
     def idle_expired(self, seconds):
         """True, and stopping, once the owner has been idle for `seconds`. Stopping is set

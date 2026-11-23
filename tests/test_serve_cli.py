@@ -33,6 +33,13 @@ def test_non_loopback_bind_is_refused_without_the_flag(tmp_path, capsys):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("flag", [["--idle-exit", "abc"], ["--idle-exit", "5"], ["--plugin-dir", "x"]])
+def test_local_options_without_local_are_refused(tmp_path, capsys, flag):
+    assert cli.main(["--root", str(tmp_path), *flag]) == 2
+    assert "only apply with --local" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_token_prints_and_rotates(tmp_path, capsys):
     (tmp_path / ".taskmaster" / "local").mkdir(parents=True)
     assert cli.main(["token", "--root", str(tmp_path)]) == 0

@@ -11,6 +11,7 @@ from taskmaster import backlog_server as bs
 from taskmaster.native import documents as core
 from .registry import adapter
 from .runtime import error_text
+from taskmaster.root import backlog_layout_present as _layout_present
 
 
 def sections_with_provenance(snapshot, kind, ident, sections, project_root):
@@ -40,7 +41,7 @@ def sections_with_provenance(snapshot, kind, ident, sections, project_root):
 def project_root():
     """The directory task `docs` paths are relative to, or None outside a project."""
     backlog = bs._backlog_path()
-    return backlog.parent.parent if backlog.exists() else None
+    return backlog.parent.parent if _layout_present(backlog) else None
 
 
 @adapter("backlog_document")

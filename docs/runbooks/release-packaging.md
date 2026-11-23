@@ -145,6 +145,10 @@ claude-tools.
 2. **Bump.** `python scripts/bump_version.py <version>` rewrites strings #1-#5 and then
    runs the check. It exits 0 only when all five agree and the CHANGELOG heading exists.
    `python scripts/bump_version.py --check` repeats the check without changing anything.
+   Then regenerate the bridge's shipped handshake: `python tests/surface_inventory.py --write-handshake`
+   (rewrites `tm_bridge_handshake.json`). Do it after the bump and whenever a tool or the server instructions change:
+   `serverInfo.version` is part of the snapshot, and `test_the_shipped_handshake_equals_the_servers_live_registration`
+   fails when it is stale. Commit the file with the bump.
 3. **Test and commit** on the release branch: the full suite (`pytest tests -n 4`), then
    commit. The version test in `tests/test_codex_plugin_manifest.py` no longer contains a
    literal version.

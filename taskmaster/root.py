@@ -345,6 +345,21 @@ def _network_filesystem_reason(path: Path) -> str | None:
     return None
 
 
+def canonical_layout_present(project_root: Path) -> bool:
+    """Whether `<root>/.taskmaster` holds a project: its backlog.yaml or its store database.
+
+    The one answer for every layout probe (B-111). backlog.yaml alone is not a stable marker: the native exporter
+    moves it aside while it installs new bytes, so a probe landing in that window saw no project. store.db stays.
+    """
+    return backlog_layout_present(project_root / ".taskmaster" / "backlog.yaml")
+
+
+def backlog_layout_present(backlog_path: Path) -> bool:
+    """canonical_layout_present for a resolved backlog.yaml path: the file or its sibling local/store.db (B-111)."""
+    backlog_path = Path(backlog_path)
+    return backlog_path.exists() or (backlog_path.parent / "local" / "store.db").is_file()
+
+
 def walk_up_for_backlog(start: Path) -> Path | None:
     """Nearest ancestor of `start` (itself included) that owns a backlog.
 
@@ -355,7 +370,7 @@ def walk_up_for_backlog(start: Path) -> Path | None:
     start = _absolute(start)
     candidates = [start, *start.parents]
     for candidate in candidates:
-        if (candidate / ".taskmaster" / "backlog.yaml").is_file():
+        if canonical_layout_present(candidate):
             return candidate
     for candidate in candidates:
         if (candidate / ".taskmaster").is_dir():

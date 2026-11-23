@@ -7,6 +7,31 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.6.0
+
+**Local server mode: one hidden taskmaster server per project, shared by every Claude Code session.** Until now each session started its own backlog server. Now the plugin's `tm` entry is a small relay that finds the project's local server, starts it if it is not running, and passes calls through. taskmaster-mods 0.2.7.
+
+- On by default for a project with a native store. There is nothing to start and no window ever opens; the server stops by itself after the last session has left.
+- Memory: 8 Claude Code sessions on one Windows project went from about 950 MB to about 550 MB: a session now costs about 58 MB (the relay plus its uv launcher) instead of about 119 MB, plus one shared server of about 82 MB.
+- If the server cannot be started, the relay falls back to the per-session server of 7.5.0.
+- Opt out with `TASKMASTER_LOCAL_SERVER=0` (all projects) or `local_server: off` in `.taskmaster/local/settings.json` (one project).
+- The taskmaster mod and its hooks work through the same server, with no setup.
+- A clone of a team-server project forwards through the plugin's `tm` to the team server using the member key, so the separate http MCP entry is optional.
+- `backlog_open_viewer` opens the viewer already signed in, with a one-time link. The viewer on a forwarded port or another host name now answers 403.
+- The solo viewer now refuses cross-site writes (CSRF), foreign Host headers and framing, and no longer sends open CORS headers.
+
+**Team-server and store fixes in this release**
+
+- A hard-linked file is refused when the viewer or a document read opens it (team-server-019).
+- Server wording no longer tells members to run `backlog_sync`, which only the operator can (team-server-021).
+- Anchors longer than the limit are refused on write (team-server-023).
+- Store integrity: a background `integrity_check` at server start on Linux and macOS, and `backlog_store_status(deep=True)` runs it on demand (team-server-029).
+- A member can no longer move a task claimed by a live teammate to blocked or todo; the holder and the operator still can (team-server-033).
+- `backlog_query` calls share one snapshot of the store instead of copying it per call: 8 concurrent queries went from about 30 s to 0.83 s (team-server-034).
+- Fixed a race where a tool call during a file export was routed to the legacy layout and refused a native store (B-111).
+- Fixed the viewer `/file/` route accepting a sibling folder that shares the root's name prefix (B-112).
+- taskmaster-mods 0.2.7 finds the reader script in an installed copy (including the desktop app), and a write cut mid-flight now says it may have committed and refreshes the queue.
+
 ## 7.5.0
 
 **Team server: one project's backlog served to a team, per project and opt-in.** A project moves to a server with

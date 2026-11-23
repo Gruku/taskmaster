@@ -75,7 +75,7 @@ def backlog_claim(call, *, action, task_id, ttl_seconds):
                        "claims": [_state(snapshot, ident, session).as_dict()
                                   for ident in _held_by(snapshot.connection, session)]}
             adoptable = _adoptable(snapshot.connection, session)
-            if claims.remote_handle(session) is not None:
+            if claims.remote_handle(session) is not None and claims.ADOPT_ACROSS_SESSIONS:   # none in the local profile
                 payload["adoptable"] = [_state(snapshot, ident, session).as_dict() for ident in adoptable]
             return answer(payload)
         found = reads.find_task(snapshot, task_id)

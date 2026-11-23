@@ -637,6 +637,16 @@ three extended ones (`backlog_get_task(provenance=)`, `backlog_pick_task(ttl_sec
 `backlog_batch_update(commands=, expected_revisions=, atomic=)`). No tool was renamed or
 removed.
 
+## Local server mode
+
+One hidden taskmaster server runs per project and every Claude Code session on that project shares it. The plugin's `tm` entry is a small relay that finds the server, starts it if needed and passes calls through, so each session costs about 58 MB on Windows (the relay plus its uv launcher) instead of a whole backlog server of about 119 MB (8 sessions: about 550 MB instead of about 950 MB). It is automatic: no command to run, and no console window opens. The taskmaster Claude mod uses the same server. If the server cannot start, the relay falls back to the per-session server.
+
+- **Opt out:** set `TASKMASTER_LOCAL_SERVER=0` (every project), or `local_server: off` in `.taskmaster/local/settings.json` (one project; applies from the next session).
+- **Files:** `.taskmaster/local/serve/` holds `local.json` (where the server listens) and `serve.log`. Look at `serve.log` to see what the server did.
+- **Stopping it:** it exits by itself a while after the last session leaves.
+- **Team clones:** the plugin's `tm` forwards to the team server with the member key, so a separate http MCP entry for the team server is now optional.
+- **Troubleshooting:** run with `TASKMASTER_LOCAL_SERVER=0` to go back to the per-session server and see whether the problem is the shared server. The viewer answers 403 on a forwarded port or another host name; open it with `backlog_open_viewer`.
+
 ## Known limitations
 
 Measured on one Windows 11 machine unless stated. None of the timings includes model or network

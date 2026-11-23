@@ -21,18 +21,19 @@ from pathlib import Path
 import uvicorn
 from starlette.middleware import Middleware
 
+from taskmaster import store_integrity
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.coordinator import allowlist, client, identity_gate, protocol, scopes
 from taskmaster.coordinator.ownership import OwnershipUnavailable, ownership_held
 from taskmaster.coordinator.actor_resolver import LOCAL, Origin
-from taskmaster.coordinator.protocol import check_handshake, describe
+from taskmaster.coordinator.protocol import HandshakeError, check_handshake, describe
 from taskmaster.coordinator.service import Coordinator
-from taskmaster.native import claims, contracts
+from taskmaster.native import claims, contracts, query_snapshots
 
 from .app import build_app, log_safe
 from .claim_keeper import AdoptionNotice, ClaimKeeper
-from .auth import (KeyAuthenticator, OperatorTokenAuthenticator, ensure_operator_token, request_key_id, serve_directory,
-                   token_path)
+from .auth import (KeyAuthenticator, OperatorTokenAuthenticator, ensure_operator_token, read_operator_token,
+                   request_key_id, serve_directory, token_path)
 from . import sessions
 from .identity import ServeActorSource, ServeIdentityGate
 from .sessions import SessionRegistry
@@ -42,24 +43,40 @@ from .guard import HeavyCalls, MemberQueryScope, PrincipalLimits, RequestGuard
 from .limits import failure_budget, principal_inflight, principal_limiter
 from .protocol import HARDENED_KEYS, hardened_uvicorn_options
 from .read_api import ReadApi
-from taskmaster import untrusted
+from taskmaster import query_guard, untrusted
 from .framing import FrameUntrusted, drop_non_string_schemas_sync
 
 from .write_api import WriteApi
 from .sanitize import SanitizeErrors, coordinator_public_error
 from .tracked import TrackedFiles
 from .viewer import ViewerGuard, start_viewer, stop_viewer
-from .viewer_auth import CookieLogin
+from .viewer_auth import LINK_PATH, CookieLogin, LocalLinkLogin
+from .local_viewer import start_band_viewer
+from . import local as local_profile
 from .config import (DEFAULT_EXPORT_INTERVAL, EXIT_COORDINATOR_LOST, EXIT_OK, EXIT_UNAVAILABLE, GRACEFUL_SECONDS,
-                     ServeConfig,
-                     ServeRefused, ServeUnavailable, allowed_viewer_origins, bind_host, check_bind, validate)
+                     PROFILE_LOCAL, ServeConfig,
+                     ServeLeaseHeld, ServeRefused, ServeUnavailable, allowed_viewer_origins, bind_host, check_bind,
+                     validate)
 
 LOG = logging.getLogger("taskmaster.serve")
+_REFUSAL_LOGGED: dict = {}
+
+
+def _warn_rarely(key: str, message: str, *args) -> None:
+    """One warning per key per minute: an unauthenticated local client must not roll serve.log over (review 004 m4)."""
+    now = time.monotonic()
+    if now - _REFUSAL_LOGGED.get(key, -61.0) >= 60.0:
+        if len(_REFUSAL_LOGGED) > 256:
+            _REFUSAL_LOGGED.clear()
+        _REFUSAL_LOGGED[key] = now
+        LOG.warning(message, *args)
 SERVE_RETIRE_REFUSED = ("this coordinator belongs to `taskmaster serve` and is never retired by a client; "
                         "to upgrade, install the new build and `systemctl restart taskmaster`, or run the "
                         "new build's `taskmaster serve --force-upgrade --root <root>` on the host")
 SERVE_SHUTDOWN_REFUSED = ("this coordinator belongs to `taskmaster serve`; stop the daemon instead "
                           "(systemctl stop taskmaster, or Ctrl+C)")
+SERVE_RETIRE_REFUSED_LOCAL = ("this project's local taskmaster server runs an older build while other sessions still use it; it "
+                            "is replaced once they end (restart those sessions to move them onto the new build)")
 OWNED_TEXT = ("another coordinator owns {root}. If it is a session's coordinator, stop it with "
               "`taskmaster coordinator stop --root {root}` or wait for its idle exit; if it is another "
               "`taskmaster serve`, stop that daemon (coordinator stop is refused there)")
@@ -79,10 +96,16 @@ def origin_of(message) -> Origin:
 
 
 class ServeCoordinator(Coordinator):
-    def __init__(self, root, *, registry=None, **kwargs):
+    def __init__(self, root, *, registry=None, local=False, **kwargs):
         registry = registry if registry is not None else PrincipalRegistry(None)
         self.principals = registry
         self.retired_for = None            # the requester build of an accepted --force-upgrade
+        self.is_local = local
+        if local:
+            # Local profile (local-server-002): the clone's own actor source and the base identity gate, so history
+            # reads as it did under stdio; no key, no served-profile attribution.
+            super().__init__(root, **kwargs)
+            return
         source = ServeActorSource(registry)
         super().__init__(root, actor_source=source, **kwargs)
         self.team_identity = ServeIdentityGate(self.root, store_id=self.identity["store_id"], source=source,
@@ -130,7 +153,7 @@ class ServeCoordinator(Coordinator):
     def _upgrade_refusal(self, requester, message) -> str | None:
         from . import upgrade
         if not isinstance(message, dict) or "force_upgrade" not in message:
-            return SERVE_RETIRE_REFUSED
+            return SERVE_RETIRE_REFUSED_LOCAL if self.is_local else SERVE_RETIRE_REFUSED
         if message.get("origin") is not None:
             return "force-upgrade is a host-local operator action"
         proof = message["force_upgrade"]
@@ -147,12 +170,16 @@ class ServeCoordinator(Coordinator):
     def dispatch(self, message):
         if isinstance(message, dict):
             method = message.get("method")
-            if method == "shutdown":
+            if method in ("shutdown", "shutdown_if_idle"):      # shutdown_if_idle is for session coordinators only (review I1)
                 check_handshake(message.get("identity"), self.identity, self.nonce, self.build)
                 raise ValueError(SERVE_SHUTDOWN_REFUSED)
             # The base dispatch's own handshake order, so a refusal never answers an unauthenticated message.
-            check_handshake(message.get("identity"), self.identity, self.nonce, self.build,
-                            any_build=method == "retire")
+            try:
+                check_handshake(message.get("identity"), self.identity, self.nonce, self.build,
+                                any_build=method == "retire")
+            except HandshakeError as exc:      # a hook, CLI or stdio server of another build: say so in the server log
+                _warn_rarely(f"hs:{log_safe(method)}", "refused %s: %s", log_safe(method), log_safe(str(exc)))
+                raise
             origin = origin_of(message)                  # the base dispatch parses it again for execute
             # No origin: a host process that read the owner-only discovery file, i.e. the operator.
             # In-process callers without a principal were already stopped by the client (005 D4).
@@ -161,7 +188,7 @@ class ServeCoordinator(Coordinator):
             if refused is None and method == "linear_bootstrap":
                 refused = allowlist.bootstrap_entry_refusal(message.get("entry"))
             if refused is not None:
-                LOG.warning("refused %s for key %s", log_safe(method), log_safe(principal))
+                _warn_rarely(f"rf:{log_safe(method)}:{log_safe(principal)}", "refused %s for key %s", log_safe(method), log_safe(principal))
                 raise ValueError(refused)
             if origin is not LOCAL and method in scopes.NAMED_SCOPE_METHODS:
                 # team-server-004 D2: before any queue or jobs slot is taken.
@@ -214,12 +241,13 @@ class LoggingSetup:
         self.handlers, self.saved = [], []
 
 
-def configure_logging(root: Path, level: str) -> LoggingSetup:
+def configure_logging(root: Path, level: str, *, stream: bool = True) -> LoggingSetup:
     setup = LoggingSetup()
     formatter = logging.Formatter(LOG_FORMAT)
-    stream = logging.StreamHandler()
-    stream.setFormatter(formatter)
-    setup.handlers.append(stream)
+    if stream:      # off in the local profile: its stderr is a file, and serve.log has its own rotating handler (M1)
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        setup.handlers.append(handler)
     try:
         rotating = RotatingFileHandler(serve_directory(root) / "serve.log", maxBytes=1024 * 1024,
                                        backupCount=3, encoding="utf-8")
@@ -294,6 +322,7 @@ class ServeDaemon:
         if pinned:
             raise ValueError(f"uvicorn_options may not override the hardened options: {', '.join(pinned)}")
         self.ready = threading.Event()
+        self.startup_warnings: list[str] = []
         self.exit_code = EXIT_OK
         self._lease = None                  # team-server-009 host lease; released last in _teardown
         self.marker = None
@@ -323,6 +352,10 @@ class ServeDaemon:
         self._notice = None                 # team-server-010 AdoptionNotice middleware
         self._member_scope = None           # team-server-026 MemberQueryScope middleware
         self._heavy = None                  # security review I-1 HeavyCalls middleware
+        self.local = None                   # local-server-002 LocalRuntime, in the local profile only
+        self._previous_adopt = None
+        self._previous_deny = None          # query_guard.DENY_FUNCTIONS_WHEN_SERVING before start
+        self.result_written = False
         self.export_settings = None
         self._stop_requested = False
         self._closed = False
@@ -349,7 +382,10 @@ class ServeDaemon:
         if not (root / ".taskmaster/local").is_dir():
             raise ServeRefused(f"{root} is not a taskmaster project with a local store")
         self.root = root
-        self._logging = configure_logging(root, config.log_level)
+        local = config.profile == PROFILE_LOCAL
+        if local:
+            local_profile.preflight(root)               # before anything is created or locked
+        self._logging = configure_logging(root, config.log_level, stream=not local)
         self._claim_host(root)
         if warning:
             print(warning, file=sys.stderr)
@@ -364,7 +400,9 @@ class ServeDaemon:
         except PrincipalsRefused as exc:
             raise ServeRefused(str(exc)) from None
         registry = PrincipalRegistry(ppath)
-        authenticator = self.authenticator or KeyAuthenticator(OperatorTokenAuthenticator(token_path(root)), registry)
+        authenticator = self.authenticator or (
+            OperatorTokenAuthenticator(token_path(root)) if local        # the local profile: the operator token only
+            else KeyAuthenticator(OperatorTokenAuthenticator(token_path(root)), registry))
         LOG.info("principals: %d active keys", sum(1 for r in records.values() if r.active))
         self.principals_path = ppath
         self._sock = bind_socket(host, config.port)
@@ -373,7 +411,10 @@ class ServeDaemon:
         self._previous_autostart = client.AUTOSTART_ALLOWED
         client.AUTOSTART_ALLOWED = False
         self._previous_origin, self._origin_installed = client.ORIGIN_PROVIDER, True
-        client.ORIGIN_PROVIDER = request_key_id      # the only assignment, ever (design D8)
+        client.ORIGIN_PROVIDER = request_key_id      # the only assignment, ever (design D8); both profiles: it guards the coordinator
+        # team-server-034: the served-only SQL deny list follows the profile (ServeConfig.deny_functions: team True, local False).
+        self._previous_deny, query_guard.DENY_FUNCTIONS_WHEN_SERVING = (
+            query_guard.DENY_FUNCTIONS_WHEN_SERVING, bool(config.deny_functions))
         # The import-time viewer and backlog_open_viewer must never start an unguarded viewer here (006 D10.1).
         self._previous_serve_env, self._serve_env_set = os.environ.get("TASKMASTER_SERVE"), True
         os.environ["TASKMASTER_SERVE"] = "1"
@@ -382,11 +423,13 @@ class ServeDaemon:
         bs = load_server_module(root)
         self._bs = bs
         # team-server-003 D2/D3/D6: the only assignments of SESSION_PROVIDER and claims.CONNECTED.
-        self.sessions = SessionRegistry(registry)
+        self.sessions = SessionRegistry(registry, local_key=local_profile.load_session_key(root) if local else None)
         self._previous_session_provider, self._previous_connected = bs.SESSION_PROVIDER, claims.CONNECTED
         self._sessions_installed = True
         bs.SESSION_PROVIDER = self.sessions.current
         claims.CONNECTED = self.sessions.connected
+        if local:
+            self._previous_adopt, claims.ADOPT_ACROSS_SESSIONS = claims.ADOPT_ACROSS_SESSIONS, False
         self.server_root = Path(bs.ROOT).resolve()
         self._saved_viewer_port, self._viewer_port_saved = bs.VIEWER_PORT, True
         bs.VIEWER_PUBLIC_URL = config.viewer_origins[0] + "/" if config.viewer_origins else None
@@ -405,15 +448,19 @@ class ServeDaemon:
             server, thread, self.viewer_port = start_viewer(bs, guard, config.viewer_port)
             self._viewer = (server, thread)
             LOG.info("viewer on http://127.0.0.1:%s/ (login required)", self.viewer_port)
+        elif local and config.viewer_band:
+            self._start_local_viewer(bs, config, authenticator, principals, inflight, failures)
+        elif local:
+            bs.VIEWER_LOCAL_OFF = "The viewer is off in this server (it was started with --no-viewer)."
         # Before the coordinator, so a refused export setting is exit 2 with nothing there to undo.
         self.export_settings = export_settings(root, config)
-        if not ownership_held(root):        # a stray session coordinator: the start below refuses anyway
+        if not local and not ownership_held(root):        # a stray session coordinator: the start below refuses anyway
             upgraded = upgrade_served_schema(root)
             if upgraded:
                 LOG.info("upgraded the store from native schema %s to %s: a served store is a team store",
                          upgraded["from"], upgraded["to"])
         try:
-            self.coordinator = ServeCoordinator(root, registry=registry)
+            self.coordinator = ServeCoordinator(root, registry=registry, local=local)
             self.coordinator.start()
         except OwnershipUnavailable:
             raise ServeUnavailable(OWNED_TEXT.format(root=root)) from None
@@ -422,6 +469,7 @@ class ServeDaemon:
         except PermissionError as exc:
             raise ServeRefused(f"{exc}") from exc
         self._startup_warnings(root)
+        self._integrity_thread = store_integrity.start_background(root / ".taskmaster/local/store.db", self._integrity_warning)   # POSIX only; advice only
         if self.export_settings is not None:
             from .state_export import StateExporter
             self.exporter = StateExporter(self.coordinator, self.export_settings).start()
@@ -434,25 +482,35 @@ class ServeDaemon:
         self.sessions.on_disconnect.append(lambda entry: self.keeper.wake())
         # team-server-027: outermost after the client-info capture, so the sanitizer still sees raw text and the
         # framer sees the adoption block (design D1.1).
-        self._framer = FrameUntrusted(self.coordinator, pre_team=lambda: pre_team_of(root), non_string=drop_non_string_schemas_sync(bs.mcp._inner))
-        bs.mcp._inner.add_middleware(self._framer)
-        bs.mcp._inner.instructions = bs._SERVER_INSTRUCTIONS + " " + untrusted.SERVER_NOTE
+        if not local:       # the local profile serves one person's own store: no untrusted framing, notes or adoption block
+            self._framer = FrameUntrusted(self.coordinator, pre_team=lambda: pre_team_of(root), non_string=drop_non_string_schemas_sync(bs.mcp._inner))
+            bs.mcp._inner.add_middleware(self._framer)
+            bs.mcp._inner.instructions = bs.server_instructions(server_mode=True) + " " + untrusted.SERVER_NOTE
+        else:               # the local operator can run backlog_sync: the stdio wording (hardening M-2)
+            bs.mcp._inner.instructions = bs.server_instructions(server_mode=False)
         self._sanitizer = SanitizeErrors(root)
         bs.mcp._inner.add_middleware(self._sanitizer)
-        self._notice = AdoptionNotice(self.coordinator, self.sessions)
-        bs.mcp._inner.add_middleware(self._notice)
-        self._member_scope = MemberQueryScope()      # team-server-026
-        bs.mcp._inner.add_middleware(self._member_scope)
-        self._heavy = HeavyCalls()                   # security review I-1
-        bs.mcp._inner.add_middleware(self._heavy)
-        limits = Middleware(PrincipalLimits, limiter=principals, inflight=inflight)
-        # team-server-007: teammates' hooks and mods read here, behind every layer above, on the same limiter.
-        reads = ReadApi(root=root, server=bs.mcp._inner, limiter=principals, build=describe(self.coordinator.build))
-        # team-server-008: a teammate's merge hook sends its stamp here, as a command, on the same layers.
-        writes = WriteApi(root=root, server=bs.mcp._inner, limiter=principals, build=describe(self.coordinator.build))
+        if not local:
+            self._notice = AdoptionNotice(self.coordinator, self.sessions)
+            bs.mcp._inner.add_middleware(self._notice)
+            self._member_scope = MemberQueryScope()      # team-server-026
+            bs.mcp._inner.add_middleware(self._member_scope)
+            self._heavy = HeavyCalls()                   # security review I-1
+            bs.mcp._inner.add_middleware(self._heavy)
+        limits = Middleware(PrincipalLimits, limiter=principals, inflight=inflight,
+                            keyer=local_profile.limit_key if local else None)
+        if local:
+            routes, session_idle = self._local_layers(config, token_path(root)), None
+            local_layer = [Middleware(local_profile.LocalMiddleware, runtime=self.local, mcp_path=config.path)]
+        else:
+            # team-server-007: teammates' hooks and mods read here, behind every layer above, on the same limiter.
+            reads = ReadApi(root=root, server=bs.mcp._inner, limiter=principals, build=describe(self.coordinator.build))
+            # team-server-008: a teammate's merge hook sends its stamp here, as a command, on the same layers.
+            writes = WriteApi(root=root, server=bs.mcp._inner, limiter=principals, build=describe(self.coordinator.build))
+            routes, session_idle, local_layer = [*reads.routes(), *writes.routes()], config.session_idle_seconds, []
         app = build_app(bs.mcp._inner, authenticator, path=config.path, allowed_hosts=config.allowed_hosts,
-                        middleware=[limits, *self._middleware], session_idle_seconds=config.session_idle_seconds,
-                        registry=registry, sessions=self.sessions, routes=[*reads.routes(), *writes.routes()])
+                        middleware=[limits, *local_layer, *self._middleware], session_idle_seconds=session_idle,
+                        registry=registry, sessions=self.sessions, routes=routes)
         for wrap in reversed(self._outer_middleware):
             app = wrap(app)
         # Outermost, so nothing a caller passes can sit ahead of the size cap (006 D1).
@@ -465,6 +523,45 @@ class ServeDaemon:
         LOG.info("starting: root=%s url=%s pid=%s build=%s", root, self.url, os.getpid(),
                  describe(self.coordinator.build))
 
+    def _start_local_viewer(self, bs, config, authenticator, principals, inflight, failures) -> None:
+        """The local profile's guarded viewer (local-server-004): the first free port of the project's band, signed in with
+        a one-time link the `backlog_open_viewer` tool mints. No free port is logged and is never fatal."""
+        root = self.root
+        target = bs._project_port()
+        login = LocalLinkLogin(authenticator=authenticator, principals=principals, inflight=inflight,
+                               operator_key=lambda: read_operator_token(token_path(root)))
+        guard = ViewerGuard(authenticator=authenticator, origins=allowed_viewer_origins(config, target), root=root,
+                            max_body_bytes=config.max_body_bytes, header_timeout=config.header_timeout,
+                            principals=principals, inflight=inflight, failures=failure_budget(), tracked=TrackedFiles(root),
+                            viewer_port=target, body_timeout=config.body_timeout, auth_adapter=login,
+                            charge_anonymous=False)       # its own budget: never the MCP app's (review I2)
+        admit = guard.admit
+
+        def admit_and_note(handler) -> bool:
+            admitted = admit(handler)
+            if admitted and handler.viewer_identity is not None and self.local is not None:
+                self.local.mark_active()
+            return admitted
+        guard.admit = admit_and_note       # reading the viewer keeps the server up (review 004 m3)
+        started = start_band_viewer(bs, guard)
+        if started is None:
+            bs.VIEWER_LOCAL_OFF = ("The viewer is off: every port from 6800 to 6899 is taken on this machine. Close what "
+                                   "holds them and ask again.")
+            return
+        server, thread, self.viewer_port = started
+        self._viewer = (server, thread)
+        bs.VIEWER_LINK_MINTER = lambda: f"http://127.0.0.1:{self.viewer_port}{LINK_PATH}?t={login.mint_link()}"
+        LOG.info("viewer on http://127.0.0.1:%s/ (opened with a one-time link from backlog_open_viewer)", self.viewer_port)
+
+    def _local_layers(self, config: ServeConfig, token_file: Path) -> list:
+        """The local profile's runtime (discovery, status, retire, idle exit) and its control routes."""
+        plugin_dir = config.plugin_dir or Path(__file__).resolve().parents[2]
+        self.local = local_profile.LocalRuntime(
+            root=self.root, url_provider=lambda: self.url, plugin_dir=plugin_dir, token_file=token_file,
+            sessions=self.sessions, coordinator_provider=lambda: self.coordinator, idle_exit=config.idle_exit_seconds)
+        self.local.on_drain.append(self.keeper.request_stop)    # a draining server must not shorten claims on its way out
+        return local_profile.LocalControl(self.local).routes()
+
     def _claim_host(self, root: Path) -> None:
         """Take the host lease before anything opens the store, then check the marker and its host_id.
 
@@ -473,6 +570,13 @@ class ServeDaemon:
         from taskmaster import server_fence, server_marker
         from . import upgrade
         config = self.config
+        if config.profile == PROFILE_LOCAL:
+            try:
+                self._lease = server_fence.claim_host(root)
+            except server_fence.HostLeaseHeld as exc:
+                raise ServeLeaseHeld(str(exc)) from None
+            local_profile.hand_over_session_coordinator(root)       # an idle session coordinator leaves; a busy one -> exit 68
+            return
         try:
             self._lease = server_fence.claim_host(root)
         except server_fence.HostLeaseHeld as exc:
@@ -519,6 +623,11 @@ class ServeDaemon:
                 "docs/runbooks/team-server-migration.md#host-head")
         self.marker = {"url": marker.url, "host_id": marker.host_id}
 
+    def _integrity_warning(self, record: dict) -> None:
+        """A failed full check joins the startup warnings (late, from the check's thread); serving continues."""
+        self.startup_warnings.append("integrity_check FAILED: " + "; ".join(record["detail"]))
+        LOG.warning("startup warning: store integrity_check failed; stop the server and restore from the last backup")
+
     def _startup_warnings(self, root: Path) -> None:
         try:
             with contextlib.closing(protocol.connect(root, readonly=True)) as connection:
@@ -550,6 +659,12 @@ class ServeDaemon:
                 thread.join(0.25)
                 if not self.ready.is_set() and self._server.started:
                     self._announce()
+                if self.local is not None and self.ready.is_set() and not self._stop_requested:
+                    why = self.local.tick()
+                    if why:
+                        LOG.info("local server stopping: %s", why)
+                        self.exit_code = EXIT_OK
+                        self.request_stop(why)
                 if (self.coordinator.stopping.is_set() and not self._stop_requested
                         and self.coordinator.retired_for is not None):
                     LOG.info("retired by a local --force-upgrade to build %s", describe(self.coordinator.retired_for))
@@ -569,6 +684,9 @@ class ServeDaemon:
         return self.exit_code
 
     def _announce(self):
+        if self.local is not None:
+            self.local.publish()             # discovery first: a bridge that sees "ready" finds it
+            self._write_result("ready", url=self.url)
         line = json.dumps({"event": "ready", "url": self.url, "pid": os.getpid(), "root": str(self.root),
                            "server_root": str(self.server_root), "build": describe(self.coordinator.build),
                            "token_file": str(token_path(self.root)),
@@ -581,6 +699,19 @@ class ServeDaemon:
         self.stdout.write(line + "\n")
         self.stdout.flush()
         self.ready.set()
+
+    def _write_result(self, status: str, reason: str = "", *, url=None) -> None:
+        """Local profile: the launch outcome for the bridge (stdout is DEVNULL after its double spawn)."""
+        path = self.config.result_file
+        if path is None or self.result_written:
+            return
+        from taskmaster import localserve
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            localserve.write_result(path, status, reason, pid=os.getpid(), url=url)
+            self.result_written = True
+        except Exception as exc:  # noqa: BLE001 - the bridge times out and falls back
+            LOG.warning("could not write the launch result: %s", type(exc).__name__)
 
     def request_stop(self, reason: str = "request") -> None:
         if self.keeper is not None:
@@ -646,6 +777,8 @@ class ServeDaemon:
             self._serve_env_set = False
         if bs is not None:
             bs.VIEWER_PUBLIC_URL = None
+            bs.VIEWER_LINK_MINTER = None
+            bs.VIEWER_LOCAL_OFF = None
 
     def _teardown(self, announce=False):
         with self._lock:
@@ -675,13 +808,20 @@ class ServeDaemon:
         if self._previous_autostart is not None:
             client.AUTOSTART_ALLOWED = self._previous_autostart
             self._previous_autostart = None
+        query_snapshots.close_all()              # team-server-034: this store's query snapshot files
+        if self._previous_deny is not None:
+            query_guard.DENY_FUNCTIONS_WHEN_SERVING, self._previous_deny = self._previous_deny, None
         if self._origin_installed:
             client.ORIGIN_PROVIDER = self._previous_origin
             self._previous_origin, self._origin_installed = None, False
+        if self.local is not None:
+            self.local.unpublish()
         if self._sessions_installed:
             if self._bs is not None:
                 self._bs.SESSION_PROVIDER = self._previous_session_provider
             claims.CONNECTED = self._previous_connected
+            if self._previous_adopt is not None:
+                claims.ADOPT_ACROSS_SESSIONS, self._previous_adopt = self._previous_adopt, None
             self._previous_session_provider = self._previous_connected = None
             self._sessions_installed = False
         if announce:
