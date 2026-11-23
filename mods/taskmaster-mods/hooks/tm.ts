@@ -1,7 +1,7 @@
 // User intent: the one door to the Taskmaster MCP server — reads sent one at a time, each bounded to 3 s, every write to
 // 15 s, and every reply read by a pure parser — so the surfaces never hang on tm, and a missing server or an unreadable
 // reply degrades to a fault instead of a crash.
-import type { TmBinding, TmBound, TmFault, TmHandover, TmHandoverList, TmHandoverSummary, TmLinkedTask, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
+import type { TmBinding, TmBound, TmConnection, TmFault, TmHandover, TmHandoverList, TmHandoverSummary, TmLinkedTask, TmPhase, TmPhasePane, TmSnapshot, TmTaskDetail } from '../types'
 import { baseName, inferTaskId } from './binding'
 import type { TmHost, TmReply } from './host'
 import { orderQueue } from './model'
@@ -112,7 +112,8 @@ function checked(tool: string, reply: TmReply): TmReply {
   return reply
 }
 
-type Reads = { readonly replies: readonly TmReply[]; readonly stale: string | null }
+/** `team`: read through a team-server clone's reader (the marker), so the connection is the team host. */
+type Reads = { readonly replies: readonly TmReply[]; readonly stale: string | null; readonly team?: boolean }
 
 /**
  * Reads, as one batch (team-server-007 D14). Solo (no reader, or no marker): the MCP calls one after another, each bounded
@@ -125,7 +126,7 @@ export async function readMany(host: Pick<TmHost, 'call' | 'sleep' | 'remote'>, 
   if (remote === null) {
     const replies: TmReply[] = []
     for (const c of calls) replies.push(checked(c.tool, await bounded(host, c.tool, c.args, TM_TIMEOUT_MS)))
-    return { replies, stale: null }
+    return { replies, stale: null, team: false }
   }
   let read: Awaited<ReturnType<typeof remote.read>>
   try {
@@ -134,7 +135,7 @@ export async function readMany(host: Pick<TmHost, 'call' | 'sleep' | 'remote'>, 
     if (!(error instanceof RemoteFailure)) throw error
     throw new TmUnreachable(error.message, error.fault === 'transient', undefined, error.fault === 'unreadable')
   }
-  return { replies: read.replies.map((reply, i) => checked(calls[i]?.tool ?? 'tm', reply)), stale: read.stale }
+  return { replies: read.replies.map((reply, i) => checked(calls[i]?.tool ?? 'tm', reply)), stale: read.stale, team: true }
 }
 
 export async function callTm(host: Pick<TmHost, 'call' | 'sleep' | 'remote'>, tool: string, args: Record<string, unknown>): Promise<TmReply> {
@@ -156,6 +157,15 @@ export function writeTm(host: TmHost, tool: string, args: Record<string, unknown
       .catch(() => undefined)
   }
   return reply
+}
+
+/**
+ * Which taskmaster answered: a team clone is `team` whatever the host says (a 7.5.0 host sends nothing), named by the host's
+ * project when it sends one, else by the clone's directory; otherwise the server's own `server` object, or null (older server).
+ */
+export function connectionOf(server: TmConnection | null, team: boolean, root: string): TmConnection | null {
+  if (!team) return server
+  return { mode: 'team', project: server?.project || baseName(root), version: server?.version ?? '', reason: '', optedOut: false }
 }
 
 function offlineSnapshot(input: FetchInput, reason: string): TmSnapshot {
@@ -246,7 +256,7 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
   const reviewItems = take('backlog_continuity_items', review.text, parseContinuity(review.text), []).filter(i => i.actionClass === 'review')
   const decideAll = take('backlog_continuity_items', decide.text, parseContinuity(decide.text), [])
   const decideItems = decideAll.filter(i => i.actionClass === 'decide')
-  const ho = take('backlog_handover_list', handovers.text, parseHandovers(handovers.text, input.root), { handovers: [], total: 0 })
+  const ho = take('backlog_handover_list', handovers.text, parseHandovers(handovers.text, input.root), { handovers: [], total: 0, server: null })
   const stamps = new Map(reviewItems.map(i => [i.id, i.timestamp]))
   const issues = [...issuesP0.issues, ...issuesP1.issues]
   const decisions = decideItems.filter(i => i.type === 'decision')
@@ -271,6 +281,9 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
     ...decisions.map(i => ({ kind: 'decision' as const, id: i.id, title: i.title, timestamp: i.timestamp })),
   ])
   const bound = boundFrom(input, taskId, task, pipeline, unreadable)
+  const fault: TmFault = reads.stale !== null ? 'offline' : unreadable.length > 0 ? 'unreadable' : 'none'
+  // The label shows only for a clean read (lead ruling 5): a fault shows as it always has.
+  const connection = fault === 'none' ? connectionOf(ho.server, reads.team === true, input.root) : null
   return {
     snapshot: {
       reachable: true,
@@ -282,8 +295,9 @@ export async function fetchSnapshot(host: TmHost, input: FetchInput): Promise<Fe
       handovers: ho.handovers,
       handoversTotal: ho.total,
       bound,
+      ...(connection === null ? {} : { connection }),
     },
-    fault: reads.stale !== null ? 'offline' : unreadable.length > 0 ? 'unreadable' : 'none',
+    fault,
     unreadable,
   }
 }
@@ -452,7 +466,7 @@ export async function readHandoverList(host: TmHost, root: string, closed: boole
     return parsed.ok ? parsed.value : null
   }
   let open: Awaited<ReturnType<typeof listed>>
-  let shut: Awaited<ReturnType<typeof listed>> = { handovers: [], total: 0 }
+  let shut: Awaited<ReturnType<typeof listed>> = { handovers: [], total: 0, server: null }
   try {
     open = await listed('open')
     if (open !== null && closed) shut = await listed('closed')

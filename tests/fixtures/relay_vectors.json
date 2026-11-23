@@ -1,0 +1,229 @@
+{
+ "format": 1,
+ "constants": {
+  "CONNECT_TIMEOUT": 5.0,
+  "SHORT_TIMEOUT": 30.0,
+  "MAX_BODY_BYTES": 67108864,
+  "MAX_LINE_BYTES": 16777216,
+  "KNOWN_PROTOCOLS": [
+   "2024-11-05",
+   "2025-03-26",
+   "2025-06-18",
+   "2025-11-25"
+  ],
+  "RECONNECT_BUDGET": 45.0,
+  "RECONNECT_BACKOFF_START": 0.2,
+  "RECONNECT_BACKOFF_CAP": 2.0,
+  "RETRY_ATTEMPTS": 4,
+  "LIST_HOLD": 12.0,
+  "HOLD_BOUND": 180.0,
+  "FALLBACK_FAILURES": 3,
+  "FALLBACK_WINDOW": 60.0,
+  "GET_BACKOFF": [
+   0.2,
+   0.5,
+   1.0,
+   2.0,
+   3.0,
+   5.0
+  ],
+  "GET_NON200_STEP": 2.0,
+  "GET_NON200_CAP": 30.0
+ },
+ "init_wait": 2.0,
+ "cwd": [
+  [
+   "C:\\Users\\me\\proj",
+   "C:%5CUsers%5Cme%5Cproj"
+  ],
+  [
+   "C:\\Users\\me\\my project",
+   "C:%5CUsers%5Cme%5Cmy%20project"
+  ],
+  [
+   "D:\\a#b\\c%d",
+   "D:%5Ca%23b%5Cc%25d"
+  ],
+  [
+   "C:\\Users\\me\\caf\u00e9 \u65e5\u672c",
+   "C:%5CUsers%5Cme%5Ccaf%C3%A9%20%E6%97%A5%E6%9C%AC"
+  ],
+  [
+   "\\\\server\\share\\proj dir",
+   "%5C%5Cserver%5Cshare%5Cproj%20dir"
+  ],
+  [
+   "/home/me/proj",
+   "/home/me/proj"
+  ],
+  [
+   "/home/me/with space/100%",
+   "/home/me/with%20space/100%25"
+  ],
+  [
+   "/tmp/\u00fcber#1",
+   "/tmp/%C3%BCber%231"
+  ],
+  [
+   "c:/mixed/slash path",
+   "c:/mixed/slash%20path"
+  ],
+  [
+   "/",
+   "/"
+  ]
+ ],
+ "sse": [
+  {
+   "chunks": [
+    "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
+   ],
+   "events": [
+    {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "result": {}
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: {\"a\":1}\r\n\r\n"
+   ],
+   "events": [
+    {
+     "a": 1
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: {\"a\":\n",
+    "data: 1}\n\n"
+   ],
+   "events": [
+    {
+     "a": 1
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "event: message\nid: 5\ndata: {\"a\":2}\n\n"
+   ],
+   "events": [
+    {
+     "a": 2
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: {\"a\":3}"
+   ],
+   "events": [
+    {
+     "a": 3
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: {\"a\":4}\n\ndata: {\"a\":5}\n\n"
+   ],
+   "events": [
+    {
+     "a": 4
+    },
+    {
+     "a": 5
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data:{\"a\":6}\n\n"
+   ],
+   "events": [
+    {
+     "a": 6
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: [{\"a\":7},{\"a\":8}]\n\n"
+   ],
+   "events": [
+    {
+     "a": 7
+    },
+    {
+     "a": 8
+    }
+   ]
+  },
+  {
+   "chunks": [
+    ": comment\ndata: {\"a\":9}\n\n\n\n"
+   ],
+   "events": [
+    {
+     "a": 9
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "data: not json\n\ndata: {\"a\":10}\n\n"
+   ],
+   "events": [
+    {
+     "a": 10
+    }
+   ]
+  },
+  {
+   "chunks": [
+    "da",
+    "ta: {\"a\":11}\n",
+    "\n"
+   ],
+   "events": [
+    {
+     "a": 11
+    }
+   ]
+  }
+ ],
+ "chunked": [
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+   "body": "hello"
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n4;ext=1\r\ndefg\r\n0\r\n\r\n",
+   "body": "abcdefg"
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nA\r\n0123456789\r\n0\r\n\r\n",
+   "body": "0123456789"
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\na\r\n0123456789\r\n0\r\nX-T: 1\r\n\r\n",
+   "body": "0123456789"
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n",
+   "body": ""
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nzz\r\nabc\r\n0\r\n\r\n",
+   "error": "IncompleteRead"
+  },
+  {
+   "raw": "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhel",
+   "error": "IncompleteRead"
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+  "source_digest": "775f7c5cede8f4999266496cb78b0452260bcac1e32a54b98532dccef52de05c",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+  "toolchain_channel": "1.93.1",
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "file": "tm-relay.exe",
+      "sha256": "5c0cc3736d30a17417de6795af25f0a66b60179d39796be6444ed5859b400f9c",
+      "size": 487424,
+      "rustflags": "--remap-path-prefix=<relay>=/src --remap-path-prefix=<CARGO_HOME>=/cargo --remap-path-prefix=<RUSTUP_HOME>=/rustup -C target-feature=+crt-static -C link-arg=/Brepro"
+    },
+    "x86_64-unknown-linux-musl": {
+      "file": "tm-relay-linux-x86_64",
+      "sha256": "43ac0a2a8ebdc843b6efb3f5924997cb0563c627e3e567484ea3650fdae5f2e4",
+      "size": 675056,
+      "rustflags": "--remap-path-prefix=<relay>=/src --remap-path-prefix=<CARGO_HOME>=/cargo --remap-path-prefix=<RUSTUP_HOME>=/rustup -C linker=rust-lld"
+    }
+  }
+}

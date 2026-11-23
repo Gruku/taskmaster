@@ -8,6 +8,7 @@ import type { TmNav, TmPhasePane, TmPhaseView, TmRestorePending, TmSessionBurst,
 import { demoPhases, demoRestore } from '../demo'
 import type { TmFlows } from '../flows'
 import { kitOf, type KitRr, outdatedNotice, type Ui } from '../kit'
+import { holdOpen, whileAsked } from '../asked'
 import { platformOf } from '../launch'
 import { RESTORE, restoreHiddenKey } from '../model'
 import { FRESH_NAV, shownRestore, shownSnapshot, type SidebarView, sidebarView } from '../nav'
@@ -175,6 +176,11 @@ const actMain = (run: (flows: TmFlows) => Promise<void>): void => {
   const main = rs.link?.flows() ?? null
   if (main !== null) void run(main)
 }
+// A pane switch: the press hook waits for it, so the engine places it as the person's open (asked.ts).
+const actMainOpen = (run: (flows: TmFlows) => Promise<void>): void => {
+  const main = rs.link?.flows() ?? null
+  if (main !== null) holdOpen(run(main))
+}
 
 /** `u` on the restore pane (TmFlows.refresh('restore')): rescans the pane's window; a no-op before the flows exist. */
 export async function refreshRestore(): Promise<void> {
@@ -213,7 +219,7 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
 
   on('ui.press', { requestId: RESTORE }, async ($, e, next) => {
     flowsOf($)
-    return next(e)
+    return whileAsked(() => next(e))
   })
 
   on('ui.render', { component: 'Pane', requestId: RESTORE }, async ($, e) => {
@@ -262,7 +268,7 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
         brief: ids => act(f => f.brief(ids)),
         copy: id => act(f => f.copy(id)),
         toggleSidebar: () => actMain(f => f.toggleSidebar()),
-        goTo: pane => actMain(f => f.goTo(pane)),
+        goTo: pane => actMainOpen(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
     )
@@ -274,7 +280,7 @@ export function onRestore(on: On, options: PluginOptions, link: RestoreLink): vo
         {tree}
       </Box>,
       sidebar,
-      pane => actMain(f => f.goTo(pane)),
+      pane => actMainOpen(f => f.goTo(pane)),
     )
   })
 

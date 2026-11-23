@@ -620,6 +620,32 @@ def test_launch_flags_hide_the_window_and_detach():
         assert tb.hidden_flags()["start_new_session"] is True
 
 
+@pytest.mark.skipif(os.name != "nt", reason="STARTUPINFO is Windows-only")
+def test_launch_chain_forces_off_the_app_starting_cursor(monkeypatch):
+    # User intent: a cold start must not show the busy cursor; every Popen of the server launch chain carries STARTF_FORCEOFFFEEDBACK.
+    for breakaway in (True, False):
+        assert tb.hidden_flags(breakaway)["startupinfo"].dwFlags & 0x80
+    seen = []
+    real = subprocess.Popen
+
+    def fake_popen(argv, **kw):
+        seen.append(kw.get("startupinfo"))
+        return real([sys.executable, "-c", "pass"], **kw)
+    monkeypatch.setattr(tb.subprocess, "Popen", fake_popen)
+    tb.spawn_detached(["x"], env=dict(os.environ), cwd=str(PLUGIN_ROOT)).wait()
+    assert seen and all(s is not None and s.dwFlags & 0x80 for s in seen)
+    runs = []
+
+    def fake_run(argv, **kw):
+        runs.append(kw.get("startupinfo"))
+        return subprocess.CompletedProcess(argv, 1, "", "")
+    monkeypatch.setattr(tb.subprocess, "run", fake_run)
+    monkeypatch.setattr(tb.shutil, "which", lambda _n: "uv")
+    monkeypatch.setenv("TASKMASTER_BRIDGE_CACHE", str(PLUGIN_ROOT / "nonexistent-cache.json"))
+    tb.server_python(PLUGIN_ROOT, refresh=True)
+    assert runs and runs[0].dwFlags & 0x80
+
+
 def test_launch_breakaway_refused_retries_without_it(monkeypatch):
     calls = []
     real = subprocess.Popen
@@ -774,10 +800,12 @@ def test_bridge_import_set_has_no_third_party_module_even_on_the_python_floor(fl
     assert done.returncode == 0, done.stdout + done.stderr
 
 
-def test_mcp_json_launches_the_bridge_through_uv_without_a_project():
+def test_mcp_json_launches_the_relay_entry_with_no_args():
+    # local-server-011: one static command for every OS; bin/tm-relay is the sh entry (POSIX) and
+    # Windows resolves it to bin/tm-relay.exe. Rollback: the uv + tm_bridge.py command (runbook).
     entry = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["tm"]
-    assert entry["command"] == "uv" and entry["args"][-1] == "${CLAUDE_PLUGIN_ROOT}/tm_bridge.py"
-    assert "--no-project" in entry["args"] and ">=3.11" in entry["args"]
+    assert entry["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/tm-relay"
+    assert not entry.get("args")
 
 
 def test_project_config_can_turn_local_mode_off(project, monkeypatch):

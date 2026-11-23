@@ -33,6 +33,7 @@ import { bandTree } from './band'
 import { createFlows, type TmFlows, type TmPane, type TmWriter } from './flows'
 import { wheelMove } from './scroll-list'
 import { isHandoverWritten, onHandoverGuard } from './handover-guard'
+import { holdOpen, whileAsked } from './asked'
 import { onRestore, refreshRestore, restoreHostOf } from './restore/hooks'
 import { FRESH_MARKS, listedHandovers, phaseHandovers } from './handover-list'
 import { type HandoversView, handoversPaneTree } from './handovers'
@@ -55,6 +56,7 @@ import {
   sessionHandoverOf,
   TICKS_PREFIX,
   ticksOf,
+  withLastConnection,
   withNotice,
 } from './model'
 import { parseHandoverWritten, replyText } from './parse'
@@ -258,7 +260,7 @@ function ioOf($: EngineInterface): TmIo {
       await update($, BINDING, () => binding)
     },
     setSnapshot: async snapshot => {
-      await update($, SNAPSHOT, () => snapshot)
+      await update($, SNAPSHOT, prev => withLastConnection(snapshot, prev))
     },
     setFault: async fault => {
       await update($, FAULT, () => fault)
@@ -610,6 +612,19 @@ function askSummary(handoverId: string): void {
 const act = (run: (flows: TmFlows) => Promise<void>): void => {
   if (mod.flows !== null) void run(mod.flows)
 }
+// A handler that opens a pane: its press hook waits for it, so the engine sees the open as the person's (asked.ts).
+const actOpen = (run: (flows: TmFlows) => Promise<void>): void => {
+  if (mod.flows !== null) holdOpen(run(mod.flows))
+}
+// One that opens a pane and then reads on: its press hook waits only until `opened` is called (or the run ends).
+const actOpenUntil = (run: (flows: TmFlows, opened: () => void) => Promise<void>): void => {
+  if (mod.flows === null) return
+  let opened: () => void = () => undefined
+  holdOpen(new Promise<void>(resolve => (opened = resolve)))
+  void run(mod.flows, opened)
+    .catch(() => undefined)
+    .finally(() => opened())
+}
 
 export const register: Register = (on, options) => {
   mod.source = options.source === 'demo' ? 'demo' : 'tm'
@@ -766,12 +781,12 @@ export const register: Register = (on, options) => {
 
   on('ui.press', { plugin: 'taskmaster-mods' }, async ($, e, next) => {
     await ready($)
-    return next(e)
+    return whileAsked(() => next(e))
   })
 
   on('ui.input', { plugin: 'taskmaster-mods' }, async ($, e, next) => {
     await ready($)
-    return next(e)
+    return whileAsked(() => next(e))
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -793,7 +808,7 @@ export const register: Register = (on, options) => {
       model,
       { mode: await read($, BAND), width: e.props.bodyColumns, maxRows: e.props.maxRows, now: await $.clock.now(), reason: snapshot?.reason ?? '' },
       {
-        openSidebar: () => act(f => f.openSidebar()),
+        openSidebar: () => actOpen(f => f.openSidebar()),
         askDone: id => act(f => f.bandAskDone(id)),
         confirmDone: id => act(f => f.bandConfirmDone(id)),
         cancel: () => act(f => f.bandCancel()),
@@ -875,7 +890,7 @@ export const register: Register = (on, options) => {
         bulkDone: ids => act(f => f.bulkDone(ids)),
         bulkSendBack: (ids, note, actions) => act(f => f.bulkSendBack(ids, note, actions)),
         toggleSidebar: () => act(f => f.toggleSidebar()),
-        goTo: pane => act(f => f.goTo(pane)),
+        goTo: pane => actOpen(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
     )
@@ -888,7 +903,7 @@ export const register: Register = (on, options) => {
         {tree}
       </Box>,
       await sidebarFor($, 'review'),
-      pane => act(f => f.goTo(pane)),
+      pane => actOpen(f => f.goTo(pane)),
     )
   })
 
@@ -964,7 +979,7 @@ export const register: Register = (on, options) => {
           overlay: open => act(f => f.setOverlay('handovers', open)),
         },
         toggleSidebar: () => act(f => f.toggleSidebar()),
-        goTo: pane => act(f => f.goTo(pane)),
+        goTo: pane => actOpen(f => f.goTo(pane)),
       },
       e.props.bodyColumns,
     )
@@ -975,7 +990,7 @@ export const register: Register = (on, options) => {
         {tree}
       </Box>,
       await sidebarFor($, 'handovers'),
-      pane => act(f => f.goTo(pane)),
+      pane => actOpen(f => f.goTo(pane)),
     )
   })
 
@@ -1020,7 +1035,7 @@ export const register: Register = (on, options) => {
         history,
       },
       {
-        goTo: pane => act(f => f.goTo(pane)),
+        goTo: pane => actOpen(f => f.goTo(pane)),
         refresh: () => {
           act(f => f.retry())
           askHistory(true)
@@ -1032,9 +1047,9 @@ export const register: Register = (on, options) => {
         askDone: id => act(f => f.bandAskDone(id)),
         confirmDone: id => act(f => f.bandConfirmDone(id)),
         cancel: () => act(f => f.bandCancel()),
-        sendBack: id => act(f => f.bandSendBack(id)),
+        sendBack: id => actOpen(f => f.bandSendBack(id)),
         copy: (id, surface) => act(f => f.copyHandover(id, surface)),
-        openHandover: id => act(f => f.openHandover(id)),
+        openHandover: id => actOpenUntil((f, opened) => f.openHandover(id, opened)),
         launch: (h, surface) =>
           act(async f => {
             await f.launch([{ cwd, title: `handover ${h.id}`, mode: 'fresh', prompt: resumePrompt(h.id, h.path) }], surface)
@@ -1051,7 +1066,7 @@ export const register: Register = (on, options) => {
         {tree}
       </Box>,
       await sidebarFor($, 'session'),
-      pane => act(f => f.goTo(pane)),
+      pane => actOpen(f => f.goTo(pane)),
     )
   })
 

@@ -5,7 +5,8 @@
 import type { RenderElement, RenderNode, UiPressArgument } from 'claude-code'
 
 import { fit, HOTKEY, KEYCAP_FACE, type Kit, PANEL_TITLE, type Piece, stepUp, type StripHandlers, type StripView } from './kit'
-import { truncate } from './model'
+import type { TmConnection, TmSnapshot } from '../types'
+import { connectionLabels, truncate, wrapText } from './model'
 import type { TmPane } from './flows'
 import type { SidebarView } from './nav'
 import type { ScrollEntry, ScrollWindow } from './scroll-list'
@@ -565,7 +566,36 @@ export function scrollListing(k: Kit, entries: readonly ListEntry[], win: Scroll
 
 // ── The frame (component sheet FRAME) ──────────────────────────────────────────────────────────────────────────────
 
-export type Health = { readonly kind: RrSignalKind; readonly word: string }
+/** A pane's health; `fuller`: longer words to show instead, first that fits the frame (the connection label, local-server-012). */
+export type Health = { readonly kind: RrSignalKind; readonly word: string; readonly fuller?: readonly string[] }
+
+/** A clean read's connection as the frame's health: per-session warns (user ruling 2); local and team are the normal ground. */
+export function connectionHealth(c: TmConnection): Health {
+  if (c.mode === 'per-session') return { kind: 'warning', word: 'per-session', fuller: connectionLabels(c) }
+  return { kind: 'success', word: c.mode === 'team' ? 'team' : 'tm ok', fuller: connectionLabels(c) }
+}
+
+/**
+ * The health of a pane drawn from the snapshot (review, handovers, session). A fault shows as it always has (lead ruling 5):
+ * connecting, loading, offline; the last clean read's label may follow it where it fits, never replace it. A clean read shows
+ * its connection label in place of `tm ok` (an older server sends none: `tm ok`).
+ */
+export function snapshotHealth(s: TmSnapshot | null, a: { readonly connecting: boolean; readonly demo: boolean }): Health {
+  const last = s?.connection ?? s?.lastConnection
+  const beside = (h: Health): Health => (last === undefined ? h : { ...h, fuller: connectionLabels(last).map(label => `${h.word} · ${label}`) })
+  if (a.connecting && (s === null || !s.reachable)) return beside({ kind: 'info', word: 'connecting' })
+  if (s === null) return { kind: 'info', word: 'loading' }
+  if (!s.reachable) return beside({ kind: 'critical', word: 'offline' })
+  if (a.demo) return { kind: 'info', word: 'demo' }
+  return s.connection === undefined ? { kind: 'success', word: 'tm ok' } : connectionHealth(s.connection)
+}
+
+/** The health word a frame of `width` draws beside its `◆ TASKMASTER · NAME` title: the first of `fuller` that fits, else `word`. */
+export function healthWord(h: Health, name: string, width: number): string {
+  // Border corners and the title's and health's own padding and gaps: 9 cells; the glyph and its space: 2.
+  const room = width - ('◆ TASKMASTER · '.length + name.length) - 9 - 2
+  return (h.fuller ?? []).find(word => word.length <= room) ?? h.word
+}
 const HEALTH_GLYPH: Readonly<Record<RrSignalKind, string>> = { success: '●', warning: '▲', critical: '▲', info: '○' }
 
 /** Rows a paneFrame takes besides its children: the round border's two, and the title's own row where the title is a row. */
@@ -598,7 +628,7 @@ export function paneFrame(
     a.health === undefined ? null : (
       <Text>
         <Text color={t.tone[a.health.kind]}>{`${HEALTH_GLYPH[a.health.kind]} `}</Text>
-        <Text color={t.fg.subtle}>{a.health.word}</Text>
+        <Text color={t.fg.subtle}>{healthWord(a.health, a.name, a.width)}</Text>
       </Text>
     )
   const frame = {
@@ -1041,11 +1071,23 @@ export function sidebar(k: Kit, v: SidebarView, go: (pane: TmPane) => void): Ren
       {rows}
       <Text> </Text>
       {line(k, [{ text: v.context, color: t.fg.disabled }], inner).el}
+      {connectionRows(k, v.connection, inner)}
       <Text> </Text>
       {hints(k, [{ keys: 'Tab', word: 'move' }, { keys: 'enter', word: 'open' }], inner)}
       {hints(k, [{ keys: '1-4', word: 'jump' }, { keys: close, word: 'close' }], inner)}
     </Box>
   )
+}
+
+/** The sidebar's connection (local-server-012): the whole label, then a per-session server's reason, wrapped (at most 3 rows). */
+function connectionRows(k: Kit, c: TmConnection | undefined, inner: number): RenderNode[] {
+  if (c === undefined) return []
+  const { t } = k
+  const label = connectionLabels(c)[0] ?? ''
+  const tone = c.mode === 'per-session' ? t.tone.warning : t.fg.subtle
+  const rows = [line(k, [{ text: c.mode === 'per-session' ? `▲ ${label}` : label, color: tone }], inner).el]
+  if (c.reason !== '') for (const row of wrapText(c.reason, inner).slice(0, 3)) rows.push(line(k, [{ text: row, color: t.fg.disabled }], inner).el)
+  return rows
 }
 
 /** A pane's body with the sidebar floating over its top-left while open; the body alone while it is shut. */

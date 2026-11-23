@@ -231,8 +231,22 @@ class Twins:
                 value = value.replace(spelling, "<root>")
         return value
 
+    @staticmethod
+    def _serverless(value):
+        """A json handover listing without its `server` object (local-server-012): it names each twin's own directory and
+        store kind, so it differs by design; tests/test_connection_status.py pins it."""
+        if isinstance(value, str) and value.startswith("{") and '"server"' in value:
+            try:
+                doc = json.loads(value)
+            except ValueError:
+                return value
+            if isinstance(doc, dict) and isinstance(doc.pop("server", None), dict):
+                return json.dumps(doc)
+        return value
+
     def same(self, tool: str, /, *args, **kwargs):
         legacy, native = self.call(tool, *args, **kwargs)
+        legacy, native = self._serverless(legacy), self._serverless(native)
         assert normalize(self._rooted(native, self.native)) == normalize(self._rooted(legacy, self.legacy)), (
             f"{tool}: native answer diverged" + chr(10) + f"legacy: {legacy!r}" + chr(10) + f"native: {native!r}")
         return legacy, native

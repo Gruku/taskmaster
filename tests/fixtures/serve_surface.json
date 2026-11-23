@@ -282,7 +282,7 @@
   },
   "backlog_handover_list": {
    "class": "member",
-   "schema_sha256": "83f5aaa8efb2cb16653b478898edb6d96a96dfc54d56052c407bb730bd5d0411"
+   "schema_sha256": "ea8d411dd4e6d3a77de62ac1aa2013ad92b453a183e439b63463446e64559597"
   },
   "backlog_handover_resync": {
    "class": "operator-only",

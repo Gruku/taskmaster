@@ -23,7 +23,7 @@ import type { TmActions, TmCloseHandover } from './actions'
 import { arrival, closeToast, FRESH_MARKS, listedHandovers, markClosed, withoutHandovers } from './handover-list'
 import type { TmHost } from './host'
 import { launchAll, type LaunchResult, type LaunchSpec, launchSummary, resumePrompt } from './launch'
-import { PANE_IDS, paneOf, TM_PANE_IDS } from './nav'
+import { PANE_IDS, PANE_TITLES, paneOf, TM_PANE_IDS } from './nav'
 import {
   afterDone,
   afterSendBack,
@@ -238,13 +238,30 @@ export function createFlows(d: TmFlowDeps) {
   }
   // Whether the last pane opened was placed (false: the terminal is too narrow); openSidebar reads it.
   const placed = { last: true }
-  // Every Taskmaster pane opens through here: it becomes the pane the band's `m` reopens (spec §15.8).
-  const open = async (id: string, title: string): Promise<void> => {
-    await closeOthers(id)
+  const remember = async (id: string): Promise<void> => {
     const pane = paneOf(id)
     if (pane !== null) await d.write.nav(n => (n.last === pane ? n : { ...n, last: pane }))
+  }
+  // Every Taskmaster pane opens through here: it becomes the pane the band's `m` reopens (spec §15.8). An open the engine does
+  // not place never leaves the person with no pane: the new one, waiting undrawn, closes and the pane it replaced comes back;
+  // only when that too is refused does the toast say to widen the terminal.
+  const open = async (id: string, title: string): Promise<void> => {
+    const before = await d.host.panes?.()
+    const previous = Array.isArray(before) ? before.find(other => other !== id && TM_PANE_IDS.includes(other)) : undefined
+    await closeOthers(id)
     placed.last = await d.host.openPane(id, title)
-    if (!placed.last) d.host.toast('taskmaster-mods: widen the terminal to see the pane')
+    if (placed.last) {
+      await remember(id)
+      return
+    }
+    try {
+      await d.host.closePane(id)
+    } catch {
+      // a hook kept it open: it waits undrawn, as the engine left it
+    }
+    const back = previous === undefined ? null : paneOf(previous)
+    if (previous !== undefined && back !== null && (await d.host.openPane(previous, PANE_TITLES[back]))) return
+    d.host.toast('taskmaster-mods: widen the terminal to see the pane')
   }
   const fill = async (text: string): Promise<void> => {
     if (!(await d.host.fill(text))) d.host.toast(PROMPT_REFUSED)
@@ -476,12 +493,14 @@ export function createFlows(d: TmFlowDeps) {
      * Session `h` (spec §9): the pane opens on that handover at once, then, once its phases and list are read, shows it under
      * its phase (the chosen one when that holds it) on its page, focused. One the list does not hold leaves page 1 unpicked, and says so.
      */
-    openHandover: async (handoverId: string): Promise<void> => {
+    openHandover: async (handoverId: string, opened: () => void = () => undefined): Promise<void> => {
       await d.write.pick(handoverId)
       await d.write.summaryOpen(() => '')
       await d.write.handoverFirst(0)
       await unmark()
       await open(HANDOVERS, 'Handovers')
+      // The press that asked waits for the open only (review M1): the reads below are bounded tm calls, not the person's.
+      opened()
       await reloadHandovers()
       const at = await handoverState()
       const listed = listedHandovers(at.list, at.snapshot, at.marks.showClosed)

@@ -19,7 +19,8 @@ from tests.entity_helpers import (apply_supersession, archive_handover, update_h
 
 HANDOVER_KEYS = {"id", "date", "created", "thread", "session_kind", "status", "tldr", "next_action",
                  "task_ids", "tip_commit", "branch", "links", "superseded_by"}
-ENVELOPE_KEYS = {"handovers", "returned", "total", "truncated", "archived_omitted"}
+# "server" (local-server-012) is additive: which taskmaster answered, for the mods' connection status.
+ENVELOPE_KEYS = {"handovers", "returned", "total", "truncated", "archived_omitted", "server"}
 
 
 def _setup(tmp_path, monkeypatch) -> Path:
@@ -79,7 +80,9 @@ def test_json_links_show_supersession_in_both_directions(tmp_path, monkeypatch):
 
 def test_json_empty_result_is_still_an_envelope(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
-    assert _json() == {"handovers": [], "returned": 0, "total": 0, "truncated": False, "archived_omitted": 0}
+    out = _json()
+    assert out.pop("server")["mode"] == "per-session"
+    assert out == {"handovers": [], "returned": 0, "total": 0, "truncated": False, "archived_omitted": 0}
 
 
 def test_json_errors_are_json(tmp_path, monkeypatch):

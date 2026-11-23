@@ -108,6 +108,18 @@ export type TmBound = {
   readonly detail: TmTaskDetail | null
   readonly pipeline: TmPipeline | null
 }
+/**
+ * Which taskmaster answered (local-server-012): the server's own `server` object on backlog_handover_list(format json), or
+ * for a team clone (the marker) `team` with the host's project, else the clone's directory name. `reason` is why a session
+ * runs on its own (per-session) server, '' when unknown; `optedOut` is true when that is the person's own opt-out.
+ */
+export type TmConnection = {
+  readonly mode: 'local' | 'per-session' | 'team'
+  readonly project: string
+  readonly version: string
+  readonly reason: string
+  readonly optedOut: boolean
+}
 export type TmSnapshot = {
   readonly reachable: boolean
   readonly reason: string
@@ -123,6 +135,10 @@ export type TmSnapshot = {
   readonly handovers: readonly TmHandover[]
   readonly handoversTotal: number
   readonly bound: TmBound | null
+  /** Present only when this refresh read everything cleanly (no fault): the label the panes and the band show. */
+  readonly connection?: TmConnection
+  /** The last clean read's connection, kept beside a fault (offline, connecting) where it fits; never in place of it. */
+  readonly lastConnection?: TmConnection
 }
 /** `connecting`: a transient failure (server still connecting, or cold and slow) being retried: no status line, a neutral note. */
 export type TmFault = 'none' | 'offline' | 'unreadable' | 'connecting'

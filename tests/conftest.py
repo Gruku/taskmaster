@@ -668,3 +668,20 @@ def projection_bypass_guard(request, monkeypatch):
     monkeypatch.setattr(Path, "rename", rename)
     monkeypatch.setattr(Path, "open", open_)
     yield
+
+
+@pytest.fixture(scope="session")
+def standin():
+    """The std-only tm-relay stand-in shared by test_relay_entry.py and test_relay_self_heal.py (skips without rustc)."""
+    import importlib.util
+    import subprocess
+    spec = importlib.util.spec_from_file_location("standin_build", Path(__file__).parent / "fixtures/relay_standin/standin_build.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    try:
+        p = mod.build_standin()
+    except subprocess.CalledProcessError as e:
+        pytest.fail("stand-in build failed: %s" % e.stderr)
+    if p is None:
+        pytest.skip("rustc not available")
+    return p

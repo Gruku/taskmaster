@@ -3,3 +3,8 @@
 *.sh text eol=lf
 deploy/** text eol=lf
 .github/workflows/*.yml text eol=lf
+# Rust relay (local-server-011): byte-exact entry script and binaries
+bin/tm-relay text eol=lf
+bin/tm-relay-* binary
+bin/*.exe binary
+bin/relay-manifest.json text eol=lf

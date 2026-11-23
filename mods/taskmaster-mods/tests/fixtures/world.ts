@@ -38,6 +38,10 @@ export type World = {
   exists: (path: string) => boolean
   /** What `$.env.get` answers, by name. */
   env: Record<string, string>
+  /** Whether `$.ui.open` places a pane (default: always); a refused one stays open undrawn, as the engine keeps it. */
+  place: (id: string) => boolean
+  /** The panes open now, in open order (`$.ui.panes()`). */
+  openNow: () => string[]
 }
 
 export function worldOf(on: On, clock: MockClock, store: Record<string, unknown> = {}): World {
@@ -64,6 +68,8 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
     stdins: [],
     exists: () => false,
     env: {},
+    place: () => true,
+    openNow: () => [...open],
   }
   let queue: Promise<void> = Promise.resolve()
   // The panes open now (`$.ui.panes()`), as the engine keeps them: one per id, in open order.
@@ -76,6 +82,7 @@ export function worldOf(on: On, clock: MockClock, store: Record<string, unknown>
   on('ui.open', ($, e) => {
     world.opened.push(e.id)
     open.add(e.id)
+    if (!world.place(e.id)) return { value: { isPlaced: false, reason: 'below 144 columns: 75 now' } } as never
     return { value: { isPlaced: true } } as never
   })
   on('ui.close', ($, e) => {

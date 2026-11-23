@@ -1,0 +1,13 @@
+#!/bin/sh
+# User intent: the plugin's tm entry on POSIX (and Claude Code's sh fallback on Windows) - exec the relay binary for this OS/arch so nothing else stays resident; with no binary, or one that does not run, exec today's Python bridge.
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "${TASKMASTER_RELAY:-}" != python ]; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) bin="$dir/tm-relay.exe" ;;
+    *) bin="$dir/tm-relay-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+       [ -f "$bin" ] && [ ! -x "$bin" ] && chmod u+x "$bin" 2>/dev/null ;;
+  esac
+  if [ -x "$bin" ] && "$bin" --version </dev/null >/dev/null 2>&1; then exec "$bin" "$@"; fi
+  [ -f "$bin" ] && echo "tm-bridge: $bin is present but does not run; using the Python bridge" >&2
+fi
+exec uv run --no-project --python ">=3.11" python "$dir/../tm_bridge.py" "$@"

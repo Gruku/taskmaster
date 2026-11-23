@@ -59,6 +59,7 @@ import {
   phasePicker,
   refreshPiece,
   type Seg,
+  snapshotHealth,
   summaryRow,
   withPhaseMenu,
 } from './vocab'
@@ -126,13 +127,7 @@ export type ReviewHandlers = {
 const NOT_SELECTABLE = 'Issues and decisions are not signed off from the list'
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
-function healthOf(v: ReviewView): Health {
-  const s = v.snapshot
-  if (v.connecting === true && (s === null || !s.reachable)) return { kind: 'info', word: 'connecting' }
-  if (s === null) return { kind: 'info', word: 'loading' }
-  if (!s.reachable) return { kind: 'critical', word: 'offline' }
-  return v.demo === true ? { kind: 'info', word: 'demo' } : { kind: 'success', word: 'tm ok' }
-}
+const healthOf = (v: ReviewView): Health => snapshotHealth(v.snapshot, { connecting: v.connecting === true, demo: v.demo === true })
 
 /** An item's dim context: collapsed `patch-1-9 · lane full · in review for 5h`; focused, the gate instead of the age. */
 function contextOf(k: Kit, it: TmQueueItem, v: ReviewView, focused: boolean): Seg[] {

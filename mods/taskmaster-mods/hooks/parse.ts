@@ -1,6 +1,6 @@
 // User intent: read Taskmaster's MCP replies — markdown and JSON text — into plain data, purely, so every format quirk is
 // pinned by a test against a captured real reply and an unreadable reply becomes a reason instead of a crash.
-import type { TmHandover, TmHandoverSummary, TmLinkedTask, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
+import type { TmConnection, TmHandover, TmHandoverSummary, TmLinkedTask, TmPhase, TmPipeline, TmPriority, TmTaskDetail } from '../types'
 import { handoverPath } from './model'
 import { unframe } from './untrusted'
 
@@ -204,7 +204,17 @@ export function parsePipeline(raw: string): Parsed<TmPipeline> {
   return ok({ laneless: false, lane: (head[1] ?? '').trim(), gateState: gate === '(none)' ? '' : gate, outstanding })
 }
 
-export function parseHandovers(raw: string, root: string): Parsed<{ handovers: TmHandover[]; total: number }> {
+const MODES: readonly TmConnection['mode'][] = ['local', 'per-session', 'team']
+
+/** The listing's `server` object (local-server-012), or null when the server sends none (older than 7.7.0) or an odd one. */
+export function parseServer(value: unknown): TmConnection | null {
+  if (!isObject(value)) return null
+  const mode = MODES.find(m => m === value.mode)
+  if (mode === undefined) return null
+  return { mode, project: str(value.project), version: str(value.version), reason: str(value.reason), optedOut: value.opted_out === true }
+}
+
+export function parseHandovers(raw: string, root: string): Parsed<{ handovers: TmHandover[]; total: number; server: TmConnection | null }> {
   const doc = json(raw)
   if (!doc.ok) return fail(`handover_list: ${doc.reason}`)
   if (typeof doc.value.error === 'string') return fail(`handover_list: ${doc.value.error}`)
@@ -226,7 +236,7 @@ export function parseHandovers(raw: string, root: string): Parsed<{ handovers: T
     }))
     .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
   const total = typeof doc.value.total === 'number' ? doc.value.total : handovers.length
-  return ok({ handovers, total })
+  return ok({ handovers, total, server: parseServer(doc.value.server) })
 }
 
 const PHASE_ROW = /^(\[\S*\])(?:\s+(.*))?$/

@@ -53,6 +53,10 @@ DRAINING_TEXT = "is draining"       # the 503 body of serve/local.py's drain ref
 FALLBACK_FAILURES = 3
 FALLBACK_WINDOW = 60.0
 GET_BACKOFF = (0.2, 0.5, 1.0, 2.0, 3.0, 5.0)
+RECONNECT_BACKOFF_START = 0.2      # first wait between eager reconnect attempts; doubles each try
+RECONNECT_BACKOFF_CAP = 2.0
+GET_NON200_STEP = 2.0              # a non-200 answer to the stream GET waits step * consecutive failures, capped
+GET_NON200_CAP = 30.0
 WIN = os.name == "nt"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -107,35 +111,10 @@ class Log:
 
 # -- opt-outs and the decision to use the local server --------------------------------------------------------------
 
-def setting_off(root) -> bool:
-    """The setting `local_server: off` in .taskmaster/local/settings.json (this clone) or .taskmaster/taskmaster.json (the whole
-    project, deliberately: a committed file opts every clone out); read at session start."""
-    for relative in (("local", "settings.json"), ("taskmaster.json",)):    # per clone first, then the project's own config
-        try:
-            data = json.loads((Path(root) / ".taskmaster" / Path(*relative)).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and str(data.get("local_server", "")).strip().lower() in ("off", "false", "0", "no"):
-            return True
-    return False
-
-
 def fallback_reason(root, env=None):
-    """Why this session must use today's stdio server, or None when the local server applies."""
-    env = os.environ if env is None else env
-    if str(env.get("TASKMASTER_LOCAL_SERVER", "")).strip().lower() in ("0", "off", "false", "no"):
-        return "TASKMASTER_LOCAL_SERVER=0"
-    ls = _ls()
-    if setting_off(root):
-        return "project setting local_server: off"
-    if not ls.db_path(Path(root) / ".taskmaster").is_file() and not (Path(root) / ".taskmaster").is_dir():
-        return "no backlog at the project root"
-    if ls.legacy_store(root):
-        return "the project store is not a ready native store"
-    why = ls.server_mode_reason(root)
-    if why:
-        return why
-    return None
+    """Why this session must use today's stdio server, or None when the local server applies. The rule lives in
+    taskmaster.localserve, where the stdio server reads it too to say why it serves this session (local-server-012)."""
+    return _ls().fallback_reason(root, env)
 
 
 # -- discovery, status, skew, retire --------------------------------------------------------------------------------
@@ -239,11 +218,21 @@ def scrubbed_env(root, base=None):
     return env
 
 
+def no_feedback_startupinfo():
+    """Windows: STARTF_FORCEOFFFEEDBACK (0x80), so starting a child does not show the app-starting cursor. The server launch
+    chain (uv, launcher, server) is the only part of a session that outlasts the first second without a window."""
+    if not WIN:
+        return {}
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= 0x80
+    return {"startupinfo": info}
+
+
 def hidden_flags(breakaway=True):
     if not WIN:
         return {"start_new_session": True}
     flags = NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    return {"creationflags": flags | (0x01000000 if breakaway else 0)}   # CREATE_BREAKAWAY_FROM_JOB
+    return {"creationflags": flags | (0x01000000 if breakaway else 0), **no_feedback_startupinfo()}   # CREATE_BREAKAWAY_FROM_JOB
 
 
 def spawn_detached(argv, *, env, cwd, stderr=None, wait_first=False):
@@ -319,7 +308,7 @@ def server_python(plugin_dir=PLUGIN_DIR, *, refresh=False, log=None):
         with _ENV_LOCK:             # a cold environment build: nothing else of ours starts another one meanwhile
             out = subprocess.run([uv, "run", "--quiet", "--script", str(Path(plugin_dir) / "tm_bridge.py"), "--print-python"],
                                  capture_output=True, text=True, timeout=LAUNCH_BOUND, creationflags=NO_WINDOW,
-                                 stdin=subprocess.DEVNULL)
+                                 stdin=subprocess.DEVNULL, **no_feedback_startupinfo())
     except (OSError, subprocess.SubprocessError) as exc:
         if log:
             log.note(f"uv could not name the server interpreter: {exc}")
@@ -362,6 +351,8 @@ def launch_server(root, plugin_dir=PLUGIN_DIR, *, log=None, idle_exit=None, serv
     pid_file = sdir / f"launch-{token}.pid"
     wait = LAUNCH_BOUND if wait is None else wait
     idle = idle_exit if idle_exit is not None else os.environ.get("TASKMASTER_LOCAL_IDLE_EXIT", "600")
+    if server_argv is None:
+        server_argv = _test_argv("TASKMASTER_BRIDGE_TEST_SERVER_ARGV")
     if server_argv is None:
         python = server_python(plugin_dir, log=log)
         if python is None:
@@ -900,7 +891,7 @@ class Bridge:
             if self.epoch != seen_epoch or self.fallback is not None:
                 return True
             deadline = time.monotonic() + (self.budget if budget is None else budget)
-            delay = 0.2
+            delay = RECONNECT_BACKOFF_START
             while not self.closed.is_set():
                 try:
                     self.endpoint = self._ensure()
@@ -918,7 +909,7 @@ class Bridge:
                     if time.monotonic() >= deadline:
                         return False
                     time.sleep(delay)
-                    delay = min(delay * 2, 2.0)
+                    delay = min(delay * 2, RECONNECT_BACKOFF_CAP)
             return False
 
     def _count_failure(self) -> bool:
@@ -932,7 +923,8 @@ class Bridge:
         with self._fb_lock:
             if self.fallback is not None:
                 return
-            command = self.fallback_command or [shutil.which("uv") or "uv", "run", str(Path(self.plugin_dir) / "backlog_server.py")]
+            command = (self.fallback_command or _test_argv("TASKMASTER_BRIDGE_TEST_FALLBACK_ARGV")
+                       or [shutil.which("uv") or "uv", "run", str(Path(self.plugin_dir) / "backlog_server.py")])
             kw = {"creationflags": NO_WINDOW} if WIN else {}
             with _ENV_LOCK:         # waits for a launch's environment build to finish instead of starting a second one
                 child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, **kw)
@@ -1166,7 +1158,7 @@ class Bridge:
                 if resp.status != 200:
                     resp.read()
                     failures += 1
-                    self.closed.wait(min(30.0, 2.0 * failures))     # e.g. 405: this server offers no stream
+                    self.closed.wait(min(GET_NON200_CAP, GET_NON200_STEP * failures))     # e.g. 405: this server offers no stream
                     continue
                 failures = 0
                 for item in self.events(resp):
@@ -1389,9 +1381,8 @@ class TeamBridge(Bridge):
             self.emit_error(mid, self.refusal)
 
 
-def _start_team_bridge(log):
-    """A TeamBridge when this project is a team-server clone (a marker or latch), else None. Reads two paths first, so a
-    solo project never imports the remote package."""
+def _team_clone_root():
+    """The project root when it is a team-server clone (a marker or latch), else None; starts nothing (the relay helper reuses it)."""
     if str(PLUGIN_DIR) not in sys.path:
         sys.path.insert(0, str(PLUGIN_DIR))
     from taskmaster.root import resolve_root
@@ -1400,7 +1391,14 @@ def _start_team_bridge(log):
         in_server_mode = _ls().server_mode_reason(root) is not None     # the same marker/latch rule the local bridge and the fence use
     except Exception:                                    # an import failure is for the local path to report (the env opt-out outranks it)
         in_server_mode = False
-    if not in_server_mode:
+    return root if in_server_mode else None
+
+
+def _start_team_bridge(log, root=None):
+    """A TeamBridge when this project is a team-server clone (a marker or latch), else None. Reads two paths first, so a
+    solo project never imports the remote package."""
+    root = root if root is not None else _team_clone_root()
+    if root is None:
         return None
     from taskmaster import server_marker
     from taskmaster.remote import keys, locate
@@ -1419,6 +1417,8 @@ def _start_team_bridge(log):
 def run_fallback(reason, plugin_dir=PLUGIN_DIR, *, stdin=None, stdout=None, log=None, command=None) -> int:
     log = log or Log()
     log.once(f"using the per-session stdio server ({reason})")
+    if command is None:
+        command = _test_argv("TASKMASTER_BRIDGE_TEST_FALLBACK_ARGV")
     if command is None:
         command = [shutil.which("uv") or "uv", "run", str(Path(plugin_dir) / "backlog_server.py")]
         if not WIN and stdin is None and stdout is None:
@@ -1463,28 +1463,126 @@ def run_fallback(reason, plugin_dir=PLUGIN_DIR, *, stdin=None, stdout=None, log=
         return child.wait()
 
 
+# -- test mode (only with TASKMASTER_BRIDGE_TESTING=1; otherwise an environment variable must not redirect what the bridge spawns)
+
+TEST_BOUNDS = {"SHORT_TIMEOUT", "LIST_HOLD", "HOLD_BOUND", "RECONNECT_BUDGET", "FALLBACK_WINDOW", "GET_BACKOFF", "LAUNCH_BOUND",
+               "DRAIN_WAIT", "SUCCESSOR_WAIT", "INIT_WAIT"}
+
+
+def _testing() -> bool:
+    return os.environ.get("TASKMASTER_BRIDGE_TESTING") == "1"
+
+
+def _test_argv(name):
+    """A JSON argv from a test-mode variable, or None (always None outside test mode)."""
+    raw = os.environ.get(name) if _testing() else None
+    if not raw:
+        return None
+    value = json.loads(raw)
+    return [str(part) for part in value] if isinstance(value, list) and value else None
+
+
+def _apply_test_bounds():
+    """Shorten module bounds from TASKMASTER_BRIDGE_TEST_BOUNDS (name -> seconds, a list for GET_BACKOFF). Returns an error text for an
+    unknown name (the caller exits), else None. Names this bridge does not have (INIT_WAIT) are accepted and ignored."""
+    raw = os.environ.get("TASKMASTER_BRIDGE_TEST_BOUNDS") if _testing() else None
+    if not raw:
+        return None
+    bounds = json.loads(raw)
+    for name in bounds:
+        if name not in TEST_BOUNDS:
+            print(f"tm-bridge: unknown test bound {name}", file=sys.stderr, flush=True)
+            return name
+    for name, value in bounds.items():
+        if name in globals():
+            globals()[name] = tuple(value) if isinstance(value, list) else value
+    return None
+
+
+# -- the relay helper: the decisions of the bridge, answered as JSON lines for the compiled relay (spec section 3) ----------
+
+def _helper_line(out, **fields):
+    out.write((json.dumps({"v": 1, **fields}, separators=(",", ":")) + "\n").encode("utf-8"))
+    out.flush()
+
+
+def _helper_endpoint_line(out, root, build, discriminator, log):
+    try:
+        endpoint = ensure_server(root, build, discriminator, log=log)
+    except ServerUnavailable as exc:
+        return _helper_line(out, kind="unavailable", reason=str(exc))
+    except Exception as exc:
+        return _helper_line(out, kind="unavailable", reason=f"local server unavailable: {exc!r}")
+    _helper_line(out, kind="endpoint", url=endpoint.record.get("url"), token=endpoint.token, build=endpoint.build)
+
+
+def helper_main(ensure_only=False, stdin=None, stdout=None) -> int:
+    """--relay-helper: line 1 session (mode local/team/fallback), for local line 2 endpoint or unavailable, exit 0.
+    --relay-helper --ensure-only: no line 1; one endpoint/unavailable line per {"op":"ensure"} line on stdin, exit at EOF."""
+    out = stdout if stdout is not None else sys.stdout.buffer
+    source = stdin if stdin is not None else sys.stdin.buffer
+    log = Log(os.environ.get("TASKMASTER_BRIDGE_LOG") or None)
+    mode, reason, root, build = "local", None, None, None
+    try:
+        mode, reason, root, build = _local_decision()
+    except ServerUnavailable as exc:
+        mode, reason = "fallback", str(exc)
+    except Exception as exc:        # a broken local server must never leave a session without tm (spec section 1)
+        mode, reason = "fallback", f"local server unavailable: {exc!r}"
+    discriminator = os.environ.get("TASKMASTER_BRIDGE_DISCRIMINATOR") or "bridge-" + secrets.token_hex(8)
+    if ensure_only:
+        for line in source:
+            try:
+                op = json.loads(line).get("op")
+            except (ValueError, AttributeError):
+                op = None
+            if op != "ensure":
+                _helper_line(out, kind="unavailable", reason=f"unknown op: {op!r}")
+            elif mode == "local":
+                _helper_endpoint_line(out, root, build, discriminator, log)
+            else:
+                _helper_line(out, kind="unavailable", reason=reason or f"mode {mode}")
+        return 0
+    _helper_line(out, kind="session", root=str(root) if root is not None else None, mode=mode, reason=reason, build=build,
+                 plugin_dir=str(PLUGIN_DIR))
+    if mode == "local":
+        _helper_endpoint_line(out, root, build, discriminator, log)
+    return 0
+
+
 # -- entry ----------------------------------------------------------------------------------------------------------
 
-def _start_local_bridge(log):
-    """Everything on the way to a started local-server bridge; any exception here sends the caller to the stdio fallback."""
-    team = _start_team_bridge(log)
-    if team is not None:
-        return None, team
+def _local_decision():
+    """The one decision sequence both the full bridge and the relay helper follow: (mode, reason, root, build) with mode
+    team / fallback / local. Any exception sends the caller to the stdio fallback."""
+    team_root = _team_clone_root()
+    if team_root is not None:
+        return "team", None, team_root, None
     if str(os.environ.get("TASKMASTER_LOCAL_SERVER", "")).strip().lower() in ("0", "off", "false", "no"):
-        return "TASKMASTER_LOCAL_SERVER=0", None      # read before localserve is imported so an import failure cannot override it
+        return "fallback", "TASKMASTER_LOCAL_SERVER=0", None, None      # read before localserve is imported so an import failure cannot override it
     ls = _ls()
     from taskmaster.root import resolve_root
     root = resolve_root(Path.cwd()).root
     reason = fallback_reason(root)
     if reason:
+        return "fallback", reason, root, None
+    build = {"version": ls.declared_version(PLUGIN_DIR), "digest": ls.package_digest(PLUGIN_DIR / "taskmaster")}
+    from taskmaster.coordinator.ownership import private_directory
+    private_directory(Path(root), ls.SERVE_DIR)       # a junction or foreign directory here fails now, not in the background
+    return "local", None, root, build
+
+
+def _start_local_bridge(log):
+    """Everything on the way to a started local-server bridge; any exception here sends the caller to the stdio fallback."""
+    mode, reason, root, my_build = _local_decision()
+    if mode == "team":
+        return None, _start_team_bridge(log, root)
+    if mode == "fallback":
         return reason, None
     session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     discriminator = session or "bridge-" + secrets.token_hex(8)
     log.note(f"discriminator {discriminator} from {'CLAUDE_CODE_SESSION_ID' if session else 'a random id (no CLAUDE_CODE_SESSION_ID)'}")
-    my_build = {"version": ls.declared_version(PLUGIN_DIR), "digest": ls.package_digest(PLUGIN_DIR / "taskmaster")}
-    from taskmaster.coordinator.ownership import private_directory
-    private_directory(Path(root), ls.SERVE_DIR)       # a junction or foreign directory here fails now, not in the background
-    bridge = Bridge(root, my_build, discriminator, log=log)
+    bridge = Bridge(root, my_build, discriminator, log=log, budget=RECONNECT_BUDGET)
     bridge.start_lazy()
     return None, bridge
 
@@ -1505,6 +1603,10 @@ def bridge_main() -> int:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    if _apply_test_bounds() is not None:
+        return 2
+    if argv[:1] == ["--relay-helper"]:
+        return helper_main(argv[1:] == ["--ensure-only"])
     if argv[:1] == ["--print-python"]:
         print(sys.executable)
         return 0

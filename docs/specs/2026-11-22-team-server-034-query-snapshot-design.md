@@ -182,7 +182,7 @@ first query, closed at exit).
 | BUILD_SECONDS | 15 s | store100 (126 MB) built in 1.1-3.0 s here |
 | BUILD_MIN_INTERVAL | 1.0 s team, 0.25 s local | caps build duty cycle at ~22 % of a core on a 32 MiB store |
 | OVERLAY_MAX_BYTES | 4 MiB | refused past it with a clear error |
-| WORKER_MEMORY_BYTES (Linux RLIMIT_AS) | 96 MiB fixed | re-measure VmSize with an open file snapshot on WSL / the team host |
+| WORKER_MEMORY_BYTES (Linux RLIMIT_AS) | 96 MiB fixed | re-measure VmSize with an open file snapshot on WSL / x402 |
 | WORKER cache_size / mmap_size | 8 MiB / 0 | |
 | WORKER_TEMP_FILE_MAX (Linux RLIMIT_FSIZE) | 256 MiB | |
 | DISK_FLOOR | 4 x SNAPSHOT_MAX_BYTES + 512 MiB free | build refused below it |
@@ -237,7 +237,7 @@ worker has no memory cap, as today (risk R7).
 - **R8 Low (future): row-level visibility.** If members ever see only some entities, the base must be keyed by
   visibility class; the design comment in the module must say so.
 - **R9 Medium: measurement validity.** Synthetic store on a Windows dev box under other lanes' load; derived tables
-  empty. Numbers must be re-taken on Linux (WSL lane and the team host) before HEAVY_TOTAL changes.
+  empty. Numbers must be re-taken on Linux (WSL lane and x402) before HEAVY_TOTAL changes.
 
 ## 7. Files to change
 
@@ -299,7 +299,7 @@ Ships with the local server release (local-server-005). Team server: deploy afte
 ## 11. Measurement follow-up
 
 Re-take section 2 on Linux (WSL lane) and, for the derived tables, in place on a real store the user owns (the task's
-original next step names the live store on the team host: run the build timing there; never copy a store to scratch).
+original next step names the HAY store on x402: run the build timing there; never copy a store to scratch).
 Scripts: D:\scratchbook\taskmaster\design-034\{gen,measure,measure_helpers,worker_bench,concurrent,par,holder,fp}.py.
 
 

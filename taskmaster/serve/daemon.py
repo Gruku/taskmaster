@@ -432,6 +432,7 @@ class ServeDaemon:
             self._previous_adopt, claims.ADOPT_ACROSS_SESSIONS = claims.ADOPT_ACROSS_SESSIONS, False
         self.server_root = Path(bs.ROOT).resolve()
         self._saved_viewer_port, self._viewer_port_saved = bs.VIEWER_PORT, True
+        bs.SERVE_PROFILE = config.profile           # local-server-012: the connection status names the profile
         bs.VIEWER_PUBLIC_URL = config.viewer_origins[0] + "/" if config.viewer_origins else None
         principals = principal_limiter(config)      # one budget per key, shared by MCP and the viewer (006 D7)
         inflight = principal_inflight(config)
@@ -776,6 +777,7 @@ class ServeDaemon:
                 os.environ["TASKMASTER_SERVE"] = self._previous_serve_env
             self._serve_env_set = False
         if bs is not None:
+            bs.SERVE_PROFILE = None
             bs.VIEWER_PUBLIC_URL = None
             bs.VIEWER_LINK_MINTER = None
             bs.VIEWER_LOCAL_OFF = None

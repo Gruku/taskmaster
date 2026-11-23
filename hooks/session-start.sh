@@ -14,6 +14,47 @@ Install: https://docs.astral.sh/uv/getting-started/installation/
 WARN
 fi
 
+# Relay self-heal (dormant unless .mcp.json launches bin/tm-relay). Claude Code does not fall back to the sh entry when
+# tm-relay.exe exists but cannot start, so a definite start failure moves it aside; anything else is only logged.
+RELAY_NOTICE=""
+relay_self_heal() {
+  local root="${CLAUDE_PLUGIN_ROOT:-}" exe
+  [ -n "$root" ] && [ -f "$root/.mcp.json" ] || return 0
+  case "$OSTYPE" in msys*|cygwin*) ;; *) return 0 ;; esac # builtins only: no process spawned while dormant
+  [[ "$(<"$root/.mcp.json")" == *bin/tm-relay* ]] || return 0
+  exe="$root/bin/tm-relay.exe"
+  if [ -f "$exe.blocked" ] && [ ! -f "$exe.blocked.noticed" ]; then # tell the user once, on the session after the block
+    RELAY_NOTICE="taskmaster: tm-relay.exe could not start (blocked or damaged) and was moved aside; tm now runs through the Python bridge. Run /mcp to reconnect."
+    echo "$RELAY_NOTICE" >&2
+    : > "$exe.blocked.noticed"
+  fi
+  [ -f "$exe" ] || return 0
+  ( relay_probe "$root" "$exe" ) </dev/null >/dev/null 2>&1 & # detached: the hook never waits on the probe
+  disown 2>/dev/null || true
+}
+relay_probe() {
+  local rc=0 out t=/usr/bin/timeout
+  if [ -x "$t" ]; then out=$("$t" 5 "$2" --version </dev/null 2>&1) || rc=$?; else out=$("$2" --version </dev/null 2>&1) || rc=$?; fi
+  relay_judge "$1" "$2" "$rc" "$out"
+}
+relay_judge() {
+  local root="$1" exe="$2" rc="$3" out="$4" definite=0 log="${TASKMASTER_ROOT:-$PWD}/.taskmaster/local/serve"
+  case "$rc" in
+    126) definite=1 ;;
+    127) [ "$(head -c2 "$exe" 2>/dev/null)" = MZ ] || definite=1 ;; # a non-PE file named .exe (Git sh answers 127)
+  esac
+  if [ "$rc" != 0 ]; then # error text counts only when the start failed
+    case "$out" in *[Pp]ermission\ denied*|*not\ executable*|*xec\ format*|*[Bb]ad\ image*) definite=1 ;; esac
+  fi
+  if [ "$definite" = 1 ]; then
+    mv -f "$exe" "$exe.blocked" 2>/dev/null || return 0
+  elif [ "$rc" != 0 ] || [ "${out#tm-relay }" = "$out" ]; then
+    [ -d "$log" ] && printf '%s tm-relay.exe --version rc=%s left in place\n' "$(date -u +%FT%TZ)" "$rc" >> "$log/relay-heal.log" 2>/dev/null
+  fi
+  return 0
+}
+relay_self_heal || true
+
 # Escape string for JSON embedding
 escape_for_json() {
     local s="$1"
@@ -84,12 +125,19 @@ if ! command -v uv &>/dev/null; then
 The tm MCP server cannot start because \`uv\` is not installed; tell the user."
 fi
 
+if [ -n "$RELAY_NOTICE" ]; then
+  CONTEXT="${CONTEXT}
+${RELAY_NOTICE} Tell the user."
+fi
 context_escaped=$(escape_for_json "$CONTEXT")
+system_message=""
+if [ -n "$RELAY_NOTICE" ]; then system_message="  \"systemMessage\": \"$(escape_for_json "$RELAY_NOTICE")\",
+"; fi
 
 # Output context injection as JSON
 cat <<EOF
 {
-  "hookSpecificOutput": {
+${system_message}  "hookSpecificOutput": {
     "hookEventName": "SessionStart",
     "additionalContext": "${context_escaped}"
   }

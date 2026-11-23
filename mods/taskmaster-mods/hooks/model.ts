@@ -1,6 +1,7 @@
 // User intent: the Taskmaster semantics behind every taskmaster-mods surface — what waits on the user, queue order, card and
 // band wording, Telegram-ready handover text — as plain functions over snapshot data, tested without drawing.
 import type {
+  TmConnection,
   TmCursor,
   TmHandover,
   TmHandoverNotice,
@@ -134,6 +135,45 @@ export type BandTask = {
 /** The neutral note while a transient failure is retried and there is no good snapshot to show. */
 export const CONNECTING = 'Connecting to Taskmaster…'
 
+const MODE_WORD: Readonly<Record<TmConnection['mode'], string>> = { local: 'local', 'per-session': 'per-session', team: 'team' }
+
+/** `local · CodeMaestro · 7.7.0`, `team · HAY`, `per-session · CodeMaestro` (user rulings 1-2): the project named, never "this project". */
+export function connectionLabel(c: TmConnection, projectRoom = Infinity): string {
+  const project = Number.isFinite(projectRoom) ? truncate(c.project, Math.max(1, projectRoom)) : c.project
+  return [MODE_WORD[c.mode], project, c.mode === 'local' ? c.version : ''].filter(Boolean).join(' · ')
+}
+
+/** The label at decreasing widths: whole, the project cut to 12 then 6 cells, and (local) without the version. */
+export function connectionLabels(c: TmConnection): string[] {
+  const all = [connectionLabel(c), connectionLabel(c, 12), connectionLabel(c, 6)]
+  if (c.mode === 'local') all.push(connectionLabel({ ...c, version: '' }, 6))
+  return [...new Set(all)]
+}
+
+/**
+ * Whether the band names the connection (lead rulings 4, 6): a team clone, and a per-session server the person did not ask
+ * for. A local connection, and a per-session one from an opt-out (TASKMASTER_LOCAL_SERVER=0, local_server: off), never do.
+ */
+export function connectionInBand(c: TmConnection): boolean {
+  return c.mode === 'team' || (c.mode === 'per-session' && !c.optedOut)
+}
+
+/** The next snapshot, keeping the last clean read's connection as `lastConnection` when this one has none (a fault). */
+export function withLastConnection(next: TmSnapshot, prev: TmSnapshot | null): TmSnapshot {
+  if (next.connection !== undefined) return next
+  const last = prev?.connection ?? prev?.lastConnection
+  return last === undefined ? next : { ...next, lastConnection: last }
+}
+
+/** The band's connection line part: its label, the reason when known, and `warn` for a per-session server. */
+export type BandConnection = {
+  readonly label: string
+  /** The label and its shorter forms, down to the mode word alone: the band shortens it before the task loses its title. */
+  readonly labels: readonly string[]
+  readonly reason: string
+  readonly warn: boolean
+}
+
 /**
  * What the band draws (spec §6). `waitingCapped`: the count was cut at the window with no server total (drawn `N+`);
  * `restore`: the pending burst's unfinished sessions (null: no `4`); `fault`: offline fades the counts, connecting says so.
@@ -146,6 +186,8 @@ export type BandModel = {
   readonly handovers: number
   readonly restore: number | null
   readonly fault: 'none' | 'offline' | 'connecting'
+  /** Present only for a team or an unasked-for per-session connection on a clean read (lead rulings 4-6). */
+  readonly connection?: BandConnection
 }
 
 /**
@@ -171,10 +213,23 @@ export function bandModel(
           inferred: b.inferred,
           ready: s.reachable && !b.inferred && detail !== null && isReady(detail, b.pipeline),
         }
+  const c = s.reachable ? s.connection : undefined
+  const connection: BandConnection | undefined =
+    c === undefined || !connectionInBand(c)
+      ? undefined
+      : { label: connectionLabel(c), labels: [...new Set([...connectionLabels(c), MODE_WORD[c.mode]])], reason: c.reason, warn: c.mode === 'per-session' }
   const m: BandModel = s.reachable
-    ? { ...quiet, task, fault: 'none', waiting: s.queueTotal, waitingCapped: s.queueTotal > 0 && s.queueCapped === true, handovers: s.handoversTotal }
+    ? {
+        ...quiet,
+        task,
+        fault: 'none',
+        waiting: s.queueTotal,
+        waitingCapped: s.queueTotal > 0 && s.queueCapped === true,
+        handovers: s.handoversTotal,
+        ...(connection === undefined ? {} : { connection }),
+      }
     : { ...quiet, task, fault: 'offline' }
-  if (task === null && a.handover === null && a.restore === null && m.waiting === 0 && m.handovers === 0) return null
+  if (task === null && a.handover === null && a.restore === null && m.waiting === 0 && m.handovers === 0 && connection === undefined) return null
   return m
 }
 

@@ -1,0 +1,16 @@
+# User intent: the tiny compiled per-session tm relay (local-server-011): one std-only crate plus serde_json, built small and reproducibly so a Claude Code session costs ~1 MB instead of 58 MB.
+[package]
+name = "tm-relay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

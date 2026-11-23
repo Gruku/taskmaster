@@ -7,6 +7,23 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.7.0
+
+**A relay that costs about 2 MB per session, and the mods say which taskmaster they are connected to.** The plugin's `tm` entry (`bin/tm-relay`) is now a small native relay instead of the Python bridge. taskmaster-mods 0.2.8.
+
+- Memory: a session costs about 2 MB (7.6.0: about 58 MB with its uv launcher). 8 sessions plus the one shared server measured about 150 MB on Windows, against about 640 MB on 7.6.0. Gates G0-G4 passed, including the Windows live gate and the WSL install check.
+- The cold-start busy cursor is gone (the relay starts the server with `STARTF_FORCEOFFFEEDBACK`).
+- The mods show the connection: `● local · <project> · <version>`, `● team · <project>`, `▲ per-session · <project>`.
+- A tab switch in a narrow terminal now opens its pane.
+- Lever: `TASKMASTER_RELAY=python` runs the Python relay instead of the native one (7.6.0 behaviour).
+
+**Known limits**
+
+- macOS and ARM Linux stay on the Python relay; binaries ship for Windows x86_64 and Linux x86_64.
+- Team-server clones still cost about 58 MB per session.
+- Recovery from a blocked exe (antivirus, policy) waits out Claude Code's roughly 15-minute failed-connect memory, or a `/mcp` reconnect.
+- A lost or failed local server shows "per-session" without saying why.
+
 ## 7.6.0
 
 **Local server mode: one hidden taskmaster server per project, shared by every Claude Code session.** Until now each session started its own backlog server. Now the plugin's `tm` entry is a small relay that finds the project's local server, starts it if it is not running, and passes calls through. taskmaster-mods 0.2.7.

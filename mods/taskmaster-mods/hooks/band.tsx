@@ -53,7 +53,8 @@ const LEVELS: readonly Level[] = [0, 1, 2, 3]
 const labelAt = (name: keyof typeof LABELS, level: Level): string => LABELS[name][Math.min(level, 2)] ?? ''
 
 /** One line: what leads it (the chip, or the indent of line 2), its subject segments, and its keys. */
-type BandLine = { readonly lead: Piece; readonly segs: readonly Seg[]; readonly keys: readonly Piece[] }
+/** `shorter`: the same subject with its connection label shortened, longest first, for a line whose whole subject does not fit. */
+type BandLine = { readonly lead: Piece; readonly segs: readonly Seg[]; readonly shorter?: readonly (readonly Seg[])[]; readonly keys: readonly Piece[] }
 
 const keysWidth = (keys: readonly Piece[]): number => keys.reduce((n, p) => n + p.width, 0) + 3 * Math.max(0, keys.length - 1)
 
@@ -67,6 +68,12 @@ export function bandTree(k: Kit, m: BandModel, a: BandArgs, on: BandHandlers): R
   const confirming = task !== null && a.mode.confirmingId === task.id
   const refused = task !== null && a.mode.refusal !== '' && a.mode.refusalId === task.id
   const sp = (n: number): Seg => ({ text: ' '.repeat(n), color: t.fg.default })
+  // A team or an unasked-for per-session connection (lead rulings 4-6): its label leads line 1; never on a fault line.
+  const conn = m.fault === 'none' ? m.connection : undefined
+  const connSeg = (label: string): Seg => ({ text: conn?.warn === true ? `▲ ${label}` : label, color: conn?.warn === true ? t.tone.warning : t.fg.subtle, bold: conn?.warn === true })
+  const connSegs: Seg[] = conn === undefined ? [] : [connSeg(conn.label)]
+  // The same line with the label shortened step by step (review M3): drawn when the whole label would cost the task its title.
+  const shorterOf = (rest: (label: Seg[]) => Seg[]): Seg[][] => (conn === undefined ? [] : conn.labels.slice(1).map(label => rest([connSeg(label)])))
 
   const build = (level: Level): BandLine[] => {
     const chip = badge(k, level <= 1 ? TM_TAG : '◆ TM', 'signature', { on: 'raised' })
@@ -97,17 +104,23 @@ export function bandTree(k: Kit, m: BandModel, a: BandArgs, on: BandHandlers): R
     } else if (m.fault === 'connecting' && task === null) {
       lines.push({ lead: lead1, segs: [{ text: CONNECTING, color: t.fg.subtle }], keys: [sidebar] })
     } else if (task === null) {
-      lines.push({ lead: lead1, segs: [{ text: 'no task bound to this session', color: t.fg.disabled }], keys: [sidebar] })
+      // With no task, a per-session server's reason has the room (user ruling 2); the task line keeps the label alone.
+      const reason = conn === undefined || conn.reason === '' ? [] : [{ text: ` · ${oneLine(conn.reason)}`, color: t.fg.subtle }]
+      const rest = (label: Seg[]): Seg[] => [...label, ...reason, ...(conn === undefined ? [] : [sp(2)]), { text: 'no task bound to this session', color: t.fg.disabled }]
+      lines.push({ lead: lead1, segs: rest(connSegs), keys: [sidebar] })
     } else {
       const title = oneLine(task.title)
+      const rest = (label: Seg[]): Seg[] => [
+        ...(level >= 3 ? [] : [...label, ...(conn === undefined ? [] : [sp(2)])]),
+        ...(task.status === '' || level >= 3 ? [] : [badgeSeg(k, statusBadgeWord(task.status)), sp(2)]),
+        { text: task.id, color: t.fg.subtle },
+        ...(task.inferred ? [sp(2), { text: 'inferred', color: t.fg.subtle }] : []),
+        ...(title === '' ? [] : [sp(2), { text: title, color: task.inferred ? t.fg.subtle : t.fg.bold, bold: !task.inferred }]),
+      ]
       lines.push({
         lead: lead1,
-        segs: [
-          ...(task.status === '' || level >= 3 ? [] : [badgeSeg(k, statusBadgeWord(task.status)), sp(2)]),
-          { text: task.id, color: t.fg.subtle },
-          ...(task.inferred ? [sp(2), { text: 'inferred', color: t.fg.subtle }] : []),
-          ...(title === '' ? [] : [sp(2), { text: title, color: task.inferred ? t.fg.subtle : t.fg.bold, bold: !task.inferred }]),
-        ],
+        segs: rest(connSegs),
+        ...(level >= 3 ? {} : { shorter: shorterOf(rest) }),
         keys: [...(task.ready ? [key('band-done', 'd', 'done', () => on.askDone(task.id))] : []), sidebar],
       })
     }
@@ -165,7 +178,9 @@ export function bandTree(k: Kit, m: BandModel, a: BandArgs, on: BandHandlers): R
   const lines = build(level)
   const column = columnOf(lines, level)
   const drawn = lines.map(l => {
-    const subject = line(k, l.segs, Math.max(0, roomOf(l, column)))
+    const room = Math.max(0, roomOf(l, column))
+    const fits = [l.segs, ...(l.shorter ?? [])].find(segs => segs.reduce((n, s) => n + s.text.length, 0) <= room)
+    const subject = line(k, fits ?? l.shorter?.at(-1) ?? l.segs, room)
     return (
       <Box flexDirection="row">
         {l.lead.el}

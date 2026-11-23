@@ -1,0 +1,121 @@
+{
+ "format": 1,
+ "pin": "7da4362cb8a16ae0070e6e4ead4720570fecb50e21c9baf62d26c409e9849724",
+ "functions": [
+  "Bridge.MIN_INIT",
+  "Bridge.__init__",
+  "Bridge._after_forward",
+  "Bridge._after_response",
+  "Bridge._background_reconnect",
+  "Bridge._boot",
+  "Bridge._count_failure",
+  "Bridge._decode",
+  "Bridge._drop_session",
+  "Bridge._enter_fallback",
+  "Bridge._fb_pump",
+  "Bridge._fb_write",
+  "Bridge._hold",
+  "Bridge._lazy_handle",
+  "Bridge._post_notification",
+  "Bridge._reconcile",
+  "Bridge._replay",
+  "Bridge._safe_handle",
+  "Bridge._shipped_handshake",
+  "Bridge._start_stream",
+  "Bridge._stream_loop",
+  "Bridge._stream_main",
+  "Bridge._switch_to_fallback",
+  "Bridge._upstream_tools",
+  "Bridge._was_cancelled",
+  "Bridge.close",
+  "Bridge.emit",
+  "Bridge.emit_error",
+  "Bridge.events",
+  "Bridge.handle",
+  "Bridge.headers",
+  "Bridge.open",
+  "Bridge.reconnect",
+  "Bridge.run",
+  "Bridge.start_lazy",
+  "Bridge.status_text",
+  "DRAINING_TEXT",
+  "Endpoint",
+  "LOOPBACK_HOSTS",
+  "Log",
+  "SERVER_NAME",
+  "may_have_committed_text"
+ ],
+ "rows": {
+  "5": [
+   "test_requests_carry_session_headers_token_and_protocol",
+   "test_the_discriminator_is_a_random_bridge_id_without_a_claude_session_id"
+  ],
+  "16": [
+   "test_a_non_loopback_endpoint_is_refused_and_the_token_is_never_sent"
+  ],
+  "17": [
+   "test_framing_blank_lines_parse_errors_batches_and_non_objects"
+  ],
+  "18": [
+   "test_requests_carry_session_headers_token_and_protocol"
+  ],
+  "19": [
+   "test_json_and_sse_responses_and_202"
+  ],
+  "20": [
+   "test_an_oversized_response_is_refused"
+  ],
+  "21": [
+   "test_a_tool_call_longer_than_the_read_bound_completes_and_a_list_past_it_is_cut_and_retried"
+  ],
+  "22": [
+   "test_an_unknown_session_404_is_reinitialized_and_the_write_runs_once",
+   "test_an_initialize_refused_by_a_draining_server_reconnects_instead_of_failing",
+   "test_unreachable_server_fails_the_call_as_not_sent_in_the_mods_wording",
+   "test_may_have_committed_after_a_cut_response_is_never_retried",
+   "test_a_non_tool_request_cut_after_send_is_retried_after_reconnect",
+   "test_a_server_http_error_is_returned_not_retried",
+   "test_a_proxy_502_on_a_tool_call_may_have_committed"
+  ],
+  "23": [
+   "test_unreachable_server_fails_the_call_as_not_sent_in_the_mods_wording",
+   "test_may_have_committed_after_a_cut_response_is_never_retried"
+  ],
+  "24": [
+   "test_two_requests_failing_on_the_same_loss_reinitialize_exactly_once",
+   "test_a_replaced_upstream_session_is_deleted",
+   "test_a_server_that_restarts_with_another_build_is_reconnected_and_list_changed_follows",
+   "test_three_failed_relaunches_after_a_loss_switch_to_the_stdio_child"
+  ],
+  "25": [
+   "test_get_stream_is_held_open_forwarded_without_internal_ids_and_closed_with_delete",
+   "test_a_get_answered_500_is_retried_no_sooner_than_the_backoff"
+  ],
+  "26": [
+   "test_initialize_is_answered_before_the_server_is_up_and_an_unknown_protocol_is_not_echoed",
+   "test_the_shipped_handshake_serves_the_list_at_once_calls_wait_and_a_different_live_list_emits_list_changed"
+  ],
+  "27": [
+   "test_ping_server_discover_and_the_empty_lists_are_answered_at_once_and_others_give_up_before_the_client_does",
+   "test_a_call_held_past_the_bound_fails_as_not_sent",
+   "test_a_held_call_cancelled_by_the_client_is_dropped_and_never_answered",
+   "test_with_no_shipped_handshake_a_list_that_waits_too_long_is_answered_empty_and_list_changed_brings_the_real_one"
+  ],
+  "28": [
+   "test_an_initialize_refused_by_a_draining_server_reconnects_instead_of_failing",
+   "test_no_list_changed_when_the_live_server_matches_what_was_served",
+   "test_a_server_that_restarts_with_another_build_is_reconnected_and_list_changed_follows"
+  ],
+  "30": [
+   "test_three_failed_relaunches_after_a_loss_switch_to_the_stdio_child",
+   "test_opt_outs_use_the_stdio_child_for_the_whole_session",
+   "test_a_project_with_no_backlog_uses_the_stdio_child"
+  ],
+  "32": [
+   "test_get_stream_is_held_open_forwarded_without_internal_ids_and_closed_with_delete"
+  ],
+  "33": [
+   "test_the_token_never_reaches_the_log_file_or_stderr"
+  ]
+ }
+}

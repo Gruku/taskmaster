@@ -183,6 +183,60 @@ def decode_cwd(value: str) -> str:
     return unquote(value)
 
 
+# -- why a session runs on its own stdio server (the bridge's decision; local-server-012 shows it) --------------
+
+OPT_OUT_ENV = "TASKMASTER_LOCAL_SERVER=0"
+OPT_OUT_SETTING = "project setting local_server: off"
+_OFF_WORDS = ("0", "off", "false", "no")
+
+
+def env_opted_out(env=None) -> bool:
+    """TASKMASTER_LOCAL_SERVER=0 (or off/false/no) in the environment."""
+    env = os.environ if env is None else env
+    return str(env.get("TASKMASTER_LOCAL_SERVER", "")).strip().lower() in _OFF_WORDS
+
+
+def setting_off(root) -> bool:
+    """The setting `local_server: off` in .taskmaster/local/settings.json (this clone) or .taskmaster/taskmaster.json (the whole
+    project, deliberately: a committed file opts every clone out); read at session start."""
+    for relative in (("local", "settings.json"), ("taskmaster.json",)):    # per clone first, then the project's own config
+        try:
+            data = json.loads((Path(root) / ".taskmaster" / Path(*relative)).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and str(data.get("local_server", "")).strip().lower() in _OFF_WORDS:
+            return True
+    return False
+
+
+def fallback_reason(root, env=None, *, strict: bool = False):
+    """Why this session must use today's stdio server, or None when the local server applies. `strict` (the stdio server
+    explaining itself): a store locked past a short wait raises StoreBusy instead of reading as not native."""
+    if env_opted_out(env):
+        return OPT_OUT_ENV
+    if setting_off(root):
+        return OPT_OUT_SETTING
+    if not db_path(Path(root) / ".taskmaster").is_file() and not (Path(root) / ".taskmaster").is_dir():
+        return "no backlog at the project root"
+    if (not _native_store(root, timeout=0.5, busy_raises=True)) if strict else legacy_store(root):
+        return "the project store is not a ready native store"
+    why = server_mode_reason(root)
+    if why:
+        return why
+    return None
+
+
+def per_session_reason(root, env=None) -> tuple[str, bool] | None:
+    """A stdio server's own account of why it serves this session: (the static fallback reason or '', opted out by the
+    person). The dynamic reasons (a lost local server, a failed launch) live only in the relay, so they read as ''.
+    None while the store is locked: not known yet, so the caller asks again rather than keep a wrong answer."""
+    try:
+        reason = fallback_reason(root, env, strict=True) or ""
+    except StoreBusy:
+        return None
+    return reason, reason in (OPT_OUT_ENV, OPT_OUT_SETTING)
+
+
 # -- marker / latch and legacy-store checks --------------------------------------------------------
 
 def server_mode_reason(root):
@@ -203,12 +257,11 @@ def server_mode_reason(root):
     return None
 
 
-def is_native_store(root) -> bool:
-    """True when `root` has a ready native store (schema 2, manifest ready); False for a missing or legacy one.
+class StoreBusy(Exception):
+    """The store was locked or busy past the wait: whether it is native is not known yet."""
 
-    Read-only, stdlib-only counterpart of native_routing.gate.native_database, same admission rule
-    (native.db.assert_native); a damaged or unclassifiable database counts as not native.
-    """
+
+def _native_store(root, *, timeout: float = 5.0, busy_raises: bool = False) -> bool:
     import sqlite3
     from taskmaster.admission import UnsupportedStoreError
     from taskmaster.native.db import assert_native
@@ -216,15 +269,29 @@ def is_native_store(root) -> bool:
     if not path.is_file():
         return False
     try:
-        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None, timeout=5)) as connection:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None,
+                                     timeout=timeout)) as connection:
             connection.execute("BEGIN")
             try:
                 assert_native(connection)
             finally:
                 connection.rollback()
+    except sqlite3.OperationalError as exc:
+        if busy_raises and ("locked" in str(exc).lower() or "busy" in str(exc).lower()):
+            raise StoreBusy(str(exc)) from exc
+        return False
     except (sqlite3.Error, UnsupportedStoreError):
         return False
     return True
+
+
+def is_native_store(root) -> bool:
+    """True when `root` has a ready native store (schema 2, manifest ready); False for a missing or legacy one.
+
+    Read-only, stdlib-only counterpart of native_routing.gate.native_database, same admission rule
+    (native.db.assert_native); a damaged or unclassifiable database counts as not native.
+    """
+    return _native_store(root)
 
 
 def legacy_store(root) -> bool:

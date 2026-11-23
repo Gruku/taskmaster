@@ -44,6 +44,7 @@ import {
   phasePicker,
   refreshPiece,
   type Seg,
+  snapshotHealth,
   statusBadgeWord,
   summaryRow,
   togglePiece,
@@ -99,13 +100,7 @@ export type HandoversHandlers = {
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
-function healthOf(v: HandoversView): Health {
-  const s = v.snapshot
-  if (v.connecting === true && (s === null || !s.reachable)) return { kind: 'info', word: 'connecting' }
-  if (s === null) return { kind: 'info', word: 'loading' }
-  if (!s.reachable) return { kind: 'critical', word: 'offline' }
-  return v.demo === true ? { kind: 'info', word: 'demo' } : { kind: 'success', word: 'tm ok' }
-}
+const healthOf = (v: HandoversView): Health => snapshotHealth(v.snapshot, { connecting: v.connecting === true, demo: v.demo === true })
 
 /** Line 2: `<id> · <branch> · N linked tasks` (`no linked task` when none). */
 function refsSegs(k: Kit, ho: TmHandover): Seg[] {

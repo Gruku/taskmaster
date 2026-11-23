@@ -4791,7 +4791,9 @@ def backlog_handover_list(
             included), superseded_by. `total` counts matches before `limit`;
             `archived_omitted` counts archived handovers not searched;
             `truncated` is true when either left something out. Errors are
-            {"error": "..."}.
+            {"error": "..."}. `server` names the taskmaster that answered: mode
+            (local, per-session or team), project, version, and for per-session
+            the reason and whether the local server was opted out of.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -4922,6 +4924,7 @@ def _handover_list_text(data, task_id, session_kind, since, status, limit, verbo
             "total": total,
             "truncated": bool(overflow or archived_omitted),
             "archived_omitted": archived_omitted,
+            "server": _server_identity(data),
         }, default=str)
 
     archive_footer = (
@@ -12958,6 +12961,37 @@ def _serve_mode() -> bool:
 # one-time sign-in URL, or VIEWER_LOCAL_OFF to why there is no viewer. Both stay None in the team profile.
 VIEWER_LINK_MINTER = None
 VIEWER_LOCAL_OFF: str | None = None
+
+# local-server-012: which taskmaster answers, for the mods' connection status. The serve daemon sets its profile
+# ("local" or "team"); None is a stdio server, one process for one session.
+SERVE_PROFILE: str | None = None
+_PER_SESSION_REASON: tuple[Path, tuple[str, bool]] | None = None
+
+
+def _per_session_reason() -> tuple[str, bool]:
+    """This stdio server's static fallback reason and whether it is the person's opt-out; read once per root. A store
+    locked during the read is no answer: nothing is kept, and the next listing asks again."""
+    global _PER_SESSION_REASON
+    if _PER_SESSION_REASON is None or _PER_SESSION_REASON[0] != ROOT:
+        try:
+            from taskmaster import localserve
+            found = localserve.per_session_reason(ROOT)
+        except Exception:  # noqa: BLE001 - a status line must never fail the read it rides on
+            found = ("", False)
+        if found is None:
+            return ("", False)
+        _PER_SESSION_REASON = (ROOT, found)
+    return _PER_SESSION_REASON[1]
+
+
+def _server_identity(data) -> dict:
+    """The `server` object of backlog_handover_list(format="json"): mode, project, version, and for a per-session server
+    its reason and whether the person opted out of the local server."""
+    meta = data.get("meta") if isinstance(data, dict) else None
+    project = str(meta.get("project") or "") if isinstance(meta, dict) else ""
+    mode = SERVE_PROFILE if SERVE_PROFILE in ("local", "team") else "per-session"
+    reason, opted_out = _per_session_reason() if mode == "per-session" else ("", False)
+    return {"mode": mode, "project": project or ROOT.name, "version": VERSION, "reason": reason, "opted_out": opted_out}
 
 
 REDIRECT_FILE_LIFETIME_SECONDS = 90.0

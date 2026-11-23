@@ -1,6 +1,6 @@
 // User intent: the Taskmaster sidebar's navigation model (spec §15.8) — which pane an id is, what each sidebar entry counts,
 // which layer Esc closes first — as plain functions, so the band, every pane and the restore module agree without drawing.
-import type { TmNav, TmRestorePending, TmSnapshot } from '../types'
+import type { TmConnection, TmNav, TmRestorePending, TmSnapshot } from '../types'
 import { demoSnapshot, isCurrentDemo, isDemoSnapshot } from './demo'
 import type { TmPane } from './flows'
 import { ageLabel, HANDOVERS, RESTORE, REVIEW, SESSION } from './model'
@@ -28,7 +28,13 @@ export type SidebarEntry = {
   readonly note: string
   readonly dim?: string
 }
-export type SidebarView = { readonly current: TmPane; readonly entries: readonly SidebarEntry[]; readonly context: string }
+/** `connection`: which taskmaster answered, on a clean read only (local-server-012); the sidebar and the restore frame show it. */
+export type SidebarView = {
+  readonly current: TmPane
+  readonly entries: readonly SidebarEntry[]
+  readonly context: string
+  readonly connection?: TmConnection
+}
 
 /** `16:14`: an epoch in seconds as local hours and minutes. */
 export function hhmm(epochSeconds: number): string {
@@ -56,9 +62,11 @@ export function sidebarView(a: {
     : { pane: 'restore', key: '4', name: 'Restore', count: '', note: '', dim: 'Restore is not built yet' }
   const bound = s?.bound ?? null
   const context = s === null ? 'no task bound' : !s.reachable ? 'tm offline' : bound === null ? 'no task bound' : [bound.taskId, (bound.detail?.status ?? '').replace(/-/g, ' ')].filter(Boolean).join(' · ')
+  const connection = live ? s.connection : undefined
   return {
     current: a.current,
     context,
+    ...(connection === undefined ? {} : { connection }),
     entries: [
       {
         pane: 'review',

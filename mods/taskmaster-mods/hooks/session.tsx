@@ -30,6 +30,7 @@ import {
   paneToolbar,
   refreshPiece,
   type Seg,
+  snapshotHealth,
   statusBadgeWord,
   tabRow,
   underLabel,
@@ -293,13 +294,7 @@ function sessionSection(k: Kit, v: SessionView, on: SessionHandlers, inner: numb
   return rows
 }
 
-function healthOf(v: SessionView): Health {
-  const s = v.snapshot
-  if (v.connecting && (s === null || !s.reachable)) return { kind: 'info', word: 'connecting' }
-  if (s === null) return { kind: 'info', word: 'loading' }
-  if (!s.reachable) return { kind: 'critical', word: 'offline' }
-  return v.demo ? { kind: 'info', word: 'demo' } : { kind: 'success', word: 'tm ok' }
-}
+const healthOf = (v: SessionView): Health => snapshotHealth(v.snapshot, { connecting: v.connecting, demo: v.demo })
 
 /** The Session tab (spec §15.7): the frame, `this session · <branch> · started <age> ago`, TASK / HISTORY / HANDOVER / SESSION, the footer. */
 export function sessionTree(k: Kit, v: SessionView, on: SessionHandlers, width: number): RenderNode {

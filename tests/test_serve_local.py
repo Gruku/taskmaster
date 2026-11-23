@@ -194,6 +194,17 @@ def test_local_profile_installs_no_team_surface(local):
     assert query_guard.DENY_FUNCTIONS_WHEN_SERVING is True        # restored to the default
 
 
+def test_the_local_profile_names_itself_in_the_handover_listing_and_forgets_it_on_stop(local):
+    # local-server-012: the mods' connection status reads mode, project and version off the json listing.
+    w = local()
+    bs = w.daemon._bs
+    a = w.bridge("claude-session-aaa")
+    server = json.loads(a.call("backlog_handover_list", {"format": "json"}))["server"]
+    assert (server["mode"], server["project"], server["version"], server["reason"]) == ("local", w.root.name, bs.VERSION, "")
+    w.stop()
+    assert bs.SERVE_PROFILE is None
+
+
 def test_a_member_key_is_not_accepted_by_the_local_profile(local):
     from taskmaster.serve.principals import add_user
     w = local()

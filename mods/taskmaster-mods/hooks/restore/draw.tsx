@@ -16,6 +16,7 @@ import {
   badgeSeg,
   bulkRow,
   cardInner,
+  connectionHealth,
   contentCol,
   emptyRow,
   focusedItem,
@@ -117,7 +118,8 @@ function healthOf(v: RestorePaneView): Health {
   if (v.source === 'demo') return { kind: 'info', word: 'demo' }
   if (v.data.error !== '') return { kind: 'critical', word: 'scan failed' }
   if (v.data.scan !== null && v.data.refs === null && v.view.busy === '') return { kind: 'critical', word: 'tm offline' }
-  return { kind: 'success', word: 'tm ok' }
+  const connection = v.tabs?.connection
+  return connection === undefined ? { kind: 'success', word: 'tm ok' } : connectionHealth(connection)
 }
 
 /** Line 2: `taskmaster · feat/x · .worktrees/x · 512k ctx` (ctx warning past 400k, critical past 700k). */

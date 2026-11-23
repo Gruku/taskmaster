@@ -9,7 +9,13 @@ import { FRESH_NAV } from '../hooks/nav'
 import { FRESH_REVIEW_LIST } from '../hooks/review-list'
 
 function rig(
-  a: { refresh?: () => void; onOpen?: (setNav: (n: TmNav) => void, get: () => TmNav) => void; placed?: boolean; closeClearsSidebar?: boolean } = {},
+  a: {
+    refresh?: () => void
+    onOpen?: (setNav: (n: TmNav) => void, get: () => TmNav) => void
+    placed?: boolean
+    place?: (id: string) => boolean
+    closeClearsSidebar?: boolean
+  } = {},
 ) {
   const seen = { opened: [] as string[], closed: [] as string[], toasts: [] as string[], nav: FRESH_NAV as TmNav, openNow: [] as string[], list: FRESH_REVIEW_LIST as TmReviewList }
   const host = new Proxy(
@@ -17,7 +23,7 @@ function rig(
       openPane: async (id: string) => {
         seen.opened.push(id)
         a.onOpen?.(n => void (seen.nav = n), () => seen.nav)
-        return a.placed ?? true
+        return a.place?.(id) ?? a.placed ?? true
       },
       closePane: async (id: string) => {
         seen.closed.push(id)
@@ -148,6 +154,39 @@ describe('one pane at a time', () => {
     expect(seen.closed).toEqual(['tm-review', 'tm-handovers'])
     expect(seen.opened).toEqual(['tm-session'])
     expect(seen.nav).toEqual({ sidebar: true, last: 'session' })
+  })
+
+  test("Session h holds its press only until the pane is open, not through the reads after it (review M1)", async () => {
+    const { flows, seen } = rig()
+    const order: string[] = []
+    await flows
+      .openHandover('2026-10-04-audit-fixes-landed', () => void order.push(`opened after ${seen.opened.join(',')}`))
+      .catch(() => undefined)
+    order.push('done')
+    expect(order).toEqual(['opened after tm-handovers', 'done'])
+  })
+
+  test('a refused open closes the undrawn pane and puts the previous one back, with no toast', async () => {
+    const { flows, seen } = rig({ place: id => id !== 'tm-handovers' })
+    seen.openNow = ['tm-review']
+    seen.nav = { sidebar: false, last: 'review' }
+    await flows.goTo('handovers')
+    expect(seen.closed).toEqual(['tm-review', 'tm-handovers'])
+    expect(seen.opened).toEqual(['tm-handovers', 'tm-review'])
+    expect(seen.toasts).toEqual([])
+    expect(seen.nav.last).toBe('review')
+  })
+
+  test('a refused open with no pane before it, or a previous pane refused too, says to widen the terminal', async () => {
+    const alone = rig({ placed: false })
+    await alone.flows.openPane('handovers')
+    expect(alone.seen.closed).toEqual(['tm-handovers'])
+    expect(alone.seen.toasts).toEqual(['taskmaster-mods: widen the terminal to see the pane'])
+    const both = rig({ placed: false })
+    both.seen.openNow = ['tm-review']
+    await both.flows.openPane('session')
+    expect(both.seen.opened).toEqual(['tm-session', 'tm-review'])
+    expect(both.seen.toasts).toEqual(['taskmaster-mods: widen the terminal to see the pane'])
   })
 
   test('m on the band when the terminal is too narrow for the pane leaves the sidebar shut', async () => {
